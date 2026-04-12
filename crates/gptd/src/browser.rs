@@ -1,7 +1,7 @@
 use crate::config::AppConfig;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use shared_protocol::{BrowserOpenRequest, BrowserStatusSnapshot};
+use shared_protocol::{BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -76,6 +76,10 @@ impl BrowserManager {
 
     pub fn profile_info(&mut self) -> Result<BrowserStatusSnapshot> {
         self.health()
+    }
+
+    pub fn capabilities(&mut self) -> Result<Option<CapabilityReport>> {
+        Ok(self.health()?.capability_report)
     }
 
     pub fn health(&mut self) -> Result<BrowserStatusSnapshot> {
@@ -263,6 +267,8 @@ fn idle_snapshot(
         reload_count: 0,
         screenshot_path: None,
         browser_path,
+        extension_connected: false,
+        capability_report: None,
     }
 }
 

@@ -7,6 +7,10 @@ import {
 } from "../src/browserAdapter";
 import { startFakeChatGptServer, stopFakeChatGptServer } from "./helpers";
 
+function withVariant(baseUrl: string, variant: "classic" | "aria"): string {
+  return variant === "classic" ? baseUrl : `${baseUrl}/?variant=${variant}`;
+}
+
 describe("browser adapter", () => {
   it("launches a managed browser and opens the fake harness", async () => {
     const server = await startFakeChatGptServer();
@@ -25,10 +29,51 @@ describe("browser adapter", () => {
     expect(snapshot.running).toBe(true);
     expect(snapshot.current_url).toContain(server.url);
     expect(snapshot.authenticated).toBe(true);
+    expect(snapshot.extension_connected).toBe(true);
+    expect(snapshot.capability_report?.matrix.composer_ready).toBe(true);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
   });
+
+  it.each([
+    ["classic", "classic"],
+    ["aria fallback", "aria"],
+  ] as const)(
+    "captures a full capability matrix for the %s harness",
+    async (_label, variant) => {
+      const server = await startFakeChatGptServer();
+      const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+      const adapter = new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withVariant(server.url, variant),
+      });
+
+      const snapshot = await adapter.open({
+        targetUrl: withVariant(server.url, variant),
+        headless: true,
+      });
+
+      expect(snapshot.extension_connected).toBe(true);
+      expect(snapshot.capability_report?.matrix).toEqual({
+        composer_ready: true,
+        submit_available: true,
+        model_picker_visible: true,
+        thinking_effort_visible: true,
+        search_mode_visible: true,
+        research_mode_visible: true,
+        upload_control_visible: true,
+        downloadable_artifacts_observable: true,
+      });
+      expect(adapter.getLastDomNeighborhoodsForTest().length).toBeGreaterThan(
+        3,
+      );
+
+      await adapter.shutdown();
+      await stopFakeChatGptServer(server.process);
+    },
+  );
 
   it("reuses the managed page on repeated open", async () => {
     const server = await startFakeChatGptServer();
@@ -98,6 +143,7 @@ describe("browser adapter", () => {
     const snapshot = await adapter.health();
     expect(snapshot.running).toBe(true);
     expect(snapshot.current_url).toContain(server.url);
+    expect(snapshot.extension_connected).toBe(true);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

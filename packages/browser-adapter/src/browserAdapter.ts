@@ -1,7 +1,85 @@
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { execFileSync } from "node:child_process";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
+
+type CapabilityKey =
+  | "composer_ready"
+  | "submit_available"
+  | "model_picker_visible"
+  | "thinking_effort_visible"
+  | "search_mode_visible"
+  | "research_mode_visible"
+  | "upload_control_visible"
+  | "downloadable_artifacts_observable";
+
+interface CapabilityMatrixSnapshot {
+  composer_ready: boolean;
+  submit_available: boolean;
+  model_picker_visible: boolean;
+  thinking_effort_visible: boolean;
+  search_mode_visible: boolean;
+  research_mode_visible: boolean;
+  upload_control_visible: boolean;
+  downloadable_artifacts_observable: boolean;
+}
+
+interface RuntimeAliasesSnapshot {
+  modes: Record<string, string[]>;
+  model_classes: Record<string, string[]>;
+  efforts: Record<string, string[]>;
+}
+
+interface CapabilityReportPayload {
+  reported_at: string;
+  selector_pack_id: string;
+  selector_pack_version: string;
+  matrix: CapabilityMatrixSnapshot;
+  aliases: RuntimeAliasesSnapshot;
+}
+
+interface DomNeighborhoodSnapshot {
+  capability: CapabilityKey;
+  strategy_id: string;
+  anchor_tag: string;
+  anchor_role: string | null;
+  anchor_name: string;
+  anchor_path: string;
+  parent_name: string | null;
+  sibling_names: string[];
+  nearby_text: string[];
+}
+
+interface CapabilityBridgeMessage {
+  type: "capability_report";
+  report: CapabilityReportPayload;
+  runtime: {
+    ui_signature: string;
+    strategy_matches: Partial<Record<CapabilityKey, string>>;
+    dom_neighborhoods: DomNeighborhoodSnapshot[];
+  };
+}
+
+interface ProbeDocumentOptions {
+  selectorPackId?: string;
+  selectorPackVersion?: string;
+  reportedAt?: string;
+  preferredStrategies?: Partial<Record<CapabilityKey, string>>;
+}
+
+let probeSource: string | undefined;
+
+function loadProbeSource(): string {
+  if (!probeSource) {
+    probeSource = readFileSync(
+      resolve(__dirname, "../../extension/src/probe.runtime.js"),
+      "utf8",
+    ).replace(/^export\s+function\s+probeDocument/m, "function probeDocument");
+  }
+
+  return probeSource;
+}
 
 export interface BrowserOpenCommand {
   targetUrl: string;
@@ -29,6 +107,8 @@ export interface BrowserStatusSnapshot {
   reload_count: number;
   screenshot_path: string | null;
   browser_path: string | null;
+  extension_connected: boolean;
+  capability_report: CapabilityReportPayload | null;
 }
 
 export interface BrowserLaunchConfig {
@@ -49,6 +129,14 @@ export class BrowserAdapter {
   private reloadCount = 0;
   private lastScreenshotPath: string | null = null;
   private readonly observedPages = new WeakSet<Page>();
+  private extensionConnected = false;
+  private lastCapabilityReport: CapabilityReportPayload | null = null;
+  private lastUiSignature: string | null = null;
+  private readonly strategyTelemetry = new Map<
+    string,
+    Partial<Record<CapabilityKey, string>>
+  >();
+  private lastDomNeighborhoods: DomNeighborhoodSnapshot[] = [];
 
   constructor(options: BrowserAdapterOptions) {
     this.profileDir = resolve(options.profileDir);
@@ -89,7 +177,8 @@ export class BrowserAdapter {
       }
     }
 
-    await this.ensureManagedPage(targetUrl);
+    const page = await this.ensureManagedPage(targetUrl);
+    await this.refreshCapabilities(page);
     return this.health();
   }
 
@@ -97,6 +186,15 @@ export class BrowserAdapter {
     await this.recoverManagedPage();
     const page = this.managedPage;
     const running = Boolean(this.context && page && !page.isClosed());
+
+    if (running) {
+      await this.refreshCapabilities(page!);
+    } else {
+      this.extensionConnected = false;
+      this.lastCapabilityReport = null;
+      this.lastDomNeighborhoods = [];
+      this.lastUiSignature = null;
+    }
 
     return {
       running,
@@ -114,6 +212,8 @@ export class BrowserAdapter {
       reload_count: this.reloadCount,
       screenshot_path: this.lastScreenshotPath,
       browser_path: this.currentBrowserPath,
+      extension_connected: this.extensionConnected,
+      capability_report: this.lastCapabilityReport,
     };
   }
 
@@ -136,6 +236,10 @@ export class BrowserAdapter {
     }
     this.context = undefined;
     this.managedPage = undefined;
+    this.extensionConnected = false;
+    this.lastCapabilityReport = null;
+    this.lastDomNeighborhoods = [];
+    this.lastUiSignature = null;
     return this.health();
   }
 
@@ -145,6 +249,10 @@ export class BrowserAdapter {
 
   getManagedPageForTest(): Page | undefined {
     return this.managedPage;
+  }
+
+  getLastDomNeighborhoodsForTest(): DomNeighborhoodSnapshot[] {
+    return [...this.lastDomNeighborhoods];
   }
 
   private async ensureManagedPage(targetUrl: string): Promise<Page> {
@@ -220,6 +328,57 @@ export class BrowserAdapter {
       }
     });
     this.managedPage = page;
+  }
+
+  private async refreshCapabilities(page: Page): Promise<void> {
+    if (page.isClosed()) {
+      this.extensionConnected = false;
+      this.lastCapabilityReport = null;
+      this.lastDomNeighborhoods = [];
+      this.lastUiSignature = null;
+      return;
+    }
+
+    const preferredStrategies = this.lastUiSignature
+      ? (this.strategyTelemetry.get(this.lastUiSignature) ?? {})
+      : {};
+
+    try {
+      const message = await page.evaluate(
+        ({
+          source,
+          options,
+        }: {
+          source: string;
+          options: ProbeDocumentOptions;
+        }): CapabilityBridgeMessage => {
+          const probeDocument = new Function(
+            `${source}\nreturn probeDocument;`,
+          )() as (options?: ProbeDocumentOptions) => CapabilityBridgeMessage;
+          return probeDocument(options);
+        },
+        {
+          source: loadProbeSource(),
+          options: {
+            selectorPackId: "chatgpt-default",
+            selectorPackVersion: "v1",
+            preferredStrategies,
+          } satisfies ProbeDocumentOptions,
+        },
+      );
+      this.extensionConnected = true;
+      this.lastCapabilityReport = message.report;
+      this.lastUiSignature = message.runtime.ui_signature;
+      this.lastDomNeighborhoods = message.runtime.dom_neighborhoods;
+      this.strategyTelemetry.set(
+        message.runtime.ui_signature,
+        message.runtime.strategy_matches,
+      );
+    } catch {
+      this.extensionConnected = false;
+      this.lastCapabilityReport = null;
+      this.lastDomNeighborhoods = [];
+    }
   }
 }
 
