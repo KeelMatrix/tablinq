@@ -8,15 +8,21 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
       "strategies": [
         {
           "kind": "aria_role",
-          "score": 0.98,
+          "score": 0.94,
           "selector": "[aria-label='Prompt composer']",
-          "strategy_id": "composer-role",
+          "strategy_id": "aria-textbox",
         },
         {
           "kind": "css",
-          "score": 0.94,
+          "score": 1,
           "selector": "[data-slot='composer']",
-          "strategy_id": "composer-slot",
+          "strategy_id": "data-slot-composer",
+        },
+        {
+          "kind": "dom_neighborhood",
+          "score": 0.76,
+          "selector": "[data-action='submit']",
+          "strategy_id": "submit-neighborhood",
         },
       ],
     },
@@ -24,10 +30,22 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
       "capability": "downloadable_artifacts_observable",
       "strategies": [
         {
+          "kind": "text",
+          "score": 0.72,
+          "selector": "Download",
+          "strategy_id": "aria-download-link",
+        },
+        {
           "kind": "css",
-          "score": 0.88,
+          "score": 1,
           "selector": "[data-slot='artifact-link']",
-          "strategy_id": "artifact-link-slot",
+          "strategy_id": "data-slot-artifact-link",
+        },
+        {
+          "kind": "css",
+          "score": 0.9,
+          "selector": "a[download]",
+          "strategy_id": "download-link",
         },
       ],
     },
@@ -35,16 +53,16 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
       "capability": "model_picker_visible",
       "strategies": [
         {
-          "kind": "css",
-          "score": 0.95,
-          "selector": "[data-slot='model-picker']",
-          "strategy_id": "model-picker-slot",
+          "kind": "dom_neighborhood",
+          "score": 0.9,
+          "selector": ".toolbar button:first-child",
+          "strategy_id": "aria-model-trigger",
         },
         {
-          "kind": "dom_neighborhood",
-          "score": 0.68,
-          "selector": ".toolbar button:first-child",
-          "strategy_id": "model-picker-toolbar",
+          "kind": "css",
+          "score": 1,
+          "selector": "[data-slot='model-picker']",
+          "strategy_id": "data-slot-model-picker",
         },
       ],
     },
@@ -52,10 +70,16 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
       "capability": "research_mode_visible",
       "strategies": [
         {
+          "kind": "text",
+          "score": 0.88,
+          "selector": "Research",
+          "strategy_id": "aria-research-toggle",
+        },
+        {
           "kind": "css",
-          "score": 0.9,
+          "score": 1,
           "selector": "[data-mode='research']",
-          "strategy_id": "research-mode-flag",
+          "strategy_id": "data-mode-research",
         },
       ],
     },
@@ -63,10 +87,16 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
       "capability": "search_mode_visible",
       "strategies": [
         {
+          "kind": "text",
+          "score": 0.88,
+          "selector": "Search",
+          "strategy_id": "aria-search-toggle",
+        },
+        {
           "kind": "css",
-          "score": 0.9,
+          "score": 1,
           "selector": "[data-mode='search']",
-          "strategy_id": "search-mode-flag",
+          "strategy_id": "data-mode-search",
         },
       ],
     },
@@ -75,15 +105,21 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
       "strategies": [
         {
           "kind": "text",
-          "score": 0.71,
+          "score": 0.92,
           "selector": "Send",
-          "strategy_id": "send-button-text",
+          "strategy_id": "button-send",
+        },
+        {
+          "kind": "dom_neighborhood",
+          "score": 0.8,
+          "selector": "[data-slot='composer']",
+          "strategy_id": "composer-neighborhood",
         },
         {
           "kind": "css",
-          "score": 0.97,
+          "score": 1,
           "selector": "[data-action='submit']",
-          "strategy_id": "submit-action",
+          "strategy_id": "data-action-submit",
         },
       ],
     },
@@ -91,10 +127,16 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
       "capability": "thinking_effort_visible",
       "strategies": [
         {
+          "kind": "text",
+          "score": 0.88,
+          "selector": "Standard",
+          "strategy_id": "aria-effort-toggle",
+        },
+        {
           "kind": "css",
-          "score": 0.92,
+          "score": 1,
           "selector": "[data-slot='effort-toggle']",
-          "strategy_id": "effort-toggle-slot",
+          "strategy_id": "data-slot-effort-toggle",
         },
       ],
     },
@@ -103,9 +145,15 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
       "strategies": [
         {
           "kind": "css",
-          "score": 0.91,
+          "score": 1,
           "selector": "[data-slot='upload-entry']",
-          "strategy_id": "upload-entry-slot",
+          "strategy_id": "data-slot-upload-entry",
+        },
+        {
+          "kind": "css",
+          "score": 0.88,
+          "selector": "input[type='file']",
+          "strategy_id": "native-file-input",
         },
       ],
     },

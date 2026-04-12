@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 pub struct FileConfig {
     pub version: Option<u32>,
     pub warm_mode: Option<bool>,
+    pub safe_mode: Option<bool>,
     pub browser_target_url: Option<String>,
     pub browser_path: Option<String>,
 }
@@ -47,6 +48,7 @@ impl AppConfig {
             crash_bundles_dir: self.paths.crash_bundles_dir.display().to_string(),
             ipc_endpoint: self.paths.ipc_endpoint.clone(),
             warm_mode: self.warm_mode(),
+            safe_mode: self.safe_mode(),
             browser_target_url: self.browser_target_url().to_owned(),
             browser_path: self.browser_path().map(ToOwned::to_owned),
         }
@@ -54,6 +56,10 @@ impl AppConfig {
 
     pub fn warm_mode(&self) -> bool {
         self.file.warm_mode.unwrap_or(false)
+    }
+
+    pub fn safe_mode(&self) -> bool {
+        self.file.safe_mode.unwrap_or(false)
     }
 
     pub fn browser_target_url(&self) -> &str {
@@ -115,6 +121,9 @@ fn upgrade_file_config(mut file: FileConfig) -> FileConfig {
     if file.warm_mode.is_none() {
         file.warm_mode = Some(false);
     }
+    if file.safe_mode.is_none() {
+        file.safe_mode = Some(false);
+    }
     if file.browser_target_url.is_none() {
         file.browser_target_url = Some("https://chatgpt.com/".to_owned());
     }
@@ -145,6 +154,7 @@ mod tests {
         assert!(config.paths.db_dir.exists());
         assert_eq!(config.file.version, Some(CONFIG_VERSION));
         assert_eq!(config.file.warm_mode, Some(false));
+        assert_eq!(config.file.safe_mode, Some(false));
         assert_eq!(
             config.file.browser_target_url.as_deref(),
             Some("https://chatgpt.com/")
@@ -156,6 +166,7 @@ mod tests {
         let parsed = parse_file_config("version = 0").unwrap();
         assert_eq!(parsed.version, Some(CONFIG_VERSION));
         assert_eq!(parsed.warm_mode, Some(false));
+        assert_eq!(parsed.safe_mode, Some(false));
         assert_eq!(
             parsed.browser_target_url.as_deref(),
             Some("https://chatgpt.com/")
@@ -171,6 +182,7 @@ mod tests {
             let file = FileConfig {
                 version,
                 warm_mode,
+                safe_mode: None,
                 browser_target_url: None,
                 browser_path: None,
             };

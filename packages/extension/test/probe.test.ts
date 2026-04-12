@@ -157,6 +157,49 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.modes.search).toBeUndefined();
     expect(message.report.aliases.model_classes.instant).toBeUndefined();
   });
+
+  it("accepts selector-pack driven strategy ordering metadata", () => {
+    document.body.innerHTML = `
+      <section>
+        <div>
+          <textarea data-slot="composer" aria-label="Prompt composer"></textarea>
+          <button type="button" data-action="submit">Send</button>
+        </div>
+      </section>
+    `;
+
+    const message = probeDocument({
+      selectorPackId: "custom-pack",
+      selectorPackVersion: "v1",
+      selectorPack: {
+        format_version: 1,
+        pack_id: "custom-pack",
+        description: "test pack",
+        updated_at: "2026-04-12T10:00:00Z",
+        capabilities: {
+          composer_ready: [
+            {
+              strategy_id: "aria-textbox",
+              kind: "aria_role",
+              selector: "[role='textbox']",
+              score: 1,
+            },
+            {
+              strategy_id: "data-slot-composer",
+              kind: "css",
+              selector: "[data-slot='composer']",
+              score: 0.5,
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(message.report.selector_pack_id).toBe("custom-pack");
+    expect(message.runtime.strategy_matches.composer_ready).toBe(
+      "aria-textbox",
+    );
+  });
 });
 
 describe("service worker bridge", () => {

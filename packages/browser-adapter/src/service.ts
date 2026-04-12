@@ -3,6 +3,7 @@ import {
   BrowserAdapter,
   type AskExecutionCommand,
   type AskResultSnapshot,
+  type BrowserDiagnosticsSnapshot,
   type BrowserStatusSnapshot,
   type ResearchExecutionCommand,
   type ResearchProgressSnapshot,
@@ -43,6 +44,7 @@ type AdapterRequest =
       output_dir?: string | null;
       timeout_ms?: number;
     }
+  | { type: "diagnostics"; bundle_dir?: string | null }
   | { type: "health" }
   | { type: "close" }
   | { type: "shutdown" };
@@ -68,6 +70,13 @@ type AdapterFrame =
       ok: boolean;
       state: BrowserStatusSnapshot;
       result?: ResearchResultSnapshot;
+      error?: string;
+    }
+  | {
+      type: "diagnostics";
+      ok: boolean;
+      state: BrowserStatusSnapshot;
+      diagnostics?: BrowserDiagnosticsSnapshot;
       error?: string;
     };
 
@@ -141,6 +150,15 @@ async function main() {
           state: await adapter.snapshot(),
           result,
         });
+      } else if (request.type === "diagnostics") {
+        writeFrame({
+          type: "diagnostics",
+          ok: true,
+          state: await adapter.snapshot(),
+          diagnostics: await adapter.diagnostics(
+            request.bundle_dir ?? undefined,
+          ),
+        });
       } else {
         const state = await handleRequest(adapter, request);
         response = { type: "response", ok: true, state } satisfies AdapterFrame;
@@ -180,7 +198,10 @@ async function main() {
 
 async function handleRequest(
   adapter: BrowserAdapter,
-  request: Exclude<AdapterRequest, { type: "ask" } | { type: "research" }>,
+  request: Exclude<
+    AdapterRequest,
+    { type: "ask" } | { type: "research" } | { type: "diagnostics" }
+  >,
 ) {
   switch (request.type) {
     case "open":

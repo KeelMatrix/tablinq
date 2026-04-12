@@ -1,6 +1,6 @@
 # Architecture Notes
 
-## Part 8 decisions
+## Part 9 decisions
 
 - The stable protocol version is `tablinq.v1`.
 - Rust owns durable types, validation, and CLI/daemon entry points.
@@ -16,10 +16,12 @@
 - Browser health is surfaced to the daemon as a `BrowserStatusSnapshot`, which now includes `extension_connected` and the last `CapabilityReport`.
 - Ask execution is streamed over the local daemon socket as `EventPayload` frames followed by a final `DaemonResponse`.
 - Runtime alias and last-known-good strategy data are cached per normalized workspace URL inside the managed browser profile so selection can reuse the latest discovered labels.
+- Strategy success and failure counts are now persisted per capability and strategy alongside the workspace capability cache.
 - File attachments are passed as local paths from the CLI to the daemon and then attached through Playwright.
 - Artifact downloads are captured by Playwright, moved into managed storage, and registered in SQLite with checksums plus conversation/message linkage.
 - Research runs as a dedicated long-running job path instead of being treated as an ordinary ask.
 - Job details, cancellation requests, and job-to-artifact mappings are persisted in SQLite alongside the existing job summary table.
+- Failure bundles are persisted both as SQLite records and as on-disk crash-bundle directories containing DOM, ARIA, and screenshot artifacts.
 
 ## Protocol surface
 
@@ -28,7 +30,7 @@
 - Payload shapes are independently versioned under `schemas/v1/`.
 - Runtime-discovered labels are represented as alias maps so UI text stays out of core control logic.
 - The CLI/daemon control path uses `DaemonRequest` and `DaemonResponse` types in `shared-protocol` for `ask`, `research`, `artifacts list`, `artifacts pull`, `ping`, `status`, `shutdown`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list|show|cancel`, and browser lifecycle commands.
-- The daemon/browser path uses a smaller JSON-line adapter protocol over stdio for `open`, `health`, `ask`, `research`, `close`, and `shutdown`, with capability probes piggybacking on browser health snapshots.
+- The daemon/browser path uses a smaller JSON-line adapter protocol over stdio for `open`, `health`, `diagnostics`, `ask`, `research`, `close`, and `shutdown`, with capability probes piggybacking on browser health snapshots.
 - For streamed asks, the daemon/browser adapter path emits `stream_chunk` frames until an `ask_result` frame closes the request.
 - Ask requests now forward `mode`, `model_class`, `effort`, and `files` to the browser adapter before composer submission.
 
@@ -52,13 +54,15 @@ The IPC endpoint is derived deterministically from the state root, so the CLI an
 - The adapter launches Edge by default on Windows through Playwright’s `msedge` channel.
 - On non-Windows platforms, the adapter falls back to detected Chromium-compatible executables or an explicit configured browser path.
 - The adapter keeps one managed page alive, recreates it if the tab is closed or crashes, and tracks top-level reloads for diagnostics.
-- The adapter evaluates the extension probe module inside the managed page and keeps last-known-good strategy choices per observed UI signature.
+- The adapter evaluates the extension probe module inside the managed page, loads selector-pack metadata from external JSON, and keeps last-known-good strategy choices per observed UI signature.
 - The adapter now owns prompt insertion, submit clicks, DOM-stream observation, timeout detection, conversation/message capture, and control selection for model/mode/effort requests.
-- `doctor` now includes daemon health, the current browser snapshot, and the latest capability report.
+- The daemon retries recoverable ask/research failures once by relaunching the adapter and recreating the managed tab.
+- Safe mode is a config-level execution guard that keeps probes and doctor working while blocking ask and research submission.
+- `doctor` now includes daemon health, browser detection, profile access checks, selector-pack metadata, strategy telemetry, recent failure-bundle summary, and recovery guidance.
 
 ## Ask flow
 
-The Part 8 ask path stays local and DOM-driven:
+The Part 9 ask path stays local and DOM-driven:
 
 - `gpt ask` sends a streamed `DaemonRequest::Ask`.
 - `gptd` creates a durable job row, resumes the last conversation when no explicit conversation is provided, and forwards stream events to the CLI.
@@ -67,6 +71,7 @@ The Part 8 ask path stays local and DOM-driven:
 - Completion stores job state, the latest conversation mapping, and any downloaded artifact metadata in SQLite.
 - Missing requested controls fail fast as `capability_missing`; mismatches between a visible capability and the action layer are classified as `ui_drift`.
 - Upload acknowledgement failures surface as `upload_failed`; download capture failures surface as `download_failed`.
+- Ask failures now also create a local failure bundle with screenshot, DOM snapshot, ARIA snapshot, capability matrix, strategy attempts, and log linkage.
 
 ## Research flow
 
@@ -75,6 +80,7 @@ The Part 8 ask path stays local and DOM-driven:
 - The browser adapter enters research mode, submits the query, observes explicit research progress states from the page, streams report deltas as they appear, and collects final artifacts.
 - Research progress is persisted as job detail state, including partial output text, current page URL, cancellation requests, and linked artifacts.
 - Cancellation is best-effort: the daemon marks the job as cancel-requested and tears down the in-flight adapter process on the next progress checkpoint.
+- Research failures now produce the same local failure-bundle diagnostics as asks.
 
 ## Capability matrix
 
@@ -117,6 +123,13 @@ It also exposes Part 8 control, upload, download, research, and streaming scenar
 - research progress with `waiting_for_sources` -> `running` -> `done`
 - research failure with a retryable-looking error
 
+Part 9 adds verification on top of those scenarios for:
+
+- selector-pack driven probe ordering
+- failure-bundle creation on timeout and other adapter-visible failures
+- doctor reporting of selector-pack and telemetry state
+- recovery guidance for browser launch, auth, profile access, and probe drift cases
+
 ## Selector-pack expectations
 
 Each selector pack must:
@@ -125,3 +138,4 @@ Each selector pack must:
 - define every known capability
 - provide at least one strategy per capability
 - keep strategies externally editable so live-site drift can be patched without rebuilding the daemon
+- keep stable strategy identifiers so telemetry and failure bundles stay comparable across runs

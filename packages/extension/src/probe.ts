@@ -57,11 +57,27 @@ export interface CapabilityBridgeMessage {
   runtime: ProbeRuntimeSnapshot;
 }
 
+export interface SelectorStrategySnapshot {
+  strategy_id: string;
+  kind: "aria_role" | "css" | "text" | "dom_neighborhood" | "hotkey";
+  selector: string;
+  score: number;
+}
+
+export interface SelectorPackSnapshot {
+  format_version: number;
+  pack_id: string;
+  description: string;
+  updated_at: string;
+  capabilities: Partial<Record<CapabilityKey, SelectorStrategySnapshot[]>>;
+}
+
 export interface ProbeDocumentOptions {
   selectorPackId?: string;
   selectorPackVersion?: string;
   reportedAt?: string;
   preferredStrategies?: Partial<Record<CapabilityKey, string>>;
+  selectorPack?: SelectorPackSnapshot;
 }
 
 import { probeDocument as runtimeProbeDocument } from "./probe.runtime.js";
