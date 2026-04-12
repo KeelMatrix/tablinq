@@ -41,9 +41,9 @@ flowchart LR
 7. Open a managed browser with `cargo run -p gpt -- browser open`.
 8. Inspect it with `cargo run -p gpt -- browser profile-info` or `cargo run -p gpt -- doctor`.
 
-## Part 7 Scope
+## Part 8 Scope
 
-This repository now includes file movement on top of the configurable end-to-end chat path. The stable boundaries in this part are:
+This repository now includes deep research as a first-class durable job on top of the upload-capable ask path. The stable boundaries in this part are:
 
 - internal enums for `mode`, `model_class`, and `effort`
 - JSON schema definitions for commands, events, streamed chunks, capability reports, job states, artifacts, failure bundles, and health checks
@@ -60,7 +60,9 @@ This repository now includes file movement on top of the configurable end-to-end
 - fake-harness coverage for successful streaming, timeout handling, tab reload recovery, renamed controls, and missing controls during an active ask
 - Playwright-backed file attachment with page acknowledgement checks before submit
 - managed artifact download capture, checksum recording, and durable SQLite-backed artifact metadata
-- CLI commands for `ask`, `artifacts list`, `artifacts pull`, `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and `browser open|close|reset-profile|profile-info`
+- a separate research execution path with durable `queued`, `starting`, `running`, `waiting_for_sources`, `completed`, and `failed` job states
+- persisted job detail lookup and cancellation requests through `jobs show` and `jobs cancel`
+- CLI commands for `ask`, `research`, `artifacts list`, `artifacts pull`, `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list|show|cancel`, and `browser open|close|reset-profile|profile-info`
 
 ## Implemented Commands
 
@@ -71,8 +73,11 @@ This repository now includes file movement on top of the configurable end-to-end
 - `gpt ask --model instant --mode search "hello"`
 - `gpt ask --model thinking --effort extended "hello"`
 - `gpt ask --file notes.txt --file data.csv "summarize uploads"`
+- `gpt research "investigate launch blockers" --file notes.txt`
 - `gpt artifacts list`
 - `gpt artifacts pull last`
+- `gpt jobs show job-123`
+- `gpt jobs cancel job-123`
 - `gpt doctor`
 - `gpt capabilities`
 - `gpt config show`
@@ -83,6 +88,6 @@ This repository now includes file movement on top of the configurable end-to-end
 - `gpt browser reset-profile`
 - `gpt browser profile-info`
 
-`research` remains deferred to a later part.
+Part 9 will focus on drift diagnostics, failure bundles, and recovery flows.
 
 More detail lives in [docs/architecture.md](/C:/Users/user/Desktop/gpt-cli/docs/architecture.md) and [docs/development.md](/C:/Users/user/Desktop/gpt-cli/docs/development.md).

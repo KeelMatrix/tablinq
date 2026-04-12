@@ -3,7 +3,8 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
     AskCommand, AskResult, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, Effort,
-    EventPayload, Mode, ModelClass, StreamChunk,
+    EventPayload, JobStatus, Mode, ModelClass, ResearchCommand, ResearchResult, StreamChunk,
+    StreamChunkKind,
 };
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -14,6 +15,17 @@ pub struct BrowserManager {
     config: AppConfig,
     process: Option<AdapterProcess>,
     last_snapshot: BrowserStatusSnapshot,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResearchUpdate {
+    pub status: JobStatus,
+    pub message: Option<String>,
+    pub conversation_id: Option<String>,
+    pub message_id: Option<String>,
+    pub current_url: Option<String>,
+    pub chunk_kind: Option<StreamChunkKind>,
+    pub chunk_text: Option<String>,
 }
 
 impl BrowserManager {
@@ -101,6 +113,36 @@ impl BrowserManager {
             .as_mut()
             .expect("browser adapter process missing")
             .ask(job_id, command, &mut on_event)
+        {
+            Ok((snapshot, result)) => {
+                self.last_snapshot = snapshot;
+                Ok(result)
+            }
+            Err(err) => {
+                let _ = self.health();
+                Err(err)
+            }
+        }
+    }
+
+    pub fn research<F, G>(
+        &mut self,
+        job_id: &str,
+        command: &ResearchCommand,
+        mut on_update: F,
+        mut should_cancel: G,
+    ) -> Result<ResearchResult>
+    where
+        F: FnMut(ResearchUpdate) -> Result<()>,
+        G: FnMut() -> bool,
+    {
+        self.ensure_process()?;
+
+        match self
+            .process
+            .as_mut()
+            .expect("browser adapter process missing")
+            .research(job_id, command, &mut on_update, &mut should_cancel)
         {
             Ok((snapshot, result)) => {
                 self.last_snapshot = snapshot;
@@ -345,6 +387,105 @@ impl AdapterProcess {
                 AdapterFrame::Response { .. } => {
                     bail!("unexpected adapter response while asking")
                 }
+                AdapterFrame::ResearchUpdate { .. } | AdapterFrame::ResearchResult { .. } => {
+                    bail!("unexpected adapter research frame while asking")
+                }
+            }
+        }
+    }
+
+    fn research<F, G>(
+        &mut self,
+        job_id: &str,
+        command: &ResearchCommand,
+        on_update: &mut F,
+        should_cancel: &mut G,
+    ) -> Result<(BrowserStatusSnapshot, ResearchResult)>
+    where
+        F: FnMut(ResearchUpdate) -> Result<()>,
+        G: FnMut() -> bool,
+    {
+        let request = AdapterRequest::Research {
+            job_id: job_id.to_owned(),
+            query: command.query.clone(),
+            files: command.files.clone(),
+            output_dir: command.output_dir.clone(),
+            timeout_ms: Some(30_000),
+        };
+        let raw = serde_json::to_string(&request).context("encode adapter research request")?;
+        self.stdin
+            .write_all(raw.as_bytes())
+            .context("write adapter research request")?;
+        self.stdin
+            .write_all(b"\n")
+            .context("write adapter newline")?;
+        self.stdin
+            .flush()
+            .context("flush adapter research request")?;
+
+        loop {
+            let mut line = String::new();
+            self.stdout
+                .read_line(&mut line)
+                .context("read adapter research frame")?;
+            if line.trim().is_empty() {
+                bail!("browser adapter closed without a research result");
+            }
+
+            let frame: AdapterFrame =
+                serde_json::from_str(line.trim_end()).context("decode adapter research frame")?;
+            match frame {
+                AdapterFrame::ResearchUpdate { update } => {
+                    on_update(ResearchUpdate {
+                        status: update.status,
+                        message: update.message,
+                        conversation_id: update.conversation_id,
+                        message_id: update.message_id,
+                        current_url: update.current_url,
+                        chunk_kind: update.chunk_kind,
+                        chunk_text: update.chunk_text,
+                    })?;
+                    if should_cancel() {
+                        let _ = self.child.kill();
+                        let _ = self.child.wait();
+                        bail!("research cancelled");
+                    }
+                }
+                AdapterFrame::ResearchResult {
+                    ok,
+                    state,
+                    result,
+                    error,
+                } => {
+                    if ok {
+                        return Ok((
+                            state,
+                            result.context("adapter research finished without a result")?,
+                        ));
+                    }
+                    bail!(
+                        "{}",
+                        error.unwrap_or_else(|| {
+                            "browser adapter returned an unknown research error".to_owned()
+                        })
+                    );
+                }
+                AdapterFrame::Response {
+                    ok: false, error, ..
+                } => {
+                    bail!(
+                        "{}",
+                        error.unwrap_or_else(|| {
+                            "browser adapter returned an unknown research error".to_owned()
+                        })
+                    );
+                }
+                AdapterFrame::Response { .. } => {
+                    bail!("unexpected adapter response while running research")
+                }
+                AdapterFrame::StreamChunk { .. } | AdapterFrame::AskResult { .. } => {
+                    bail!("unexpected adapter frame while running research")
+                }
             }
         }
     }
@@ -369,6 +510,13 @@ enum AdapterRequest {
         effort: Option<Effort>,
         files: Vec<String>,
     },
+    Research {
+        job_id: String,
+        query: String,
+        files: Vec<String>,
+        output_dir: Option<String>,
+        timeout_ms: Option<u64>,
+    },
     Close,
     Shutdown,
 }
@@ -390,6 +538,15 @@ enum AdapterFrame {
         result: Option<AskResult>,
         error: Option<String>,
     },
+    ResearchUpdate {
+        update: AdapterResearchUpdate,
+    },
+    ResearchResult {
+        ok: bool,
+        state: BrowserStatusSnapshot,
+        result: Option<ResearchResult>,
+        error: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -401,6 +558,18 @@ struct AdapterStreamChunk {
     seq: u64,
     kind: String,
     text: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdapterResearchUpdate {
+    status: JobStatus,
+    message: Option<String>,
+    conversation_id: Option<String>,
+    message_id: Option<String>,
+    current_url: Option<String>,
+    chunk_kind: Option<StreamChunkKind>,
+    chunk_text: Option<String>,
 }
 
 fn idle_snapshot(

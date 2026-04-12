@@ -62,6 +62,13 @@ pub enum JobStatus {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum JobKind {
+    Ask,
+    Research,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum StreamChunkKind {
     Delta,
     Citation,
@@ -537,10 +544,13 @@ pub enum DaemonRequest {
     Shutdown,
     Doctor,
     Ask(AskCommand),
+    Research(ResearchCommand),
     Capabilities,
     ConfigShow,
     SessionsList,
     JobsList,
+    JobsShow(String),
+    JobsCancel(CancelJobCommand),
     ArtifactsList,
     ArtifactPull(PullArtifactCommand),
     BrowserOpen(BrowserOpenRequest),
@@ -557,10 +567,12 @@ pub enum DaemonResponse {
     Status(DaemonStatusSnapshot),
     Doctor(DoctorReport),
     Ask(AskResult),
+    Research(ResearchResult),
     Capabilities(CapabilitySnapshot),
     Config(ConfigSnapshot),
     Sessions(SessionList),
     Jobs(JobList),
+    Job(JobDetail),
     Artifacts(ArtifactList),
     ArtifactPull(ArtifactPullResult),
     Browser(BrowserStatusSnapshot),
@@ -656,6 +668,24 @@ pub struct JobList {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct JobDetail {
+    pub job_id: String,
+    pub kind: JobKind,
+    pub status: JobStatus,
+    pub message: Option<String>,
+    pub conversation_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub input_text: Option<String>,
+    pub output_text: Option<String>,
+    pub current_url: Option<String>,
+    pub output_path: Option<String>,
+    pub artifacts: Vec<ArtifactSummary>,
+    pub cancel_requested: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AskResult {
     pub job_id: String,
     pub conversation_id: String,
@@ -664,6 +694,19 @@ pub struct AskResult {
     pub artifacts: Vec<ArtifactMetadata>,
     pub completed_at: DateTime<Utc>,
     pub current_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchResult {
+    pub job_id: String,
+    pub conversation_id: String,
+    pub message_id: String,
+    pub report_text: String,
+    pub artifacts: Vec<ArtifactMetadata>,
+    pub completed_at: DateTime<Utc>,
+    pub current_url: String,
+    pub output_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

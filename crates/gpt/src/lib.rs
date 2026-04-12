@@ -2,8 +2,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
 use shared_protocol::{
-    AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, Effort, EventPayload, Mode,
-    ModelClass, PullArtifactCommand, StreamChunkKind, build_state_paths, resolve_state_root,
+    AskCommand, BrowserOpenRequest, CancelJobCommand, DaemonRequest, DaemonResponse, Effort,
+    EventPayload, Mode, ModelClass, PullArtifactCommand, ResearchCommand, StreamChunkKind,
+    build_state_paths, resolve_state_root,
 };
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -169,28 +170,19 @@ pub fn run(cli: &Cli) -> Result<String> {
             JobsCommand::List => {
                 send_daemon_request(cli.state_root.as_deref(), DaemonRequest::JobsList)
             }
-            JobsCommand::Show { job_id } => Ok(json!({
-                "status": "not_implemented",
-                "message": "jobs show is planned for a later part",
-                "job_id": job_id,
-            })
-            .to_string()),
-            JobsCommand::Cancel { job_id } => Ok(json!({
-                "status": "not_implemented",
-                "message": "jobs cancel is planned for a later part",
-                "job_id": job_id,
-            })
-            .to_string()),
+            JobsCommand::Show { job_id } => send_daemon_request(
+                cli.state_root.as_deref(),
+                DaemonRequest::JobsShow(job_id.clone()),
+            ),
+            JobsCommand::Cancel { job_id } => send_daemon_request(
+                cli.state_root.as_deref(),
+                DaemonRequest::JobsCancel(CancelJobCommand {
+                    job_id: job_id.clone(),
+                }),
+            ),
         },
         Command::Ask(args) => run_ask(cli.state_root.as_deref(), args),
-        Command::Research(args) => not_implemented_summary(
-            "research",
-            json!({
-                "query": args.query,
-                "files": args.files.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
-                "output_dir": args.output_dir.as_ref().map(|path| path.display().to_string()),
-            }),
-        ),
+        Command::Research(args) => run_research(cli.state_root.as_deref(), args),
         Command::Capabilities => {
             send_daemon_request(cli.state_root.as_deref(), DaemonRequest::Capabilities)
         }
@@ -292,6 +284,72 @@ fn run_ask(state_root: Option<&Path>, args: &AskArgs) -> Result<String> {
     }
 }
 
+fn run_research(state_root: Option<&Path>, args: &ResearchArgs) -> Result<String> {
+    let paths = build_state_paths(resolve_state_root(state_root));
+    let command = ResearchCommand {
+        query: args.query.clone(),
+        files: args
+            .files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        output_dir: args
+            .output_dir
+            .as_ref()
+            .map(|path| path.display().to_string()),
+    };
+
+    let mut stdout = io::stdout();
+    let mut stderr = io::stderr();
+    let mut printed_any = false;
+    let mut last_status: Option<JobStatusLine> = None;
+    let response = gptd::send_request_stream(
+        &paths.ipc_endpoint,
+        &DaemonRequest::Research(command),
+        |event| {
+            match event {
+                EventPayload::StreamChunk(chunk) => match chunk.kind {
+                    StreamChunkKind::Delta if !chunk.text.is_empty() => {
+                        write!(stdout, "{}", chunk.text)?;
+                        stdout.flush()?;
+                        printed_any = true;
+                    }
+                    StreamChunkKind::Done if printed_any => {
+                        writeln!(stdout)?;
+                        stdout.flush()?;
+                    }
+                    _ => {}
+                },
+                EventPayload::JobState(state) => {
+                    let next = JobStatusLine {
+                        status: format!("{:?}", state.status).to_lowercase(),
+                        message: state.message.unwrap_or_default(),
+                    };
+                    if last_status.as_ref() != Some(&next) {
+                        writeln!(stderr, "[{}] {}", next.status, next.message)?;
+                        stderr.flush()?;
+                        last_status = Some(next);
+                    }
+                }
+                _ => {}
+            }
+            Ok(())
+        },
+    )
+    .with_context(|| format!("connect to daemon at {}", paths.ipc_endpoint))?;
+
+    match response {
+        DaemonResponse::Research(result) => {
+            if !printed_any && !result.report_text.is_empty() {
+                writeln!(stdout, "{}", result.report_text)?;
+            }
+            Ok(String::new())
+        }
+        DaemonResponse::Error(error) => bail!("{}", error.message),
+        other => bail!("unexpected research response: {other:?}"),
+    }
+}
+
 fn config_show(state_root: Option<&Path>) -> Result<String> {
     let config = gptd::AppConfig::load_or_create(state_root)?;
     serde_json::to_string_pretty(&config.snapshot()).context("serialize config snapshot")
@@ -370,12 +428,10 @@ fn resolve_gptd_binary() -> PathBuf {
     }
 }
 
-fn not_implemented_summary(command: &str, payload: serde_json::Value) -> Result<String> {
-    Ok(serde_json::to_string_pretty(&json!({
-        "status": "not_implemented",
-        "message": format!("{command} is planned for a later part"),
-        "payload": payload,
-    }))?)
+#[derive(Debug, PartialEq, Eq)]
+struct JobStatusLine {
+    status: String,
+    message: String,
 }
 
 fn map_mode(value: CliMode) -> Mode {
@@ -451,5 +507,26 @@ mod tests {
         let cli = parse(&["gpt", "artifacts", "pull", "last", "--to", "."]);
 
         assert!(matches!(cli.command, Command::Artifacts { .. }));
+    }
+
+    #[test]
+    fn research_command_matches_golden_shape() {
+        let cli = parse(&[
+            "gpt",
+            "research",
+            "latest roadmap",
+            "--file",
+            "notes.txt",
+            "--output-dir",
+            "out",
+        ]);
+
+        assert!(matches!(cli.command, Command::Research(_)));
+    }
+
+    #[test]
+    fn jobs_show_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "jobs", "show", "job-123"]);
+        assert!(matches!(cli.command, Command::Jobs { .. }));
     }
 }

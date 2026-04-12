@@ -16,6 +16,8 @@ document.body.dataset.selectedModel = "thinking";
 document.body.dataset.selectedEffort = "standard";
 document.body.dataset.selectedMode = "normal";
 document.body.dataset.uploadedFiles = "";
+document.body.dataset.researchState = "idle";
+document.body.dataset.researchStatusMessage = "";
 
 note.textContent =
   variant === "aria"
@@ -221,6 +223,10 @@ function streamStorageKey(conversationId) {
   return `tablinq-stream:${conversationId}`;
 }
 
+function researchStorageKey(conversationId) {
+  return `tablinq-research:${conversationId}`;
+}
+
 function writeConversationState(conversationId, messageId) {
   document.body.dataset.conversationId = conversationId;
   document.body.dataset.lastMessageId = messageId;
@@ -232,6 +238,11 @@ function writeConversationState(conversationId, messageId) {
 function setStreamState(state) {
   document.body.dataset.streamState = state;
   messageArticle?.setAttribute("data-stream-state", state);
+}
+
+function setResearchState(state, statusMessage = "") {
+  document.body.dataset.researchState = state;
+  document.body.dataset.researchStatusMessage = statusMessage;
 }
 
 function uploadedFiles() {
@@ -348,6 +359,17 @@ function clearState(conversationId) {
   sessionStorage.removeItem(streamStorageKey(conversationId));
 }
 
+function persistResearchState(state) {
+  sessionStorage.setItem(
+    researchStorageKey(state.conversationId),
+    JSON.stringify(state),
+  );
+}
+
+function clearResearchState(conversationId) {
+  sessionStorage.removeItem(researchStorageKey(conversationId));
+}
+
 function stopTimer() {
   if (activeTimer) {
     clearTimeout(activeTimer);
@@ -368,6 +390,86 @@ function finishStream(state) {
   setStreamState("done");
   prepareArtifact(state.promptText);
   clearState(state.conversationId);
+}
+
+function renderResearchChunk(state) {
+  if (!message) {
+    return;
+  }
+  const text = state.reportText.slice(0, state.index);
+  message.textContent = text;
+  messageArticle?.setAttribute("data-message-id", state.messageId);
+}
+
+function finishResearch(state) {
+  stopTimer();
+  state.index = state.reportText.length;
+  renderResearchChunk(state);
+  setResearchState("done", "research completed");
+  setStreamState("done");
+  prepareArtifact(state.promptText);
+  clearResearchState(state.conversationId);
+}
+
+function tickResearch(state) {
+  stopTimer();
+  if (state.phase === "waiting") {
+    state.waitTicks += 1;
+    setResearchState("waiting_for_sources", "gathering sources");
+    persistResearchState(state);
+    if (state.waitTicks >= 3) {
+      state.phase = "running";
+    }
+    activeTimer = setTimeout(() => tickResearch(state), 80);
+    return;
+  }
+
+  setResearchState("running", "drafting report");
+  state.index = Math.min(state.reportText.length, state.index + 12);
+  renderResearchChunk(state);
+
+  if (scenario === "research-failure" && state.index >= 24) {
+    setResearchState("failed", "temporary upstream issue; retryable");
+    persistResearchState(state);
+    stopTimer();
+    return;
+  }
+
+  if (state.index >= state.reportText.length) {
+    finishResearch(state);
+    return;
+  }
+
+  persistResearchState(state);
+  activeTimer = setTimeout(() => tickResearch(state), 80);
+}
+
+function startResearch(promptText) {
+  if (!message || !messageArticle) {
+    return;
+  }
+
+  const conversationId = currentConversationId();
+  const messageId = `msg-${Date.now()}`;
+  const state = {
+    conversationId,
+    messageId,
+    promptText,
+    reportText: promptText
+      ? `Research report for: ${promptText}\n\nSources were reviewed and summarized.\nUploads: ${uploadedFiles().length ? uploadedFiles().join(", ") : "none"}`
+      : "Research report for an empty query.",
+    index: 0,
+    phase: "waiting",
+    waitTicks: 0,
+  };
+
+  writeConversationState(conversationId, messageId);
+  setStreamState("running");
+  setResearchState("waiting_for_sources", "gathering sources");
+  message.textContent = "";
+  renderResearchChunk(state);
+  persistResearchState(state);
+  activeTimer = setTimeout(() => tickResearch(state), 80);
 }
 
 function tickStream(state) {
@@ -443,6 +545,24 @@ function resumeStreamIfNeeded() {
   scheduleNextTick(state);
 }
 
+function resumeResearchIfNeeded() {
+  const conversationId = currentConversationId();
+  const raw = sessionStorage.getItem(researchStorageKey(conversationId));
+  if (!raw) {
+    return;
+  }
+
+  const state = JSON.parse(raw);
+  writeConversationState(state.conversationId, state.messageId);
+  setStreamState("running");
+  setResearchState(
+    state.phase === "waiting" ? "waiting_for_sources" : "running",
+    state.phase === "waiting" ? "gathering sources" : "drafting report",
+  );
+  renderResearchChunk(state);
+  activeTimer = setTimeout(() => tickResearch(state), 80);
+}
+
 document.querySelectorAll("[data-model]").forEach((element) => {
   element.addEventListener("click", () => {
     document.body.dataset.selectedModel = element.getAttribute("data-model");
@@ -492,10 +612,18 @@ submit?.addEventListener("click", () => {
   stopTimer();
   const promptText =
     "value" in composer ? composer.value.trim() : composer.textContent.trim();
+  if (
+    document.body.dataset.selectedMode === "research" &&
+    scenario.startsWith("research-")
+  ) {
+    startResearch(promptText);
+    return;
+  }
   startStream(promptText);
 });
 
 syncSelectedState();
 renderUploadedFiles(uploadedFiles());
 resetArtifactLink();
+resumeResearchIfNeeded();
 resumeStreamIfNeeded();

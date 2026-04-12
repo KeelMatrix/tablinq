@@ -2,7 +2,8 @@ use chrono::{Duration, Utc};
 use gptd::{AppConfig, Database, daemon_is_responsive, send_request, send_request_stream};
 use shared_protocol::{
     AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, Effort, ErrorCode, EventPayload,
-    HealthStatus, JobStatus, Mode, ModelClass, PullArtifactCommand, build_state_paths,
+    HealthStatus, JobStatus, Mode, ModelClass, PullArtifactCommand, ResearchCommand,
+    build_state_paths,
 };
 use std::fs;
 use std::net::TcpListener;
@@ -17,7 +18,7 @@ fn integration_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("integration lock poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn spawn_daemon(state_root: &Path) -> Child {
@@ -82,6 +83,25 @@ fn spawn_fake_chatgpt() -> (Child, String) {
     panic!("fake-chatgpt did not become ready on port {port}");
 }
 
+fn wait_for_job_id(state_root: &Path) -> String {
+    let deadline = Instant::now() + StdDuration::from_secs(10);
+    while Instant::now() < deadline {
+        let response = send_request(
+            &build_state_paths(state_root).ipc_endpoint,
+            &DaemonRequest::JobsList,
+        )
+        .unwrap();
+        if let DaemonResponse::Jobs(list) = response {
+            if let Some(job) = list.jobs.first() {
+                return job.job_id.clone();
+            }
+        }
+        thread::sleep(StdDuration::from_millis(50));
+    }
+
+    panic!("job id was not created in time");
+}
+
 #[test]
 fn daemon_boots_and_responds_over_local_socket() {
     let _guard = integration_lock();
@@ -118,7 +138,7 @@ fn daemon_creates_config_and_applies_db_migrations() {
     assert!(config.paths.db_path.exists());
 
     let db = Database::open(&config.paths.db_path).unwrap();
-    assert_eq!(db.migration_count().unwrap(), 3);
+    assert_eq!(db.migration_count().unwrap(), 4);
 
     stop_daemon(dir.path(), &mut child);
 }
@@ -582,6 +602,215 @@ fn daemon_reports_upload_errors_when_attachment_controls_are_missing() {
         DaemonResponse::Error(error) => {
             assert_eq!(error.error_code, ErrorCode::UploadFailed);
             assert!(error.message.contains("upload failed"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn daemon_runs_research_jobs_and_persists_details_across_restart() {
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let upload_fixture = dir.path().join("brief.txt");
+    let output_dir = dir.path().join("research-out");
+    fs::write(&upload_fixture, "brief body").unwrap();
+
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?scenario=research-success")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let mut statuses = Vec::new();
+    let response = send_request_stream(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Research(ResearchCommand {
+            query: "investigate launch blockers".to_owned(),
+            files: vec![upload_fixture.display().to_string()],
+            output_dir: Some(output_dir.display().to_string()),
+        }),
+        |event| {
+            if let EventPayload::JobState(state) = event {
+                statuses.push(state.status);
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    let job_id = match response {
+        DaemonResponse::Research(result) => {
+            assert!(
+                result
+                    .report_text
+                    .contains("Research report for: investigate launch blockers")
+            );
+            assert_eq!(result.artifacts.len(), 1);
+            assert!(result.output_path.is_some());
+            result.job_id
+        }
+        other => panic!("unexpected response: {other:?}"),
+    };
+
+    assert!(statuses.contains(&JobStatus::WaitingForSources));
+    assert!(statuses.contains(&JobStatus::Running));
+    assert!(statuses.contains(&JobStatus::Completed));
+
+    let detail = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::JobsShow(job_id.clone()),
+    )
+    .unwrap();
+    match detail {
+        DaemonResponse::Job(job) => {
+            assert_eq!(job.job_id, job_id);
+            assert_eq!(job.kind, shared_protocol::JobKind::Research);
+            assert_eq!(job.status, JobStatus::Completed);
+            assert!(job.output_text.unwrap().contains("Research report for"));
+            assert!(job.output_path.is_some());
+            assert_eq!(job.artifacts.len(), 1);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let mut restarted = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let detail_after_restart = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::JobsShow(job_id),
+    )
+    .unwrap();
+    match detail_after_restart {
+        DaemonResponse::Job(job) => {
+            assert_eq!(job.status, JobStatus::Completed);
+            assert!(job.output_path.is_some());
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut restarted);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn daemon_cancels_running_research_jobs() {
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?scenario=research-success")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let endpoint = build_state_paths(dir.path()).ipc_endpoint;
+    let handle = thread::spawn(move || {
+        send_request_stream(
+            &endpoint,
+            &DaemonRequest::Research(ResearchCommand {
+                query: "cancel me".to_owned(),
+                files: vec![],
+                output_dir: None,
+            }),
+            |_event| Ok(()),
+        )
+        .unwrap()
+    });
+
+    let job_id = wait_for_job_id(dir.path());
+    let cancel = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::JobsCancel(shared_protocol::CancelJobCommand {
+            job_id: job_id.clone(),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(cancel, DaemonResponse::Ack(_)));
+
+    let response = handle.join().unwrap();
+    match response {
+        DaemonResponse::Error(error) => {
+            assert_eq!(error.error_code, ErrorCode::ResearchJobFailed);
+            assert!(error.message.contains("cancelled"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let detail = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::JobsShow(job_id),
+    )
+    .unwrap();
+    match detail {
+        DaemonResponse::Job(job) => {
+            assert_eq!(job.status, JobStatus::Failed);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn daemon_reports_research_failures_with_research_error_code() {
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?scenario=research-failure")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let response = send_request_stream(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Research(ResearchCommand {
+            query: "retry this".to_owned(),
+            files: vec![],
+            output_dir: None,
+        }),
+        |_event| Ok(()),
+    )
+    .unwrap();
+
+    match response {
+        DaemonResponse::Error(error) => {
+            assert_eq!(error.error_code, ErrorCode::ResearchJobFailed);
+            assert!(error.message.contains("research job failed"));
         }
         other => panic!("unexpected response: {other:?}"),
     }

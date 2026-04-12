@@ -1,20 +1,24 @@
-use crate::browser::BrowserManager;
+use crate::browser::{BrowserManager, ResearchUpdate};
 use crate::config::AppConfig;
 use crate::db::Database;
 use crate::ipc;
 use crate::lockfile;
 use crate::logging::JsonLogger;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use interprocess::local_socket::traits::Listener as LocalSocketListenerTrait;
 use serde_json::json;
 use shared_protocol::{
     AckEvent, AskCommand, BrowserOpenRequest, CapabilitySnapshot, DaemonErrorResponse, DaemonFrame,
     DaemonRequest, DaemonResponse, DaemonStatusSnapshot, DoctorReport, ErrorCode, EventPayload,
-    HealthCheck, HealthStatus, JobState, JobStatus,
+    HealthCheck, HealthStatus, JobKind, JobState, JobStatus, ResearchCommand, StreamChunk,
+    StreamChunkKind,
 };
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread;
 
 pub fn run_service(config: AppConfig) -> Result<()> {
     let logger = JsonLogger::new(&config.paths.log_path)?;
@@ -28,12 +32,14 @@ pub fn run_service(config: AppConfig) -> Result<()> {
 
     let _lock = lockfile::acquire(&config.paths)?;
     let db = Database::open(&config.paths.db_path)?;
+    db.fail_incomplete_jobs("daemon restarted before the job finished", Utc::now())?;
     let listener = ipc::bind(&config.paths.ipc_endpoint)?;
     let started_at = Utc::now();
-    let mut browser = BrowserManager::new(&config);
+    let browser = Arc::new(Mutex::new(BrowserManager::new(&config)));
+    let cancel_registry = Arc::new(Mutex::new(HashSet::<String>::new()));
 
     if config.warm_mode() {
-        if let Err(err) = browser.open(BrowserOpenRequest {
+        if let Err(err) = lock_browser(&browser)?.open(BrowserOpenRequest {
             target_url: None,
             browser_path: None,
             headless: None,
@@ -63,7 +69,7 @@ pub fn run_service(config: AppConfig) -> Result<()> {
         let should_shutdown = matches!(request, DaemonRequest::Shutdown);
         if let DaemonRequest::Ask(command) = request {
             if let Err(err) =
-                handle_ask_request(&config, &db, &mut browser, &stream, started_at, command)
+                handle_ask_request(&config, &db, &browser, &stream, started_at, command)
             {
                 logger.warn(
                     "daemon request failed",
@@ -75,7 +81,37 @@ pub fn run_service(config: AppConfig) -> Result<()> {
             }
             continue;
         }
-        let response = match handle_request(&config, &db, &mut browser, started_at, request) {
+        if let DaemonRequest::Research(command) = request {
+            let config = config.clone();
+            let browser = Arc::clone(&browser);
+            let cancel_registry = Arc::clone(&cancel_registry);
+            thread::spawn(move || {
+                let logger = JsonLogger::new(&config.paths.log_path).ok();
+                if let Err(err) =
+                    handle_research_request(&config, &browser, &cancel_registry, &stream, command)
+                {
+                    let error_message = format!("{err:#}");
+                    let _ = ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
+                    if let Some(logger) = logger {
+                        let _ = logger.warn(
+                            "daemon research request failed",
+                            json!({
+                                "error": error_message,
+                            }),
+                        );
+                    }
+                }
+            });
+            continue;
+        }
+        let response = match handle_request(
+            &config,
+            &db,
+            &browser,
+            &cancel_registry,
+            started_at,
+            request,
+        ) {
             Ok(response) => response,
             Err(err) => {
                 logger.warn(
@@ -101,7 +137,7 @@ pub fn run_service(config: AppConfig) -> Result<()> {
 fn handle_ask_request(
     _config: &AppConfig,
     db: &Database,
-    browser: &mut BrowserManager,
+    browser: &Arc<Mutex<BrowserManager>>,
     stream: &interprocess::local_socket::Stream,
     _started_at: chrono::DateTime<Utc>,
     command: AskCommand,
@@ -123,6 +159,7 @@ fn handle_ask_request(
         now,
         now,
     )?;
+    db.upsert_job_detail(&job_id, JobKind::Ask, Some(&effective.prompt), None)?;
     emit_job_state(
         stream,
         JobState {
@@ -155,7 +192,7 @@ fn handle_ask_request(
         },
     )?;
 
-    match browser.ask(&job_id, &effective, |event| {
+    match lock_browser(browser)?.ask(&job_id, &effective, |event| {
         ipc::write_frame(stream, &DaemonFrame::Event(event.clone()))?;
         Ok(())
     }) {
@@ -163,6 +200,7 @@ fn handle_ask_request(
             let completed_at = result.completed_at;
             for artifact in &result.artifacts {
                 db.insert_artifact(artifact, completed_at)?;
+                db.link_job_artifact(&job_id, &artifact.artifact_id)?;
                 ipc::write_frame(
                     stream,
                     &DaemonFrame::Event(EventPayload::ArtifactReady(artifact.clone())),
@@ -191,6 +229,12 @@ fn handle_ask_request(
                 Some(&result.output_text),
                 completed_at,
             )?;
+            db.update_job_output(
+                &job_id,
+                Some(&result.output_text),
+                Some(&result.current_url),
+                None,
+            )?;
             emit_job_state(
                 stream,
                 JobState {
@@ -207,20 +251,22 @@ fn handle_ask_request(
         }
         Err(err) => {
             let failed_at = Utc::now();
+            let message = format!("{err:#}");
             db.insert_job(
                 &job_id,
                 JobStatus::Failed,
-                Some(&format!("{err:#}")),
+                Some(&message),
                 effective.conversation_id.as_deref(),
                 now,
                 failed_at,
             )?;
+            db.update_job_output(&job_id, None, None, None)?;
             emit_job_state(
                 stream,
                 JobState {
                     job_id,
                     status: JobStatus::Failed,
-                    message: Some(format!("{err:#}")),
+                    message: Some(message),
                     conversation_id: effective.conversation_id,
                     updated_at: failed_at,
                     artifacts: vec![],
@@ -231,22 +277,192 @@ fn handle_ask_request(
     }
 }
 
+fn handle_research_request(
+    config: &AppConfig,
+    browser: &Arc<Mutex<BrowserManager>>,
+    cancel_registry: &Arc<Mutex<HashSet<String>>>,
+    stream: &interprocess::local_socket::Stream,
+    command: ResearchCommand,
+) -> Result<()> {
+    let db = Database::open(&config.paths.db_path)?;
+    let created_at = Utc::now();
+    let job_id = format!("job-{}", created_at.timestamp_millis());
+
+    db.insert_job(
+        &job_id,
+        JobStatus::Queued,
+        Some("queued research job"),
+        None,
+        created_at,
+        created_at,
+    )?;
+    db.upsert_job_detail(&job_id, JobKind::Research, Some(&command.query), None)?;
+    emit_job_state(
+        stream,
+        JobState {
+            job_id: job_id.clone(),
+            status: JobStatus::Queued,
+            message: Some("queued research job".to_owned()),
+            conversation_id: None,
+            updated_at: created_at,
+            artifacts: vec![],
+        },
+    )?;
+
+    let mut conversation_id = None;
+    let mut current_url = None;
+    let mut report_text = String::new();
+    let mut next_seq = 0u64;
+
+    let outcome = lock_browser(browser)?.research(
+        &job_id,
+        &command,
+        |update| {
+            apply_research_update(
+                &db,
+                stream,
+                &job_id,
+                created_at,
+                &mut conversation_id,
+                &mut current_url,
+                &mut report_text,
+                &mut next_seq,
+                update,
+            )
+        },
+        || {
+            lock_cancel_registry(cancel_registry)
+                .map(|set| set.contains(&job_id))
+                .unwrap_or(false)
+        },
+    );
+
+    let _ = lock_cancel_registry(cancel_registry).map(|mut set| {
+        set.remove(&job_id);
+    });
+    let _ = db.set_job_cancel_requested(&job_id, false);
+
+    match outcome {
+        Ok(mut result) => {
+            let output_path = maybe_write_research_output(&command, &job_id, &result.report_text)?;
+            result.output_path = output_path.clone();
+            let completed_at = result.completed_at;
+            for artifact in &result.artifacts {
+                db.insert_artifact(artifact, completed_at)?;
+                db.link_job_artifact(&job_id, &artifact.artifact_id)?;
+                ipc::write_frame(
+                    stream,
+                    &DaemonFrame::Event(EventPayload::ArtifactReady(artifact.clone())),
+                )?;
+            }
+            db.insert_job(
+                &job_id,
+                JobStatus::Completed,
+                Some("research completed"),
+                Some(&result.conversation_id),
+                created_at,
+                completed_at,
+            )?;
+            db.update_job_output(
+                &job_id,
+                Some(&result.report_text),
+                Some(&result.current_url),
+                output_path.as_deref(),
+            )?;
+            db.upsert_session(
+                "browser-primary",
+                "Managed browser",
+                Some(&result.current_url),
+                completed_at,
+            )?;
+            db.upsert_conversation(
+                &result.conversation_id,
+                "browser-primary",
+                "Managed conversation",
+                Some(&result.current_url),
+                Some(&command.query),
+                Some(&result.report_text),
+                completed_at,
+            )?;
+            emit_job_state(
+                stream,
+                JobState {
+                    job_id: job_id.clone(),
+                    status: JobStatus::Completed,
+                    message: Some("research completed".to_owned()),
+                    conversation_id: Some(result.conversation_id.clone()),
+                    updated_at: completed_at,
+                    artifacts: result.artifacts.clone(),
+                },
+            )?;
+            ipc::write_frame(
+                stream,
+                &DaemonFrame::Response(DaemonResponse::Research(result)),
+            )?;
+            Ok(())
+        }
+        Err(err) => {
+            let failed_at = Utc::now();
+            let message = format!("{err:#}");
+            let status_message = if message.contains("cancelled") {
+                "research cancelled"
+            } else {
+                "research failed"
+            };
+            db.insert_job(
+                &job_id,
+                JobStatus::Failed,
+                Some(&message),
+                conversation_id.as_deref(),
+                created_at,
+                failed_at,
+            )?;
+            db.update_job_output(
+                &job_id,
+                if report_text.is_empty() {
+                    None
+                } else {
+                    Some(report_text.as_str())
+                },
+                current_url.as_deref(),
+                None,
+            )?;
+            emit_job_state(
+                stream,
+                JobState {
+                    job_id,
+                    status: JobStatus::Failed,
+                    message: Some(status_message.to_owned()),
+                    conversation_id,
+                    updated_at: failed_at,
+                    artifacts: vec![],
+                },
+            )?;
+            ipc::write_frame(stream, &DaemonFrame::Response(map_error(err)))?;
+            Ok(())
+        }
+    }
+}
+
 fn handle_request(
     config: &AppConfig,
     db: &Database,
-    browser: &mut BrowserManager,
+    browser: &Arc<Mutex<BrowserManager>>,
+    cancel_registry: &Arc<Mutex<HashSet<String>>>,
     started_at: chrono::DateTime<Utc>,
     request: DaemonRequest,
 ) -> Result<DaemonResponse> {
     Ok(match request {
-        DaemonRequest::Ping => DaemonResponse::Health(health_snapshot(config, browser.health()?)),
+        DaemonRequest::Ping => {
+            DaemonResponse::Health(health_snapshot(config, lock_browser(browser)?.health()?))
+        }
         DaemonRequest::Status => DaemonResponse::Status(status_snapshot(config, started_at)),
         DaemonRequest::Shutdown => DaemonResponse::Ack(AckEvent {
             accepted: true,
             message: "daemon stopping".to_owned(),
         }),
         DaemonRequest::Doctor => {
-            let browser_snapshot = browser.profile_info()?;
+            let browser_snapshot = lock_browser(browser)?.profile_info()?;
             DaemonResponse::Doctor(DoctorReport {
                 health: health_snapshot(config, browser_snapshot.clone()),
                 status: status_snapshot(config, started_at),
@@ -256,12 +472,37 @@ fn handle_request(
             })
         }
         DaemonRequest::Ask(_) => unreachable!("ask requests are handled as streaming responses"),
+        DaemonRequest::Research(_) => {
+            unreachable!("research requests are handled as streaming responses")
+        }
         DaemonRequest::Capabilities => DaemonResponse::Capabilities(CapabilitySnapshot {
-            report: browser.capabilities()?,
+            report: lock_browser(browser)?.capabilities()?,
         }),
         DaemonRequest::ConfigShow => DaemonResponse::Config(config.snapshot()),
         DaemonRequest::SessionsList => DaemonResponse::Sessions(db.list_sessions()?),
         DaemonRequest::JobsList => DaemonResponse::Jobs(db.list_jobs()?),
+        DaemonRequest::JobsShow(job_id) => DaemonResponse::Job(
+            db.job_detail(&job_id)?
+                .with_context(|| format!("job {job_id} was not found"))?,
+        ),
+        DaemonRequest::JobsCancel(command) => {
+            let detail = db
+                .job_detail(&command.job_id)?
+                .with_context(|| format!("job {} was not found", command.job_id))?;
+            if matches!(detail.status, JobStatus::Completed | JobStatus::Failed) {
+                DaemonResponse::Ack(AckEvent {
+                    accepted: false,
+                    message: format!("job {} is already finished", command.job_id),
+                })
+            } else {
+                db.set_job_cancel_requested(&command.job_id, true)?;
+                lock_cancel_registry(cancel_registry)?.insert(command.job_id.clone());
+                DaemonResponse::Ack(AckEvent {
+                    accepted: true,
+                    message: format!("cancellation requested for {}", command.job_id),
+                })
+            }
+        }
         DaemonRequest::ArtifactsList => DaemonResponse::Artifacts(db.list_artifacts()?),
         DaemonRequest::ArtifactPull(command) => {
             let artifact = if command.artifact_id == "last" {
@@ -290,7 +531,7 @@ fn handle_request(
             })
         }
         DaemonRequest::BrowserOpen(request) => {
-            let snapshot = browser.open(request)?;
+            let snapshot = lock_browser(browser)?.open(request)?;
             db.upsert_session(
                 "browser-primary",
                 "Managed browser",
@@ -299,9 +540,13 @@ fn handle_request(
             )?;
             DaemonResponse::Browser(snapshot)
         }
-        DaemonRequest::BrowserClose => DaemonResponse::Browser(browser.close()?),
-        DaemonRequest::BrowserResetProfile => DaemonResponse::Browser(browser.reset_profile()?),
-        DaemonRequest::BrowserProfileInfo => DaemonResponse::Browser(browser.profile_info()?),
+        DaemonRequest::BrowserClose => DaemonResponse::Browser(lock_browser(browser)?.close()?),
+        DaemonRequest::BrowserResetProfile => {
+            DaemonResponse::Browser(lock_browser(browser)?.reset_profile()?)
+        }
+        DaemonRequest::BrowserProfileInfo => {
+            DaemonResponse::Browser(lock_browser(browser)?.profile_info()?)
+        }
     })
 }
 
@@ -352,6 +597,11 @@ pub fn map_error(err: anyhow::Error) -> DaemonResponse {
     DaemonResponse::Error(DaemonErrorResponse {
         error_code: if message.contains("capability missing") {
             ErrorCode::CapabilityMissing
+        } else if message.contains("research job failed")
+            || message.contains("research failed")
+            || message.contains("research cancelled")
+        {
+            ErrorCode::ResearchJobFailed
         } else if message.contains("upload failed") {
             ErrorCode::UploadFailed
         } else if message.contains("download failed") {
@@ -369,6 +619,130 @@ pub fn map_error(err: anyhow::Error) -> DaemonResponse {
 
 fn emit_job_state(stream: &interprocess::local_socket::Stream, state: JobState) -> Result<()> {
     ipc::write_frame(stream, &DaemonFrame::Event(EventPayload::JobState(state)))
+}
+
+fn lock_browser<'a>(
+    browser: &'a Arc<Mutex<BrowserManager>>,
+) -> Result<MutexGuard<'a, BrowserManager>> {
+    browser
+        .lock()
+        .map_err(|_| anyhow!("browser manager lock poisoned"))
+}
+
+fn lock_cancel_registry<'a>(
+    registry: &'a Arc<Mutex<HashSet<String>>>,
+) -> Result<MutexGuard<'a, HashSet<String>>> {
+    registry
+        .lock()
+        .map_err(|_| anyhow!("cancel registry lock poisoned"))
+}
+
+fn apply_research_update(
+    db: &Database,
+    stream: &interprocess::local_socket::Stream,
+    job_id: &str,
+    created_at: chrono::DateTime<Utc>,
+    conversation_id: &mut Option<String>,
+    current_url: &mut Option<String>,
+    report_text: &mut String,
+    next_seq: &mut u64,
+    update: ResearchUpdate,
+) -> Result<()> {
+    let updated_at = Utc::now();
+    if let Some(value) = update.conversation_id.clone() {
+        *conversation_id = Some(value);
+    }
+    if let Some(value) = update.current_url.clone() {
+        *current_url = Some(value);
+    }
+
+    db.insert_job(
+        job_id,
+        update.status,
+        update.message.as_deref(),
+        update
+            .conversation_id
+            .as_deref()
+            .or(conversation_id.as_deref()),
+        created_at,
+        updated_at,
+    )?;
+
+    if let Some(chunk_text) = update.chunk_text.clone() {
+        if matches!(
+            update.chunk_kind.unwrap_or(StreamChunkKind::Delta),
+            StreamChunkKind::Delta
+        ) {
+            report_text.push_str(&chunk_text);
+        }
+        ipc::write_frame(
+            stream,
+            &DaemonFrame::Event(EventPayload::StreamChunk(StreamChunk {
+                job_id: job_id.to_owned(),
+                conversation_id: update.conversation_id.clone().or(conversation_id.clone()),
+                message_id: update.message_id.clone(),
+                seq: *next_seq,
+                kind: update.chunk_kind.unwrap_or(StreamChunkKind::Delta),
+                text: chunk_text,
+            })),
+        )?;
+        *next_seq += 1;
+    }
+
+    db.update_job_output(
+        job_id,
+        if report_text.is_empty() {
+            None
+        } else {
+            Some(report_text.as_str())
+        },
+        current_url.as_deref(),
+        None,
+    )?;
+    emit_job_state(
+        stream,
+        JobState {
+            job_id: job_id.to_owned(),
+            status: update.status,
+            message: update.message,
+            conversation_id: update.conversation_id.or(conversation_id.clone()),
+            updated_at,
+            artifacts: vec![],
+        },
+    )
+}
+
+fn maybe_write_research_output(
+    command: &ResearchCommand,
+    job_id: &str,
+    report_text: &str,
+) -> Result<Option<String>> {
+    let Some(output_dir) = command.output_dir.as_deref() else {
+        return Ok(None);
+    };
+
+    let output_dir = PathBuf::from(output_dir);
+    fs::create_dir_all(&output_dir).with_context(|| format!("create {}", output_dir.display()))?;
+    let destination = unique_destination_path(
+        &output_dir,
+        Path::new(&format!("{}-report.md", sanitize_file_stem(job_id))),
+    );
+    fs::write(&destination, report_text)
+        .with_context(|| format!("write {}", destination.display()))?;
+    Ok(Some(destination.display().to_string()))
+}
+
+fn sanitize_file_stem(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn unique_destination_path(destination_dir: &Path, file_name: &Path) -> PathBuf {
