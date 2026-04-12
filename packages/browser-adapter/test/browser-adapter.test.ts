@@ -12,6 +12,7 @@ function withHarnessUrl(
   options: {
     variant?: "classic" | "aria";
     scenario?: "success" | "timeout" | "reload";
+    missing?: string[];
   } = {},
 ): string {
   const url = new URL(baseUrl);
@@ -20,6 +21,9 @@ function withHarnessUrl(
   }
   if (options.scenario && options.scenario !== "success") {
     url.searchParams.set("scenario", options.scenario);
+  }
+  if (options.missing && options.missing.length > 0) {
+    url.searchParams.set("missing", options.missing.join(","));
   }
   return url.toString();
 }
@@ -79,6 +83,12 @@ describe("browser adapter", () => {
         upload_control_visible: true,
         downloadable_artifacts_observable: true,
       });
+      expect(
+        snapshot.capability_report?.aliases.model_classes.instant,
+      ).toBeTruthy();
+      expect(
+        snapshot.capability_report?.aliases.model_classes.thinking,
+      ).toBeTruthy();
       expect(adapter.getLastDomNeighborhoodsForTest().length).toBeGreaterThan(
         3,
       );
@@ -231,6 +241,111 @@ describe("browser adapter", () => {
     expect(result.output_text).toBe("Fake response for: hello streaming world");
     expect(result.conversation_id).toMatch(/^conv-/);
     expect(result.message_id).toMatch(/^msg-/);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("selects model, effort, and search mode on the classic harness", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: server.url,
+    });
+    await adapter.open({ targetUrl: server.url, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-configured-classic",
+        prompt: "configure classic",
+        mode: "search",
+        modelClass: "instant",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      model: "instant",
+      effort: "extended",
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("selects renamed controls on the aria harness", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: withHarnessUrl(server.url, { variant: "aria" }),
+    });
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { variant: "aria" }),
+      headless: true,
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-configured-aria",
+        prompt: "configure aria",
+        mode: "research",
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+    }));
+
+    expect(state).toEqual({
+      mode: "research",
+      model: "thinking",
+      effort: "extended",
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails with a capability-missing error when search mode is unavailable", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: withHarnessUrl(server.url, { missing: ["search"] }),
+    });
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { missing: ["search"] }),
+      headless: true,
+    });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-missing-search",
+          prompt: "search for docs",
+          mode: "search",
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/capability missing: search mode/i);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

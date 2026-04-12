@@ -41,9 +41,9 @@ flowchart LR
 7. Open a managed browser with `cargo run -p gpt -- browser open`.
 8. Inspect it with `cargo run -p gpt -- browser profile-info` or `cargo run -p gpt -- doctor`.
 
-## Part 5 Scope
+## Part 6 Scope
 
-This repository now includes the first useful end-to-end chat path on top of the semantic browser layer. The stable boundaries in this part are:
+This repository now includes a configurable end-to-end chat path on top of the semantic browser layer. The stable boundaries in this part are:
 
 - internal enums for `mode`, `model_class`, and `effort`
 - JSON schema definitions for commands, events, streamed chunks, capability reports, job states, artifacts, failure bundles, and health checks
@@ -54,7 +54,10 @@ This repository now includes the first useful end-to-end chat path on top of the
 - ARIA-aware capability probes with strategy scoring, DOM neighborhood snapshots, and last-known-good strategy reuse per observed UI shape
 - fake harness coverage for both the classic slot-based UI and an ARIA-first fallback UI
 - a streamed `ask` flow from CLI -> daemon -> browser adapter -> managed page, with durable job and conversation persistence
-- fake-harness coverage for successful streaming, timeout handling, and tab reload recovery during an active ask
+- runtime model, effort, and mode selection driven by discovered capability aliases instead of hardcoded UI labels
+- persisted per-workspace capability alias and strategy cache under the managed browser profile
+- clear capability-missing failures when a requested model, effort, or mode is unavailable in the current UI
+- fake-harness coverage for successful streaming, timeout handling, tab reload recovery, renamed controls, and missing controls during an active ask
 - CLI commands for `ask`, `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and `browser open|close|reset-profile|profile-info`
 
 ## Implemented Commands
@@ -63,6 +66,8 @@ This repository now includes the first useful end-to-end chat path on top of the
 - `gpt daemon status`
 - `gpt daemon stop`
 - `gpt ask "hello"`
+- `gpt ask --model instant --mode search "hello"`
+- `gpt ask --model thinking --effort extended "hello"`
 - `gpt doctor`
 - `gpt capabilities`
 - `gpt config show`

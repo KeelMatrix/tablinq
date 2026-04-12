@@ -314,7 +314,11 @@ pub fn health_snapshot(
 pub fn map_error(err: anyhow::Error) -> DaemonResponse {
     let message = format!("{err:#}");
     DaemonResponse::Error(DaemonErrorResponse {
-        error_code: if message.contains("timed out") {
+        error_code: if message.contains("capability missing") {
+            ErrorCode::CapabilityMissing
+        } else if message.contains("ui drift") {
+            ErrorCode::UiDrift
+        } else if message.contains("timed out") {
             ErrorCode::ActionTimeout
         } else {
             ErrorCode::Transport

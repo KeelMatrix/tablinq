@@ -26,12 +26,16 @@ describe("extension capability probe", () => {
     document.body.innerHTML = `
       <section>
         <div>
-          <button type="button" data-slot="model-picker" aria-haspopup="listbox">
-            GPT-5.4 Thinking
-          </button>
+          <div data-slot="model-picker" role="group" aria-label="Model picker">
+            <button type="button" data-model="instant" aria-pressed="false">GPT-5.3 Instant</button>
+            <button type="button" data-model="thinking" aria-pressed="true">GPT-5.4 Thinking</button>
+          </div>
           <button type="button" data-mode="search">Search</button>
           <button type="button" data-mode="research">Research</button>
-          <button type="button" data-slot="effort-toggle">Standard</button>
+          <div data-slot="effort-toggle" role="group" aria-label="Thinking effort">
+            <button type="button" data-effort="standard" aria-pressed="true">Standard</button>
+            <button type="button" data-effort="extended" aria-pressed="false">Extended</button>
+          </div>
           <button type="button" data-slot="upload-entry">Attach</button>
         </div>
         <div>
@@ -61,6 +65,10 @@ describe("extension capability probe", () => {
     expect(message.runtime.strategy_matches.composer_ready).toBe(
       "data-slot-composer",
     );
+    expect(message.report.aliases.model_classes.instant).toContain(
+      "gpt-5.3 instant",
+    );
+    expect(message.report.aliases.efforts.extended).toContain("extended");
     expect(message.runtime.dom_neighborhoods.length).toBeGreaterThan(3);
     expect(validateCapabilityReport(message.report)).toBe(true);
     expect(validateCapabilityReport.errors).toBeNull();
@@ -71,14 +79,24 @@ describe("extension capability probe", () => {
     document.body.innerHTML = `
       <section aria-label="assistant workspace">
         <div>
-          <button type="button" aria-haspopup="listbox">
-            Choose engine: GPT-5.3 Instant / GPT-5.4 Thinking
-          </button>
+          <div role="group" aria-label="Choose engine">
+            <button type="button" data-model="instant" aria-pressed="false">
+              Instant answers
+            </button>
+            <button type="button" data-model="thinking" aria-pressed="true">
+              Deep thinking
+            </button>
+          </div>
           <button type="button" aria-pressed="false">Browse the web</button>
           <button type="button" aria-pressed="false">Deep research</button>
-          <button type="button" aria-label="Reasoning effort">
-            Extended reasoning
-          </button>
+          <div role="group" aria-label="Reasoning effort">
+            <button type="button" data-effort="standard" aria-pressed="true">
+              Standard reasoning
+            </button>
+            <button type="button" data-effort="extended" aria-pressed="false">
+              Extended reasoning
+            </button>
+          </div>
           <label for="upload-input">Add files</label>
           <input id="upload-input" type="file" hidden />
         </div>
@@ -113,11 +131,31 @@ describe("extension capability probe", () => {
       "aria-search-toggle",
     );
     expect(message.report.aliases.model_classes.instant).toContain(
-      "choose engine: gpt-5.3 instant / gpt-5.4 thinking",
+      "instant answers",
     );
     expect(message.report.aliases.modes.search).toContain("browse the web");
     expect(message.runtime.ui_signature).toContain("aria");
     expect(validateCapabilityReport(message.report)).toBe(true);
+  });
+
+  it("reports missing controls without inventing aliases", () => {
+    document.body.innerHTML = `
+      <section>
+        <div>
+          <textarea data-slot="composer" aria-label="Prompt composer"></textarea>
+          <button type="button" data-action="submit">Send</button>
+        </div>
+      </section>
+    `;
+
+    const message = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(message.report.matrix.search_mode_visible).toBe(false);
+    expect(message.report.matrix.model_picker_visible).toBe(false);
+    expect(message.report.aliases.modes.search).toBeUndefined();
+    expect(message.report.aliases.model_classes.instant).toBeUndefined();
   });
 });
 

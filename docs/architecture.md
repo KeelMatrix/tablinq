@@ -1,6 +1,6 @@
 # Architecture Notes
 
-## Part 5 decisions
+## Part 6 decisions
 
 - The stable protocol version is `tablinq.v1`.
 - Rust owns durable types, validation, and CLI/daemon entry points.
@@ -15,6 +15,7 @@
 - The browser adapter is a long-lived TypeScript service launched through `npx tsx` and backed by Playwright persistent contexts.
 - Browser health is surfaced to the daemon as a `BrowserStatusSnapshot`, which now includes `extension_connected` and the last `CapabilityReport`.
 - Ask execution is streamed over the local daemon socket as `EventPayload` frames followed by a final `DaemonResponse`.
+- Runtime alias and last-known-good strategy data are cached per normalized workspace URL inside the managed browser profile so selection can reuse the latest discovered labels.
 
 ## Protocol surface
 
@@ -25,6 +26,7 @@
 - The CLI/daemon control path uses `DaemonRequest` and `DaemonResponse` types in `shared-protocol` for `ask`, `ping`, `status`, `shutdown`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and browser lifecycle commands.
 - The daemon/browser path uses a smaller JSON-line adapter protocol over stdio for `open`, `health`, `close`, and `shutdown`, with capability probes piggybacking on browser health snapshots.
 - For streamed asks, the daemon/browser adapter path emits `stream_chunk` frames until an `ask_result` frame closes the request.
+- Ask requests now forward `mode`, `model_class`, and `effort` to the browser adapter before composer submission.
 
 ## State layout
 
@@ -47,18 +49,19 @@ The IPC endpoint is derived deterministically from the state root, so the CLI an
 - On non-Windows platforms, the adapter falls back to detected Chromium-compatible executables or an explicit configured browser path.
 - The adapter keeps one managed page alive, recreates it if the tab is closed or crashes, and tracks top-level reloads for diagnostics.
 - The adapter evaluates the extension probe module inside the managed page and keeps last-known-good strategy choices per observed UI signature.
-- The adapter now owns prompt insertion, submit clicks, DOM-stream observation, timeout detection, and conversation/message capture for the first ask flow.
+- The adapter now owns prompt insertion, submit clicks, DOM-stream observation, timeout detection, conversation/message capture, and control selection for model/mode/effort requests.
 - `doctor` now includes daemon health, the current browser snapshot, and the latest capability report.
 
 ## Ask flow
 
-The Part 5 ask path is intentionally local and DOM-driven:
+The Part 6 ask path stays local and DOM-driven:
 
 - `gpt ask` sends a streamed `DaemonRequest::Ask`.
 - `gptd` creates a durable job row, resumes the last conversation when no explicit conversation is provided, and forwards stream events to the CLI.
-- The browser adapter focuses the composer, inserts the prompt, clicks submit, and polls the managed page for DOM text growth.
+- The browser adapter refreshes the latest capability report, applies requested model/mode/effort settings from discovered aliases, focuses the composer, inserts the prompt, clicks submit, and polls the managed page for DOM text growth.
 - Streamed deltas are normalized into `StreamChunk` events and forwarded immediately to the terminal.
 - Completion stores job state plus the latest conversation mapping in SQLite.
+- Missing requested controls fail fast as `capability_missing`; mismatches between a visible capability and the action layer are classified as `ui_drift`.
 
 ## Capability matrix
 
@@ -86,11 +89,13 @@ Probe logic lives in `src/probe.ts` as capability modules with multiple strategi
 
 The fake harness now exposes two intentionally different UI shapes:
 
-- a classic variant with `data-slot` anchors
+- a classic variant with grouped `data-slot` anchors
 - an ARIA-first variant with renamed controls and moved upload/composer affordances
 
-It also exposes Part 5 streaming scenarios:
+It also exposes Part 6 control and streaming scenarios:
 
+- model and effort groups with renamed labels
+- optional missing search/model/effort controls
 - successful streamed output
 - stalled output for timeout handling
 - one forced reload during an active stream
