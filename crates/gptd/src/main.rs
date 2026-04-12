@@ -1,27 +1,27 @@
-use clap::Parser;
-use serde_json::json;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
-#[command(name = "gptd", version, about = "Tablinq daemon scaffold")]
+#[command(name = "gptd", version, about = "Tablinq local daemon")]
 struct Cli {
-    #[arg(long, default_value = ".tablinq/state")]
-    state_dir: PathBuf,
-    #[arg(long, default_value_t = false)]
-    warm: bool,
+    #[command(subcommand)]
+    command: Command,
 }
 
-fn main() {
-    let cli = Cli::parse();
-    let payload = json!({
-        "status": "scaffold",
-        "protocol_version": shared_protocol::PROTOCOL_VERSION,
-        "state_dir": cli.state_dir,
-        "warm": cli.warm,
-    });
+#[derive(Debug, Subcommand)]
+enum Command {
+    Serve {
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+}
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&payload).expect("serialize daemon scaffold")
-    );
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Serve { state_root } => {
+            let config = gptd::AppConfig::load_or_create(state_root.as_deref())?;
+            gptd::run_service(config)
+        }
+    }
 }

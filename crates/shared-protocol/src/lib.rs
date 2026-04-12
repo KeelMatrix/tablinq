@@ -1,10 +1,14 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::env;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 pub const PROTOCOL_VERSION: &str = "tablinq.v1";
 pub const SELECTOR_PACK_FORMAT_VERSION: u32 = 1;
+pub const CONFIG_VERSION: u32 = 1;
+pub const APP_NAME: &str = "Tablinq";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -523,6 +527,222 @@ impl SelectorStrategy {
         validate_required("selector", &self.selector)?;
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum DaemonRequest {
+    Ping,
+    Status,
+    Shutdown,
+    Doctor,
+    ConfigShow,
+    SessionsList,
+    JobsList,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum DaemonResponse {
+    Ack(AckEvent),
+    Health(HealthCheck),
+    Status(DaemonStatusSnapshot),
+    Doctor(DoctorReport),
+    Config(ConfigSnapshot),
+    Sessions(SessionList),
+    Jobs(JobList),
+    Error(DaemonErrorResponse),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DaemonStatusSnapshot {
+    pub pid: u32,
+    pub started_at: DateTime<Utc>,
+    pub state_root: String,
+    pub ipc_endpoint: String,
+    pub lock_path: String,
+    pub db_path: String,
+    pub warm_mode: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigSnapshot {
+    pub version: u32,
+    pub state_root: String,
+    pub config_dir: String,
+    pub config_path: String,
+    pub logs_dir: String,
+    pub log_path: String,
+    pub db_dir: String,
+    pub db_path: String,
+    pub browser_profile_dir: String,
+    pub downloads_dir: String,
+    pub crash_bundles_dir: String,
+    pub ipc_endpoint: String,
+    pub warm_mode: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DoctorReport {
+    pub health: HealthCheck,
+    pub status: DaemonStatusSnapshot,
+    pub config: ConfigSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SessionSummary {
+    pub session_id: String,
+    pub label: String,
+    pub tab_url: Option<String>,
+    pub last_seen_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SessionList {
+    pub sessions: Vec<SessionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JobSummary {
+    pub job_id: String,
+    pub status: JobStatus,
+    pub message: Option<String>,
+    pub conversation_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JobList {
+    pub jobs: Vec<JobSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DaemonErrorResponse {
+    pub error_code: ErrorCode,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatePaths {
+    pub state_root: PathBuf,
+    pub config_dir: PathBuf,
+    pub config_path: PathBuf,
+    pub logs_dir: PathBuf,
+    pub log_path: PathBuf,
+    pub db_dir: PathBuf,
+    pub db_path: PathBuf,
+    pub browser_profile_dir: PathBuf,
+    pub downloads_dir: PathBuf,
+    pub crash_bundles_dir: PathBuf,
+    pub lock_path: PathBuf,
+    pub ipc_endpoint: String,
+}
+
+pub fn resolve_state_root(explicit: Option<&Path>) -> PathBuf {
+    if let Some(path) = explicit {
+        return path.to_path_buf();
+    }
+
+    if let Ok(value) = env::var("TABLINQ_STATE_ROOT") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
+    default_state_root()
+}
+
+pub fn default_state_root() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(value) = env::var("LOCALAPPDATA") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed).join(APP_NAME);
+            }
+        }
+
+        if let Ok(value) = env::var("USERPROFILE") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed)
+                    .join("AppData")
+                    .join("Local")
+                    .join(APP_NAME);
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        if let Ok(value) = env::var("XDG_STATE_HOME") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed).join(APP_NAME.to_lowercase());
+            }
+        }
+
+        if let Ok(value) = env::var("HOME") {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed)
+                    .join(".local")
+                    .join("state")
+                    .join(APP_NAME.to_lowercase());
+            }
+        }
+    }
+
+    PathBuf::from(".tablinq")
+}
+
+pub fn build_state_paths(state_root: impl AsRef<Path>) -> StatePaths {
+    let state_root = state_root.as_ref().to_path_buf();
+    let config_dir = state_root.join("config");
+    let logs_dir = state_root.join("logs");
+    let db_dir = state_root.join("db");
+    let browser_profile_dir = state_root.join("browser-profile");
+    let downloads_dir = state_root.join("downloads");
+    let crash_bundles_dir = state_root.join("crash-bundles");
+
+    StatePaths {
+        config_path: config_dir.join("config.toml"),
+        log_path: logs_dir.join("gptd.log"),
+        db_path: db_dir.join("tablinq.sqlite3"),
+        lock_path: state_root.join("daemon.lock"),
+        ipc_endpoint: ipc_endpoint_for_root(&state_root),
+        state_root,
+        config_dir,
+        logs_dir,
+        db_dir,
+        browser_profile_dir,
+        downloads_dir,
+        crash_bundles_dir,
+    }
+}
+
+pub fn ipc_endpoint_for_root(state_root: impl AsRef<Path>) -> String {
+    let input = state_root.as_ref().to_string_lossy();
+    format!("tablinq-{:016x}", stable_hash(input.as_bytes()))
+}
+
+fn stable_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
