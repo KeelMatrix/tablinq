@@ -10,6 +10,10 @@
 ## Primary commands
 
 - `cargo test`
+- `cargo run -p gpt -- daemon start`
+- `cargo run -p gpt -- daemon status`
+- `cargo run -p gpt -- doctor`
+- `cargo run -p gpt -- config show`
 - `pnpm test`
 - `pnpm lint`
 - `pnpm build`
@@ -21,16 +25,15 @@
 
 ## Current testing strategy
 
-- Rust tests cover protocol serialization, tagged payloads, validation, and CLI golden parsing stubs.
+- Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, and CLI parsing.
 - TypeScript tests validate the JSON schemas and snapshot the selector-pack parser output.
 - `packages/fake-chatgpt` is the CI-safe target for later Playwright and extension tests.
 
 ## Next implementation boundary
 
-Part 2 should build the real control plane behind the already-frozen contracts:
+Part 3 should build the browser runtime behind the now-working control plane:
 
-- single-user daemon process model
-- local IPC
-- config and state directories
-- SQLite persistence
-- daemon lifecycle commands in the CLI
+- Playwright-backed browser launch and reconnect
+- persistent dedicated profile ownership
+- managed browser open/close/reset commands
+- daemon <-> adapter health messaging

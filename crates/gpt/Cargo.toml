@@ -5,8 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 clap.workspace = true
+gptd = { path = "../gptd" }
+serde_json.workspace = true
 shared-protocol = { path = "../shared-protocol" }
+thiserror.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+tempfile.workspace = true
