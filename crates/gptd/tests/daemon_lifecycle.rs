@@ -117,7 +117,7 @@ fn daemon_boots_and_responds_over_local_socket() {
 
     match response {
         DaemonResponse::Health(health) => {
-            assert_eq!(health.status, HealthStatus::Ok);
+            assert_eq!(health.status, HealthStatus::Degraded);
             assert_eq!(health.browser_connected, false);
         }
         other => panic!("unexpected response: {other:?}"),
@@ -138,7 +138,7 @@ fn daemon_creates_config_and_applies_db_migrations() {
     assert!(config.paths.db_path.exists());
 
     let db = Database::open(&config.paths.db_path).unwrap();
-    assert_eq!(db.migration_count().unwrap(), 4);
+    assert_eq!(db.migration_count().unwrap(), 5);
 
     stop_daemon(dir.path(), &mut child);
 }
@@ -224,6 +224,9 @@ fn daemon_reports_browser_health_from_adapter() {
             assert!(report.health.extension_connected);
             assert!(report.health.authenticated);
             assert!(report.capabilities.is_some());
+            assert!(report.browser_detection.browser_detected);
+            assert!(report.browser_detection.profile_accessible);
+            assert!(report.selector_pack.is_some());
             assert!(
                 report
                     .capabilities
@@ -232,6 +235,7 @@ fn daemon_reports_browser_health_from_adapter() {
                     .matrix
                     .composer_ready
             );
+            assert!(report.failure_bundle_count == 0);
         }
         other => panic!("unexpected response: {other:?}"),
     }
@@ -381,6 +385,28 @@ fn daemon_reports_timeout_errors_for_stalled_asks() {
         DaemonResponse::Error(error) => {
             assert_eq!(error.error_code, ErrorCode::ActionTimeout);
             assert!(error.message.contains("timed out"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let db = Database::open(&config.paths.db_path).unwrap();
+    assert_eq!(db.count_failure_bundles().unwrap(), 1);
+    let bundle = db.latest_failure_bundle().unwrap().expect("failure bundle");
+    assert_eq!(bundle.error_code, ErrorCode::ActionTimeout);
+    assert!(Path::new(bundle.dom_snapshot_path.as_deref().unwrap()).exists());
+    assert!(Path::new(bundle.aria_snapshot_path.as_deref().unwrap()).exists());
+    assert!(bundle.screenshot_path.is_some());
+
+    let doctor = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Doctor,
+    )
+    .unwrap();
+    match doctor {
+        DaemonResponse::Doctor(report) => {
+            assert_eq!(report.failure_bundle_count, 1);
+            assert!(report.latest_failure_bundle.is_some());
         }
         other => panic!("unexpected response: {other:?}"),
     }

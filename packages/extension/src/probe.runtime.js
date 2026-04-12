@@ -3,6 +3,7 @@ export function probeDocument(options = {}) {
   const selectorPackVersion = options.selectorPackVersion ?? "v1";
   const reportedAt = options.reportedAt ?? new Date().toISOString();
   const preferredStrategies = options.preferredStrategies ?? {};
+  const selectorPack = options.selectorPack ?? null;
 
   const normalizeText = (value) =>
     (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -446,11 +447,29 @@ export function probeDocument(options = {}) {
   ];
 
   const orderStrategies = (capability, strategies) => {
+    const fromPack =
+      selectorPack?.capabilities?.[capability]
+        ?.map((entry) => {
+          const match = strategies.find(
+            (strategy) => strategy.id === entry.strategy_id,
+          );
+          return match ? { ...match, score: entry.score } : null;
+        })
+        .filter(Boolean) ?? [];
+    const orderedStrategies =
+      fromPack.length > 0
+        ? [
+            ...fromPack,
+            ...strategies.filter(
+              (strategy) => !fromPack.some((entry) => entry.id === strategy.id),
+            ),
+          ]
+        : [...strategies];
     const preferred = preferredStrategies[capability];
     if (!preferred) {
-      return [...strategies].sort((left, right) => right.score - left.score);
+      return orderedStrategies.sort((left, right) => right.score - left.score);
     }
-    return [...strategies].sort((left, right) => {
+    return orderedStrategies.sort((left, right) => {
       if (left.id === preferred) {
         return -1;
       }

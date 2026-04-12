@@ -41,9 +41,9 @@ flowchart LR
 7. Open a managed browser with `cargo run -p gpt -- browser open`.
 8. Inspect it with `cargo run -p gpt -- browser profile-info` or `cargo run -p gpt -- doctor`.
 
-## Part 8 Scope
+## Part 9 Scope
 
-This repository now includes deep research as a first-class durable job on top of the upload-capable ask path. The stable boundaries in this part are:
+This repository now includes Part 9 drift resistance, diagnostics, and recovery on top of the existing ask, upload, and research paths. The stable boundaries in this part are:
 
 - internal enums for `mode`, `model_class`, and `effort`
 - JSON schema definitions for commands, events, streamed chunks, capability reports, job states, artifacts, failure bundles, and health checks
@@ -56,12 +56,16 @@ This repository now includes deep research as a first-class durable job on top o
 - a streamed `ask` flow from CLI -> daemon -> browser adapter -> managed page, with durable job and conversation persistence
 - runtime model, effort, and mode selection driven by discovered capability aliases instead of hardcoded UI labels
 - persisted per-workspace capability alias and strategy cache under the managed browser profile
+- persisted strategy success/failure telemetry per capability and strategy
 - clear capability-missing failures when a requested model, effort, or mode is unavailable in the current UI
 - fake-harness coverage for successful streaming, timeout handling, tab reload recovery, renamed controls, and missing controls during an active ask
 - Playwright-backed file attachment with page acknowledgement checks before submit
 - managed artifact download capture, checksum recording, and durable SQLite-backed artifact metadata
 - a separate research execution path with durable `queued`, `starting`, `running`, `waiting_for_sources`, `completed`, and `failed` job states
 - persisted job detail lookup and cancellation requests through `jobs show` and `jobs cancel`
+- local failure bundles with screenshot, DOM snapshot, ARIA snapshot, active URL, strategy attempts, capability matrix, and logs linkage
+- selector-pack loading from external versioned JSON instead of adapter-local metadata only
+- daemon-side recovery guidance for browser relaunch, tab recreation, profile access problems, auth-required cases, and safe mode
 - CLI commands for `ask`, `research`, `artifacts list`, `artifacts pull`, `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list|show|cancel`, and `browser open|close|reset-profile|profile-info`
 
 ## Implemented Commands
@@ -88,6 +92,6 @@ This repository now includes deep research as a first-class durable job on top o
 - `gpt browser reset-profile`
 - `gpt browser profile-info`
 
-Part 9 will focus on drift diagnostics, failure bundles, and recovery flows.
+Part 10 will focus on packaging and Windows-first install polish.
 
 More detail lives in [docs/architecture.md](/C:/Users/user/Desktop/gpt-cli/docs/architecture.md) and [docs/development.md](/C:/Users/user/Desktop/gpt-cli/docs/development.md).

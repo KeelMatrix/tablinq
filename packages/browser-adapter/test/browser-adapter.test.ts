@@ -95,6 +95,10 @@ describe("browser adapter", () => {
       expect(
         snapshot.capability_report?.aliases.model_classes.thinking,
       ).toBeTruthy();
+      const diagnostics = await adapter.diagnostics();
+      expect(diagnostics.selector_pack?.pack_id).toBe("chatgpt-default");
+      expect(diagnostics.strategy_attempts.length).toBeGreaterThan(3);
+      expect(diagnostics.strategy_telemetry.length).toBeGreaterThan(0);
       expect(adapter.getLastDomNeighborhoodsForTest().length).toBeGreaterThan(
         3,
       );
@@ -524,6 +528,11 @@ describe("browser adapter", () => {
         () => {},
       ),
     ).rejects.toThrow("timed out");
+
+    const diagnostics = await adapter.diagnostics(path.join(root, "bundle"));
+    expect(diagnostics.screenshot_path).toContain("failure.png");
+    expect(diagnostics.dom_snapshot).toContain("body_excerpt");
+    expect(diagnostics.aria_snapshot).toContain("role");
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

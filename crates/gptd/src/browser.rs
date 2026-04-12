@@ -3,8 +3,8 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
     AskCommand, AskResult, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, Effort,
-    EventPayload, JobStatus, Mode, ModelClass, ResearchCommand, ResearchResult, StreamChunk,
-    StreamChunkKind,
+    EventPayload, JobStatus, Mode, ModelClass, ResearchCommand, ResearchResult,
+    SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry, StreamChunk, StreamChunkKind,
 };
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -26,6 +26,22 @@ pub struct ResearchUpdate {
     pub current_url: Option<String>,
     pub chunk_kind: Option<StreamChunkKind>,
     pub chunk_text: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BrowserDiagnosticsSnapshot {
+    pub current_url: Option<String>,
+    pub capability_matrix: shared_protocol::CapabilityMatrix,
+    pub strategy_attempts: Vec<StrategyAttempt>,
+    pub dom_snapshot: String,
+    pub aria_snapshot: String,
+    pub screenshot_path: Option<String>,
+    pub selector_pack: Option<SelectorPackSummary>,
+    pub strategy_telemetry: Vec<StrategyTelemetryEntry>,
+    pub browser_detected: bool,
+    pub detected_browser_path: Option<String>,
+    pub profile_accessible: bool,
+    pub profile_access_error: Option<String>,
 }
 
 impl BrowserManager {
@@ -97,6 +113,14 @@ impl BrowserManager {
         Ok(self.health()?.capability_report)
     }
 
+    pub fn diagnostics(&mut self, bundle_dir: Option<&Path>) -> Result<BrowserDiagnosticsSnapshot> {
+        self.ensure_process()?;
+        self.process
+            .as_mut()
+            .expect("browser adapter process missing")
+            .diagnostics(bundle_dir)
+    }
+
     pub fn ask<F>(
         &mut self,
         job_id: &str,
@@ -119,6 +143,16 @@ impl BrowserManager {
                 Ok(result)
             }
             Err(err) => {
+                if is_recoverable_adapter_error(&err.to_string()) {
+                    self.relaunch_for_recovery()?;
+                    let (snapshot, result) = self
+                        .process
+                        .as_mut()
+                        .expect("browser adapter process missing")
+                        .ask(job_id, command, &mut on_event)?;
+                    self.last_snapshot = snapshot;
+                    return Ok(result);
+                }
                 let _ = self.health();
                 Err(err)
             }
@@ -149,6 +183,16 @@ impl BrowserManager {
                 Ok(result)
             }
             Err(err) => {
+                if is_recoverable_adapter_error(&err.to_string()) {
+                    self.relaunch_for_recovery()?;
+                    let (snapshot, result) = self
+                        .process
+                        .as_mut()
+                        .expect("browser adapter process missing")
+                        .research(job_id, command, &mut on_update, &mut should_cancel)?;
+                    self.last_snapshot = snapshot;
+                    return Ok(result);
+                }
                 let _ = self.health();
                 Err(err)
             }
@@ -213,6 +257,24 @@ impl BrowserManager {
             let _ = process.child.kill();
             let _ = process.child.wait();
         }
+    }
+
+    fn relaunch_for_recovery(&mut self) -> Result<()> {
+        let target_url = self.last_snapshot.target_url.clone();
+        let browser_path = self.last_snapshot.browser_path.clone();
+        self.teardown_process();
+        self.ensure_process()?;
+        let snapshot = self
+            .process
+            .as_mut()
+            .expect("browser adapter process missing")
+            .request(AdapterRequest::Open {
+                target_url,
+                browser_path,
+                headless: true,
+            })?;
+        self.last_snapshot = snapshot;
+        Ok(())
     }
 
     fn current_target(&self) -> String {
@@ -298,6 +360,53 @@ impl AdapterProcess {
                 }
             }
             other => bail!("unexpected adapter frame for request: {other:?}"),
+        }
+    }
+
+    fn diagnostics(&mut self, bundle_dir: Option<&Path>) -> Result<BrowserDiagnosticsSnapshot> {
+        let request = AdapterRequest::Diagnostics {
+            bundle_dir: bundle_dir.map(|path| path.display().to_string()),
+        };
+        let raw = serde_json::to_string(&request).context("encode adapter diagnostics request")?;
+        self.stdin
+            .write_all(raw.as_bytes())
+            .context("write adapter diagnostics request")?;
+        self.stdin
+            .write_all(b"\n")
+            .context("write adapter newline")?;
+        self.stdin
+            .flush()
+            .context("flush adapter diagnostics request")?;
+
+        let mut line = String::new();
+        self.stdout
+            .read_line(&mut line)
+            .context("read adapter diagnostics response")?;
+        if line.trim().is_empty() {
+            bail!("browser adapter closed without a diagnostics response");
+        }
+
+        let response: AdapterFrame =
+            serde_json::from_str(line.trim_end()).context("decode adapter diagnostics response")?;
+        match response {
+            AdapterFrame::Diagnostics {
+                ok,
+                state: _state,
+                diagnostics,
+                error,
+            } => {
+                if ok {
+                    diagnostics.context("adapter diagnostics finished without a result")
+                } else {
+                    bail!(
+                        "{}",
+                        error.unwrap_or_else(|| {
+                            "browser adapter returned an unknown diagnostics error".to_owned()
+                        })
+                    );
+                }
+            }
+            other => bail!("unexpected adapter frame for diagnostics: {other:?}"),
         }
     }
 
@@ -387,7 +496,9 @@ impl AdapterProcess {
                 AdapterFrame::Response { .. } => {
                     bail!("unexpected adapter response while asking")
                 }
-                AdapterFrame::ResearchUpdate { .. } | AdapterFrame::ResearchResult { .. } => {
+                AdapterFrame::ResearchUpdate { .. }
+                | AdapterFrame::ResearchResult { .. }
+                | AdapterFrame::Diagnostics { .. } => {
                     bail!("unexpected adapter research frame while asking")
                 }
             }
@@ -483,7 +594,9 @@ impl AdapterProcess {
                 AdapterFrame::Response { .. } => {
                     bail!("unexpected adapter response while running research")
                 }
-                AdapterFrame::StreamChunk { .. } | AdapterFrame::AskResult { .. } => {
+                AdapterFrame::StreamChunk { .. }
+                | AdapterFrame::AskResult { .. }
+                | AdapterFrame::Diagnostics { .. } => {
                     bail!("unexpected adapter frame while running research")
                 }
             }
@@ -517,6 +630,9 @@ enum AdapterRequest {
         output_dir: Option<String>,
         timeout_ms: Option<u64>,
     },
+    Diagnostics {
+        bundle_dir: Option<String>,
+    },
     Close,
     Shutdown,
 }
@@ -547,6 +663,12 @@ enum AdapterFrame {
         result: Option<ResearchResult>,
         error: Option<String>,
     },
+    Diagnostics {
+        ok: bool,
+        state: BrowserStatusSnapshot,
+        diagnostics: Option<BrowserDiagnosticsSnapshot>,
+        error: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -570,6 +692,14 @@ struct AdapterResearchUpdate {
     current_url: Option<String>,
     chunk_kind: Option<StreamChunkKind>,
     chunk_text: Option<String>,
+}
+
+fn is_recoverable_adapter_error(message: &str) -> bool {
+    message.contains("Execution context was destroyed")
+        || message.contains("Cannot find context")
+        || message.contains("managed page is not open")
+        || message.contains("Target page, context or browser has been closed")
+        || message.contains("browser adapter closed without")
 }
 
 fn idle_snapshot(

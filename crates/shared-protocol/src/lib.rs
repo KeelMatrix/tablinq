@@ -614,11 +614,41 @@ pub struct ConfigSnapshot {
     pub crash_bundles_dir: String,
     pub ipc_endpoint: String,
     pub warm_mode: bool,
+    pub safe_mode: bool,
     pub browser_target_url: String,
     pub browser_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SelectorPackSummary {
+    pub pack_id: String,
+    pub version: String,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StrategyTelemetryEntry {
+    pub capability: String,
+    pub strategy_id: String,
+    pub success_count: u64,
+    pub failure_count: u64,
+    pub success_rate: f32,
+    pub last_used_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserDoctor {
+    pub browser_detected: bool,
+    pub detected_browser_path: Option<String>,
+    pub profile_accessible: bool,
+    pub profile_access_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct DoctorReport {
     pub health: HealthCheck,
@@ -626,6 +656,12 @@ pub struct DoctorReport {
     pub config: ConfigSnapshot,
     pub browser: BrowserStatusSnapshot,
     pub capabilities: Option<CapabilityReport>,
+    pub selector_pack: Option<SelectorPackSummary>,
+    pub strategy_telemetry: Vec<StrategyTelemetryEntry>,
+    pub failure_bundle_count: u64,
+    pub latest_failure_bundle: Option<FailureBundle>,
+    pub browser_detection: BrowserDoctor,
+    pub recovery_guidance: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

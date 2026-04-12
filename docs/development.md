@@ -38,31 +38,32 @@
 
 ## Current testing strategy
 
-- Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, browser health messaging, streamed ask execution, timeout diagnostics, capability snapshots, configured ask requests, capability-missing failures, upload/download artifact persistence, research success/failure/cancellation, and CLI parsing.
-- TypeScript tests validate the JSON schemas, probe the extension against synthetic DOM fixtures, and exercise the browser adapter against both `fake-chatgpt` UI variants plus streaming/reload, renamed-control, missing-control, upload, managed-download, and research-progress scenarios with real Playwright flows.
+- Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, browser health messaging, streamed ask execution, timeout diagnostics, failure-bundle persistence, capability snapshots, configured ask requests, capability-missing failures, upload/download artifact persistence, research success/failure/cancellation, and CLI parsing.
+- TypeScript tests validate the JSON schemas, probe the extension against synthetic DOM fixtures, and exercise the browser adapter against both `fake-chatgpt` UI variants plus selector-pack loading, diagnostics capture, streaming/reload, renamed-control, missing-control, upload, managed-download, and research-progress scenarios with real Playwright flows.
 - `packages/fake-chatgpt` is the CI-safe target for browser and extension fallback tests.
 
 ## Current execution paths
 
-Part 8 adds deep research as a durable job path:
+Part 9 hardens the execution paths around drift and failure recovery:
 
 - `packages/extension/src/probe.ts`: ARIA-aware capability modules, strategy scoring, alias discovery, and DOM neighborhood snapshots.
 - `packages/extension/src/content-script.ts`: debounced capability publishing on DOM changes.
 - `packages/extension/src/service-worker.ts`: native-messaging and development WebSocket forwarding.
-- `packages/browser-adapter/src/browserAdapter.ts`: capability-cache persistence, runtime model/mode/effort selection, Playwright-backed uploads, managed downloads, prompt insertion, submit, streamed DOM observation, timeout handling, reload recovery, and research progress polling.
+- `packages/browser-adapter/src/browserAdapter.ts`: selector-pack loading, capability-cache persistence, strategy telemetry, runtime model/mode/effort selection, Playwright-backed uploads, managed downloads, prompt insertion, submit, streamed DOM observation, timeout handling, diagnostics capture, and reload recovery.
 - `gpt ask`: streamed terminal output backed by daemon job persistence, last-conversation resume, and returned artifact metadata.
 - `gpt research`: streamed report output backed by a dedicated durable job record, partial-output persistence, and optional local report writing.
 - `gpt capabilities`: daemon-facing inspection of the last real capability matrix and alias set from the managed page.
 - `gpt artifacts list|pull`: SQLite-backed artifact inspection and managed download retrieval.
 - `gpt jobs show|cancel`: persisted job detail inspection and best-effort cancellation signaling.
+- `gpt doctor`: daemon status plus browser detection, profile access, selector-pack summary, strategy telemetry, recent failure-bundle summary, and recovery guidance.
 - Capability-missing requests now fail fast with a typed daemon error instead of silently guessing.
-- Upload, download, and research failures are surfaced as typed daemon errors.
+- Upload, download, research, timeout, auth-required, profile-lock, launch, and drift failures are surfaced as typed daemon errors and bundled local diagnostics.
+- `config.toml` now supports `safe_mode = true` for probe-only local debugging.
 
 ## Next implementation boundary
 
-Part 9 should harden diagnostics and recovery around the now-complete core execution paths:
+Part 10 should package the now-hardened local system for easier Windows-first installation:
 
-- failure bundles with screenshots and DOM context
-- selector-pack drift diagnostics
-- recovery guidance and browser relaunch flows
-- richer `doctor` coverage
+- packaging and install scripts
+- native messaging/bootstrap polish
+- end-user install and troubleshooting docs

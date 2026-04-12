@@ -1,18 +1,18 @@
-use crate::browser::{BrowserManager, ResearchUpdate};
+use crate::browser::{BrowserDiagnosticsSnapshot, BrowserManager, ResearchUpdate};
 use crate::config::AppConfig;
 use crate::db::Database;
 use crate::ipc;
 use crate::lockfile;
 use crate::logging::JsonLogger;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::Utc;
 use interprocess::local_socket::traits::Listener as LocalSocketListenerTrait;
 use serde_json::json;
 use shared_protocol::{
-    AckEvent, AskCommand, BrowserOpenRequest, CapabilitySnapshot, DaemonErrorResponse, DaemonFrame,
-    DaemonRequest, DaemonResponse, DaemonStatusSnapshot, DoctorReport, ErrorCode, EventPayload,
-    HealthCheck, HealthStatus, JobKind, JobState, JobStatus, ResearchCommand, StreamChunk,
-    StreamChunkKind,
+    AckEvent, AskCommand, BrowserDoctor, BrowserOpenRequest, CapabilitySnapshot,
+    DaemonErrorResponse, DaemonFrame, DaemonRequest, DaemonResponse, DaemonStatusSnapshot,
+    DoctorReport, ErrorCode, EventPayload, FailureBundle, HealthCheck, HealthStatus, JobKind,
+    JobState, JobStatus, ResearchCommand, SelectorPackSummary, StreamChunk, StreamChunkKind,
 };
 use std::collections::HashSet;
 use std::fs;
@@ -71,12 +71,21 @@ pub fn run_service(config: AppConfig) -> Result<()> {
             if let Err(err) =
                 handle_ask_request(&config, &db, &browser, &stream, started_at, command)
             {
+                let error_message = format!("{err:#}");
                 logger.warn(
                     "daemon request failed",
                     json!({
-                        "error": format!("{err:#}"),
+                        "error": error_message,
                     }),
                 )?;
+                let _ = capture_failure_bundle(
+                    &config,
+                    &db,
+                    &browser,
+                    Some(&stream),
+                    None,
+                    &error_message,
+                );
                 ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)))?;
             }
             continue;
@@ -91,6 +100,17 @@ pub fn run_service(config: AppConfig) -> Result<()> {
                     handle_research_request(&config, &browser, &cancel_registry, &stream, command)
                 {
                     let error_message = format!("{err:#}");
+                    let db = Database::open(&config.paths.db_path).ok();
+                    if let Some(db) = db.as_ref() {
+                        let _ = capture_failure_bundle(
+                            &config,
+                            db,
+                            &browser,
+                            Some(&stream),
+                            Some(shared_protocol::Mode::Research),
+                            &error_message,
+                        );
+                    }
                     let _ = ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
                     if let Some(logger) = logger {
                         let _ = logger.warn(
@@ -135,13 +155,16 @@ pub fn run_service(config: AppConfig) -> Result<()> {
 }
 
 fn handle_ask_request(
-    _config: &AppConfig,
+    config: &AppConfig,
     db: &Database,
     browser: &Arc<Mutex<BrowserManager>>,
     stream: &interprocess::local_socket::Stream,
     _started_at: chrono::DateTime<Utc>,
     command: AskCommand,
 ) -> Result<()> {
+    if config.safe_mode() {
+        bail!("safe mode enabled: prompt execution is disabled; run doctor or capabilities only");
+    }
     let now = Utc::now();
     let job_id = format!("job-{}", now.timestamp_millis());
     let conversation_id = match command.conversation_id.clone() {
@@ -284,6 +307,9 @@ fn handle_research_request(
     stream: &interprocess::local_socket::Stream,
     command: ResearchCommand,
 ) -> Result<()> {
+    if config.safe_mode() {
+        bail!("safe mode enabled: prompt execution is disabled; run doctor or capabilities only");
+    }
     let db = Database::open(&config.paths.db_path)?;
     let created_at = Utc::now();
     let job_id = format!("job-{}", created_at.timestamp_millis());
@@ -463,12 +489,45 @@ fn handle_request(
         }),
         DaemonRequest::Doctor => {
             let browser_snapshot = lock_browser(browser)?.profile_info()?;
+            let diagnostics = lock_browser(browser)?.diagnostics(None).ok();
+            let browser_detection = diagnostics
+                .as_ref()
+                .map(|value| BrowserDoctor {
+                    browser_detected: value.browser_detected,
+                    detected_browser_path: value.detected_browser_path.clone(),
+                    profile_accessible: value.profile_accessible,
+                    profile_access_error: value.profile_access_error.clone(),
+                })
+                .unwrap_or_else(|| BrowserDoctor {
+                    browser_detected: cfg!(windows) || config.browser_path().is_some(),
+                    detected_browser_path: config.browser_path().map(ToOwned::to_owned),
+                    profile_accessible: true,
+                    profile_access_error: None,
+                });
+            let latest_failure_bundle = db.latest_failure_bundle()?;
+            let failure_bundle_count = db.count_failure_bundles()?;
             DaemonResponse::Doctor(DoctorReport {
                 health: health_snapshot(config, browser_snapshot.clone()),
                 status: status_snapshot(config, started_at),
                 config: config.snapshot(),
                 capabilities: browser_snapshot.capability_report.clone(),
                 browser: browser_snapshot,
+                selector_pack: diagnostics
+                    .as_ref()
+                    .and_then(|value| value.selector_pack.clone())
+                    .or_else(default_selector_pack_summary),
+                strategy_telemetry: diagnostics
+                    .as_ref()
+                    .map(|value| value.strategy_telemetry.clone())
+                    .unwrap_or_default(),
+                failure_bundle_count,
+                latest_failure_bundle,
+                browser_detection,
+                recovery_guidance: recovery_guidance(
+                    config,
+                    health_snapshot(config, lock_browser(browser)?.health()?),
+                    diagnostics.as_ref(),
+                ),
             })
         }
         DaemonRequest::Ask(_) => unreachable!("ask requests are handled as streaming responses"),
@@ -569,8 +628,15 @@ pub fn health_snapshot(
     config: &AppConfig,
     browser: shared_protocol::BrowserStatusSnapshot,
 ) -> HealthCheck {
+    let status = if !browser.running {
+        HealthStatus::Degraded
+    } else if !browser.extension_connected || !browser.authenticated {
+        HealthStatus::Degraded
+    } else {
+        HealthStatus::Ok
+    };
     HealthCheck {
-        status: HealthStatus::Ok,
+        status,
         checked_at: Utc::now(),
         browser_connected: browser.running,
         extension_connected: browser.extension_connected,
@@ -595,30 +661,111 @@ pub fn health_snapshot(
 pub fn map_error(err: anyhow::Error) -> DaemonResponse {
     let message = format!("{err:#}");
     DaemonResponse::Error(DaemonErrorResponse {
-        error_code: if message.contains("capability missing") {
-            ErrorCode::CapabilityMissing
-        } else if message.contains("research job failed")
-            || message.contains("research failed")
-            || message.contains("research cancelled")
-        {
-            ErrorCode::ResearchJobFailed
-        } else if message.contains("upload failed") {
-            ErrorCode::UploadFailed
-        } else if message.contains("download failed") {
-            ErrorCode::DownloadFailed
-        } else if message.contains("ui drift") {
-            ErrorCode::UiDrift
-        } else if message.contains("timed out") {
-            ErrorCode::ActionTimeout
-        } else {
-            ErrorCode::Transport
-        },
+        error_code: error_code_for_message(&message),
         message,
     })
 }
 
+fn error_code_for_message(message: &str) -> ErrorCode {
+    if message.contains("profile locked") || message.contains("SingletonLock") {
+        ErrorCode::ProfileLocked
+    } else if message.contains("auth required") {
+        ErrorCode::AuthRequired
+    } else if message.contains("browser launch failed")
+        || message.contains("spawn browser adapter")
+        || message.contains("supported browser executable")
+    {
+        ErrorCode::BrowserLaunch
+    } else if message.contains("capability missing") {
+        ErrorCode::CapabilityMissing
+    } else if message.contains("research job failed")
+        || message.contains("research failed")
+        || message.contains("research cancelled")
+    {
+        ErrorCode::ResearchJobFailed
+    } else if message.contains("upload failed") {
+        ErrorCode::UploadFailed
+    } else if message.contains("download failed") {
+        ErrorCode::DownloadFailed
+    } else if message.contains("ui drift") {
+        ErrorCode::UiDrift
+    } else if message.contains("timed out") {
+        ErrorCode::ActionTimeout
+    } else {
+        ErrorCode::Transport
+    }
+}
+
 fn emit_job_state(stream: &interprocess::local_socket::Stream, state: JobState) -> Result<()> {
     ipc::write_frame(stream, &DaemonFrame::Event(EventPayload::JobState(state)))
+}
+
+fn capture_failure_bundle(
+    config: &AppConfig,
+    db: &Database,
+    browser: &Arc<Mutex<BrowserManager>>,
+    stream: Option<&interprocess::local_socket::Stream>,
+    mode: Option<shared_protocol::Mode>,
+    message: &str,
+) -> Result<FailureBundle> {
+    let created_at = Utc::now();
+    let bundle_id = format!("bundle-{}", created_at.timestamp_millis());
+    let bundle_dir = config.paths.crash_bundles_dir.join(&bundle_id);
+    fs::create_dir_all(&bundle_dir).with_context(|| format!("create {}", bundle_dir.display()))?;
+
+    let diagnostics = lock_browser(browser)
+        .and_then(|mut manager| manager.diagnostics(Some(&bundle_dir)))
+        .unwrap_or_else(|_| {
+            let placeholder_screenshot = bundle_dir.join("failure.png");
+            let _ = fs::write(&placeholder_screenshot, []);
+            BrowserDiagnosticsSnapshot {
+                current_url: None,
+                capability_matrix: Default::default(),
+                strategy_attempts: vec![],
+                dom_snapshot: String::new(),
+                aria_snapshot: String::new(),
+                screenshot_path: Some(placeholder_screenshot.display().to_string()),
+                selector_pack: default_selector_pack_summary(),
+                strategy_telemetry: vec![],
+                browser_detected: cfg!(windows),
+                detected_browser_path: None,
+                profile_accessible: true,
+                profile_access_error: None,
+            }
+        });
+
+    let dom_snapshot_path = bundle_dir.join("dom.json");
+    fs::write(&dom_snapshot_path, diagnostics.dom_snapshot.as_bytes())
+        .with_context(|| format!("write {}", dom_snapshot_path.display()))?;
+    let aria_snapshot_path = bundle_dir.join("aria.json");
+    fs::write(&aria_snapshot_path, diagnostics.aria_snapshot.as_bytes())
+        .with_context(|| format!("write {}", aria_snapshot_path.display()))?;
+
+    let bundle = FailureBundle {
+        bundle_id: bundle_id.clone(),
+        error_code: error_code_for_message(message),
+        message: message.to_owned(),
+        created_at,
+        url: diagnostics.current_url,
+        mode,
+        screenshot_path: diagnostics.screenshot_path,
+        dom_snapshot_path: Some(dom_snapshot_path.display().to_string()),
+        aria_snapshot_path: Some(aria_snapshot_path.display().to_string()),
+        logs_path: Some(config.paths.log_path.display().to_string()),
+        strategy_attempts: diagnostics.strategy_attempts,
+        capability_matrix: diagnostics.capability_matrix,
+    };
+    let bundle_json_path = bundle_dir.join("bundle.json");
+    fs::write(&bundle_json_path, serde_json::to_vec_pretty(&bundle)?)
+        .with_context(|| format!("write {}", bundle_json_path.display()))?;
+    db.insert_failure_bundle(&bundle)?;
+    if let Some(stream) = stream {
+        let _ = ipc::write_frame(
+            stream,
+            &DaemonFrame::Event(EventPayload::Failure(bundle.clone())),
+        );
+    }
+    Ok(bundle)
 }
 
 fn lock_browser<'a>(
@@ -635,6 +782,63 @@ fn lock_cancel_registry<'a>(
     registry
         .lock()
         .map_err(|_| anyhow!("cancel registry lock poisoned"))
+}
+
+fn recovery_guidance(
+    config: &AppConfig,
+    health: HealthCheck,
+    diagnostics: Option<&BrowserDiagnosticsSnapshot>,
+) -> Vec<String> {
+    let mut guidance = Vec::new();
+    if config.safe_mode() {
+        guidance.push(
+            "safe mode is enabled; ask and research are disabled until config.toml is updated"
+                .to_owned(),
+        );
+    }
+    if !health.browser_connected {
+        guidance.push(
+            "browser is not running; use `gpt browser open` to launch or recreate the managed tab"
+                .to_owned(),
+        );
+    } else {
+        guidance.push("daemon can recreate the managed tab and relaunch the browser adapter when the page crashes or closes".to_owned());
+    }
+    if !health.authenticated {
+        guidance.push("authentication is required; open the managed browser and sign in before running ask or research".to_owned());
+    }
+    if !health.extension_connected {
+        guidance.push("extension probe is disconnected; reload the managed page or relaunch the browser to refresh capabilities".to_owned());
+    }
+    if let Some(diagnostics) = diagnostics {
+        if !diagnostics.profile_accessible {
+            guidance.push("browser profile is not writable; close other managed browser instances or reset the profile directory".to_owned());
+        }
+        if !diagnostics.browser_detected {
+            guidance.push(
+                "no supported browser was detected; set an explicit browser path in config.toml"
+                    .to_owned(),
+            );
+        }
+    }
+    guidance
+}
+
+fn default_selector_pack_summary() -> Option<SelectorPackSummary> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("selector-packs")
+        .join("v1")
+        .join("chatgpt-default.json");
+    let raw = fs::read_to_string(&path).ok()?;
+    let parsed: shared_protocol::SelectorPack = serde_json::from_str(&raw).ok()?;
+    Some(SelectorPackSummary {
+        pack_id: parsed.pack_id,
+        version: format!("v{}", parsed.format_version),
+        updated_at: Some(parsed.updated_at),
+        path: Some(path.display().to_string()),
+    })
 }
 
 fn apply_research_update(

@@ -6,84 +6,132 @@
   "capabilities": {
     "composer_ready": [
       {
-        "strategy_id": "composer-role",
-        "kind": "aria_role",
-        "selector": "[aria-label='Prompt composer']",
-        "score": 0.98
-      },
-      {
-        "strategy_id": "composer-slot",
+        "strategy_id": "data-slot-composer",
         "kind": "css",
         "selector": "[data-slot='composer']",
+        "score": 1.0
+      },
+      {
+        "strategy_id": "aria-textbox",
+        "kind": "aria_role",
+        "selector": "[aria-label='Prompt composer']",
         "score": 0.94
+      },
+      {
+        "strategy_id": "submit-neighborhood",
+        "kind": "dom_neighborhood",
+        "selector": "[data-action='submit']",
+        "score": 0.76
       }
     ],
     "submit_available": [
       {
-        "strategy_id": "submit-action",
+        "strategy_id": "data-action-submit",
         "kind": "css",
         "selector": "[data-action='submit']",
-        "score": 0.97
+        "score": 1.0
       },
       {
-        "strategy_id": "send-button-text",
+        "strategy_id": "button-send",
         "kind": "text",
         "selector": "Send",
-        "score": 0.71
+        "score": 0.92
+      },
+      {
+        "strategy_id": "composer-neighborhood",
+        "kind": "dom_neighborhood",
+        "selector": "[data-slot='composer']",
+        "score": 0.8
       }
     ],
     "model_picker_visible": [
       {
-        "strategy_id": "model-picker-slot",
+        "strategy_id": "data-slot-model-picker",
         "kind": "css",
         "selector": "[data-slot='model-picker']",
-        "score": 0.95
+        "score": 1.0
       },
       {
-        "strategy_id": "model-picker-toolbar",
+        "strategy_id": "aria-model-trigger",
         "kind": "dom_neighborhood",
         "selector": ".toolbar button:first-child",
-        "score": 0.68
+        "score": 0.9
       }
     ],
     "thinking_effort_visible": [
       {
-        "strategy_id": "effort-toggle-slot",
+        "strategy_id": "data-slot-effort-toggle",
         "kind": "css",
         "selector": "[data-slot='effort-toggle']",
-        "score": 0.92
+        "score": 1.0
+      },
+      {
+        "strategy_id": "aria-effort-toggle",
+        "kind": "text",
+        "selector": "Standard",
+        "score": 0.88
       }
     ],
     "search_mode_visible": [
       {
-        "strategy_id": "search-mode-flag",
+        "strategy_id": "data-mode-search",
         "kind": "css",
         "selector": "[data-mode='search']",
-        "score": 0.9
+        "score": 1.0
+      },
+      {
+        "strategy_id": "aria-search-toggle",
+        "kind": "text",
+        "selector": "Search",
+        "score": 0.88
       }
     ],
     "research_mode_visible": [
       {
-        "strategy_id": "research-mode-flag",
+        "strategy_id": "data-mode-research",
         "kind": "css",
         "selector": "[data-mode='research']",
-        "score": 0.9
+        "score": 1.0
+      },
+      {
+        "strategy_id": "aria-research-toggle",
+        "kind": "text",
+        "selector": "Research",
+        "score": 0.88
       }
     ],
     "upload_control_visible": [
       {
-        "strategy_id": "upload-entry-slot",
+        "strategy_id": "data-slot-upload-entry",
         "kind": "css",
         "selector": "[data-slot='upload-entry']",
-        "score": 0.91
+        "score": 1.0
+      },
+      {
+        "strategy_id": "native-file-input",
+        "kind": "css",
+        "selector": "input[type='file']",
+        "score": 0.88
       }
     ],
     "downloadable_artifacts_observable": [
       {
-        "strategy_id": "artifact-link-slot",
+        "strategy_id": "data-slot-artifact-link",
         "kind": "css",
         "selector": "[data-slot='artifact-link']",
-        "score": 0.88
+        "score": 1.0
+      },
+      {
+        "strategy_id": "download-link",
+        "kind": "css",
+        "selector": "a[download]",
+        "score": 0.9
+      },
+      {
+        "strategy_id": "aria-download-link",
+        "kind": "text",
+        "selector": "Download",
+        "score": 0.72
       }
     ]
   }
