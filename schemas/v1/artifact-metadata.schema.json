@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tablinq.local/schemas/v1/artifact-metadata.schema.json",
+  "title": "ArtifactMetadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_id",
+    "conversation_id",
+    "message_id",
+    "file_name",
+    "content_type",
+    "size_bytes",
+    "sha256",
+    "storage_path"
+  ],
+  "properties": {
+    "artifact_id": { "type": "string", "minLength": 1 },
+    "conversation_id": { "type": ["string", "null"], "minLength": 1 },
+    "message_id": { "type": ["string", "null"], "minLength": 1 },
+    "file_name": { "type": "string", "minLength": 1 },
+    "content_type": { "type": "string", "minLength": 1 },
+    "size_bytes": { "type": "integer", "minimum": 0 },
+    "sha256": { "type": "string", "minLength": 1 },
+    "storage_path": { "type": "string", "minLength": 1 }
+  }
+}

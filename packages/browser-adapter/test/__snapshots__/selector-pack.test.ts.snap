@@ -1,0 +1,118 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`selector pack parsing > parses the default selector pack 1`] = `
+{
+  "capabilities": [
+    {
+      "capability": "composer_ready",
+      "strategies": [
+        {
+          "kind": "aria_role",
+          "score": 0.98,
+          "selector": "[aria-label='Prompt composer']",
+          "strategy_id": "composer-role",
+        },
+        {
+          "kind": "css",
+          "score": 0.94,
+          "selector": "[data-slot='composer']",
+          "strategy_id": "composer-slot",
+        },
+      ],
+    },
+    {
+      "capability": "downloadable_artifacts_observable",
+      "strategies": [
+        {
+          "kind": "css",
+          "score": 0.88,
+          "selector": "[data-slot='artifact-link']",
+          "strategy_id": "artifact-link-slot",
+        },
+      ],
+    },
+    {
+      "capability": "model_picker_visible",
+      "strategies": [
+        {
+          "kind": "css",
+          "score": 0.95,
+          "selector": "[data-slot='model-picker']",
+          "strategy_id": "model-picker-slot",
+        },
+        {
+          "kind": "dom_neighborhood",
+          "score": 0.68,
+          "selector": ".toolbar button:first-child",
+          "strategy_id": "model-picker-toolbar",
+        },
+      ],
+    },
+    {
+      "capability": "research_mode_visible",
+      "strategies": [
+        {
+          "kind": "css",
+          "score": 0.9,
+          "selector": "[data-mode='research']",
+          "strategy_id": "research-mode-flag",
+        },
+      ],
+    },
+    {
+      "capability": "search_mode_visible",
+      "strategies": [
+        {
+          "kind": "css",
+          "score": 0.9,
+          "selector": "[data-mode='search']",
+          "strategy_id": "search-mode-flag",
+        },
+      ],
+    },
+    {
+      "capability": "submit_available",
+      "strategies": [
+        {
+          "kind": "text",
+          "score": 0.71,
+          "selector": "Send",
+          "strategy_id": "send-button-text",
+        },
+        {
+          "kind": "css",
+          "score": 0.97,
+          "selector": "[data-action='submit']",
+          "strategy_id": "submit-action",
+        },
+      ],
+    },
+    {
+      "capability": "thinking_effort_visible",
+      "strategies": [
+        {
+          "kind": "css",
+          "score": 0.92,
+          "selector": "[data-slot='effort-toggle']",
+          "strategy_id": "effort-toggle-slot",
+        },
+      ],
+    },
+    {
+      "capability": "upload_control_visible",
+      "strategies": [
+        {
+          "kind": "css",
+          "score": 0.91,
+          "selector": "[data-slot='upload-entry']",
+          "strategy_id": "upload-entry-slot",
+        },
+      ],
+    },
+  ],
+  "description": "Baseline selectors and semantic fallbacks for fake-chatgpt and early live-site development.",
+  "format_version": 1,
+  "pack_id": "chatgpt-default",
+  "updated_at": "2026-04-12T00:00:00Z",
+}
+`;

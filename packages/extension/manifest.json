@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Tablinq Bridge",
+  "version": "0.1.0",
+  "description": "Semantic bridge for a managed ChatGPT browser session.",
+  "permissions": ["nativeMessaging", "storage", "tabs"],
+  "host_permissions": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://chat.openai.com/*"],
+      "js": ["src/content-script.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

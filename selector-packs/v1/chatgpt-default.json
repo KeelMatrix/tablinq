@@ -1,0 +1,90 @@
+{
+  "format_version": 1,
+  "pack_id": "chatgpt-default",
+  "description": "Baseline selectors and semantic fallbacks for fake-chatgpt and early live-site development.",
+  "updated_at": "2026-04-12T00:00:00Z",
+  "capabilities": {
+    "composer_ready": [
+      {
+        "strategy_id": "composer-role",
+        "kind": "aria_role",
+        "selector": "[aria-label='Prompt composer']",
+        "score": 0.98
+      },
+      {
+        "strategy_id": "composer-slot",
+        "kind": "css",
+        "selector": "[data-slot='composer']",
+        "score": 0.94
+      }
+    ],
+    "submit_available": [
+      {
+        "strategy_id": "submit-action",
+        "kind": "css",
+        "selector": "[data-action='submit']",
+        "score": 0.97
+      },
+      {
+        "strategy_id": "send-button-text",
+        "kind": "text",
+        "selector": "Send",
+        "score": 0.71
+      }
+    ],
+    "model_picker_visible": [
+      {
+        "strategy_id": "model-picker-slot",
+        "kind": "css",
+        "selector": "[data-slot='model-picker']",
+        "score": 0.95
+      },
+      {
+        "strategy_id": "model-picker-toolbar",
+        "kind": "dom_neighborhood",
+        "selector": ".toolbar button:first-child",
+        "score": 0.68
+      }
+    ],
+    "thinking_effort_visible": [
+      {
+        "strategy_id": "effort-toggle-slot",
+        "kind": "css",
+        "selector": "[data-slot='effort-toggle']",
+        "score": 0.92
+      }
+    ],
+    "search_mode_visible": [
+      {
+        "strategy_id": "search-mode-flag",
+        "kind": "css",
+        "selector": "[data-mode='search']",
+        "score": 0.9
+      }
+    ],
+    "research_mode_visible": [
+      {
+        "strategy_id": "research-mode-flag",
+        "kind": "css",
+        "selector": "[data-mode='research']",
+        "score": 0.9
+      }
+    ],
+    "upload_control_visible": [
+      {
+        "strategy_id": "upload-entry-slot",
+        "kind": "css",
+        "selector": "[data-slot='upload-entry']",
+        "score": 0.91
+      }
+    ],
+    "downloadable_artifacts_observable": [
+      {
+        "strategy_id": "artifact-link-slot",
+        "kind": "css",
+        "selector": "[data-slot='artifact-link']",
+        "score": 0.88
+      }
+    ]
+  }
+}

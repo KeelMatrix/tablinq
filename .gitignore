@@ -1,0 +1,68 @@
+# === Project meta (exclude planning files) ===
+app-idea.txt
+app-plan.txt
+
+# === Rust ===
+target/
+Cargo.lock
+**/*.rs.bk
+
+# === Node / JS / TS ===
+node_modules/
+.pnpm-store/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# === Playwright ===
+playwright-report/
+test-results/
+
+# === Logs ===
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Editor / IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# === Environment ===
+.env
+.env.*
+*.local
+
+# === SQLite / local state ===
+*.db
+*.sqlite
+*.sqlite3
+
+# === Runtime directories ===
+data/
+downloads/
+browser-profile/
+tmp/
+temp/
+
+# === Build artifacts ===
+*.exe
+*.dll
+*.so
+*.dylib
+
+# === Extension build ===
+packages/extension/dist/
+packages/browser-adapter/dist/
+
+# === Misc ===
+.cache/

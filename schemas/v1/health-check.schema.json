@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tablinq.local/schemas/v1/health-check.schema.json",
+  "title": "HealthCheck",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "checked_at",
+    "browser_connected",
+    "extension_connected",
+    "authenticated",
+    "details"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["ok", "degraded", "down"]
+    },
+    "checked_at": { "type": "string", "format": "date-time" },
+    "browser_connected": { "type": "boolean" },
+    "extension_connected": { "type": "boolean" },
+    "authenticated": { "type": "boolean" },
+    "details": { "type": ["string", "null"], "minLength": 1 }
+  }
+}

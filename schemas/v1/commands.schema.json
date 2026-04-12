@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tablinq.local/schemas/v1/commands.schema.json",
+  "title": "CommandEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "request_id", "sent_at", "command"],
+  "properties": {
+    "version": { "const": "tablinq.v1" },
+    "request_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": ["string", "null"], "minLength": 1 },
+    "sent_at": { "type": "string", "format": "date-time" },
+    "command": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "payload"],
+          "properties": {
+            "type": { "const": "ask" },
+            "payload": { "$ref": "#/$defs/ask_payload" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "payload"],
+          "properties": {
+            "type": { "const": "research" },
+            "payload": { "$ref": "#/$defs/research_payload" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "payload"],
+          "properties": {
+            "type": { "const": "cancel_job" },
+            "payload": { "$ref": "#/$defs/cancel_job_payload" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "payload"],
+          "properties": {
+            "type": { "const": "inspect_capabilities" },
+            "payload": { "$ref": "#/$defs/empty_payload" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "payload"],
+          "properties": {
+            "type": { "const": "health_ping" },
+            "payload": { "$ref": "#/$defs/empty_payload" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "payload"],
+          "properties": {
+            "type": { "const": "pull_artifact" },
+            "payload": { "$ref": "#/$defs/pull_artifact_payload" }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "empty_payload": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "ask_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "prompt",
+        "conversation_id",
+        "mode",
+        "model_class",
+        "effort",
+        "files"
+      ],
+      "properties": {
+        "prompt": { "type": "string", "minLength": 1 },
+        "conversation_id": { "type": ["string", "null"], "minLength": 1 },
+        "mode": {
+          "type": "string",
+          "enum": ["normal", "search", "research"]
+        },
+        "model_class": {
+          "type": ["string", "null"],
+          "enum": ["instant", "thinking", null]
+        },
+        "effort": {
+          "type": ["string", "null"],
+          "enum": ["none", "standard", "extended", null]
+        },
+        "files": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "research_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["query", "files", "output_dir"],
+      "properties": {
+        "query": { "type": "string", "minLength": 1 },
+        "files": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "output_dir": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "cancel_job_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["job_id"],
+      "properties": {
+        "job_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "pull_artifact_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "destination_dir"],
+      "properties": {
+        "artifact_id": { "type": "string", "minLength": 1 },
+        "destination_dir": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
