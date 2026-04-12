@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
@@ -92,6 +92,9 @@ export interface AskExecutionCommand {
   prompt: string;
   conversationId?: string | null;
   timeoutMs?: number;
+  mode?: "normal" | "search" | "research";
+  modelClass?: "instant" | "thinking" | null;
+  effort?: "none" | "standard" | "extended" | null;
 }
 
 export interface AskResultSnapshot {
@@ -142,6 +145,19 @@ export interface BrowserLaunchConfig {
   executablePath?: string;
 }
 
+interface CapabilityCacheEntry {
+  workspace_key: string;
+  saved_at: string;
+  ui_signature: string | null;
+  preferred_strategies: Partial<Record<CapabilityKey, string>>;
+  report: CapabilityReportPayload;
+}
+
+interface CapabilityCacheFile {
+  version: 1;
+  workspaces: Record<string, CapabilityCacheEntry>;
+}
+
 export class BrowserAdapter {
   private context: BrowserContext | undefined;
   private managedPage: Page | undefined;
@@ -162,6 +178,12 @@ export class BrowserAdapter {
     Partial<Record<CapabilityKey, string>>
   >();
   private lastDomNeighborhoods: DomNeighborhoodSnapshot[] = [];
+  private readonly capabilityCachePath: string;
+  private capabilityCacheLoaded = false;
+  private capabilityCache: CapabilityCacheFile = {
+    version: 1,
+    workspaces: {},
+  };
 
   constructor(options: BrowserAdapterOptions) {
     this.profileDir = resolve(options.profileDir);
@@ -170,6 +192,10 @@ export class BrowserAdapter {
     this.defaultBrowserPath = options.defaultBrowserPath ?? null;
     this.currentTargetUrl = options.defaultTargetUrl;
     this.currentBrowserPath = options.defaultBrowserPath ?? null;
+    this.capabilityCachePath = resolve(
+      this.profileDir,
+      "tablinq-capability-cache.json",
+    );
   }
 
   async open(command: BrowserOpenCommand): Promise<BrowserStatusSnapshot> {
@@ -269,6 +295,7 @@ export class BrowserAdapter {
       this.resolveConversationTarget(command.conversationId),
     );
     await this.refreshCapabilities(page);
+    await applyAskConfiguration(page, command, this.lastCapabilityReport);
     await fillComposer(page, command.prompt);
     await clickSubmit(page);
 
@@ -362,6 +389,7 @@ export class BrowserAdapter {
       return;
     }
 
+    this.hydrateCapabilityCache();
     await mkdir(this.profileDir, { recursive: true });
     await mkdir(this.downloadsDir, { recursive: true });
     const launch = resolveBrowserLaunchConfig(process.platform, browserPath);
@@ -457,7 +485,8 @@ export class BrowserAdapter {
 
     const preferredStrategies = this.lastUiSignature
       ? (this.strategyTelemetry.get(this.lastUiSignature) ?? {})
-      : {};
+      : (this.capabilityCache.workspaces[workspaceKeyFromUrl(page.url())]
+          ?.preferred_strategies ?? {});
 
     try {
       const message = await page.evaluate(
@@ -490,10 +519,65 @@ export class BrowserAdapter {
         message.runtime.ui_signature,
         message.runtime.strategy_matches,
       );
+      this.persistCapabilitySnapshot(page.url(), message);
     } catch {
       this.extensionConnected = false;
       this.lastCapabilityReport = null;
       this.lastDomNeighborhoods = [];
+    }
+  }
+
+  private hydrateCapabilityCache(): void {
+    if (this.capabilityCacheLoaded) {
+      return;
+    }
+    this.capabilityCacheLoaded = true;
+
+    try {
+      const parsed = JSON.parse(
+        readFileSync(this.capabilityCachePath, "utf8"),
+      ) as CapabilityCacheFile;
+      if (parsed?.version !== 1 || !parsed.workspaces) {
+        return;
+      }
+      this.capabilityCache = parsed;
+      for (const entry of Object.values(parsed.workspaces)) {
+        if (entry.ui_signature) {
+          this.strategyTelemetry.set(
+            entry.ui_signature,
+            entry.preferred_strategies ?? {},
+          );
+        }
+      }
+    } catch {
+      this.capabilityCache = {
+        version: 1,
+        workspaces: {},
+      };
+    }
+  }
+
+  private persistCapabilitySnapshot(
+    currentUrl: string,
+    message: CapabilityBridgeMessage,
+  ): void {
+    const workspaceKey = workspaceKeyFromUrl(currentUrl);
+    this.capabilityCache.workspaces[workspaceKey] = {
+      workspace_key: workspaceKey,
+      saved_at: new Date().toISOString(),
+      ui_signature: message.runtime.ui_signature,
+      preferred_strategies: message.runtime.strategy_matches,
+      report: message.report,
+    };
+
+    try {
+      writeFileSync(
+        this.capabilityCachePath,
+        JSON.stringify(this.capabilityCache, null, 2),
+        "utf8",
+      );
+    } catch {
+      // Cache persistence is opportunistic and should not fail browser control.
     }
   }
 }
@@ -615,6 +699,63 @@ async function fillComposer(page: Page, prompt: string): Promise<void> {
   }, prompt);
 }
 
+async function applyAskConfiguration(
+  page: Page,
+  command: AskExecutionCommand,
+  report: CapabilityReportPayload | null,
+): Promise<void> {
+  if (
+    !command.modelClass &&
+    !command.effort &&
+    (!command.mode || command.mode === "normal")
+  ) {
+    return;
+  }
+
+  if (!report) {
+    throw new Error(
+      "capability missing: no capability report is available for model or mode selection",
+    );
+  }
+
+  await page.evaluate(
+    ({
+      source,
+      report,
+      request,
+    }: {
+      source: string;
+      report: CapabilityReportPayload;
+      request: {
+        mode: "normal" | "search" | "research";
+        modelClass?: "instant" | "thinking";
+        effort?: "none" | "standard" | "extended";
+      };
+    }) => {
+      const applyInPage = new Function(
+        `${source}\nreturn applyAskConfigurationInPage;`,
+      )() as (
+        report: CapabilityReportPayload,
+        request: {
+          mode: "normal" | "search" | "research";
+          modelClass?: "instant" | "thinking";
+          effort?: "none" | "standard" | "extended";
+        },
+      ) => void;
+      applyInPage(report, request);
+    },
+    {
+      source: applyAskConfigurationSource,
+      report,
+      request: {
+        modelClass: command.modelClass ?? undefined,
+        effort: command.effort ?? undefined,
+        mode: command.mode ?? "normal",
+      },
+    },
+  );
+}
+
 async function clickSubmit(page: Page): Promise<void> {
   await page.evaluate(() => {
     const submit = document.querySelector(
@@ -667,3 +808,268 @@ async function readAskSnapshot(page: Page): Promise<{
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+function workspaceKeyFromUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    const params = new URLSearchParams(url.search);
+    params.delete("conversation");
+    params.delete("scenario");
+    const query = params.toString();
+    return `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+  } catch {
+    return rawUrl;
+  }
+}
+
+const applyAskConfigurationSource = String.raw`
+function applyAskConfigurationInPage(report, request) {
+  const normalizeText = (value) =>
+    (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  const hasToken = (value, tokens) =>
+    tokens.some((token) =>
+      new RegExp(
+        '(^|[^a-z0-9])' +
+          token.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&') +
+          '([^a-z0-9]|$)',
+      ).test(value),
+    );
+
+  const isVisible = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (element.hidden || element.getAttribute("aria-hidden") === "true") {
+      return false;
+    }
+    const computed = window.getComputedStyle(element);
+    return (
+      computed.display !== "none" &&
+      computed.visibility !== "hidden" &&
+      computed.opacity !== "0"
+    );
+  };
+
+  const accessibleName = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    const ariaLabel = element.getAttribute("aria-label");
+    if (ariaLabel) {
+      return normalizeText(ariaLabel);
+    }
+    if (
+      element instanceof HTMLInputElement ||
+      element instanceof HTMLTextAreaElement
+    ) {
+      if (element.labels?.length) {
+        return normalizeText(
+          Array.from(element.labels)
+            .map((label) => label.textContent ?? "")
+            .join(" "),
+        );
+      }
+      if (element.placeholder) {
+        return normalizeText(element.placeholder);
+      }
+    }
+    return normalizeText(element.textContent);
+  };
+
+  const actionableElements = () =>
+    Array.from(
+      document.querySelectorAll(
+        [
+          "button",
+          "[role='button']",
+          "[role='tab']",
+          "[role='switch']",
+          "[role='option']",
+          "[aria-haspopup]",
+          "label[for]",
+        ].join(", "),
+      ),
+    ).filter(isVisible);
+
+  const isSelected = (element) =>
+    element.getAttribute("aria-pressed") === "true" ||
+    element.getAttribute("aria-checked") === "true" ||
+    element.getAttribute("aria-selected") === "true" ||
+    element.dataset.selected === "true" ||
+    element.dataset.active === "true";
+
+  const controlStateDetail = (aliases, requested) => {
+    const entries = Object.entries(aliases ?? {})
+      .map(([key, labels]) => key + "=[" + labels.join(", ") + "]")
+      .join("; ");
+    if (!entries) {
+      return "requested=" + requested + "; discovered=none";
+    }
+    return "requested=" + requested + "; discovered=" + entries;
+  };
+
+  const throwCapabilityMissing = (capability, requested, aliases) => {
+    throw new Error(
+      "capability missing: " +
+        capability +
+        "; " +
+        controlStateDetail(aliases, requested),
+    );
+  };
+
+  const throwUiDrift = (detail) => {
+    throw new Error("ui drift: " + detail);
+  };
+
+  const clickControl = (element) => {
+    if (element.tagName.toLowerCase() === "label") {
+      const inputId = element.getAttribute("for");
+      if (inputId) {
+        const input = document.getElementById(inputId);
+        if (input instanceof HTMLElement) {
+          input.click();
+          return;
+        }
+      }
+    }
+    element.click();
+  };
+
+  const findBySelector = (selector) => {
+    for (const element of Array.from(document.querySelectorAll(selector))) {
+      if (isVisible(element)) {
+        return element;
+      }
+    }
+    return null;
+  };
+
+  const findByAliases = (aliases, fallbackTokens) => {
+    const normalizedAliases = aliases.map((alias) => normalizeText(alias));
+    for (const element of actionableElements()) {
+      const name = accessibleName(element);
+      if (!name) {
+        continue;
+      }
+      if (
+        normalizedAliases.some(
+          (alias) =>
+            name === alias || name.includes(alias) || alias.includes(name),
+        )
+      ) {
+        return element;
+      }
+    }
+    for (const element of actionableElements()) {
+      const name = accessibleName(element);
+      if (hasToken(name, fallbackTokens)) {
+        return element;
+      }
+    }
+    return null;
+  };
+
+  const ensureMode = (mode) => {
+    if (mode === "normal") {
+      return;
+    }
+    const capabilityVisible =
+      mode === "search"
+        ? report.matrix.search_mode_visible
+        : report.matrix.research_mode_visible;
+    if (!capabilityVisible) {
+      throwCapabilityMissing(mode + " mode", mode, report.aliases.modes);
+    }
+
+    const fallbackSelector =
+      mode === "search" ? "[data-mode='search']" : "[data-mode='research']";
+    const fallbackTokens =
+      mode === "search" ? ["search", "browse", "web"] : ["research", "deep"];
+    const control =
+      findBySelector(fallbackSelector) ??
+      findByAliases(report.aliases.modes[mode] ?? [], fallbackTokens);
+    if (!control) {
+      throwUiDrift("could not find " + mode + " mode control after probing it");
+    }
+    if (!isSelected(control)) {
+      clickControl(control);
+    }
+  };
+
+  const ensureModelClass = (modelClass) => {
+    if (!report.matrix.model_picker_visible) {
+      throwCapabilityMissing(
+        "model picker",
+        modelClass,
+        report.aliases.model_classes,
+      );
+    }
+    const aliases = report.aliases.model_classes[modelClass] ?? [];
+    if (aliases.length === 0) {
+      throwCapabilityMissing(
+        "model class",
+        modelClass,
+        report.aliases.model_classes,
+      );
+    }
+    const control =
+      findBySelector("[data-model='" + modelClass + "']") ??
+      findByAliases(aliases, [modelClass]);
+    if (!control) {
+      throwUiDrift(
+        "could not find a control for model=" +
+          modelClass +
+          " after alias discovery",
+      );
+    }
+    if (!isSelected(control)) {
+      clickControl(control);
+    }
+  };
+
+  const ensureEffort = (effort) => {
+    if (effort === "none") {
+      return;
+    }
+    if (!report.matrix.thinking_effort_visible) {
+      throwCapabilityMissing(
+        "thinking effort",
+        effort,
+        report.aliases.efforts,
+      );
+    }
+    const aliases = report.aliases.efforts[effort] ?? [];
+    if (aliases.length === 0) {
+      throwCapabilityMissing(
+        "thinking effort",
+        effort,
+        report.aliases.efforts,
+      );
+    }
+    const control =
+      findBySelector("[data-effort='" + effort + "']") ??
+      findByAliases(aliases, [effort, "reasoning", "effort"]);
+    if (!control) {
+      throwUiDrift(
+        "could not find a control for effort=" +
+          effort +
+          " after alias discovery",
+      );
+    }
+    if (!isSelected(control)) {
+      clickControl(control);
+    }
+  };
+
+  if (request.modelClass) {
+    ensureModelClass(request.modelClass);
+  }
+  if (request.effort) {
+    ensureEffort(request.effort);
+  }
+  if (request.mode) {
+    ensureMode(request.mode);
+  }
+}
+`;

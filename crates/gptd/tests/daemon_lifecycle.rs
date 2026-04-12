@@ -1,15 +1,23 @@
 use chrono::{Duration, Utc};
 use gptd::{AppConfig, Database, daemon_is_responsive, send_request, send_request_stream};
 use shared_protocol::{
-    AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, ErrorCode, EventPayload,
-    HealthStatus, JobStatus, Mode, build_state_paths,
+    AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, Effort, ErrorCode, EventPayload,
+    HealthStatus, JobStatus, Mode, ModelClass, build_state_paths,
 };
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 use tempfile::tempdir;
+
+fn integration_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("integration lock poisoned")
+}
 
 fn spawn_daemon(state_root: &Path) -> Child {
     Command::new(env!("CARGO_BIN_EXE_gptd"))
@@ -75,6 +83,7 @@ fn spawn_fake_chatgpt() -> (Child, String) {
 
 #[test]
 fn daemon_boots_and_responds_over_local_socket() {
+    let _guard = integration_lock();
     let dir = tempdir().unwrap();
     let mut child = spawn_daemon(dir.path());
     wait_until_ready(dir.path());
@@ -98,6 +107,7 @@ fn daemon_boots_and_responds_over_local_socket() {
 
 #[test]
 fn daemon_creates_config_and_applies_db_migrations() {
+    let _guard = integration_lock();
     let dir = tempdir().unwrap();
     let mut child = spawn_daemon(dir.path());
     wait_until_ready(dir.path());
@@ -114,6 +124,7 @@ fn daemon_creates_config_and_applies_db_migrations() {
 
 #[test]
 fn jobs_persist_across_restarts() {
+    let _guard = integration_lock();
     let dir = tempdir().unwrap();
     let mut first = spawn_daemon(dir.path());
     wait_until_ready(dir.path());
@@ -154,6 +165,7 @@ fn jobs_persist_across_restarts() {
 
 #[test]
 fn daemon_reports_browser_health_from_adapter() {
+    let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
     let mut daemon = spawn_daemon(dir.path());
@@ -238,6 +250,7 @@ fn daemon_reports_browser_health_from_adapter() {
 
 #[test]
 fn daemon_streams_ask_responses_and_persists_conversations() {
+    let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
     let mut daemon = spawn_daemon(dir.path());
@@ -312,6 +325,7 @@ fn daemon_streams_ask_responses_and_persists_conversations() {
 
 #[test]
 fn daemon_reports_timeout_errors_for_stalled_asks() {
+    let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
     let mut daemon = spawn_daemon(dir.path());
@@ -356,7 +370,99 @@ fn daemon_reports_timeout_errors_for_stalled_asks() {
 }
 
 #[test]
+fn daemon_handles_configured_asks_on_renamed_controls() {
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?variant=aria")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let response = send_request_stream(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Ask(AskCommand {
+            prompt: "configured aria ask".to_owned(),
+            conversation_id: None,
+            mode: Mode::Research,
+            model_class: Some(ModelClass::Thinking),
+            effort: Some(Effort::Extended),
+            files: vec![],
+        }),
+        |_event| Ok(()),
+    )
+    .unwrap();
+
+    match response {
+        DaemonResponse::Ask(result) => {
+            assert_eq!(result.output_text, "Fake response for: configured aria ask");
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn daemon_reports_capability_missing_errors_for_unavailable_modes() {
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?missing=search")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let response = send_request_stream(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Ask(AskCommand {
+            prompt: "search for release notes".to_owned(),
+            conversation_id: None,
+            mode: Mode::Search,
+            model_class: None,
+            effort: None,
+            files: vec![],
+        }),
+        |_event| Ok(()),
+    )
+    .unwrap();
+
+    match response {
+        DaemonResponse::Error(error) => {
+            assert_eq!(error.error_code, ErrorCode::CapabilityMissing);
+            assert!(error.message.contains("search mode"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
 fn stale_lock_is_recovered_on_boot() {
+    let _guard = integration_lock();
     let dir = tempdir().unwrap();
     let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
     let stale = serde_json::json!({
@@ -380,6 +486,7 @@ fn stale_lock_is_recovered_on_boot() {
 #[cfg(windows)]
 #[test]
 fn windows_daemon_uses_namespaced_endpoint() {
+    let _guard = integration_lock();
     let dir = tempdir().unwrap();
     let paths = build_state_paths(dir.path());
     assert!(paths.ipc_endpoint.starts_with("tablinq-"));

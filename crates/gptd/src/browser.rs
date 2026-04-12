@@ -2,8 +2,8 @@ use crate::config::AppConfig;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
-    AskCommand, AskResult, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport,
-    EventPayload, StreamChunk,
+    AskCommand, AskResult, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, Effort,
+    EventPayload, Mode, ModelClass, StreamChunk,
 };
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -273,6 +273,9 @@ impl AdapterProcess {
             prompt: command.prompt.clone(),
             conversation_id: command.conversation_id.clone(),
             timeout_ms: Some(15_000),
+            mode: Some(command.mode),
+            model_class: command.model_class,
+            effort: command.effort,
         };
         let raw = serde_json::to_string(&request).context("encode adapter ask request")?;
         self.stdin
@@ -360,6 +363,9 @@ enum AdapterRequest {
         prompt: String,
         conversation_id: Option<String>,
         timeout_ms: Option<u64>,
+        mode: Option<Mode>,
+        model_class: Option<ModelClass>,
+        effort: Option<Effort>,
     },
     Close,
     Shutdown,

@@ -3,29 +3,124 @@ const note = document.querySelector("#variant-note");
 const params = new URLSearchParams(window.location.search);
 const variant = params.get("variant") === "aria" ? "aria" : "classic";
 const scenario = params.get("scenario") || "success";
+const missingControls = new Set(
+  (params.get("missing") || "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean),
+);
 
 document.body.dataset.uiVariant = variant;
 document.body.dataset.streamState = "idle";
+document.body.dataset.selectedModel = "thinking";
+document.body.dataset.selectedEffort = "standard";
+document.body.dataset.selectedMode = "normal";
+
 note.textContent =
   variant === "aria"
-    ? "ARIA-first variant with moved controls and renamed labels."
-    : "Classic variant with data-slot anchors and direct toolbar controls.";
+    ? "ARIA-first variant with moved controls, renamed labels, and semantic groups."
+    : "Classic variant with grouped controls and direct toolbar buttons.";
+
+function hasControl(name) {
+  return !missingControls.has(name);
+}
+
+function classicModelControls() {
+  if (!hasControl("model")) {
+    return "";
+  }
+  return `
+    <div class="pill" data-slot="model-picker" role="group" aria-label="Model picker">
+      <button type="button" data-model="instant" aria-pressed="false">GPT-5.3 Instant</button>
+      <button type="button" data-model="thinking" aria-pressed="true">GPT-5.4 Thinking</button>
+    </div>
+  `;
+}
+
+function classicModeControls() {
+  return [
+    hasControl("search")
+      ? `<button type="button" data-mode="search" aria-pressed="false">Search</button>`
+      : "",
+    hasControl("research")
+      ? `<button type="button" data-mode="research" aria-pressed="false">Research</button>`
+      : "",
+  ].join("");
+}
+
+function classicEffortControls() {
+  if (!hasControl("effort")) {
+    return "";
+  }
+  return `
+    <div class="pill" data-slot="effort-toggle" role="group" aria-label="Thinking effort">
+      <button type="button" data-effort="standard" aria-pressed="true">Standard</button>
+      <button type="button" data-effort="extended" aria-pressed="false">Extended</button>
+    </div>
+  `;
+}
+
+function classicUploadControl() {
+  if (!hasControl("upload")) {
+    return "";
+  }
+  return `<button type="button" data-slot="upload-entry">Attach</button>`;
+}
+
+function ariaModelControls() {
+  if (!hasControl("model")) {
+    return "";
+  }
+  return `
+    <div class="pill" role="group" aria-label="Choose engine">
+      <button type="button" data-model="instant" aria-pressed="false">Instant answers</button>
+      <button type="button" data-model="thinking" aria-pressed="true">Deep thinking</button>
+    </div>
+  `;
+}
+
+function ariaModeControls() {
+  return [
+    hasControl("search")
+      ? `<button type="button" data-mode="search" aria-pressed="false">Browse the web</button>`
+      : "",
+    hasControl("research")
+      ? `<button type="button" data-mode="research" aria-pressed="false">Deep research</button>`
+      : "",
+  ].join("");
+}
+
+function ariaEffortControls() {
+  if (!hasControl("effort")) {
+    return "";
+  }
+  return `
+    <div class="pill" role="group" aria-label="Reasoning effort">
+      <button type="button" data-effort="standard" aria-pressed="true">Standard reasoning</button>
+      <button type="button" data-effort="extended" aria-pressed="false">Extended reasoning</button>
+    </div>
+  `;
+}
+
+function ariaUploadControl() {
+  if (!hasControl("upload")) {
+    return "";
+  }
+  return `
+    <label class="pill" for="upload-input">Add files</label>
+    <input id="upload-input" type="file" hidden multiple />
+  `;
+}
 
 root.innerHTML =
   variant === "aria"
     ? `
       <section class="stacked-shell" aria-label="assistant workspace">
         <div class="stacked-toolbar">
-          <button type="button" class="pill" aria-haspopup="listbox">
-            Choose engine: GPT-5.3 Instant / GPT-5.4 Thinking
-          </button>
-          <button type="button" class="pill" aria-pressed="false">Browse the web</button>
-          <button type="button" class="pill" aria-pressed="false">Deep research</button>
-          <button type="button" class="pill" aria-label="Reasoning effort">
-            Extended reasoning
-          </button>
-          <label class="pill" for="upload-input">Add files</label>
-          <input id="upload-input" type="file" hidden multiple />
+          ${ariaModelControls()}
+          ${ariaModeControls()}
+          ${ariaEffortControls()}
+          ${ariaUploadControl()}
         </div>
         <div class="stacked-composer">
           <div
@@ -51,17 +146,10 @@ root.innerHTML =
     : `
       <section class="shell" aria-label="fake-chatgpt-shell">
         <div class="toolbar">
-          <button
-            type="button"
-            data-slot="model-picker"
-            aria-haspopup="listbox"
-          >
-            GPT-5.4 Thinking
-          </button>
-          <button type="button" data-mode="search">Search</button>
-          <button type="button" data-mode="research">Research</button>
-          <button type="button" data-slot="effort-toggle">Standard</button>
-          <button type="button" data-slot="upload-entry">Attach</button>
+          ${classicModelControls()}
+          ${classicModeControls()}
+          ${classicEffortControls()}
+          ${classicUploadControl()}
         </div>
         <div class="composer">
           <textarea
@@ -120,6 +208,29 @@ function writeConversationState(conversationId, messageId) {
 function setStreamState(state) {
   document.body.dataset.streamState = state;
   messageArticle?.setAttribute("data-stream-state", state);
+}
+
+function applyPressedState(selector, selectedValue) {
+  document.querySelectorAll(selector).forEach((element) => {
+    const key =
+      element.getAttribute("data-model") ||
+      element.getAttribute("data-effort") ||
+      element.getAttribute("data-mode");
+    const selected = key === selectedValue;
+    element.setAttribute("aria-pressed", selected ? "true" : "false");
+    element.dataset.selected = selected ? "true" : "false";
+  });
+}
+
+function syncSelectedState() {
+  applyPressedState("[data-model]", document.body.dataset.selectedModel);
+  applyPressedState("[data-effort]", document.body.dataset.selectedEffort);
+  const selectedMode = document.body.dataset.selectedMode;
+  document.querySelectorAll("[data-mode]").forEach((element) => {
+    const selected = element.getAttribute("data-mode") === selectedMode;
+    element.setAttribute("aria-pressed", selected ? "true" : "false");
+    element.dataset.selected = selected ? "true" : "false";
+  });
 }
 
 function renderChunk(state) {
@@ -237,6 +348,27 @@ function resumeStreamIfNeeded() {
   scheduleNextTick(state);
 }
 
+document.querySelectorAll("[data-model]").forEach((element) => {
+  element.addEventListener("click", () => {
+    document.body.dataset.selectedModel = element.getAttribute("data-model");
+    syncSelectedState();
+  });
+});
+
+document.querySelectorAll("[data-effort]").forEach((element) => {
+  element.addEventListener("click", () => {
+    document.body.dataset.selectedEffort = element.getAttribute("data-effort");
+    syncSelectedState();
+  });
+});
+
+document.querySelectorAll("[data-mode]").forEach((element) => {
+  element.addEventListener("click", () => {
+    document.body.dataset.selectedMode = element.getAttribute("data-mode");
+    syncSelectedState();
+  });
+});
+
 window.__tablinqCancelStream = () => {
   stopTimer();
   const conversationId = currentConversationId();
@@ -255,4 +387,5 @@ submit?.addEventListener("click", () => {
   startStream(promptText);
 });
 
+syncSelectedState();
 resumeStreamIfNeeded();

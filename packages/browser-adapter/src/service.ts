@@ -27,6 +27,9 @@ type AdapterRequest =
       prompt: string;
       conversation_id?: string | null;
       timeout_ms?: number;
+      mode?: "normal" | "search" | "research";
+      model_class?: "instant" | "thinking" | null;
+      effort?: "none" | "standard" | "extended" | null;
     }
   | { type: "health" }
   | { type: "close" }
@@ -78,6 +81,9 @@ async function main() {
             prompt: request.prompt,
             conversationId: request.conversation_id,
             timeoutMs: request.timeout_ms,
+            mode: request.mode,
+            modelClass: request.model_class,
+            effort: request.effort,
           } satisfies AskExecutionCommand,
           (chunk) => {
             writeFrame({

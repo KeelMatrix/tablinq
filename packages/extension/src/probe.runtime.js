@@ -123,7 +123,11 @@ export function probeDocument(options = {}) {
   };
 
   const hasToken = (value, tokens) =>
-    tokens.some((token) => value.includes(token));
+    tokens.some((token) =>
+      new RegExp(
+        `(^|[^a-z0-9])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`,
+      ).test(value),
+    );
 
   const firstVisibleBySelector = (selector) =>
     firstVisible(documentRoot.querySelectorAll(selector));
@@ -473,41 +477,83 @@ export function probeDocument(options = {}) {
     }
   };
 
+  const collectAliasCandidates = (element) => {
+    const names = [];
+    const pushName = (candidate) => {
+      const name = accessibleName(candidate);
+      if (name && !names.includes(name)) {
+        names.push(name);
+      }
+    };
+
+    pushName(element);
+    const scoped = element.matches(
+      "[data-slot='model-picker'], [data-slot='effort-toggle']",
+    )
+      ? element
+      : element.parentElement;
+    for (const candidate of Array.from(
+      scoped?.querySelectorAll(
+        [
+          "button",
+          "[role='button']",
+          "[role='tab']",
+          "[role='option']",
+          "[aria-haspopup]",
+          "label",
+        ].join(", "),
+      ) ?? [],
+    )) {
+      if (isVisible(candidate)) {
+        pushName(candidate);
+      }
+    }
+    return names;
+  };
+
   const captureAliases = (capability, element) => {
     if (!element) {
       return;
     }
-    const name = accessibleName(element);
-    if (!name) {
+    const names = collectAliasCandidates(element);
+    if (names.length === 0) {
       return;
     }
     if (capability === "model_picker_visible") {
-      if (hasToken(name, ["instant"])) {
-        addAlias("model_classes", "instant", name);
-      }
-      if (hasToken(name, ["thinking"])) {
-        addAlias("model_classes", "thinking", name);
+      for (const name of names) {
+        if (hasToken(name, ["instant"])) {
+          addAlias("model_classes", "instant", name);
+        }
+        if (hasToken(name, ["thinking"])) {
+          addAlias("model_classes", "thinking", name);
+        }
       }
       if (Object.keys(aliases.model_classes).length === 0) {
-        addAlias("model_classes", "thinking", name);
+        addAlias("model_classes", "thinking", names[0]);
       }
     }
     if (capability === "thinking_effort_visible") {
-      if (hasToken(name, ["extended"])) {
-        addAlias("efforts", "extended", name);
-      }
-      if (hasToken(name, ["standard"])) {
-        addAlias("efforts", "standard", name);
-      }
-      if (!hasToken(name, ["standard", "extended"])) {
-        addAlias("efforts", "none", name);
+      for (const name of names) {
+        if (hasToken(name, ["extended"])) {
+          addAlias("efforts", "extended", name);
+        }
+        if (hasToken(name, ["standard"])) {
+          addAlias("efforts", "standard", name);
+        }
+        if (!hasToken(name, ["standard", "extended"])) {
+          addAlias("efforts", "none", name);
+        }
       }
     }
     if (capability === "search_mode_visible") {
-      addAlias("modes", "search", name);
+      for (const name of names) {
+        addAlias("modes", "search", name);
+      }
     }
     if (capability === "research_mode_visible") {
-      addAlias("modes", "research", name);
+      for (const name of names) {
+        addAlias("modes", "research", name);
+      }
     }
   };
 
