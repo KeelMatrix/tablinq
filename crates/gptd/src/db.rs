@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use shared_protocol::{
-    ArtifactList, ArtifactMetadata, ArtifactSummary, JobList, JobStatus, JobSummary, SessionList,
-    SessionSummary,
+    ArtifactList, ArtifactMetadata, ArtifactSummary, JobDetail, JobKind, JobList, JobStatus,
+    JobSummary, SessionList, SessionSummary,
 };
 use std::path::Path;
 
@@ -67,6 +67,28 @@ const MIGRATIONS: &[(&str, &str)] = &[
         );
 
         CREATE INDEX IF NOT EXISTS idx_conversations_last_seen_at ON conversations(last_seen_at DESC);
+        "#,
+    ),
+    (
+        "0004_job_details",
+        r#"
+        CREATE TABLE IF NOT EXISTS job_details (
+            job_id TEXT PRIMARY KEY,
+            job_kind TEXT NOT NULL,
+            input_text TEXT,
+            output_text TEXT,
+            current_url TEXT,
+            output_path TEXT,
+            cancel_requested INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS job_artifacts (
+            job_id TEXT NOT NULL,
+            artifact_id TEXT NOT NULL,
+            PRIMARY KEY (job_id, artifact_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_job_artifacts_job_id ON job_artifacts(job_id);
         "#,
     ),
 ];
@@ -176,6 +198,74 @@ impl Database {
         Ok(())
     }
 
+    pub fn upsert_job_detail(
+        &self,
+        job_id: &str,
+        kind: JobKind,
+        input_text: Option<&str>,
+        output_path: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO job_details (job_id, job_kind, input_text, output_text, current_url, output_path, cancel_requested)
+            VALUES (?1, ?2, ?3, NULL, NULL, ?4, 0)
+            ON CONFLICT(job_id) DO UPDATE SET
+                job_kind = excluded.job_kind,
+                input_text = excluded.input_text,
+                output_path = COALESCE(excluded.output_path, job_details.output_path)
+            "#,
+            params![job_id, job_kind_as_str(kind), input_text, output_path],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_job_output(
+        &self,
+        job_id: &str,
+        output_text: Option<&str>,
+        current_url: Option<&str>,
+        output_path: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO job_details (job_id, job_kind, input_text, output_text, current_url, output_path, cancel_requested)
+            VALUES (?1, 'ask', NULL, ?2, ?3, ?4, 0)
+            ON CONFLICT(job_id) DO UPDATE SET
+                output_text = COALESCE(excluded.output_text, job_details.output_text),
+                current_url = COALESCE(excluded.current_url, job_details.current_url),
+                output_path = COALESCE(excluded.output_path, job_details.output_path)
+            "#,
+            params![job_id, output_text, current_url, output_path],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_job_cancel_requested(&self, job_id: &str, cancel_requested: bool) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO job_details (job_id, job_kind, input_text, output_text, current_url, output_path, cancel_requested)
+            VALUES (?1, 'ask', NULL, NULL, NULL, NULL, ?2)
+            ON CONFLICT(job_id) DO UPDATE SET
+                cancel_requested = excluded.cancel_requested
+            "#,
+            params![job_id, if cancel_requested { 1 } else { 0 }],
+        )?;
+        Ok(())
+    }
+
+    pub fn job_cancel_requested(&self, job_id: &str) -> Result<bool> {
+        let requested = self
+            .conn
+            .query_row(
+                "SELECT cancel_requested FROM job_details WHERE job_id = ?1",
+                [job_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        Ok(requested != 0)
+    }
+
     pub fn upsert_conversation(
         &self,
         conversation_id: &str,
@@ -253,6 +343,17 @@ impl Database {
         Ok(())
     }
 
+    pub fn link_job_artifact(&self, job_id: &str, artifact_id: &str) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT OR IGNORE INTO job_artifacts (job_id, artifact_id)
+            VALUES (?1, ?2)
+            "#,
+            params![job_id, artifact_id],
+        )?;
+        Ok(())
+    }
+
     pub fn list_artifacts(&self) -> Result<ArtifactList> {
         let mut statement = self.conn.prepare(
             r#"
@@ -300,6 +401,118 @@ impl Database {
             )
             .optional()?;
         Ok(artifact)
+    }
+
+    pub fn job_detail(&self, job_id: &str) -> Result<Option<JobDetail>> {
+        let row = self
+            .conn
+            .query_row(
+                r#"
+                SELECT jobs.job_id,
+                       jobs.status,
+                       jobs.message,
+                       jobs.conversation_id,
+                       jobs.created_at,
+                       jobs.updated_at,
+                       job_details.job_kind,
+                       job_details.input_text,
+                       job_details.output_text,
+                       job_details.current_url,
+                       job_details.output_path,
+                       job_details.cancel_requested
+                FROM jobs
+                LEFT JOIN job_details ON job_details.job_id = jobs.job_id
+                WHERE jobs.job_id = ?1
+                "#,
+                [job_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        parse_job_status(row.get::<_, String>(1)?.as_str()),
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        parse_timestamp(row.get::<_, String>(4)?)?,
+                        parse_timestamp(row.get::<_, String>(5)?)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((
+            job_id,
+            status,
+            message,
+            conversation_id,
+            created_at,
+            updated_at,
+            kind,
+            input_text,
+            output_text,
+            current_url,
+            output_path,
+            cancel_requested,
+        )) = row
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(JobDetail {
+            job_id: job_id.clone(),
+            kind: kind.as_deref().map(parse_job_kind).unwrap_or(JobKind::Ask),
+            status,
+            message,
+            conversation_id,
+            created_at,
+            updated_at,
+            input_text,
+            output_text,
+            current_url,
+            output_path,
+            artifacts: self.job_artifacts(&job_id)?,
+            cancel_requested,
+        }))
+    }
+
+    pub fn fail_incomplete_jobs(&self, message: &str, updated_at: DateTime<Utc>) -> Result<()> {
+        self.conn.execute(
+            r#"
+            UPDATE jobs
+            SET status = 'failed',
+                message = ?1,
+                updated_at = ?2
+            WHERE status IN ('starting', 'running', 'waiting_for_sources', 'artifact_ready')
+            "#,
+            params![message, updated_at.to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    fn job_artifacts(&self, job_id: &str) -> Result<Vec<ArtifactSummary>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT artifacts.artifact_id,
+                   artifacts.conversation_id,
+                   artifacts.message_id,
+                   artifacts.file_name,
+                   artifacts.content_type,
+                   artifacts.size_bytes,
+                   artifacts.sha256,
+                   artifacts.storage_path,
+                   artifacts.created_at
+            FROM job_artifacts
+            INNER JOIN artifacts ON artifacts.artifact_id = job_artifacts.artifact_id
+            WHERE job_artifacts.job_id = ?1
+            ORDER BY artifacts.created_at DESC
+            "#,
+        )?;
+        let rows = statement.query_map([job_id], map_artifact_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     fn apply_migrations(&self) -> Result<()> {
@@ -368,6 +581,13 @@ fn parse_job_status(value: &str) -> JobStatus {
     }
 }
 
+fn parse_job_kind(value: &str) -> JobKind {
+    match value {
+        "research" => JobKind::Research,
+        _ => JobKind::Ask,
+    }
+}
+
 fn job_status_as_str(value: JobStatus) -> &'static str {
     match value {
         JobStatus::Queued => "queued",
@@ -377,6 +597,13 @@ fn job_status_as_str(value: JobStatus) -> &'static str {
         JobStatus::Completed => "completed",
         JobStatus::Failed => "failed",
         JobStatus::ArtifactReady => "artifact_ready",
+    }
+}
+
+fn job_kind_as_str(value: JobKind) -> &'static str {
+    match value {
+        JobKind::Ask => "ask",
+        JobKind::Research => "research",
     }
 }
 

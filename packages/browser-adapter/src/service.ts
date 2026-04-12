@@ -4,6 +4,9 @@ import {
   type AskExecutionCommand,
   type AskResultSnapshot,
   type BrowserStatusSnapshot,
+  type ResearchExecutionCommand,
+  type ResearchProgressSnapshot,
+  type ResearchResultSnapshot,
   type StreamChunkSnapshot,
 } from "./browserAdapter";
 
@@ -32,6 +35,14 @@ type AdapterRequest =
       effort?: "none" | "standard" | "extended" | null;
       files?: string[];
     }
+  | {
+      type: "research";
+      job_id: string;
+      query: string;
+      files?: string[];
+      output_dir?: string | null;
+      timeout_ms?: number;
+    }
   | { type: "health" }
   | { type: "close" }
   | { type: "shutdown" };
@@ -44,11 +55,19 @@ type AdapterFrame =
       error?: string;
     }
   | { type: "stream_chunk"; chunk: StreamChunkSnapshot }
+  | { type: "research_update"; update: ResearchProgressSnapshot }
   | {
       type: "ask_result";
       ok: boolean;
       state: BrowserStatusSnapshot;
       result?: AskResultSnapshot;
+      error?: string;
+    }
+  | {
+      type: "research_result";
+      ok: boolean;
+      state: BrowserStatusSnapshot;
+      result?: ResearchResultSnapshot;
       error?: string;
     };
 
@@ -100,6 +119,28 @@ async function main() {
           state: await adapter.snapshot(),
           result,
         });
+      } else if (request.type === "research") {
+        const result = await adapter.research(
+          {
+            jobId: request.job_id,
+            query: request.query,
+            files: request.files ?? [],
+            outputDir: request.output_dir,
+            timeoutMs: request.timeout_ms,
+          } satisfies ResearchExecutionCommand,
+          (update) => {
+            writeFrame({
+              type: "research_update",
+              update,
+            });
+          },
+        );
+        writeFrame({
+          type: "research_result",
+          ok: true,
+          state: await adapter.snapshot(),
+          result,
+        });
       } else {
         const state = await handleRequest(adapter, request);
         response = { type: "response", ok: true, state } satisfies AdapterFrame;
@@ -139,7 +180,7 @@ async function main() {
 
 async function handleRequest(
   adapter: BrowserAdapter,
-  request: Exclude<AdapterRequest, { type: "ask" }>,
+  request: Exclude<AdapterRequest, { type: "ask" } | { type: "research" }>,
 ) {
   switch (request.type) {
     case "open":

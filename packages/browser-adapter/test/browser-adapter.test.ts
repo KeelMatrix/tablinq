@@ -12,7 +12,12 @@ function withHarnessUrl(
   baseUrl: string,
   options: {
     variant?: "classic" | "aria";
-    scenario?: "success" | "timeout" | "reload";
+    scenario?:
+      | "success"
+      | "timeout"
+      | "reload"
+      | "research-success"
+      | "research-failure";
     missing?: string[];
   } = {},
 ): string {
@@ -389,6 +394,78 @@ describe("browser adapter", () => {
       "utf8",
     );
     expect(artifactBody).toContain("Uploads: brief.txt, notes.csv");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("runs research jobs with progress updates and persisted artifacts", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: withHarnessUrl(server.url, {
+        scenario: "research-success",
+      }),
+    });
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { scenario: "research-success" }),
+      headless: true,
+    });
+
+    const updates: string[] = [];
+    const result = await adapter.research(
+      {
+        jobId: "job-research-success",
+        query: "investigate launch risks",
+        files: [fixture],
+        timeoutMs: 5_000,
+      },
+      (update) => {
+        updates.push(update.status);
+      },
+    );
+
+    expect(updates).toContain("starting");
+    expect(updates).toContain("waiting_for_sources");
+    expect(updates).toContain("running");
+    expect(result.report_text).toContain(
+      "Research report for: investigate launch risks",
+    );
+    expect(result.artifacts).toHaveLength(1);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails research jobs with a research-specific error", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: withHarnessUrl(server.url, {
+        scenario: "research-failure",
+      }),
+    });
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { scenario: "research-failure" }),
+      headless: true,
+    });
+
+    await expect(
+      adapter.research(
+        {
+          jobId: "job-research-failure",
+          query: "investigate flaky providers",
+          timeoutMs: 5_000,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/research job failed/i);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

@@ -105,6 +105,14 @@ export interface AskExecutionCommand {
   files?: string[];
 }
 
+export interface ResearchExecutionCommand {
+  jobId: string;
+  query: string;
+  files?: string[];
+  outputDir?: string | null;
+  timeoutMs?: number;
+}
+
 export interface ArtifactMetadataSnapshot {
   artifact_id: string;
   conversation_id: string | null;
@@ -124,6 +132,27 @@ export interface AskResultSnapshot {
   artifacts: ArtifactMetadataSnapshot[];
   completed_at: string;
   current_url: string;
+}
+
+export interface ResearchProgressSnapshot {
+  status: "starting" | "waiting_for_sources" | "running";
+  message?: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  current_url: string;
+  chunk_kind?: "delta" | "status";
+  chunk_text?: string;
+}
+
+export interface ResearchResultSnapshot {
+  job_id: string;
+  conversation_id: string;
+  message_id: string;
+  report_text: string;
+  artifacts: ArtifactMetadataSnapshot[];
+  completed_at: string;
+  current_url: string;
+  output_path?: string | null;
 }
 
 export interface StreamChunkSnapshot {
@@ -417,6 +446,114 @@ export class BrowserAdapter {
     }
 
     throw new Error("ask timed out waiting for streamed response");
+  }
+
+  async research(
+    command: ResearchExecutionCommand,
+    onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
+  ): Promise<ResearchResultSnapshot> {
+    await this.ensureContext(false, this.currentBrowserPath ?? undefined);
+    const page = await this.ensureManagedPage(this.currentTargetUrl);
+    await this.refreshCapabilities(page);
+    await applyAskConfiguration(
+      page,
+      {
+        jobId: command.jobId,
+        prompt: command.query,
+        mode: "research",
+      },
+      this.lastCapabilityReport,
+    );
+    await uploadAttachments(
+      page,
+      command.files ?? [],
+      this.lastCapabilityReport,
+    );
+    await fillComposer(page, command.query);
+    await clickSubmit(page);
+
+    let emittedText = "";
+    let lastStatus = "starting";
+    let lastMessage = "starting research";
+    const timeoutAt = Date.now() + (command.timeoutMs ?? 30_000);
+
+    await onUpdate({
+      status: "starting",
+      message: "starting research",
+      conversation_id: null,
+      message_id: null,
+      current_url: page.url(),
+    });
+
+    while (Date.now() < timeoutAt) {
+      const snapshot = await readResearchSnapshot(page);
+      if (
+        snapshot.status !== lastStatus ||
+        snapshot.statusMessage !== lastMessage
+      ) {
+        lastStatus = snapshot.status;
+        lastMessage = snapshot.statusMessage ?? "";
+        if (
+          snapshot.status === "waiting_for_sources" ||
+          snapshot.status === "running"
+        ) {
+          await onUpdate({
+            status: snapshot.status,
+            message: snapshot.statusMessage ?? undefined,
+            conversation_id: snapshot.conversationId,
+            message_id: snapshot.messageId,
+            current_url: snapshot.currentUrl,
+          });
+        }
+      }
+
+      if (
+        snapshot.reportText.length > emittedText.length &&
+        snapshot.reportText.startsWith(emittedText)
+      ) {
+        const delta = snapshot.reportText.slice(emittedText.length);
+        emittedText = snapshot.reportText;
+        await onUpdate({
+          status: "running",
+          message: snapshot.statusMessage ?? undefined,
+          conversation_id: snapshot.conversationId,
+          message_id: snapshot.messageId,
+          current_url: snapshot.currentUrl,
+          chunk_kind: "delta",
+          chunk_text: delta,
+        });
+      }
+
+      if (snapshot.status === "failed") {
+        throw new Error(
+          `research job failed: ${snapshot.statusMessage ?? "research failed"}`,
+        );
+      }
+
+      if (snapshot.status === "done") {
+        const artifacts = await collectArtifacts(
+          page,
+          this.downloadsDir,
+          snapshot.conversationId,
+          snapshot.messageId,
+        );
+        return {
+          job_id: command.jobId,
+          conversation_id:
+            snapshot.conversationId ?? `${command.jobId}-conversation`,
+          message_id: snapshot.messageId ?? `${command.jobId}-message`,
+          report_text: snapshot.reportText,
+          artifacts,
+          completed_at: new Date().toISOString(),
+          current_url: snapshot.currentUrl,
+          output_path: null,
+        };
+      }
+
+      await sleep(75);
+    }
+
+    throw new Error("research job failed: timed out waiting for completion");
   }
 
   private async ensureManagedPage(targetUrl: string): Promise<Page> {
@@ -936,6 +1073,39 @@ async function readAskSnapshot(page: Page): Promise<{
       state,
       conversationId,
       messageId,
+      currentUrl: window.location.href,
+    };
+  });
+}
+
+async function readResearchSnapshot(page: Page): Promise<{
+  status: "waiting_for_sources" | "running" | "done" | "failed";
+  statusMessage: string | null;
+  reportText: string;
+  conversationId: string | null;
+  messageId: string | null;
+  currentUrl: string;
+}> {
+  return page.evaluate(() => {
+    const reportNode =
+      document.querySelector("[data-slot='research-report'] p") ??
+      document.querySelector("[data-slot='assistant-message'] p") ??
+      document.querySelector(".message p");
+    const status =
+      (document.body.dataset.researchState as
+        | "waiting_for_sources"
+        | "running"
+        | "done"
+        | "failed"
+        | undefined) ?? "running";
+    return {
+      status,
+      statusMessage: document.body.dataset.researchStatusMessage ?? null,
+      reportText: reportNode?.textContent?.trim() ?? "",
+      conversationId:
+        document.body.dataset.conversationId ??
+        new URL(window.location.href).searchParams.get("conversation"),
+      messageId: document.body.dataset.lastMessageId ?? null,
       currentUrl: window.location.href,
     };
   });
