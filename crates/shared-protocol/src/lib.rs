@@ -539,6 +539,10 @@ pub enum DaemonRequest {
     ConfigShow,
     SessionsList,
     JobsList,
+    BrowserOpen(BrowserOpenRequest),
+    BrowserClose,
+    BrowserResetProfile,
+    BrowserProfileInfo,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -551,6 +555,7 @@ pub enum DaemonResponse {
     Config(ConfigSnapshot),
     Sessions(SessionList),
     Jobs(JobList),
+    Browser(BrowserStatusSnapshot),
     Error(DaemonErrorResponse),
 }
 
@@ -582,6 +587,8 @@ pub struct ConfigSnapshot {
     pub crash_bundles_dir: String,
     pub ipc_endpoint: String,
     pub warm_mode: bool,
+    pub browser_target_url: String,
+    pub browser_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -590,6 +597,7 @@ pub struct DoctorReport {
     pub health: HealthCheck,
     pub status: DaemonStatusSnapshot,
     pub config: ConfigSnapshot,
+    pub browser: BrowserStatusSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -629,6 +637,31 @@ pub struct JobList {
 pub struct DaemonErrorResponse {
     pub error_code: ErrorCode,
     pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserOpenRequest {
+    pub target_url: Option<String>,
+    pub browser_path: Option<String>,
+    pub headless: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserStatusSnapshot {
+    pub running: bool,
+    pub browser_kind: String,
+    pub profile_dir: String,
+    pub downloads_dir: String,
+    pub target_url: String,
+    pub current_url: Option<String>,
+    pub page_title: Option<String>,
+    pub page_ready: bool,
+    pub authenticated: bool,
+    pub reload_count: u64,
+    pub screenshot_path: Option<String>,
+    pub browser_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
-use shared_protocol::{DaemonRequest, build_state_paths, resolve_state_root};
+use shared_protocol::{BrowserOpenRequest, DaemonRequest, build_state_paths, resolve_state_root};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::thread;
@@ -108,9 +108,17 @@ pub enum ArtifactsCommand {
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum BrowserCommand {
-    Open,
+    Open {
+        #[arg(long)]
+        target_url: Option<String>,
+        #[arg(long)]
+        browser_path: Option<PathBuf>,
+        #[arg(long, hide = true)]
+        headless: bool,
+    },
     Close,
     ResetProfile,
+    ProfileInfo,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -194,8 +202,30 @@ pub fn run(cli: &Cli) -> Result<String> {
             "artifacts",
             json!({ "subcommand": render_artifacts(command) }),
         ),
-        Command::Browser { command } => {
-            not_implemented_summary("browser", json!({ "subcommand": render_browser(command) }))
+        Command::Browser { command } => run_browser_command(cli.state_root.as_deref(), command),
+    }
+}
+
+fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> Result<String> {
+    match command {
+        BrowserCommand::Open {
+            target_url,
+            browser_path,
+            headless,
+        } => send_daemon_request(
+            state_root,
+            DaemonRequest::BrowserOpen(BrowserOpenRequest {
+                target_url: target_url.clone(),
+                browser_path: browser_path.as_ref().map(|path| path.display().to_string()),
+                headless: Some(*headless),
+            }),
+        ),
+        BrowserCommand::Close => send_daemon_request(state_root, DaemonRequest::BrowserClose),
+        BrowserCommand::ResetProfile => {
+            send_daemon_request(state_root, DaemonRequest::BrowserResetProfile)
+        }
+        BrowserCommand::ProfileInfo => {
+            send_daemon_request(state_root, DaemonRequest::BrowserProfileInfo)
         }
     }
 }
@@ -329,14 +359,6 @@ fn render_artifacts(value: &ArtifactsCommand) -> String {
             "subcommand=pull\nartifact_id={artifact_id}\ndestination_dir={}",
             destination_dir.display()
         ),
-    }
-}
-
-fn render_browser(value: &BrowserCommand) -> &'static str {
-    match value {
-        BrowserCommand::Open => "open",
-        BrowserCommand::Close => "close",
-        BrowserCommand::ResetProfile => "reset-profile",
     }
 }
 

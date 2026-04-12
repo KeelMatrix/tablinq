@@ -1,9 +1,10 @@
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const port = Number(process.env.PORT || 4177);
-const root = new URL("./src/", import.meta.url);
+const root = fileURLToPath(new URL("./src/", import.meta.url));
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -13,7 +14,7 @@ const mimeTypes = {
 
 createServer((request, response) => {
   const pathname = request.url === "/" ? "/index.html" : request.url;
-  const filePath = join(root.pathname, pathname);
+  const filePath = join(root, pathname);
 
   try {
     const body = readFileSync(filePath);

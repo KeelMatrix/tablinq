@@ -1,6 +1,6 @@
 # Architecture Notes
 
-## Part 2 decisions
+## Part 3 decisions
 
 - The stable protocol version is `tablinq.v1`.
 - Rust owns durable types, validation, and CLI/daemon entry points.
@@ -11,6 +11,9 @@
 - Persistent state lives under one resolved state root with fixed subdirectories for config, logs, db, browser profile, downloads, and crash bundles.
 - SQLite migrations run at daemon boot and back the job, artifact, and session registries from day one.
 - Single-instance protection is enforced with a startup lock file plus responsive-daemon checks; stale lock files are reclaimed.
+- The daemon owns one browser adapter child process and talks to it over JSON lines on stdio.
+- The browser adapter is a long-lived TypeScript service launched through `npx tsx` and backed by Playwright persistent contexts.
+- Browser health is surfaced to the daemon as a `BrowserStatusSnapshot`, which feeds `browser profile-info` and `doctor`.
 
 ## Protocol surface
 
@@ -18,7 +21,8 @@
 - Events use an envelope with `version`, `request_id`, `emitted_at`, and a tagged `event`.
 - Payload shapes are independently versioned under `schemas/v1/`.
 - Runtime-discovered labels are represented as alias maps so UI text stays out of core control logic.
-- The CLI/daemon control path uses `DaemonRequest` and `DaemonResponse` types in `shared-protocol` for `ping`, `status`, `shutdown`, `doctor`, `config show`, `sessions list`, and `jobs list`.
+- The CLI/daemon control path uses `DaemonRequest` and `DaemonResponse` types in `shared-protocol` for `ping`, `status`, `shutdown`, `doctor`, `config show`, `sessions list`, `jobs list`, and browser lifecycle commands.
+- The daemon/browser path uses a smaller JSON-line adapter protocol over stdio for `open`, `health`, `close`, and `shutdown`.
 
 ## State layout
 
@@ -33,6 +37,14 @@ The resolved state root contains:
 - `daemon.lock`
 
 The IPC endpoint is derived deterministically from the state root, so the CLI and daemon resolve the same socket name without extra registration.
+
+## Browser runtime
+
+- The dedicated profile directory is always `browser-profile/` under the resolved state root.
+- The adapter launches Edge by default on Windows through Playwright’s `msedge` channel.
+- On non-Windows platforms, the adapter falls back to detected Chromium-compatible executables or an explicit configured browser path.
+- The adapter keeps one managed page alive, recreates it if the tab is closed or crashes, and tracks top-level reloads for diagnostics.
+- `doctor` now includes both daemon health and the current browser snapshot.
 
 ## Capability matrix
 

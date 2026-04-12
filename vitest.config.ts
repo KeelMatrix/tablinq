@@ -5,5 +5,6 @@ export default defineConfig({
     environment: "node",
     globals: true,
     include: ["packages/browser-adapter/test/**/*.test.ts"],
+    testTimeout: 60000,
   },
 });

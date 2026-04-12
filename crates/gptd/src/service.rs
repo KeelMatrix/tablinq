@@ -1,3 +1,4 @@
+use crate::browser::BrowserManager;
 use crate::config::AppConfig;
 use crate::db::Database;
 use crate::ipc;
@@ -8,8 +9,8 @@ use chrono::Utc;
 use interprocess::local_socket::traits::Listener as LocalSocketListenerTrait;
 use serde_json::json;
 use shared_protocol::{
-    AckEvent, DaemonErrorResponse, DaemonRequest, DaemonResponse, DaemonStatusSnapshot,
-    DoctorReport, ErrorCode, HealthCheck, HealthStatus,
+    AckEvent, BrowserOpenRequest, DaemonErrorResponse, DaemonRequest, DaemonResponse,
+    DaemonStatusSnapshot, DoctorReport, ErrorCode, HealthCheck, HealthStatus,
 };
 
 pub fn run_service(config: AppConfig) -> Result<()> {
@@ -26,6 +27,22 @@ pub fn run_service(config: AppConfig) -> Result<()> {
     let db = Database::open(&config.paths.db_path)?;
     let listener = ipc::bind(&config.paths.ipc_endpoint)?;
     let started_at = Utc::now();
+    let mut browser = BrowserManager::new(&config);
+
+    if config.warm_mode() {
+        if let Err(err) = browser.open(BrowserOpenRequest {
+            target_url: None,
+            browser_path: None,
+            headless: None,
+        }) {
+            logger.warn(
+                "warm browser open failed",
+                json!({
+                    "error": format!("{err:#}"),
+                }),
+            )?;
+        }
+    }
 
     logger.info(
         "daemon ready",
@@ -41,7 +58,18 @@ pub fn run_service(config: AppConfig) -> Result<()> {
         logger.info("daemon request", json!({ "request": request }))?;
 
         let should_shutdown = matches!(request, DaemonRequest::Shutdown);
-        let response = handle_request(&config, &db, started_at, request)?;
+        let response = match handle_request(&config, &db, &mut browser, started_at, request) {
+            Ok(response) => response,
+            Err(err) => {
+                logger.warn(
+                    "daemon request failed",
+                    json!({
+                        "error": format!("{err:#}"),
+                    }),
+                )?;
+                map_error(err)
+            }
+        };
         ipc::write_response(stream, &response)?;
 
         if should_shutdown {
@@ -56,24 +84,39 @@ pub fn run_service(config: AppConfig) -> Result<()> {
 fn handle_request(
     config: &AppConfig,
     db: &Database,
+    browser: &mut BrowserManager,
     started_at: chrono::DateTime<Utc>,
     request: DaemonRequest,
 ) -> Result<DaemonResponse> {
     Ok(match request {
-        DaemonRequest::Ping => DaemonResponse::Health(health_snapshot(config)),
+        DaemonRequest::Ping => DaemonResponse::Health(health_snapshot(config, browser.health()?)),
         DaemonRequest::Status => DaemonResponse::Status(status_snapshot(config, started_at)),
         DaemonRequest::Shutdown => DaemonResponse::Ack(AckEvent {
             accepted: true,
             message: "daemon stopping".to_owned(),
         }),
         DaemonRequest::Doctor => DaemonResponse::Doctor(DoctorReport {
-            health: health_snapshot(config),
+            health: health_snapshot(config, browser.health()?),
             status: status_snapshot(config, started_at),
             config: config.snapshot(),
+            browser: browser.profile_info()?,
         }),
         DaemonRequest::ConfigShow => DaemonResponse::Config(config.snapshot()),
         DaemonRequest::SessionsList => DaemonResponse::Sessions(db.list_sessions()?),
         DaemonRequest::JobsList => DaemonResponse::Jobs(db.list_jobs()?),
+        DaemonRequest::BrowserOpen(request) => {
+            let snapshot = browser.open(request)?;
+            db.upsert_session(
+                "browser-primary",
+                "Managed browser",
+                snapshot.current_url.as_deref(),
+                Utc::now(),
+            )?;
+            DaemonResponse::Browser(snapshot)
+        }
+        DaemonRequest::BrowserClose => DaemonResponse::Browser(browser.close()?),
+        DaemonRequest::BrowserResetProfile => DaemonResponse::Browser(browser.reset_profile()?),
+        DaemonRequest::BrowserProfileInfo => DaemonResponse::Browser(browser.profile_info()?),
     })
 }
 
@@ -92,17 +135,26 @@ pub fn status_snapshot(
     }
 }
 
-pub fn health_snapshot(config: &AppConfig) -> HealthCheck {
+pub fn health_snapshot(
+    config: &AppConfig,
+    browser: shared_protocol::BrowserStatusSnapshot,
+) -> HealthCheck {
     HealthCheck {
         status: HealthStatus::Ok,
         checked_at: Utc::now(),
-        browser_connected: false,
+        browser_connected: browser.running,
         extension_connected: false,
-        authenticated: false,
+        authenticated: browser.authenticated,
         details: Some(if config.warm_mode() {
-            "control plane ready; browser warm mode enabled in config".to_owned()
+            format!(
+                "control plane ready; warm mode enabled; browser_running={}",
+                browser.running
+            )
         } else {
-            "control plane ready; browser runtime not started yet".to_owned()
+            match browser.current_url {
+                Some(url) => format!("control plane ready; managed tab at {url}"),
+                None => "control plane ready; browser runtime not started yet".to_owned(),
+            }
         }),
     }
 }

@@ -1,6 +1,9 @@
 use chrono::{Duration, Utc};
 use gptd::{AppConfig, Database, daemon_is_responsive, send_request};
-use shared_protocol::{DaemonRequest, DaemonResponse, HealthStatus, JobStatus, build_state_paths};
+use shared_protocol::{
+    BrowserOpenRequest, DaemonRequest, DaemonResponse, HealthStatus, JobStatus, build_state_paths,
+};
+use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -35,6 +38,38 @@ fn stop_daemon(state_root: &Path, child: &mut Child) {
     let paths = build_state_paths(state_root);
     let _ = send_request(&paths.ipc_endpoint, &DaemonRequest::Shutdown);
     let _ = child.wait();
+}
+
+fn spawn_fake_chatgpt() -> (Child, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("allocate tcp port");
+    let port = listener.local_addr().expect("resolve local address").port();
+    drop(listener);
+
+    let server_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("packages")
+        .join("fake-chatgpt")
+        .join("server.mjs");
+    let child = Command::new("node")
+        .arg(server_path)
+        .env("PORT", port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn fake-chatgpt");
+
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + StdDuration::from_secs(10);
+    while Instant::now() < deadline {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return (child, url);
+        }
+        thread::sleep(StdDuration::from_millis(100));
+    }
+
+    panic!("fake-chatgpt did not become ready on port {port}");
 }
 
 #[test]
@@ -114,6 +149,65 @@ fn jobs_persist_across_restarts() {
     }
 
     stop_daemon(dir.path(), &mut second);
+}
+
+#[test]
+fn daemon_reports_browser_health_from_adapter() {
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(fake_url.clone()),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+
+    match browser_open {
+        DaemonResponse::Browser(snapshot) => {
+            assert!(snapshot.running);
+            assert_eq!(snapshot.target_url, fake_url);
+            assert!(snapshot.authenticated);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let doctor = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Doctor,
+    )
+    .unwrap();
+
+    match doctor {
+        DaemonResponse::Doctor(report) => {
+            assert!(report.browser.running);
+            assert!(report.health.browser_connected);
+            assert!(report.health.authenticated);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let browser_close = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserClose,
+    )
+    .unwrap();
+
+    match browser_close {
+        DaemonResponse::Browser(snapshot) => {
+            assert!(!snapshot.running);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
 }
 
 #[test]
