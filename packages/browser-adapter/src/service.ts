@@ -1,5 +1,11 @@
 import readline from "node:readline";
-import { BrowserAdapter } from "./browserAdapter";
+import {
+  BrowserAdapter,
+  type AskExecutionCommand,
+  type AskResultSnapshot,
+  type BrowserStatusSnapshot,
+  type StreamChunkSnapshot,
+} from "./browserAdapter";
 
 interface ServiceArgs {
   profileDir: string;
@@ -15,9 +21,32 @@ type AdapterRequest =
       browser_path?: string | null;
       headless?: boolean;
     }
+  | {
+      type: "ask";
+      job_id: string;
+      prompt: string;
+      conversation_id?: string | null;
+      timeout_ms?: number;
+    }
   | { type: "health" }
   | { type: "close" }
   | { type: "shutdown" };
+
+type AdapterFrame =
+  | {
+      type: "response";
+      ok: boolean;
+      state: BrowserStatusSnapshot;
+      error?: string;
+    }
+  | { type: "stream_chunk"; chunk: StreamChunkSnapshot }
+  | {
+      type: "ask_result";
+      ok: boolean;
+      state: BrowserStatusSnapshot;
+      result?: AskResultSnapshot;
+      error?: string;
+    };
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
@@ -42,12 +71,35 @@ async function main() {
     let response;
     try {
       const request = JSON.parse(trimmed) as AdapterRequest;
-      const state = await handleRequest(adapter, request);
-      response = { ok: true, state };
-      process.stdout.write(`${JSON.stringify(response)}\n`);
+      if (request.type === "ask") {
+        const result = await adapter.ask(
+          {
+            jobId: request.job_id,
+            prompt: request.prompt,
+            conversationId: request.conversation_id,
+            timeoutMs: request.timeout_ms,
+          } satisfies AskExecutionCommand,
+          (chunk) => {
+            writeFrame({
+              type: "stream_chunk",
+              chunk,
+            });
+          },
+        );
+        writeFrame({
+          type: "ask_result",
+          ok: true,
+          state: await adapter.health(),
+          result,
+        });
+      } else {
+        const state = await handleRequest(adapter, request);
+        response = { type: "response", ok: true, state } satisfies AdapterFrame;
+        writeFrame(response);
 
-      if (request.type === "shutdown") {
-        break;
+        if (request.type === "shutdown") {
+          break;
+        }
       }
     } catch (error) {
       const state = await adapter.health().catch(() => ({
@@ -67,16 +119,20 @@ async function main() {
         capability_report: null,
       }));
       response = {
+        type: "response",
         ok: false,
         state,
         error: error instanceof Error ? error.message : String(error),
-      };
-      process.stdout.write(`${JSON.stringify(response)}\n`);
+      } satisfies AdapterFrame;
+      writeFrame(response);
     }
   }
 }
 
-async function handleRequest(adapter: BrowserAdapter, request: AdapterRequest) {
+async function handleRequest(
+  adapter: BrowserAdapter,
+  request: Exclude<AdapterRequest, { type: "ask" }>,
+) {
   switch (request.type) {
     case "open":
       return adapter.open({
@@ -91,6 +147,10 @@ async function handleRequest(adapter: BrowserAdapter, request: AdapterRequest) {
     case "shutdown":
       return adapter.shutdown();
   }
+}
+
+function writeFrame(frame: AdapterFrame): void {
+  process.stdout.write(`${JSON.stringify(frame)}\n`);
 }
 
 function parseArgs(argv: string[]): ServiceArgs {

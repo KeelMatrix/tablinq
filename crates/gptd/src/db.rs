@@ -52,6 +52,22 @@ const MIGRATIONS: &[(&str, &str)] = &[
         CREATE INDEX IF NOT EXISTS idx_artifacts_created_at ON artifacts(created_at DESC);
         "#,
     ),
+    (
+        "0003_conversations",
+        r#"
+        CREATE TABLE IF NOT EXISTS conversations (
+            conversation_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            label TEXT NOT NULL,
+            tab_url TEXT,
+            last_prompt TEXT,
+            last_response TEXT,
+            last_seen_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_conversations_last_seen_at ON conversations(last_seen_at DESC);
+        "#,
+    ),
 ];
 
 pub struct Database {
@@ -157,6 +173,55 @@ impl Database {
             ],
         )?;
         Ok(())
+    }
+
+    pub fn upsert_conversation(
+        &self,
+        conversation_id: &str,
+        session_id: &str,
+        label: &str,
+        tab_url: Option<&str>,
+        last_prompt: Option<&str>,
+        last_response: Option<&str>,
+        last_seen_at: DateTime<Utc>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO conversations (
+                conversation_id, session_id, label, tab_url, last_prompt, last_response, last_seen_at
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                session_id = excluded.session_id,
+                label = excluded.label,
+                tab_url = excluded.tab_url,
+                last_prompt = excluded.last_prompt,
+                last_response = excluded.last_response,
+                last_seen_at = excluded.last_seen_at
+            "#,
+            params![
+                conversation_id,
+                session_id,
+                label,
+                tab_url,
+                last_prompt,
+                last_response,
+                last_seen_at.to_rfc3339()
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn latest_conversation_id(&self) -> Result<Option<String>> {
+        let conversation_id = self
+            .conn
+            .query_row(
+                "SELECT conversation_id FROM conversations ORDER BY last_seen_at DESC LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(conversation_id)
     }
 
     pub fn insert_artifact(

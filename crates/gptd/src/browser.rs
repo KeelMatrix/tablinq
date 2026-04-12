@@ -1,7 +1,10 @@
 use crate::config::AppConfig;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use shared_protocol::{BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport};
+use shared_protocol::{
+    AskCommand, AskResult, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport,
+    EventPayload, StreamChunk,
+};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -80,6 +83,34 @@ impl BrowserManager {
 
     pub fn capabilities(&mut self) -> Result<Option<CapabilityReport>> {
         Ok(self.health()?.capability_report)
+    }
+
+    pub fn ask<F>(
+        &mut self,
+        job_id: &str,
+        command: &AskCommand,
+        mut on_event: F,
+    ) -> Result<AskResult>
+    where
+        F: FnMut(EventPayload) -> Result<()>,
+    {
+        self.ensure_process()?;
+
+        match self
+            .process
+            .as_mut()
+            .expect("browser adapter process missing")
+            .ask(job_id, command, &mut on_event)
+        {
+            Ok((snapshot, result)) => {
+                self.last_snapshot = snapshot;
+                Ok(result)
+            }
+            Err(err) => {
+                let _ = self.health();
+                Err(err)
+            }
+        }
     }
 
     pub fn health(&mut self) -> Result<BrowserStatusSnapshot> {
@@ -209,17 +240,108 @@ impl AdapterProcess {
             bail!("browser adapter closed without a response");
         }
 
-        let response: AdapterResponse =
+        let response: AdapterFrame =
             serde_json::from_str(line.trim_end()).context("decode adapter response")?;
-        if response.ok {
-            Ok(response.state)
-        } else {
-            bail!(
-                "{}",
-                response
-                    .error
-                    .unwrap_or_else(|| "browser adapter returned an unknown error".to_owned())
-            );
+        match response {
+            AdapterFrame::Response { ok, state, error } => {
+                if ok {
+                    Ok(state)
+                } else {
+                    bail!(
+                        "{}",
+                        error.unwrap_or_else(|| {
+                            "browser adapter returned an unknown error".to_owned()
+                        })
+                    );
+                }
+            }
+            other => bail!("unexpected adapter frame for request: {other:?}"),
+        }
+    }
+
+    fn ask<F>(
+        &mut self,
+        job_id: &str,
+        command: &AskCommand,
+        on_event: &mut F,
+    ) -> Result<(BrowserStatusSnapshot, AskResult)>
+    where
+        F: FnMut(EventPayload) -> Result<()>,
+    {
+        let request = AdapterRequest::Ask {
+            job_id: job_id.to_owned(),
+            prompt: command.prompt.clone(),
+            conversation_id: command.conversation_id.clone(),
+            timeout_ms: Some(15_000),
+        };
+        let raw = serde_json::to_string(&request).context("encode adapter ask request")?;
+        self.stdin
+            .write_all(raw.as_bytes())
+            .context("write adapter ask request")?;
+        self.stdin
+            .write_all(b"\n")
+            .context("write adapter newline")?;
+        self.stdin.flush().context("flush adapter ask request")?;
+
+        loop {
+            let mut line = String::new();
+            self.stdout
+                .read_line(&mut line)
+                .context("read adapter ask frame")?;
+            if line.trim().is_empty() {
+                bail!("browser adapter closed without an ask result");
+            }
+
+            let frame: AdapterFrame =
+                serde_json::from_str(line.trim_end()).context("decode adapter ask frame")?;
+            match frame {
+                AdapterFrame::StreamChunk { chunk } => {
+                    on_event(EventPayload::StreamChunk(StreamChunk {
+                        job_id: chunk.job_id,
+                        conversation_id: chunk.conversation_id,
+                        message_id: chunk.message_id,
+                        seq: chunk.seq,
+                        kind: if chunk.kind == "done" {
+                            shared_protocol::StreamChunkKind::Done
+                        } else {
+                            shared_protocol::StreamChunkKind::Delta
+                        },
+                        text: chunk.text,
+                    }))?;
+                }
+                AdapterFrame::AskResult {
+                    ok,
+                    state,
+                    result,
+                    error,
+                } => {
+                    if ok {
+                        return Ok((
+                            state,
+                            result.context("adapter ask finished without a result")?,
+                        ));
+                    }
+                    bail!(
+                        "{}",
+                        error.unwrap_or_else(|| {
+                            "browser adapter returned an unknown ask error".to_owned()
+                        })
+                    );
+                }
+                AdapterFrame::Response {
+                    ok: false, error, ..
+                } => {
+                    bail!(
+                        "{}",
+                        error.unwrap_or_else(|| {
+                            "browser adapter returned an unknown ask error".to_owned()
+                        })
+                    );
+                }
+                AdapterFrame::Response { .. } => {
+                    bail!("unexpected adapter response while asking")
+                }
+            }
         }
     }
 }
@@ -233,16 +355,44 @@ enum AdapterRequest {
         headless: bool,
     },
     Health,
+    Ask {
+        job_id: String,
+        prompt: String,
+        conversation_id: Option<String>,
+        timeout_ms: Option<u64>,
+    },
     Close,
     Shutdown,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum AdapterFrame {
+    Response {
+        ok: bool,
+        state: BrowserStatusSnapshot,
+        error: Option<String>,
+    },
+    StreamChunk {
+        chunk: AdapterStreamChunk,
+    },
+    AskResult {
+        ok: bool,
+        state: BrowserStatusSnapshot,
+        result: Option<AskResult>,
+        error: Option<String>,
+    },
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AdapterResponse {
-    ok: bool,
-    state: BrowserStatusSnapshot,
-    error: Option<String>,
+struct AdapterStreamChunk {
+    job_id: String,
+    conversation_id: Option<String>,
+    message_id: Option<String>,
+    seq: u64,
+    kind: String,
+    text: String,
 }
 
 fn idle_snapshot(

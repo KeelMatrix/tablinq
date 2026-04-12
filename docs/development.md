@@ -12,6 +12,7 @@
 - `cargo test`
 - `cargo run -p gpt -- daemon start`
 - `cargo run -p gpt -- daemon status`
+- `cargo run -p gpt -- ask "hello world"`
 - `cargo run -p gpt -- doctor`
 - `cargo run -p gpt -- capabilities`
 - `cargo run -p gpt -- config show`
@@ -29,24 +30,26 @@
 
 ## Current testing strategy
 
-- Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, browser health messaging, capability snapshots, and CLI parsing.
-- TypeScript tests validate the JSON schemas, probe the extension against synthetic DOM fixtures, and exercise the browser adapter against both `fake-chatgpt` UI variants with real Playwright flows.
+- Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, browser health messaging, streamed ask execution, timeout diagnostics, capability snapshots, and CLI parsing.
+- TypeScript tests validate the JSON schemas, probe the extension against synthetic DOM fixtures, and exercise the browser adapter against both `fake-chatgpt` UI variants plus streaming/reload scenarios with real Playwright flows.
 - `packages/fake-chatgpt` is the CI-safe target for browser and extension fallback tests.
 
-## Current semantic bridge
+## Current ask path
 
-Part 4 added the semantic control surface that later command parts will build on:
+Part 5 added the first end-to-end useful execution path:
 
 - `packages/extension/src/probe.ts`: ARIA-aware capability modules, strategy scoring, alias discovery, and DOM neighborhood snapshots.
 - `packages/extension/src/content-script.ts`: debounced capability publishing on DOM changes.
 - `packages/extension/src/service-worker.ts`: native-messaging and development WebSocket forwarding.
+- `packages/browser-adapter/src/browserAdapter.ts`: prompt insertion, submit, streamed DOM observation, timeout handling, and reload recovery.
+- `gpt ask`: streamed terminal output backed by daemon job persistence and last-conversation resume.
 - `gpt capabilities`: daemon-facing inspection of the last real capability matrix from the managed page.
 
 ## Next implementation boundary
 
-Part 5 should build the first useful end-to-end ask flow on top of the semantic bridge:
+Part 6 should build model and mode selection on top of the now-working ask path:
 
-- prompt insertion
-- submission
-- streaming output observation
-- conversation state tracking
+- runtime model discovery
+- thinking effort toggles
+- search mode selection
+- graceful capability-missing failures

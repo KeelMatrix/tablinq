@@ -536,6 +536,7 @@ pub enum DaemonRequest {
     Status,
     Shutdown,
     Doctor,
+    Ask(AskCommand),
     Capabilities,
     ConfigShow,
     SessionsList,
@@ -553,12 +554,20 @@ pub enum DaemonResponse {
     Health(HealthCheck),
     Status(DaemonStatusSnapshot),
     Doctor(DoctorReport),
+    Ask(AskResult),
     Capabilities(CapabilitySnapshot),
     Config(ConfigSnapshot),
     Sessions(SessionList),
     Jobs(JobList),
     Browser(BrowserStatusSnapshot),
     Error(DaemonErrorResponse),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+pub enum DaemonFrame {
+    Event(EventPayload),
+    Response(DaemonResponse),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -639,6 +648,17 @@ pub struct JobSummary {
 #[serde(deny_unknown_fields)]
 pub struct JobList {
     pub jobs: Vec<JobSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AskResult {
+    pub job_id: String,
+    pub conversation_id: String,
+    pub message_id: String,
+    pub output_text: String,
+    pub completed_at: DateTime<Utc>,
+    pub current_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

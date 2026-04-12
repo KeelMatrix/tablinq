@@ -1,7 +1,11 @@
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
-use shared_protocol::{BrowserOpenRequest, DaemonRequest, build_state_paths, resolve_state_root};
+use shared_protocol::{
+    AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, Effort, EventPayload, Mode,
+    ModelClass, StreamChunkKind, build_state_paths, resolve_state_root,
+};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::thread;
@@ -178,17 +182,7 @@ pub fn run(cli: &Cli) -> Result<String> {
             })
             .to_string()),
         },
-        Command::Ask(args) => not_implemented_summary(
-            "ask",
-            json!({
-                "prompt": args.prompt,
-                "mode": render_mode(args.mode),
-                "model_class": args.model_class.map(render_model),
-                "effort": args.effort.map(render_effort),
-                "files": args.files.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
-                "conversation": args.conversation,
-            }),
-        ),
+        Command::Ask(args) => run_ask(cli.state_root.as_deref(), args),
         Command::Research(args) => not_implemented_summary(
             "research",
             json!({
@@ -237,6 +231,52 @@ fn send_daemon_request(state_root: Option<&Path>, request: DaemonRequest) -> Res
     let response = gptd::send_request(&paths.ipc_endpoint, &request)
         .with_context(|| format!("connect to daemon at {}", paths.ipc_endpoint))?;
     serde_json::to_string_pretty(&response).context("serialize daemon response")
+}
+
+fn run_ask(state_root: Option<&Path>, args: &AskArgs) -> Result<String> {
+    let paths = build_state_paths(resolve_state_root(state_root));
+    let command = AskCommand {
+        prompt: args.prompt.clone(),
+        conversation_id: args.conversation.clone(),
+        mode: map_mode(args.mode),
+        model_class: args.model_class.map(map_model),
+        effort: args.effort.map(map_effort),
+        files: args
+            .files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+    };
+
+    let mut stdout = io::stdout();
+    let mut printed_any = false;
+    let response =
+        gptd::send_request_stream(&paths.ipc_endpoint, &DaemonRequest::Ask(command), |event| {
+            if let EventPayload::StreamChunk(chunk) = event {
+                if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
+                    write!(stdout, "{}", chunk.text)?;
+                    stdout.flush()?;
+                    printed_any = true;
+                }
+                if chunk.kind == StreamChunkKind::Done && printed_any {
+                    writeln!(stdout)?;
+                    stdout.flush()?;
+                }
+            }
+            Ok(())
+        })
+        .with_context(|| format!("connect to daemon at {}", paths.ipc_endpoint))?;
+
+    match response {
+        DaemonResponse::Ask(result) => {
+            if !printed_any && !result.output_text.is_empty() {
+                writeln!(stdout, "{}", result.output_text)?;
+            }
+            Ok(String::new())
+        }
+        DaemonResponse::Error(error) => bail!("{}", error.message),
+        other => bail!("unexpected ask response: {other:?}"),
+    }
 }
 
 fn config_show(state_root: Option<&Path>) -> Result<String> {
@@ -325,30 +365,27 @@ fn not_implemented_summary(command: &str, payload: serde_json::Value) -> Result<
     }))?)
 }
 
-fn render_mode(value: CliMode) -> String {
+fn map_mode(value: CliMode) -> Mode {
     match value {
-        CliMode::Normal => "normal",
-        CliMode::Search => "search",
-        CliMode::Research => "research",
+        CliMode::Normal => Mode::Normal,
+        CliMode::Search => Mode::Search,
+        CliMode::Research => Mode::Research,
     }
-    .to_owned()
 }
 
-fn render_model(value: CliModelClass) -> String {
+fn map_model(value: CliModelClass) -> ModelClass {
     match value {
-        CliModelClass::Instant => "instant",
-        CliModelClass::Thinking => "thinking",
+        CliModelClass::Instant => ModelClass::Instant,
+        CliModelClass::Thinking => ModelClass::Thinking,
     }
-    .to_owned()
 }
 
-fn render_effort(value: CliEffort) -> String {
+fn map_effort(value: CliEffort) -> Effort {
     match value {
-        CliEffort::None => "none",
-        CliEffort::Standard => "standard",
-        CliEffort::Extended => "extended",
+        CliEffort::None => Effort::None,
+        CliEffort::Standard => Effort::Standard,
+        CliEffort::Extended => Effort::Extended,
     }
-    .to_owned()
 }
 
 fn render_artifacts(value: &ArtifactsCommand) -> String {
