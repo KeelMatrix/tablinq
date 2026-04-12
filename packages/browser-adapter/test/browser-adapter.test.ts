@@ -1,8 +1,9 @@
-import { mkdtemp, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
   BrowserAdapter,
+  chooseUniqueArtifactPath,
   resolveBrowserLaunchConfig,
 } from "../src/browserAdapter";
 import { startFakeChatGptServer, stopFakeChatGptServer } from "./helpers";
@@ -351,6 +352,78 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("uploads files and persists generated artifacts", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixtureDir = path.join(root, "fixtures");
+    const firstFile = path.join(fixtureDir, "brief.txt");
+    const secondFile = path.join(fixtureDir, "notes.csv");
+    await mkdir(fixtureDir, { recursive: true });
+    await writeFile(firstFile, "brief body", "utf8");
+    await writeFile(secondFile, "col\nvalue", "utf8");
+
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: server.url,
+    });
+    await adapter.open({ targetUrl: server.url, headless: true });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-upload-artifact",
+        prompt: "summarize uploads",
+        files: [firstFile, secondFile],
+      },
+      () => {},
+    );
+
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0]!.file_name).toContain("brief-summary");
+    expect(result.artifacts[0]!.content_type).toBe("text/plain; charset=utf-8");
+    expect(result.artifacts[0]!.size_bytes).toBeGreaterThan(0);
+    const downloaded = await stat(result.artifacts[0]!.storage_path);
+    expect(downloaded.size).toBeGreaterThan(0);
+    const artifactBody = await readFile(
+      result.artifacts[0]!.storage_path,
+      "utf8",
+    );
+    expect(artifactBody).toContain("Uploads: brief.txt, notes.csv");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails with an upload error when files are requested without an upload control", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: withHarnessUrl(server.url, { missing: ["upload"] }),
+    });
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { missing: ["upload"] }),
+      headless: true,
+    });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-missing-upload",
+          prompt: "summarize uploads",
+          files: [fixture],
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/upload failed/i);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("fails cleanly when the harness never completes streaming", async () => {
     const server = await startFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -425,5 +498,15 @@ describe("browser launch config", () => {
     const config = resolveBrowserLaunchConfig("win32");
     expect(config.browserKind).toBe("msedge");
     expect(config.channel).toBe("msedge");
+  });
+
+  it("allocates unique artifact paths without overwriting existing files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-artifacts-"));
+    const first = await chooseUniqueArtifactPath(root, "report.txt");
+    await writeFile(first, "first", "utf8");
+    const second = await chooseUniqueArtifactPath(root, "report.txt");
+
+    expect(path.basename(first)).toBe("report.txt");
+    expect(path.basename(second)).toBe("report-2.txt");
   });
 });

@@ -276,6 +276,7 @@ impl AdapterProcess {
             mode: Some(command.mode),
             model_class: command.model_class,
             effort: command.effort,
+            files: command.files.clone(),
         };
         let raw = serde_json::to_string(&request).context("encode adapter ask request")?;
         self.stdin
@@ -366,6 +367,7 @@ enum AdapterRequest {
         mode: Option<Mode>,
         model_class: Option<ModelClass>,
         effort: Option<Effort>,
+        files: Vec<String>,
     },
     Close,
     Shutdown,

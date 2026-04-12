@@ -30,6 +30,7 @@ type AdapterRequest =
       mode?: "normal" | "search" | "research";
       model_class?: "instant" | "thinking" | null;
       effort?: "none" | "standard" | "extended" | null;
+      files?: string[];
     }
   | { type: "health" }
   | { type: "close" }
@@ -84,6 +85,7 @@ async function main() {
             mode: request.mode,
             modelClass: request.model_class,
             effort: request.effort,
+            files: request.files ?? [],
           } satisfies AskExecutionCommand,
           (chunk) => {
             writeFrame({
@@ -95,7 +97,7 @@ async function main() {
         writeFrame({
           type: "ask_result",
           ok: true,
-          state: await adapter.health(),
+          state: await adapter.snapshot(),
           result,
         });
       } else {

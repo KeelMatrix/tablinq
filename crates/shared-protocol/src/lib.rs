@@ -541,6 +541,8 @@ pub enum DaemonRequest {
     ConfigShow,
     SessionsList,
     JobsList,
+    ArtifactsList,
+    ArtifactPull(PullArtifactCommand),
     BrowserOpen(BrowserOpenRequest),
     BrowserClose,
     BrowserResetProfile,
@@ -559,6 +561,8 @@ pub enum DaemonResponse {
     Config(ConfigSnapshot),
     Sessions(SessionList),
     Jobs(JobList),
+    Artifacts(ArtifactList),
+    ArtifactPull(ArtifactPullResult),
     Browser(BrowserStatusSnapshot),
     Error(DaemonErrorResponse),
 }
@@ -657,8 +661,36 @@ pub struct AskResult {
     pub conversation_id: String,
     pub message_id: String,
     pub output_text: String,
+    pub artifacts: Vec<ArtifactMetadata>,
     pub completed_at: DateTime<Utc>,
     pub current_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactSummary {
+    pub artifact_id: String,
+    pub conversation_id: Option<String>,
+    pub message_id: Option<String>,
+    pub file_name: String,
+    pub content_type: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub storage_path: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactList {
+    pub artifacts: Vec<ArtifactSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactPullResult {
+    pub artifact: ArtifactSummary,
+    pub destination_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

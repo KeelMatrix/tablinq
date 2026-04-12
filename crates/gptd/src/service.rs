@@ -13,6 +13,8 @@ use shared_protocol::{
     DaemonRequest, DaemonResponse, DaemonStatusSnapshot, DoctorReport, ErrorCode, EventPayload,
     HealthCheck, HealthStatus, JobState, JobStatus,
 };
+use std::fs;
+use std::path::{Path, PathBuf};
 
 pub fn run_service(config: AppConfig) -> Result<()> {
     let logger = JsonLogger::new(&config.paths.log_path)?;
@@ -159,6 +161,13 @@ fn handle_ask_request(
     }) {
         Ok(result) => {
             let completed_at = result.completed_at;
+            for artifact in &result.artifacts {
+                db.insert_artifact(artifact, completed_at)?;
+                ipc::write_frame(
+                    stream,
+                    &DaemonFrame::Event(EventPayload::ArtifactReady(artifact.clone())),
+                )?;
+            }
             db.insert_job(
                 &job_id,
                 JobStatus::Completed,
@@ -190,7 +199,7 @@ fn handle_ask_request(
                     message: Some("ask completed".to_owned()),
                     conversation_id: Some(result.conversation_id.clone()),
                     updated_at: completed_at,
-                    artifacts: vec![],
+                    artifacts: result.artifacts.clone(),
                 },
             )?;
             ipc::write_frame(stream, &DaemonFrame::Response(DaemonResponse::Ask(result)))?;
@@ -253,6 +262,33 @@ fn handle_request(
         DaemonRequest::ConfigShow => DaemonResponse::Config(config.snapshot()),
         DaemonRequest::SessionsList => DaemonResponse::Sessions(db.list_sessions()?),
         DaemonRequest::JobsList => DaemonResponse::Jobs(db.list_jobs()?),
+        DaemonRequest::ArtifactsList => DaemonResponse::Artifacts(db.list_artifacts()?),
+        DaemonRequest::ArtifactPull(command) => {
+            let artifact = if command.artifact_id == "last" {
+                db.latest_artifact()?
+            } else {
+                db.find_artifact(&command.artifact_id)?
+            }
+            .with_context(|| format!("artifact {} was not found", command.artifact_id))?;
+
+            let destination_dir = PathBuf::from(&command.destination_dir);
+            fs::create_dir_all(&destination_dir)
+                .with_context(|| format!("create {}", destination_dir.display()))?;
+            let destination_path =
+                unique_destination_path(&destination_dir, Path::new(&artifact.file_name));
+            fs::copy(&artifact.storage_path, &destination_path).with_context(|| {
+                format!(
+                    "copy managed artifact {} to {}",
+                    artifact.storage_path,
+                    destination_path.display()
+                )
+            })?;
+
+            DaemonResponse::ArtifactPull(shared_protocol::ArtifactPullResult {
+                artifact,
+                destination_path: destination_path.display().to_string(),
+            })
+        }
         DaemonRequest::BrowserOpen(request) => {
             let snapshot = browser.open(request)?;
             db.upsert_session(
@@ -316,6 +352,10 @@ pub fn map_error(err: anyhow::Error) -> DaemonResponse {
     DaemonResponse::Error(DaemonErrorResponse {
         error_code: if message.contains("capability missing") {
             ErrorCode::CapabilityMissing
+        } else if message.contains("upload failed") {
+            ErrorCode::UploadFailed
+        } else if message.contains("download failed") {
+            ErrorCode::DownloadFailed
         } else if message.contains("ui drift") {
             ErrorCode::UiDrift
         } else if message.contains("timed out") {
@@ -329,4 +369,30 @@ pub fn map_error(err: anyhow::Error) -> DaemonResponse {
 
 fn emit_job_state(stream: &interprocess::local_socket::Stream, state: JobState) -> Result<()> {
     ipc::write_frame(stream, &DaemonFrame::Event(EventPayload::JobState(state)))
+}
+
+fn unique_destination_path(destination_dir: &Path, file_name: &Path) -> PathBuf {
+    let candidate = destination_dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let stem = file_name
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("artifact");
+    let extension = file_name.extension().and_then(|value| value.to_str());
+
+    for index in 2.. {
+        let name = match extension {
+            Some(extension) => format!("{stem}-{index}.{extension}"),
+            None => format!("{stem}-{index}"),
+        };
+        let candidate = destination_dir.join(name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+
+    unreachable!("destination path generation should always return");
 }

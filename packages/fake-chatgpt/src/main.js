@@ -15,6 +15,7 @@ document.body.dataset.streamState = "idle";
 document.body.dataset.selectedModel = "thinking";
 document.body.dataset.selectedEffort = "standard";
 document.body.dataset.selectedMode = "normal";
+document.body.dataset.uploadedFiles = "";
 
 note.textContent =
   variant === "aria"
@@ -64,7 +65,10 @@ function classicUploadControl() {
   if (!hasControl("upload")) {
     return "";
   }
-  return `<button type="button" data-slot="upload-entry">Attach</button>`;
+  return `
+    <button type="button" data-slot="upload-entry">Attach</button>
+    <input id="classic-upload-input" type="file" hidden multiple />
+  `;
 }
 
 function ariaModelControls() {
@@ -131,6 +135,7 @@ root.innerHTML =
           ></div>
           <button type="button" aria-label="Submit prompt">Go</button>
         </div>
+        <div class="stacked-toolbar" data-slot="upload-list"></div>
         <div class="transcript">
           <article
             class="message"
@@ -138,7 +143,14 @@ root.innerHTML =
             data-stream-state="idle"
           >
             <p>Streaming output lands here.</p>
-            <a href="/artifact.txt" download data-slot="artifact-link">Download artifact.txt</a>
+            <a
+              href="/artifact.txt"
+              download="artifact.txt"
+              data-slot="artifact-link"
+              data-artifact-ready="false"
+            >
+              Download artifact.txt
+            </a>
           </article>
         </div>
       </section>
@@ -159,6 +171,7 @@ root.innerHTML =
           ></textarea>
           <button type="button" data-action="submit">Send</button>
         </div>
+        <div class="toolbar" data-slot="upload-list"></div>
         <div class="transcript">
           <article
             class="message"
@@ -166,7 +179,14 @@ root.innerHTML =
             data-stream-state="idle"
           >
             <p>Streaming output lands here.</p>
-            <a href="/artifact.txt" download data-slot="artifact-link">artifact.txt</a>
+            <a
+              href="/artifact.txt"
+              download="artifact.txt"
+              data-slot="artifact-link"
+              data-artifact-ready="false"
+            >
+              artifact.txt
+            </a>
           </article>
         </div>
       </section>
@@ -178,10 +198,14 @@ const composer = document.querySelector(
 const submit = document.querySelector(
   "[data-action='submit'], [aria-label='Submit prompt']",
 );
+const uploadEntry = document.querySelector("[data-slot='upload-entry']");
+const uploadInput = document.querySelector("input[type='file']");
+const uploadList = document.querySelector("[data-slot='upload-list']");
 const messageArticle = document.querySelector(
   "[data-slot='assistant-message']",
 );
 const message = document.querySelector("[data-slot='assistant-message'] p");
+const artifactLink = document.querySelector("[data-slot='artifact-link']");
 let activeTimer = null;
 
 function currentConversationId() {
@@ -208,6 +232,76 @@ function writeConversationState(conversationId, messageId) {
 function setStreamState(state) {
   document.body.dataset.streamState = state;
   messageArticle?.setAttribute("data-stream-state", state);
+}
+
+function uploadedFiles() {
+  return (document.body.dataset.uploadedFiles || "")
+    .split("|")
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function renderUploadedFiles(fileNames) {
+  if (!uploadList) {
+    return;
+  }
+  uploadList.innerHTML = fileNames
+    .map(
+      (fileName) =>
+        `<span class="pill" data-slot="uploaded-file">${fileName}</span>`,
+    )
+    .join("");
+}
+
+function resetArtifactLink() {
+  if (!artifactLink) {
+    return;
+  }
+  artifactLink.setAttribute("href", "/artifact.txt");
+  artifactLink.setAttribute("download", "artifact.txt");
+  artifactLink.setAttribute("data-artifact-ready", "false");
+}
+
+function setUploadedFiles(fileNames) {
+  document.body.dataset.uploadedFiles = fileNames.join("|");
+  renderUploadedFiles(fileNames);
+  resetArtifactLink();
+}
+
+function buildArtifactPayload(promptText) {
+  const uploads = uploadedFiles();
+  return [
+    `Prompt: ${promptText || "(empty)"}`,
+    `Mode: ${document.body.dataset.selectedMode}`,
+    `Model: ${document.body.dataset.selectedModel}`,
+    `Effort: ${document.body.dataset.selectedEffort}`,
+    `Uploads: ${uploads.length ? uploads.join(", ") : "none"}`,
+  ].join("\n");
+}
+
+function prepareArtifact(promptText) {
+  if (!artifactLink) {
+    return;
+  }
+  const uploads = uploadedFiles();
+  if (uploads.length === 0) {
+    resetArtifactLink();
+    return;
+  }
+
+  const payload = buildArtifactPayload(promptText);
+  const blob = new Blob([payload], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const safeStem = uploads[0]
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .toLowerCase();
+  artifactLink.setAttribute("href", url);
+  artifactLink.setAttribute(
+    "download",
+    `${safeStem || "artifact"}-summary.txt`,
+  );
+  artifactLink.setAttribute("data-artifact-ready", "true");
 }
 
 function applyPressedState(selector, selectedValue) {
@@ -272,6 +366,7 @@ function finishStream(state) {
   state.index = state.responseText.length;
   renderChunk(state);
   setStreamState("done");
+  prepareArtifact(state.promptText);
   clearState(state.conversationId);
 }
 
@@ -369,6 +464,19 @@ document.querySelectorAll("[data-mode]").forEach((element) => {
   });
 });
 
+uploadEntry?.addEventListener("click", () => {
+  if (uploadInput instanceof HTMLElement) {
+    uploadInput.click();
+  }
+});
+
+uploadInput?.addEventListener("change", () => {
+  const fileNames = Array.from(uploadInput.files || []).map(
+    (file) => file.name,
+  );
+  setUploadedFiles(fileNames);
+});
+
 window.__tablinqCancelStream = () => {
   stopTimer();
   const conversationId = currentConversationId();
@@ -388,4 +496,6 @@ submit?.addEventListener("click", () => {
 });
 
 syncSelectedState();
+renderUploadedFiles(uploadedFiles());
+resetArtifactLink();
 resumeStreamIfNeeded();
