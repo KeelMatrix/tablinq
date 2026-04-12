@@ -3,7 +3,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
 use shared_protocol::{
     AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, Effort, EventPayload, Mode,
-    ModelClass, StreamChunkKind, build_state_paths, resolve_state_root,
+    ModelClass, PullArtifactCommand, StreamChunkKind, build_state_paths, resolve_state_root,
 };
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -194,11 +194,24 @@ pub fn run(cli: &Cli) -> Result<String> {
         Command::Capabilities => {
             send_daemon_request(cli.state_root.as_deref(), DaemonRequest::Capabilities)
         }
-        Command::Artifacts { command } => not_implemented_summary(
-            "artifacts",
-            json!({ "subcommand": render_artifacts(command) }),
-        ),
+        Command::Artifacts { command } => run_artifacts_command(cli.state_root.as_deref(), command),
         Command::Browser { command } => run_browser_command(cli.state_root.as_deref(), command),
+    }
+}
+
+fn run_artifacts_command(state_root: Option<&Path>, command: &ArtifactsCommand) -> Result<String> {
+    match command {
+        ArtifactsCommand::List => send_daemon_request(state_root, DaemonRequest::ArtifactsList),
+        ArtifactsCommand::Pull {
+            artifact_id,
+            destination_dir,
+        } => send_daemon_request(
+            state_root,
+            DaemonRequest::ArtifactPull(PullArtifactCommand {
+                artifact_id: artifact_id.clone(),
+                destination_dir: destination_dir.display().to_string(),
+            }),
+        ),
     }
 }
 
@@ -385,19 +398,6 @@ fn map_effort(value: CliEffort) -> Effort {
         CliEffort::None => Effort::None,
         CliEffort::Standard => Effort::Standard,
         CliEffort::Extended => Effort::Extended,
-    }
-}
-
-fn render_artifacts(value: &ArtifactsCommand) -> String {
-    match value {
-        ArtifactsCommand::List => "subcommand=list".to_owned(),
-        ArtifactsCommand::Pull {
-            artifact_id,
-            destination_dir,
-        } => format!(
-            "subcommand=pull\nartifact_id={artifact_id}\ndestination_dir={}",
-            destination_dir.display()
-        ),
     }
 }
 

@@ -41,9 +41,9 @@ flowchart LR
 7. Open a managed browser with `cargo run -p gpt -- browser open`.
 8. Inspect it with `cargo run -p gpt -- browser profile-info` or `cargo run -p gpt -- doctor`.
 
-## Part 6 Scope
+## Part 7 Scope
 
-This repository now includes a configurable end-to-end chat path on top of the semantic browser layer. The stable boundaries in this part are:
+This repository now includes file movement on top of the configurable end-to-end chat path. The stable boundaries in this part are:
 
 - internal enums for `mode`, `model_class`, and `effort`
 - JSON schema definitions for commands, events, streamed chunks, capability reports, job states, artifacts, failure bundles, and health checks
@@ -58,7 +58,9 @@ This repository now includes a configurable end-to-end chat path on top of the s
 - persisted per-workspace capability alias and strategy cache under the managed browser profile
 - clear capability-missing failures when a requested model, effort, or mode is unavailable in the current UI
 - fake-harness coverage for successful streaming, timeout handling, tab reload recovery, renamed controls, and missing controls during an active ask
-- CLI commands for `ask`, `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and `browser open|close|reset-profile|profile-info`
+- Playwright-backed file attachment with page acknowledgement checks before submit
+- managed artifact download capture, checksum recording, and durable SQLite-backed artifact metadata
+- CLI commands for `ask`, `artifacts list`, `artifacts pull`, `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and `browser open|close|reset-profile|profile-info`
 
 ## Implemented Commands
 
@@ -68,6 +70,9 @@ This repository now includes a configurable end-to-end chat path on top of the s
 - `gpt ask "hello"`
 - `gpt ask --model instant --mode search "hello"`
 - `gpt ask --model thinking --effort extended "hello"`
+- `gpt ask --file notes.txt --file data.csv "summarize uploads"`
+- `gpt artifacts list`
+- `gpt artifacts pull last`
 - `gpt doctor`
 - `gpt capabilities`
 - `gpt config show`
@@ -78,6 +83,6 @@ This repository now includes a configurable end-to-end chat path on top of the s
 - `gpt browser reset-profile`
 - `gpt browser profile-info`
 
-`research`, uploads, downloads, and artifacts remain deferred to later parts.
+`research` remains deferred to a later part.
 
 More detail lives in [docs/architecture.md](/C:/Users/user/Desktop/gpt-cli/docs/architecture.md) and [docs/development.md](/C:/Users/user/Desktop/gpt-cli/docs/development.md).

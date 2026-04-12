@@ -2,8 +2,9 @@ use chrono::{Duration, Utc};
 use gptd::{AppConfig, Database, daemon_is_responsive, send_request, send_request_stream};
 use shared_protocol::{
     AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, Effort, ErrorCode, EventPayload,
-    HealthStatus, JobStatus, Mode, ModelClass, build_state_paths,
+    HealthStatus, JobStatus, Mode, ModelClass, PullArtifactCommand, build_state_paths,
 };
+use std::fs;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -451,6 +452,136 @@ fn daemon_reports_capability_missing_errors_for_unavailable_modes() {
         DaemonResponse::Error(error) => {
             assert_eq!(error.error_code, ErrorCode::CapabilityMissing);
             assert!(error.message.contains("search mode"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn daemon_persists_uploaded_artifacts_and_pulls_them_locally() {
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let upload_fixture = dir.path().join("brief.txt");
+    fs::write(&upload_fixture, "brief body").unwrap();
+
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(fake_url.clone()),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let response = send_request_stream(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Ask(AskCommand {
+            prompt: "summarize uploads".to_owned(),
+            conversation_id: None,
+            mode: Mode::Normal,
+            model_class: None,
+            effort: None,
+            files: vec![upload_fixture.display().to_string()],
+        }),
+        |_event| Ok(()),
+    )
+    .unwrap();
+
+    let artifact_id = match response {
+        DaemonResponse::Ask(result) => {
+            assert_eq!(result.artifacts.len(), 1);
+            assert!(result.artifacts[0].file_name.contains("brief-summary"));
+            result.artifacts[0].artifact_id.clone()
+        }
+        other => panic!("unexpected response: {other:?}"),
+    };
+
+    let artifacts = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::ArtifactsList,
+    )
+    .unwrap();
+    match artifacts {
+        DaemonResponse::Artifacts(list) => {
+            assert_eq!(list.artifacts.len(), 1);
+            assert_eq!(list.artifacts[0].artifact_id, artifact_id);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let pull_dir = dir.path().join("pulled");
+    let pull = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::ArtifactPull(PullArtifactCommand {
+            artifact_id: "last".to_owned(),
+            destination_dir: pull_dir.display().to_string(),
+        }),
+    )
+    .unwrap();
+    match pull {
+        DaemonResponse::ArtifactPull(result) => {
+            let pulled = fs::read_to_string(result.destination_path).unwrap();
+            assert!(pulled.contains("Uploads: brief.txt"));
+            assert_eq!(result.artifact.artifact_id, artifact_id);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn daemon_reports_upload_errors_when_attachment_controls_are_missing() {
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let upload_fixture = dir.path().join("brief.txt");
+    fs::write(&upload_fixture, "brief body").unwrap();
+
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?missing=upload")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let response = send_request_stream(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Ask(AskCommand {
+            prompt: "summarize uploads".to_owned(),
+            conversation_id: None,
+            mode: Mode::Normal,
+            model_class: None,
+            effort: None,
+            files: vec![upload_fixture.display().to_string()],
+        }),
+        |_event| Ok(()),
+    )
+    .unwrap();
+
+    match response {
+        DaemonResponse::Error(error) => {
+            assert_eq!(error.error_code, ErrorCode::UploadFailed);
+            assert!(error.message.contains("upload failed"));
         }
         other => panic!("unexpected response: {other:?}"),
     }

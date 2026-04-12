@@ -1,8 +1,15 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { chromium, type BrowserContext, type Page } from "playwright-core";
+import { mkdir, readFile, stat } from "node:fs/promises";
+import { basename, dirname, extname, resolve } from "node:path";
+import {
+  chromium,
+  type BrowserContext,
+  type Download,
+  type Locator,
+  type Page,
+} from "playwright-core";
 
 type CapabilityKey =
   | "composer_ready"
@@ -95,6 +102,18 @@ export interface AskExecutionCommand {
   mode?: "normal" | "search" | "research";
   modelClass?: "instant" | "thinking" | null;
   effort?: "none" | "standard" | "extended" | null;
+  files?: string[];
+}
+
+export interface ArtifactMetadataSnapshot {
+  artifact_id: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  storage_path: string;
 }
 
 export interface AskResultSnapshot {
@@ -102,6 +121,7 @@ export interface AskResultSnapshot {
   conversation_id: string;
   message_id: string;
   output_text: string;
+  artifacts: ArtifactMetadataSnapshot[];
   completed_at: string;
   current_url: string;
 }
@@ -248,6 +268,31 @@ export class BrowserAdapter {
     };
   }
 
+  async snapshot(): Promise<BrowserStatusSnapshot> {
+    const page = this.managedPage;
+    const running = Boolean(this.context && page && !page.isClosed());
+
+    return {
+      running,
+      browser_kind: resolveBrowserLaunchConfig(
+        process.platform,
+        this.currentBrowserPath ?? undefined,
+      ).browserKind,
+      profile_dir: this.profileDir,
+      downloads_dir: this.downloadsDir,
+      target_url: this.currentTargetUrl,
+      current_url: running ? page!.url() : null,
+      page_title: null,
+      page_ready: running,
+      authenticated: running ? inferAuthenticated(page!.url()) : false,
+      reload_count: this.reloadCount,
+      screenshot_path: this.lastScreenshotPath,
+      browser_path: this.currentBrowserPath,
+      extension_connected: this.extensionConnected,
+      capability_report: this.lastCapabilityReport,
+    };
+  }
+
   async screenshot(path: string): Promise<BrowserStatusSnapshot> {
     await this.recoverManagedPage();
     if (!this.managedPage || this.managedPage.isClosed()) {
@@ -296,6 +341,11 @@ export class BrowserAdapter {
     );
     await this.refreshCapabilities(page);
     await applyAskConfiguration(page, command, this.lastCapabilityReport);
+    await uploadAttachments(
+      page,
+      command.files ?? [],
+      this.lastCapabilityReport,
+    );
     await fillComposer(page, command.prompt);
     await clickSubmit(page);
 
@@ -337,6 +387,12 @@ export class BrowserAdapter {
       }
 
       if (snapshot.state === "done") {
+        const artifacts = await collectArtifacts(
+          page,
+          this.downloadsDir,
+          snapshot.conversationId,
+          snapshot.messageId,
+        );
         await onChunk({
           job_id: command.jobId,
           conversation_id: snapshot.conversationId,
@@ -351,6 +407,7 @@ export class BrowserAdapter {
             snapshot.conversationId ?? `${command.jobId}-conversation`,
           message_id: snapshot.messageId ?? `${command.jobId}-message`,
           output_text: snapshot.text,
+          artifacts,
           completed_at: new Date().toISOString(),
           current_url: snapshot.currentUrl,
         };
@@ -756,6 +813,85 @@ async function applyAskConfiguration(
   );
 }
 
+async function uploadAttachments(
+  page: Page,
+  files: string[],
+  report: CapabilityReportPayload | null,
+): Promise<void> {
+  if (files.length === 0) {
+    return;
+  }
+
+  if (!report?.matrix.upload_control_visible) {
+    throw new Error(
+      "upload failed: no upload control is available in the current browser session",
+    );
+  }
+
+  const resolvedFiles = await Promise.all(
+    files.map(async (filePath) => {
+      const absolutePath = resolve(filePath);
+      const fileStat = await stat(absolutePath).catch(() => null);
+      if (!fileStat?.isFile()) {
+        throw new Error(`upload failed: file not found: ${absolutePath}`);
+      }
+      return absolutePath;
+    }),
+  );
+
+  const fileInput = page.locator("input[type='file']").first();
+  if ((await fileInput.count()) > 0) {
+    await fileInput.setInputFiles(resolvedFiles);
+  } else {
+    const uploadEntry = page
+      .locator("[data-slot='upload-entry'], label[for], [aria-label*='file']")
+      .first();
+    if ((await uploadEntry.count()) === 0) {
+      throw new Error("upload failed: upload entry point could not be found");
+    }
+    const chooserPromise = page.waitForEvent("filechooser", { timeout: 2_000 });
+    await uploadEntry.click();
+    const chooser = await chooserPromise.catch(() => null);
+    if (!chooser) {
+      throw new Error("upload failed: file chooser did not open");
+    }
+    await chooser.setFiles(resolvedFiles);
+  }
+
+  const expectedNames = resolvedFiles.map((filePath) => basename(filePath));
+  await page
+    .waitForFunction(
+      (names: string[]) => {
+        const uploaded = new Set(
+          Array.from(
+            document.querySelectorAll(
+              "[data-slot='uploaded-file'], [data-slot='upload-entry-name']",
+            ),
+          )
+            .map((element) => element.textContent?.trim() ?? "")
+            .filter((value) => value.length > 0),
+        );
+        if (uploaded.size === 0) {
+          const fromDataset = document.body.dataset.uploadedFiles
+            ?.split("|")
+            .map((value) => value.trim())
+            .filter(Boolean);
+          if (fromDataset?.length) {
+            return names.every((name) => fromDataset.includes(name));
+          }
+        }
+        return names.every((name) => uploaded.has(name));
+      },
+      expectedNames,
+      { timeout: 5_000 },
+    )
+    .catch(() => {
+      throw new Error(
+        `upload failed: the page did not acknowledge uploaded files: ${expectedNames.join(", ")}`,
+      );
+    });
+}
+
 async function clickSubmit(page: Page): Promise<void> {
   await page.evaluate(() => {
     const submit = document.querySelector(
@@ -807,6 +943,151 @@ async function readAskSnapshot(page: Page): Promise<{
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function collectArtifacts(
+  page: Page,
+  downloadsDir: string,
+  conversationId: string | null,
+  messageId: string | null,
+): Promise<ArtifactMetadataSnapshot[]> {
+  const handles = await page
+    .locator("[data-slot='artifact-link'], a[download]")
+    .all();
+  const artifacts: ArtifactMetadataSnapshot[] = [];
+
+  for (let index = 0; index < handles.length; index += 1) {
+    const handle = handles[index]!;
+    const artifactReady = await handle.evaluate((element) => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      return (
+        element.dataset.artifactReady === "true" ||
+        element.getAttribute("data-artifact-ready") === "true"
+      );
+    });
+    if (!artifactReady) {
+      continue;
+    }
+
+    const download = await clickAndCaptureDownload(page, handle).catch(
+      (error) => {
+        throw new Error(
+          `download failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
+    );
+    artifacts.push(
+      await persistDownload(
+        download,
+        downloadsDir,
+        conversationId,
+        messageId,
+        index,
+      ),
+    );
+  }
+
+  return artifacts;
+}
+
+async function clickAndCaptureDownload(
+  page: Page,
+  handle: Locator,
+): Promise<Download> {
+  const downloadPromise = page.waitForEvent("download", { timeout: 5_000 });
+  await handle.click({ noWaitAfter: true });
+  return downloadPromise;
+}
+
+async function persistDownload(
+  download: Download,
+  downloadsDir: string,
+  conversationId: string | null,
+  messageId: string | null,
+  index: number,
+): Promise<ArtifactMetadataSnapshot> {
+  const suggestedName =
+    download.suggestedFilename() || `artifact-${index + 1}.bin`;
+  const storagePath = await chooseUniqueArtifactPath(
+    downloadsDir,
+    suggestedName,
+  );
+  await mkdir(dirname(storagePath), { recursive: true });
+  await download.saveAs(storagePath);
+
+  const fileBuffer = await readFile(storagePath);
+  const fileStat = await stat(storagePath);
+  const sha256 = createHash("sha256").update(fileBuffer).digest("hex");
+  const artifactId = createHash("sha1")
+    .update(
+      `${conversationId ?? "no-conversation"}:${messageId ?? "no-message"}:${storagePath}`,
+    )
+    .digest("hex")
+    .slice(0, 16);
+
+  return {
+    artifact_id: `artifact-${artifactId}`,
+    conversation_id: conversationId,
+    message_id: messageId,
+    file_name: basename(storagePath),
+    content_type: contentTypeForFile(storagePath),
+    size_bytes: fileStat.size,
+    sha256,
+    storage_path: storagePath,
+  };
+}
+
+export async function chooseUniqueArtifactPath(
+  downloadsDir: string,
+  fileName: string,
+): Promise<string> {
+  const absoluteDownloadsDir = resolve(downloadsDir);
+  const baseName = basename(fileName);
+  let candidate = resolve(absoluteDownloadsDir, baseName);
+  if (!(await pathExists(candidate))) {
+    return candidate;
+  }
+
+  const extension = extname(baseName);
+  const stem = extension ? baseName.slice(0, -extension.length) : baseName;
+  for (let index = 2; index < 10_000; index += 1) {
+    candidate = resolve(absoluteDownloadsDir, `${stem}-${index}${extension}`);
+    if (!(await pathExists(candidate))) {
+      return candidate;
+    }
+  }
+
+  throw new Error(
+    `download failed: could not allocate a unique path for ${fileName}`,
+  );
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function contentTypeForFile(path: string): string {
+  switch (extname(path).toLowerCase()) {
+    case ".txt":
+      return "text/plain; charset=utf-8";
+    case ".json":
+      return "application/json";
+    case ".csv":
+      return "text/csv; charset=utf-8";
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".pdf":
+      return "application/pdf";
+    default:
+      return "application/octet-stream";
+  }
 }
 
 function workspaceKeyFromUrl(rawUrl: string): string {

@@ -1,6 +1,6 @@
 # Architecture Notes
 
-## Part 6 decisions
+## Part 7 decisions
 
 - The stable protocol version is `tablinq.v1`.
 - Rust owns durable types, validation, and CLI/daemon entry points.
@@ -16,6 +16,8 @@
 - Browser health is surfaced to the daemon as a `BrowserStatusSnapshot`, which now includes `extension_connected` and the last `CapabilityReport`.
 - Ask execution is streamed over the local daemon socket as `EventPayload` frames followed by a final `DaemonResponse`.
 - Runtime alias and last-known-good strategy data are cached per normalized workspace URL inside the managed browser profile so selection can reuse the latest discovered labels.
+- File attachments are passed as local paths from the CLI to the daemon and then attached through Playwright.
+- Artifact downloads are captured by Playwright, moved into managed storage, and registered in SQLite with checksums plus conversation/message linkage.
 
 ## Protocol surface
 
@@ -23,10 +25,10 @@
 - Events use an envelope with `version`, `request_id`, `emitted_at`, and a tagged `event`.
 - Payload shapes are independently versioned under `schemas/v1/`.
 - Runtime-discovered labels are represented as alias maps so UI text stays out of core control logic.
-- The CLI/daemon control path uses `DaemonRequest` and `DaemonResponse` types in `shared-protocol` for `ask`, `ping`, `status`, `shutdown`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and browser lifecycle commands.
-- The daemon/browser path uses a smaller JSON-line adapter protocol over stdio for `open`, `health`, `close`, and `shutdown`, with capability probes piggybacking on browser health snapshots.
+- The CLI/daemon control path uses `DaemonRequest` and `DaemonResponse` types in `shared-protocol` for `ask`, `artifacts list`, `artifacts pull`, `ping`, `status`, `shutdown`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and browser lifecycle commands.
+- The daemon/browser path uses a smaller JSON-line adapter protocol over stdio for `open`, `health`, `ask`, `close`, and `shutdown`, with capability probes piggybacking on browser health snapshots.
 - For streamed asks, the daemon/browser adapter path emits `stream_chunk` frames until an `ask_result` frame closes the request.
-- Ask requests now forward `mode`, `model_class`, and `effort` to the browser adapter before composer submission.
+- Ask requests now forward `mode`, `model_class`, `effort`, and `files` to the browser adapter before composer submission.
 
 ## State layout
 
@@ -54,14 +56,15 @@ The IPC endpoint is derived deterministically from the state root, so the CLI an
 
 ## Ask flow
 
-The Part 6 ask path stays local and DOM-driven:
+The Part 7 ask path stays local and DOM-driven:
 
 - `gpt ask` sends a streamed `DaemonRequest::Ask`.
 - `gptd` creates a durable job row, resumes the last conversation when no explicit conversation is provided, and forwards stream events to the CLI.
-- The browser adapter refreshes the latest capability report, applies requested model/mode/effort settings from discovered aliases, focuses the composer, inserts the prompt, clicks submit, and polls the managed page for DOM text growth.
+- The browser adapter refreshes the latest capability report, applies requested model/mode/effort settings from discovered aliases, attaches requested files through Playwright, confirms page acknowledgement, focuses the composer, inserts the prompt, clicks submit, and polls the managed page for DOM text growth.
 - Streamed deltas are normalized into `StreamChunk` events and forwarded immediately to the terminal.
-- Completion stores job state plus the latest conversation mapping in SQLite.
+- Completion stores job state, the latest conversation mapping, and any downloaded artifact metadata in SQLite.
 - Missing requested controls fail fast as `capability_missing`; mismatches between a visible capability and the action layer are classified as `ui_drift`.
+- Upload acknowledgement failures surface as `upload_failed`; download capture failures surface as `download_failed`.
 
 ## Capability matrix
 
@@ -92,10 +95,12 @@ The fake harness now exposes two intentionally different UI shapes:
 - a classic variant with grouped `data-slot` anchors
 - an ARIA-first variant with renamed controls and moved upload/composer affordances
 
-It also exposes Part 6 control and streaming scenarios:
+It also exposes Part 7 control, upload, download, and streaming scenarios:
 
 - model and effort groups with renamed labels
 - optional missing search/model/effort controls
+- upload acknowledgement via `data-slot` markers and `body.dataset.uploadedFiles`
+- artifact links that become download-ready only after completion
 - successful streamed output
 - stalled output for timeout handling
 - one forced reload during an active stream

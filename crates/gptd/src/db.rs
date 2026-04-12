@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use shared_protocol::{
-    ArtifactMetadata, JobList, JobStatus, JobSummary, SessionList, SessionSummary,
+    ArtifactList, ArtifactMetadata, ArtifactSummary, JobList, JobStatus, JobSummary, SessionList,
+    SessionSummary,
 };
 use std::path::Path;
 
@@ -252,6 +253,55 @@ impl Database {
         Ok(())
     }
 
+    pub fn list_artifacts(&self) -> Result<ArtifactList> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT artifact_id, conversation_id, message_id, file_name, content_type,
+                   size_bytes, sha256, storage_path, created_at
+            FROM artifacts
+            ORDER BY created_at DESC
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| map_artifact_row(row))?;
+        let artifacts = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(ArtifactList { artifacts })
+    }
+
+    pub fn latest_artifact(&self) -> Result<Option<ArtifactSummary>> {
+        let artifact = self
+            .conn
+            .query_row(
+                r#"
+                SELECT artifact_id, conversation_id, message_id, file_name, content_type,
+                       size_bytes, sha256, storage_path, created_at
+                FROM artifacts
+                ORDER BY created_at DESC
+                LIMIT 1
+                "#,
+                [],
+                map_artifact_row,
+            )
+            .optional()?;
+        Ok(artifact)
+    }
+
+    pub fn find_artifact(&self, artifact_id: &str) -> Result<Option<ArtifactSummary>> {
+        let artifact = self
+            .conn
+            .query_row(
+                r#"
+                SELECT artifact_id, conversation_id, message_id, file_name, content_type,
+                       size_bytes, sha256, storage_path, created_at
+                FROM artifacts
+                WHERE artifact_id = ?1
+                "#,
+                [artifact_id],
+                map_artifact_row,
+            )
+            .optional()?;
+        Ok(artifact)
+    }
+
     fn apply_migrations(&self) -> Result<()> {
         self.conn.execute_batch(
             r#"
@@ -290,6 +340,20 @@ fn parse_timestamp(value: String) -> rusqlite::Result<DateTime<Utc>> {
         .map_err(|err| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(err))
         })
+}
+
+fn map_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactSummary> {
+    Ok(ArtifactSummary {
+        artifact_id: row.get(0)?,
+        conversation_id: row.get(1)?,
+        message_id: row.get(2)?,
+        file_name: row.get(3)?,
+        content_type: row.get(4)?,
+        size_bytes: row.get(5)?,
+        sha256: row.get(6)?,
+        storage_path: row.get(7)?,
+        created_at: parse_timestamp(row.get::<_, String>(8)?)?,
+    })
 }
 
 fn parse_job_status(value: &str) -> JobStatus {
