@@ -1,0 +1,703 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
+
+pub const PROTOCOL_VERSION: &str = "tablinq.v1";
+pub const SELECTOR_PACK_FORMAT_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    Normal,
+    Search,
+    Research,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelClass {
+    Instant,
+    Thinking,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Effort {
+    None,
+    Standard,
+    Extended,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    Transport,
+    BrowserLaunch,
+    ProfileLocked,
+    AuthRequired,
+    CapabilityMissing,
+    ActionTimeout,
+    UiDrift,
+    DownloadFailed,
+    UploadFailed,
+    ResearchJobFailed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JobStatus {
+    Queued,
+    Starting,
+    Running,
+    WaitingForSources,
+    Completed,
+    Failed,
+    ArtifactReady,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamChunkKind {
+    Delta,
+    Citation,
+    Status,
+    Done,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthStatus {
+    Ok,
+    Degraded,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StrategyKind {
+    AriaRole,
+    Css,
+    Text,
+    DomNeighborhood,
+    Hotkey,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CommandEnvelope {
+    pub version: String,
+    pub request_id: String,
+    pub session_id: Option<String>,
+    pub sent_at: DateTime<Utc>,
+    pub command: CommandPayload,
+}
+
+impl CommandEnvelope {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_exact_version(&self.version)?;
+        validate_required("request_id", &self.request_id)?;
+        validate_optional("session_id", self.session_id.as_deref())?;
+        self.command.validate()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum CommandPayload {
+    Ask(AskCommand),
+    Research(ResearchCommand),
+    CancelJob(CancelJobCommand),
+    InspectCapabilities(InspectCapabilitiesCommand),
+    HealthPing(HealthPingCommand),
+    PullArtifact(PullArtifactCommand),
+}
+
+impl CommandPayload {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        match self {
+            Self::Ask(command) => command.validate(),
+            Self::Research(command) => command.validate(),
+            Self::CancelJob(command) => command.validate(),
+            Self::InspectCapabilities(command) => command.validate(),
+            Self::HealthPing(command) => command.validate(),
+            Self::PullArtifact(command) => command.validate(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AskCommand {
+    pub prompt: String,
+    pub conversation_id: Option<String>,
+    pub mode: Mode,
+    pub model_class: Option<ModelClass>,
+    pub effort: Option<Effort>,
+    pub files: Vec<String>,
+}
+
+impl AskCommand {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("prompt", &self.prompt)?;
+        validate_optional("conversation_id", self.conversation_id.as_deref())?;
+        validate_paths("files", &self.files)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchCommand {
+    pub query: String,
+    pub files: Vec<String>,
+    pub output_dir: Option<String>,
+}
+
+impl ResearchCommand {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("query", &self.query)?;
+        validate_optional("output_dir", self.output_dir.as_deref())?;
+        validate_paths("files", &self.files)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CancelJobCommand {
+    pub job_id: String,
+}
+
+impl CancelJobCommand {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("job_id", &self.job_id)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct InspectCapabilitiesCommand {}
+
+impl InspectCapabilitiesCommand {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct HealthPingCommand {}
+
+impl HealthPingCommand {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PullArtifactCommand {
+    pub artifact_id: String,
+    pub destination_dir: String,
+}
+
+impl PullArtifactCommand {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("artifact_id", &self.artifact_id)?;
+        validate_required("destination_dir", &self.destination_dir)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EventEnvelope {
+    pub version: String,
+    pub request_id: Option<String>,
+    pub emitted_at: DateTime<Utc>,
+    pub event: EventPayload,
+}
+
+impl EventEnvelope {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_exact_version(&self.version)?;
+        validate_optional("request_id", self.request_id.as_deref())?;
+        self.event.validate()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum EventPayload {
+    Ack(AckEvent),
+    StreamChunk(StreamChunk),
+    CapabilityReport(CapabilityReport),
+    JobState(JobState),
+    ArtifactReady(ArtifactMetadata),
+    Failure(FailureBundle),
+    HealthCheck(HealthCheck),
+}
+
+impl EventPayload {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        match self {
+            Self::Ack(event) => event.validate(),
+            Self::StreamChunk(event) => event.validate(),
+            Self::CapabilityReport(event) => event.validate(),
+            Self::JobState(event) => event.validate(),
+            Self::ArtifactReady(event) => event.validate(),
+            Self::Failure(event) => event.validate(),
+            Self::HealthCheck(event) => event.validate(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AckEvent {
+    pub accepted: bool,
+    pub message: String,
+}
+
+impl AckEvent {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("message", &self.message)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct StreamChunk {
+    pub job_id: String,
+    pub conversation_id: Option<String>,
+    pub message_id: Option<String>,
+    pub seq: u64,
+    pub kind: StreamChunkKind,
+    pub text: String,
+}
+
+impl StreamChunk {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("job_id", &self.job_id)?;
+        validate_optional("conversation_id", self.conversation_id.as_deref())?;
+        validate_optional("message_id", self.message_id.as_deref())?;
+        if self.kind != StreamChunkKind::Done {
+            validate_required("text", &self.text)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityMatrix {
+    pub composer_ready: bool,
+    pub submit_available: bool,
+    pub model_picker_visible: bool,
+    pub thinking_effort_visible: bool,
+    pub search_mode_visible: bool,
+    pub research_mode_visible: bool,
+    pub upload_control_visible: bool,
+    pub downloadable_artifacts_observable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityReport {
+    pub reported_at: DateTime<Utc>,
+    pub selector_pack_id: String,
+    pub selector_pack_version: String,
+    pub matrix: CapabilityMatrix,
+    pub aliases: RuntimeAliases,
+}
+
+impl CapabilityReport {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("selector_pack_id", &self.selector_pack_id)?;
+        validate_required("selector_pack_version", &self.selector_pack_version)?;
+        self.aliases.validate()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeAliases {
+    pub modes: BTreeMap<String, Vec<String>>,
+    pub model_classes: BTreeMap<String, Vec<String>>,
+    pub efforts: BTreeMap<String, Vec<String>>,
+}
+
+impl RuntimeAliases {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        for (field, groups) in [
+            ("aliases.modes", &self.modes),
+            ("aliases.model_classes", &self.model_classes),
+            ("aliases.efforts", &self.efforts),
+        ] {
+            for (name, labels) in groups {
+                validate_required(field, name)?;
+                for label in labels {
+                    validate_required(field, label)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JobState {
+    pub job_id: String,
+    pub status: JobStatus,
+    pub message: Option<String>,
+    pub conversation_id: Option<String>,
+    pub updated_at: DateTime<Utc>,
+    pub artifacts: Vec<ArtifactMetadata>,
+}
+
+impl JobState {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("job_id", &self.job_id)?;
+        validate_optional("message", self.message.as_deref())?;
+        validate_optional("conversation_id", self.conversation_id.as_deref())?;
+        for artifact in &self.artifacts {
+            artifact.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactMetadata {
+    pub artifact_id: String,
+    pub conversation_id: Option<String>,
+    pub message_id: Option<String>,
+    pub file_name: String,
+    pub content_type: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub storage_path: String,
+}
+
+impl ArtifactMetadata {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("artifact_id", &self.artifact_id)?;
+        validate_optional("conversation_id", self.conversation_id.as_deref())?;
+        validate_optional("message_id", self.message_id.as_deref())?;
+        validate_required("file_name", &self.file_name)?;
+        validate_required("content_type", &self.content_type)?;
+        validate_required("sha256", &self.sha256)?;
+        validate_required("storage_path", &self.storage_path)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FailureBundle {
+    pub bundle_id: String,
+    pub error_code: ErrorCode,
+    pub message: String,
+    pub created_at: DateTime<Utc>,
+    pub url: Option<String>,
+    pub mode: Option<Mode>,
+    pub screenshot_path: Option<String>,
+    pub dom_snapshot_path: Option<String>,
+    pub aria_snapshot_path: Option<String>,
+    pub logs_path: Option<String>,
+    pub strategy_attempts: Vec<StrategyAttempt>,
+    pub capability_matrix: CapabilityMatrix,
+}
+
+impl FailureBundle {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("bundle_id", &self.bundle_id)?;
+        validate_required("message", &self.message)?;
+        validate_optional("url", self.url.as_deref())?;
+        validate_optional("screenshot_path", self.screenshot_path.as_deref())?;
+        validate_optional("dom_snapshot_path", self.dom_snapshot_path.as_deref())?;
+        validate_optional("aria_snapshot_path", self.aria_snapshot_path.as_deref())?;
+        validate_optional("logs_path", self.logs_path.as_deref())?;
+        for attempt in &self.strategy_attempts {
+            attempt.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StrategyAttempt {
+    pub capability: String,
+    pub strategy_id: String,
+    pub score: f32,
+    pub outcome: String,
+    pub detail: Option<String>,
+}
+
+impl StrategyAttempt {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("capability", &self.capability)?;
+        validate_required("strategy_id", &self.strategy_id)?;
+        validate_required("outcome", &self.outcome)?;
+        validate_optional("detail", self.detail.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HealthCheck {
+    pub status: HealthStatus,
+    pub checked_at: DateTime<Utc>,
+    pub browser_connected: bool,
+    pub extension_connected: bool,
+    pub authenticated: bool,
+    pub details: Option<String>,
+}
+
+impl HealthCheck {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_optional("details", self.details.as_deref())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SelectorPack {
+    pub format_version: u32,
+    pub pack_id: String,
+    pub description: String,
+    pub updated_at: DateTime<Utc>,
+    pub capabilities: BTreeMap<String, Vec<SelectorStrategy>>,
+}
+
+impl SelectorPack {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.format_version != SELECTOR_PACK_FORMAT_VERSION {
+            return Err(ValidationError::UnsupportedSelectorPackFormat {
+                found: self.format_version,
+                expected: SELECTOR_PACK_FORMAT_VERSION,
+            });
+        }
+
+        validate_required("pack_id", &self.pack_id)?;
+        validate_required("description", &self.description)?;
+
+        if self.capabilities.is_empty() {
+            return Err(ValidationError::EmptyCollection("capabilities"));
+        }
+
+        for (capability, strategies) in &self.capabilities {
+            validate_required("capabilities", capability)?;
+            if strategies.is_empty() {
+                return Err(ValidationError::EmptyCollection("capability strategies"));
+            }
+
+            let mut seen = BTreeSet::new();
+            for strategy in strategies {
+                strategy.validate()?;
+                if !seen.insert(strategy.strategy_id.clone()) {
+                    return Err(ValidationError::DuplicateStrategy {
+                        field: capability.clone(),
+                        strategy_id: strategy.strategy_id.clone(),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct SelectorStrategy {
+    pub strategy_id: String,
+    pub kind: StrategyKind,
+    pub selector: String,
+    pub score: f32,
+}
+
+impl SelectorStrategy {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("strategy_id", &self.strategy_id)?;
+        validate_required("selector", &self.selector)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ValidationError {
+    #[error("{0} must not be empty")]
+    EmptyField(&'static str),
+    #[error("{0} must contain at least one item")]
+    EmptyCollection(&'static str),
+    #[error("selector pack format version {found} is unsupported; expected {expected}")]
+    UnsupportedSelectorPackFormat { found: u32, expected: u32 },
+    #[error("{field} contains duplicate strategy id {strategy_id}")]
+    DuplicateStrategy { field: String, strategy_id: String },
+    #[error("protocol version {found} is unsupported; expected {expected}")]
+    UnsupportedVersion {
+        found: String,
+        expected: &'static str,
+    },
+}
+
+fn validate_exact_version(version: &str) -> Result<(), ValidationError> {
+    if version == PROTOCOL_VERSION {
+        Ok(())
+    } else {
+        Err(ValidationError::UnsupportedVersion {
+            found: version.to_owned(),
+            expected: PROTOCOL_VERSION,
+        })
+    }
+}
+
+fn validate_required(field: &'static str, value: &str) -> Result<(), ValidationError> {
+    if value.trim().is_empty() {
+        Err(ValidationError::EmptyField(field))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_optional(field: &'static str, value: Option<&str>) -> Result<(), ValidationError> {
+    match value {
+        Some(value) => validate_required(field, value),
+        None => Ok(()),
+    }
+}
+
+fn validate_paths(field: &'static str, values: &[String]) -> Result<(), ValidationError> {
+    for value in values {
+        validate_required(field, value)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn fixed_time() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 4, 12, 3, 4, 5).unwrap()
+    }
+
+    #[test]
+    fn command_envelope_round_trips() {
+        let envelope = CommandEnvelope {
+            version: PROTOCOL_VERSION.to_owned(),
+            request_id: "req-123".to_owned(),
+            session_id: Some("session-abc".to_owned()),
+            sent_at: fixed_time(),
+            command: CommandPayload::Ask(AskCommand {
+                prompt: "hello".to_owned(),
+                conversation_id: Some("conv-1".to_owned()),
+                mode: Mode::Search,
+                model_class: Some(ModelClass::Thinking),
+                effort: Some(Effort::Standard),
+                files: vec!["fixtures/a.pdf".to_owned()],
+            }),
+        };
+
+        let json = serde_json::to_string_pretty(&envelope).unwrap();
+        let restored: CommandEnvelope = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored, envelope);
+        assert!(json.contains("\"type\": \"ask\""));
+        envelope.validate().unwrap();
+    }
+
+    #[test]
+    fn event_envelope_round_trips() {
+        let envelope = EventEnvelope {
+            version: PROTOCOL_VERSION.to_owned(),
+            request_id: Some("req-123".to_owned()),
+            emitted_at: fixed_time(),
+            event: EventPayload::CapabilityReport(CapabilityReport {
+                reported_at: fixed_time(),
+                selector_pack_id: "chatgpt-default".to_owned(),
+                selector_pack_version: "v1".to_owned(),
+                matrix: CapabilityMatrix {
+                    composer_ready: true,
+                    submit_available: true,
+                    model_picker_visible: true,
+                    thinking_effort_visible: true,
+                    search_mode_visible: true,
+                    research_mode_visible: false,
+                    upload_control_visible: true,
+                    downloadable_artifacts_observable: false,
+                },
+                aliases: RuntimeAliases {
+                    modes: BTreeMap::from([
+                        ("normal".to_owned(), vec!["Chat".to_owned()]),
+                        ("search".to_owned(), vec!["Search".to_owned()]),
+                    ]),
+                    model_classes: BTreeMap::from([(
+                        "thinking".to_owned(),
+                        vec!["GPT-5.4 Thinking".to_owned()],
+                    )]),
+                    efforts: BTreeMap::from([("standard".to_owned(), vec!["Standard".to_owned()])]),
+                },
+            }),
+        };
+
+        let json = serde_json::to_string_pretty(&envelope).unwrap();
+        let restored: EventEnvelope = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored, envelope);
+        assert!(json.contains("\"type\": \"capability_report\""));
+        envelope.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_blank_request_id() {
+        let envelope = CommandEnvelope {
+            version: PROTOCOL_VERSION.to_owned(),
+            request_id: "   ".to_owned(),
+            session_id: None,
+            sent_at: fixed_time(),
+            command: CommandPayload::HealthPing(HealthPingCommand::default()),
+        };
+
+        let err = envelope.validate().unwrap_err();
+        assert_eq!(err, ValidationError::EmptyField("request_id"));
+    }
+
+    #[test]
+    fn selector_pack_validation_rejects_duplicate_strategy_ids() {
+        let pack = SelectorPack {
+            format_version: SELECTOR_PACK_FORMAT_VERSION,
+            pack_id: "chatgpt-default".to_owned(),
+            description: "baseline".to_owned(),
+            updated_at: fixed_time(),
+            capabilities: BTreeMap::from([(
+                "composer_ready".to_owned(),
+                vec![
+                    SelectorStrategy {
+                        strategy_id: "composer-role".to_owned(),
+                        kind: StrategyKind::AriaRole,
+                        selector: "[role='textbox']".to_owned(),
+                        score: 0.98,
+                    },
+                    SelectorStrategy {
+                        strategy_id: "composer-role".to_owned(),
+                        kind: StrategyKind::Css,
+                        selector: "textarea".to_owned(),
+                        score: 0.7,
+                    },
+                ],
+            )]),
+        };
+
+        let err = pack.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ValidationError::DuplicateStrategy {
+                field: "composer_ready".to_owned(),
+                strategy_id: "composer-role".to_owned(),
+            }
+        );
+    }
+}

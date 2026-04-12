@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tablinq.local/schemas/v1/selector-pack.schema.json",
+  "title": "SelectorPack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "pack_id",
+    "description",
+    "updated_at",
+    "capabilities"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "pack_id": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "composer_ready",
+        "submit_available",
+        "model_picker_visible",
+        "thinking_effort_visible",
+        "search_mode_visible",
+        "research_mode_visible",
+        "upload_control_visible",
+        "downloadable_artifacts_observable"
+      ],
+      "properties": {
+        "composer_ready": { "$ref": "#/$defs/strategies" },
+        "submit_available": { "$ref": "#/$defs/strategies" },
+        "model_picker_visible": { "$ref": "#/$defs/strategies" },
+        "thinking_effort_visible": { "$ref": "#/$defs/strategies" },
+        "search_mode_visible": { "$ref": "#/$defs/strategies" },
+        "research_mode_visible": { "$ref": "#/$defs/strategies" },
+        "upload_control_visible": { "$ref": "#/$defs/strategies" },
+        "downloadable_artifacts_observable": { "$ref": "#/$defs/strategies" }
+      }
+    }
+  },
+  "$defs": {
+    "strategies": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/selector_strategy" }
+    },
+    "selector_strategy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strategy_id", "kind", "selector", "score"],
+      "properties": {
+        "strategy_id": { "type": "string", "minLength": 1 },
+        "kind": {
+          "type": "string",
+          "enum": ["aria_role", "css", "text", "dom_neighborhood", "hotkey"]
+        },
+        "selector": { "type": "string", "minLength": 1 },
+        "score": { "type": "number" }
+      }
+    }
+  }
+}

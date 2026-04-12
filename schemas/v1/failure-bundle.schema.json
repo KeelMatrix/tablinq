@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tablinq.local/schemas/v1/failure-bundle.schema.json",
+  "title": "FailureBundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "bundle_id",
+    "error_code",
+    "message",
+    "created_at",
+    "url",
+    "mode",
+    "screenshot_path",
+    "dom_snapshot_path",
+    "aria_snapshot_path",
+    "logs_path",
+    "strategy_attempts",
+    "capability_matrix"
+  ],
+  "properties": {
+    "bundle_id": { "type": "string", "minLength": 1 },
+    "error_code": {
+      "type": "string",
+      "enum": [
+        "transport",
+        "browser_launch",
+        "profile_locked",
+        "auth_required",
+        "capability_missing",
+        "action_timeout",
+        "ui_drift",
+        "download_failed",
+        "upload_failed",
+        "research_job_failed"
+      ]
+    },
+    "message": { "type": "string", "minLength": 1 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "url": { "type": ["string", "null"], "minLength": 1 },
+    "mode": {
+      "type": ["string", "null"],
+      "enum": ["normal", "search", "research", null]
+    },
+    "screenshot_path": { "type": ["string", "null"], "minLength": 1 },
+    "dom_snapshot_path": { "type": ["string", "null"], "minLength": 1 },
+    "aria_snapshot_path": { "type": ["string", "null"], "minLength": 1 },
+    "logs_path": { "type": ["string", "null"], "minLength": 1 },
+    "strategy_attempts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/strategy_attempt" }
+    },
+    "capability_matrix": { "$ref": "#/$defs/capability_matrix" }
+  },
+  "$defs": {
+    "strategy_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capability", "strategy_id", "score", "outcome", "detail"],
+      "properties": {
+        "capability": { "type": "string", "minLength": 1 },
+        "strategy_id": { "type": "string", "minLength": 1 },
+        "score": { "type": "number" },
+        "outcome": { "type": "string", "minLength": 1 },
+        "detail": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "capability_matrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "composer_ready",
+        "submit_available",
+        "model_picker_visible",
+        "thinking_effort_visible",
+        "search_mode_visible",
+        "research_mode_visible",
+        "upload_control_visible",
+        "downloadable_artifacts_observable"
+      ],
+      "properties": {
+        "composer_ready": { "type": "boolean" },
+        "submit_available": { "type": "boolean" },
+        "model_picker_visible": { "type": "boolean" },
+        "thinking_effort_visible": { "type": "boolean" },
+        "search_mode_visible": { "type": "boolean" },
+        "research_mode_visible": { "type": "boolean" },
+        "upload_control_visible": { "type": "boolean" },
+        "downloadable_artifacts_observable": { "type": "boolean" }
+      }
+    }
+  }
+}

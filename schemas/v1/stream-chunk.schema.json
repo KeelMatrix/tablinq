@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tablinq.local/schemas/v1/stream-chunk.schema.json",
+  "title": "StreamChunk",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job_id",
+    "conversation_id",
+    "message_id",
+    "seq",
+    "kind",
+    "text"
+  ],
+  "properties": {
+    "job_id": { "type": "string", "minLength": 1 },
+    "conversation_id": { "type": ["string", "null"], "minLength": 1 },
+    "message_id": { "type": ["string", "null"], "minLength": 1 },
+    "seq": { "type": "integer", "minimum": 0 },
+    "kind": {
+      "type": "string",
+      "enum": ["delta", "citation", "status", "done"]
+    },
+    "text": { "type": "string" }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "tablinq",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "lint": "pnpm exec tsc -p packages/browser-adapter/tsconfig.json --noEmit && pnpm exec tsc -p packages/extension/tsconfig.json --noEmit",
+    "format": "pnpm exec prettier --check \"**/*.{json,md,ts,js,html,yml,yaml}\"",
+    "test": "pnpm exec vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.30",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "prettier": "^3.5.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.1"
+  }
+}
