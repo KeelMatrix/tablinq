@@ -41,9 +41,9 @@ flowchart LR
 7. Open a managed browser with `cargo run -p gpt -- browser open`.
 8. Inspect it with `cargo run -p gpt -- browser profile-info` or `cargo run -p gpt -- doctor`.
 
-## Part 4 Scope
+## Part 5 Scope
 
-This repository now includes a semantic probe layer on top of the managed browser runtime. The stable boundaries in this part are:
+This repository now includes the first useful end-to-end chat path on top of the semantic browser layer. The stable boundaries in this part are:
 
 - internal enums for `mode`, `model_class`, and `effort`
 - JSON schema definitions for commands, events, streamed chunks, capability reports, job states, artifacts, failure bundles, and health checks
@@ -53,13 +53,16 @@ This repository now includes a semantic probe layer on top of the managed browse
 - an MV3 extension service worker and content script with native-messaging and localhost WebSocket bridge modes
 - ARIA-aware capability probes with strategy scoring, DOM neighborhood snapshots, and last-known-good strategy reuse per observed UI shape
 - fake harness coverage for both the classic slot-based UI and an ARIA-first fallback UI
-- CLI commands for `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and `browser open|close|reset-profile|profile-info`
+- a streamed `ask` flow from CLI -> daemon -> browser adapter -> managed page, with durable job and conversation persistence
+- fake-harness coverage for successful streaming, timeout handling, and tab reload recovery during an active ask
+- CLI commands for `ask`, `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and `browser open|close|reset-profile|profile-info`
 
 ## Implemented Commands
 
 - `gpt daemon start`
 - `gpt daemon status`
 - `gpt daemon stop`
+- `gpt ask "hello"`
 - `gpt doctor`
 - `gpt capabilities`
 - `gpt config show`
@@ -70,6 +73,6 @@ This repository now includes a semantic probe layer on top of the managed browse
 - `gpt browser reset-profile`
 - `gpt browser profile-info`
 
-`ask`, `research`, uploads, downloads, and artifacts remain deferred to later parts.
+`research`, uploads, downloads, and artifacts remain deferred to later parts.
 
 More detail lives in [docs/architecture.md](/C:/Users/user/Desktop/gpt-cli/docs/architecture.md) and [docs/development.md](/C:/Users/user/Desktop/gpt-cli/docs/development.md).

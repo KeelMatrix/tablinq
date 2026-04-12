@@ -87,6 +87,31 @@ export interface BrowserOpenCommand {
   headless?: boolean;
 }
 
+export interface AskExecutionCommand {
+  jobId: string;
+  prompt: string;
+  conversationId?: string | null;
+  timeoutMs?: number;
+}
+
+export interface AskResultSnapshot {
+  job_id: string;
+  conversation_id: string;
+  message_id: string;
+  output_text: string;
+  completed_at: string;
+  current_url: string;
+}
+
+export interface StreamChunkSnapshot {
+  job_id: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  seq: number;
+  kind: "delta" | "done";
+  text: string;
+}
+
 export interface BrowserAdapterOptions {
   profileDir: string;
   downloadsDir: string;
@@ -155,27 +180,7 @@ export class BrowserAdapter {
     this.currentTargetUrl = targetUrl;
     this.currentBrowserPath = browserPath ?? null;
 
-    if (!this.context) {
-      await mkdir(this.profileDir, { recursive: true });
-      await mkdir(this.downloadsDir, { recursive: true });
-      const launch = resolveBrowserLaunchConfig(
-        process.platform,
-        browserPath ?? undefined,
-      );
-      this.context = await chromium.launchPersistentContext(this.profileDir, {
-        acceptDownloads: true,
-        channel: launch.channel,
-        executablePath: launch.executablePath,
-        downloadsPath: this.downloadsDir,
-        headless,
-      });
-      this.context.on("page", (page) => {
-        this.attachPage(page);
-      });
-      for (const page of this.context.pages()) {
-        this.attachPage(page);
-      }
-    }
+    await this.ensureContext(headless, browserPath ?? undefined);
 
     const page = await this.ensureManagedPage(targetUrl);
     await this.refreshCapabilities(page);
@@ -255,6 +260,81 @@ export class BrowserAdapter {
     return [...this.lastDomNeighborhoods];
   }
 
+  async ask(
+    command: AskExecutionCommand,
+    onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+  ): Promise<AskResultSnapshot> {
+    await this.ensureContext(false, this.currentBrowserPath ?? undefined);
+    const page = await this.ensureManagedPage(
+      this.resolveConversationTarget(command.conversationId),
+    );
+    await this.refreshCapabilities(page);
+    await fillComposer(page, command.prompt);
+    await clickSubmit(page);
+
+    const timeoutAt = Date.now() + (command.timeoutMs ?? 15000);
+    let emittedText = "";
+    let nextSeq = 0;
+
+    while (Date.now() < timeoutAt) {
+      let snapshot;
+      try {
+        snapshot = await readAskSnapshot(page);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (
+          message.includes("Execution context was destroyed") ||
+          message.includes("Cannot find context")
+        ) {
+          await page.waitForLoadState("domcontentloaded");
+          await sleep(50);
+          continue;
+        }
+        throw error;
+      }
+      if (
+        snapshot.text.length > emittedText.length &&
+        snapshot.text.startsWith(emittedText)
+      ) {
+        const delta = snapshot.text.slice(emittedText.length);
+        emittedText = snapshot.text;
+        await onChunk({
+          job_id: command.jobId,
+          conversation_id: snapshot.conversationId,
+          message_id: snapshot.messageId,
+          seq: nextSeq,
+          kind: "delta",
+          text: delta,
+        });
+        nextSeq += 1;
+      }
+
+      if (snapshot.state === "done") {
+        await onChunk({
+          job_id: command.jobId,
+          conversation_id: snapshot.conversationId,
+          message_id: snapshot.messageId,
+          seq: nextSeq,
+          kind: "done",
+          text: "",
+        });
+        return {
+          job_id: command.jobId,
+          conversation_id:
+            snapshot.conversationId ?? `${command.jobId}-conversation`,
+          message_id: snapshot.messageId ?? `${command.jobId}-message`,
+          output_text: snapshot.text,
+          completed_at: new Date().toISOString(),
+          current_url: snapshot.currentUrl,
+        };
+      }
+
+      await sleep(50);
+    }
+
+    throw new Error("ask timed out waiting for streamed response");
+  }
+
   private async ensureManagedPage(targetUrl: string): Promise<Page> {
     await this.recoverManagedPage();
     let page = this.managedPage;
@@ -272,6 +352,42 @@ export class BrowserAdapter {
     }
 
     return page;
+  }
+
+  private async ensureContext(
+    headless: boolean,
+    browserPath?: string,
+  ): Promise<void> {
+    if (this.context) {
+      return;
+    }
+
+    await mkdir(this.profileDir, { recursive: true });
+    await mkdir(this.downloadsDir, { recursive: true });
+    const launch = resolveBrowserLaunchConfig(process.platform, browserPath);
+    this.context = await chromium.launchPersistentContext(this.profileDir, {
+      acceptDownloads: true,
+      channel: launch.channel,
+      executablePath: launch.executablePath,
+      downloadsPath: this.downloadsDir,
+      headless,
+    });
+    this.context.on("page", (page) => {
+      this.attachPage(page);
+    });
+    for (const page of this.context.pages()) {
+      this.attachPage(page);
+    }
+  }
+
+  private resolveConversationTarget(conversationId?: string | null): string {
+    if (!conversationId) {
+      return this.currentTargetUrl;
+    }
+
+    const target = new URL(this.currentTargetUrl);
+    target.searchParams.set("conversation", conversationId);
+    return target.toString();
   }
 
   private async recoverManagedPage(): Promise<void> {
@@ -471,4 +587,83 @@ async function safeTitle(page: Page): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+async function fillComposer(page: Page, prompt: string): Promise<void> {
+  await page.evaluate((value: string) => {
+    const composer = document.querySelector(
+      "[data-slot='composer'], textarea, [role='textbox'], [contenteditable='true']",
+    );
+    if (!(composer instanceof HTMLElement)) {
+      throw new Error("composer not found");
+    }
+
+    composer.focus();
+    if (
+      composer instanceof HTMLTextAreaElement ||
+      composer instanceof HTMLInputElement
+    ) {
+      composer.value = value;
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
+
+    composer.textContent = value;
+    composer.dispatchEvent(
+      new InputEvent("input", { bubbles: true, data: value }),
+    );
+  }, prompt);
+}
+
+async function clickSubmit(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const submit = document.querySelector(
+      "[data-action='submit'], [aria-label='Submit prompt'], button[type='submit']",
+    );
+    if (!(submit instanceof HTMLElement)) {
+      throw new Error("submit action not found");
+    }
+    submit.click();
+  });
+}
+
+async function readAskSnapshot(page: Page): Promise<{
+  text: string;
+  state: string;
+  conversationId: string | null;
+  messageId: string | null;
+  currentUrl: string;
+}> {
+  return page.evaluate(() => {
+    const article = document.querySelector(
+      "[data-slot='assistant-message'], .message",
+    );
+    const textNode =
+      document.querySelector("[data-slot='assistant-message'] p") ??
+      document.querySelector(".message p");
+    const text = textNode?.textContent?.trim() ?? "";
+    const state =
+      article?.getAttribute("data-stream-state") ??
+      document.body.dataset.streamState ??
+      "idle";
+    const conversationId =
+      document.body.dataset.conversationId ??
+      new URL(window.location.href).searchParams.get("conversation");
+    const messageId =
+      article?.getAttribute("data-message-id") ??
+      document.body.dataset.lastMessageId ??
+      null;
+
+    return {
+      text,
+      state,
+      conversationId,
+      messageId,
+      currentUrl: window.location.href,
+    };
+  });
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -1,7 +1,8 @@
 use chrono::{Duration, Utc};
-use gptd::{AppConfig, Database, daemon_is_responsive, send_request};
+use gptd::{AppConfig, Database, daemon_is_responsive, send_request, send_request_stream};
 use shared_protocol::{
-    BrowserOpenRequest, DaemonRequest, DaemonResponse, HealthStatus, JobStatus, build_state_paths,
+    AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, ErrorCode, EventPayload,
+    HealthStatus, JobStatus, Mode, build_state_paths,
 };
 use std::net::TcpListener;
 use std::path::Path;
@@ -106,7 +107,7 @@ fn daemon_creates_config_and_applies_db_migrations() {
     assert!(config.paths.db_path.exists());
 
     let db = Database::open(&config.paths.db_path).unwrap();
-    assert_eq!(db.migration_count().unwrap(), 2);
+    assert_eq!(db.migration_count().unwrap(), 3);
 
     stop_daemon(dir.path(), &mut child);
 }
@@ -226,6 +227,125 @@ fn daemon_reports_browser_health_from_adapter() {
     match browser_close {
         DaemonResponse::Browser(snapshot) => {
             assert!(!snapshot.running);
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn daemon_streams_ask_responses_and_persists_conversations() {
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(fake_url.clone()),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let mut streamed = String::new();
+    let mut saw_running = false;
+    let response = send_request_stream(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Ask(AskCommand {
+            prompt: "hello from daemon".to_owned(),
+            conversation_id: None,
+            mode: Mode::Normal,
+            model_class: None,
+            effort: None,
+            files: vec![],
+        }),
+        |event| {
+            match event {
+                EventPayload::StreamChunk(chunk) if chunk.text.len() > 0 => {
+                    streamed.push_str(&chunk.text);
+                }
+                EventPayload::JobState(state) if state.status == JobStatus::Running => {
+                    saw_running = true;
+                }
+                _ => {}
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    match response {
+        DaemonResponse::Ask(result) => {
+            assert_eq!(streamed, "Fake response for: hello from daemon");
+            assert_eq!(result.output_text, streamed);
+            assert!(result.conversation_id.starts_with("conv-"));
+            assert!(result.message_id.starts_with("msg-"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+    assert!(saw_running);
+
+    let jobs = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::JobsList,
+    )
+    .unwrap();
+    match jobs {
+        DaemonResponse::Jobs(list) => {
+            assert_eq!(list.jobs[0].status, JobStatus::Completed);
+            assert!(list.jobs[0].conversation_id.is_some());
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn daemon_reports_timeout_errors_for_stalled_asks() {
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?scenario=timeout")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let response = send_request_stream(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Ask(AskCommand {
+            prompt: "this will stall".to_owned(),
+            conversation_id: None,
+            mode: Mode::Normal,
+            model_class: None,
+            effort: None,
+            files: vec![],
+        }),
+        |_event| Ok(()),
+    )
+    .unwrap();
+
+    match response {
+        DaemonResponse::Error(error) => {
+            assert_eq!(error.error_code, ErrorCode::ActionTimeout);
+            assert!(error.message.contains("timed out"));
         }
         other => panic!("unexpected response: {other:?}"),
     }

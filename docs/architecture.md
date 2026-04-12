@@ -1,6 +1,6 @@
 # Architecture Notes
 
-## Part 4 decisions
+## Part 5 decisions
 
 - The stable protocol version is `tablinq.v1`.
 - Rust owns durable types, validation, and CLI/daemon entry points.
@@ -14,6 +14,7 @@
 - The daemon owns one browser adapter child process and talks to it over JSON lines on stdio.
 - The browser adapter is a long-lived TypeScript service launched through `npx tsx` and backed by Playwright persistent contexts.
 - Browser health is surfaced to the daemon as a `BrowserStatusSnapshot`, which now includes `extension_connected` and the last `CapabilityReport`.
+- Ask execution is streamed over the local daemon socket as `EventPayload` frames followed by a final `DaemonResponse`.
 
 ## Protocol surface
 
@@ -21,8 +22,9 @@
 - Events use an envelope with `version`, `request_id`, `emitted_at`, and a tagged `event`.
 - Payload shapes are independently versioned under `schemas/v1/`.
 - Runtime-discovered labels are represented as alias maps so UI text stays out of core control logic.
-- The CLI/daemon control path uses `DaemonRequest` and `DaemonResponse` types in `shared-protocol` for `ping`, `status`, `shutdown`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and browser lifecycle commands.
+- The CLI/daemon control path uses `DaemonRequest` and `DaemonResponse` types in `shared-protocol` for `ask`, `ping`, `status`, `shutdown`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list`, and browser lifecycle commands.
 - The daemon/browser path uses a smaller JSON-line adapter protocol over stdio for `open`, `health`, `close`, and `shutdown`, with capability probes piggybacking on browser health snapshots.
+- For streamed asks, the daemon/browser adapter path emits `stream_chunk` frames until an `ask_result` frame closes the request.
 
 ## State layout
 
@@ -45,7 +47,18 @@ The IPC endpoint is derived deterministically from the state root, so the CLI an
 - On non-Windows platforms, the adapter falls back to detected Chromium-compatible executables or an explicit configured browser path.
 - The adapter keeps one managed page alive, recreates it if the tab is closed or crashes, and tracks top-level reloads for diagnostics.
 - The adapter evaluates the extension probe module inside the managed page and keeps last-known-good strategy choices per observed UI signature.
+- The adapter now owns prompt insertion, submit clicks, DOM-stream observation, timeout detection, and conversation/message capture for the first ask flow.
 - `doctor` now includes daemon health, the current browser snapshot, and the latest capability report.
+
+## Ask flow
+
+The Part 5 ask path is intentionally local and DOM-driven:
+
+- `gpt ask` sends a streamed `DaemonRequest::Ask`.
+- `gptd` creates a durable job row, resumes the last conversation when no explicit conversation is provided, and forwards stream events to the CLI.
+- The browser adapter focuses the composer, inserts the prompt, clicks submit, and polls the managed page for DOM text growth.
+- Streamed deltas are normalized into `StreamChunk` events and forwarded immediately to the terminal.
+- Completion stores job state plus the latest conversation mapping in SQLite.
 
 ## Capability matrix
 
@@ -75,6 +88,12 @@ The fake harness now exposes two intentionally different UI shapes:
 
 - a classic variant with `data-slot` anchors
 - an ARIA-first variant with renamed controls and moved upload/composer affordances
+
+It also exposes Part 5 streaming scenarios:
+
+- successful streamed output
+- stalled output for timeout handling
+- one forced reload during an active stream
 
 ## Selector-pack expectations
 

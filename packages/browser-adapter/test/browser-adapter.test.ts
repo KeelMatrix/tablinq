@@ -7,8 +7,21 @@ import {
 } from "../src/browserAdapter";
 import { startFakeChatGptServer, stopFakeChatGptServer } from "./helpers";
 
-function withVariant(baseUrl: string, variant: "classic" | "aria"): string {
-  return variant === "classic" ? baseUrl : `${baseUrl}/?variant=${variant}`;
+function withHarnessUrl(
+  baseUrl: string,
+  options: {
+    variant?: "classic" | "aria";
+    scenario?: "success" | "timeout" | "reload";
+  } = {},
+): string {
+  const url = new URL(baseUrl);
+  if (options.variant && options.variant !== "classic") {
+    url.searchParams.set("variant", options.variant);
+  }
+  if (options.scenario && options.scenario !== "success") {
+    url.searchParams.set("scenario", options.scenario);
+  }
+  return url.toString();
 }
 
 describe("browser adapter", () => {
@@ -47,11 +60,11 @@ describe("browser adapter", () => {
       const adapter = new BrowserAdapter({
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: withVariant(server.url, variant),
+        defaultTargetUrl: withHarnessUrl(server.url, { variant }),
       });
 
       const snapshot = await adapter.open({
-        targetUrl: withVariant(server.url, variant),
+        targetUrl: withHarnessUrl(server.url, { variant }),
         headless: true,
       });
 
@@ -186,6 +199,95 @@ describe("browser adapter", () => {
     const snapshot = await adapter.health();
 
     expect(snapshot.reload_count).toBeGreaterThan(0);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("streams ask responses to completion", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: server.url,
+    });
+    await adapter.open({ targetUrl: server.url, headless: true });
+
+    const chunks: string[] = [];
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-success",
+        prompt: "hello streaming world",
+      },
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+    );
+
+    expect(chunks.join("")).toBe("Fake response for: hello streaming world");
+    expect(result.output_text).toBe("Fake response for: hello streaming world");
+    expect(result.conversation_id).toMatch(/^conv-/);
+    expect(result.message_id).toMatch(/^msg-/);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails cleanly when the harness never completes streaming", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: withHarnessUrl(server.url, { scenario: "timeout" }),
+    });
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { scenario: "timeout" }),
+      headless: true,
+    });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-timeout",
+          prompt: "never finish",
+          timeoutMs: 600,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow("timed out");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("continues ask streaming after a page reload", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: withHarnessUrl(server.url, { scenario: "reload" }),
+    });
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { scenario: "reload" }),
+      headless: true,
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-reload",
+        prompt: "survive reloads",
+        timeoutMs: 5000,
+      },
+      () => {},
+    );
+
+    expect(result.output_text).toBe("Fake response for: survive reloads");
+    expect((await adapter.health()).reload_count).toBeGreaterThan(0);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
