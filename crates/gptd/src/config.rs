@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 pub struct FileConfig {
     pub version: Option<u32>,
     pub warm_mode: Option<bool>,
+    pub browser_target_url: Option<String>,
+    pub browser_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,11 +47,28 @@ impl AppConfig {
             crash_bundles_dir: self.paths.crash_bundles_dir.display().to_string(),
             ipc_endpoint: self.paths.ipc_endpoint.clone(),
             warm_mode: self.warm_mode(),
+            browser_target_url: self.browser_target_url().to_owned(),
+            browser_path: self.browser_path().map(ToOwned::to_owned),
         }
     }
 
     pub fn warm_mode(&self) -> bool {
         self.file.warm_mode.unwrap_or(false)
+    }
+
+    pub fn browser_target_url(&self) -> &str {
+        self.file
+            .browser_target_url
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("https://chatgpt.com/")
+    }
+
+    pub fn browser_path(&self) -> Option<&str> {
+        self.file
+            .browser_path
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
     }
 }
 
@@ -96,6 +115,9 @@ fn upgrade_file_config(mut file: FileConfig) -> FileConfig {
     if file.warm_mode.is_none() {
         file.warm_mode = Some(false);
     }
+    if file.browser_target_url.is_none() {
+        file.browser_target_url = Some("https://chatgpt.com/".to_owned());
+    }
     file
 }
 
@@ -123,6 +145,10 @@ mod tests {
         assert!(config.paths.db_dir.exists());
         assert_eq!(config.file.version, Some(CONFIG_VERSION));
         assert_eq!(config.file.warm_mode, Some(false));
+        assert_eq!(
+            config.file.browser_target_url.as_deref(),
+            Some("https://chatgpt.com/")
+        );
     }
 
     #[test]
@@ -130,6 +156,10 @@ mod tests {
         let parsed = parse_file_config("version = 0").unwrap();
         assert_eq!(parsed.version, Some(CONFIG_VERSION));
         assert_eq!(parsed.warm_mode, Some(false));
+        assert_eq!(
+            parsed.browser_target_url.as_deref(),
+            Some("https://chatgpt.com/")
+        );
     }
 
     proptest! {
@@ -138,7 +168,12 @@ mod tests {
             version in proptest::option::of(0u32..10),
             warm_mode in proptest::option::of(any::<bool>()),
         ) {
-            let file = FileConfig { version, warm_mode };
+            let file = FileConfig {
+                version,
+                warm_mode,
+                browser_target_url: None,
+                browser_path: None,
+            };
             let upgraded = super::upgrade_file_config(file.clone());
 
             prop_assert_eq!(upgraded.version, Some(CONFIG_VERSION));

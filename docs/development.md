@@ -14,6 +14,9 @@
 - `cargo run -p gpt -- daemon status`
 - `cargo run -p gpt -- doctor`
 - `cargo run -p gpt -- config show`
+- `cargo run -p gpt -- browser open`
+- `cargo run -p gpt -- browser profile-info`
+- `cargo run -p gpt -- browser close`
 - `pnpm test`
 - `pnpm lint`
 - `pnpm build`
@@ -25,15 +28,15 @@
 
 ## Current testing strategy
 
-- Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, and CLI parsing.
-- TypeScript tests validate the JSON schemas and snapshot the selector-pack parser output.
+- Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, browser health messaging, and CLI parsing.
+- TypeScript tests validate the JSON schemas, snapshot the selector-pack parser output, and exercise the browser adapter against `fake-chatgpt` with real Playwright flows.
 - `packages/fake-chatgpt` is the CI-safe target for later Playwright and extension tests.
 
 ## Next implementation boundary
 
-Part 3 should build the browser runtime behind the now-working control plane:
+Part 4 should build the semantic bridge on top of the now-working browser runtime:
 
-- Playwright-backed browser launch and reconnect
-- persistent dedicated profile ownership
-- managed browser open/close/reset commands
-- daemon <-> adapter health messaging
+- MV3 extension bridge
+- real capability probing
+- DOM/ARIA utilities
+- strategy scoring and fallback
