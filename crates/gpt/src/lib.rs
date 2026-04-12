@@ -197,7 +197,9 @@ pub fn run(cli: &Cli) -> Result<String> {
                 "output_dir": args.output_dir.as_ref().map(|path| path.display().to_string()),
             }),
         ),
-        Command::Capabilities => not_implemented_summary("capabilities", json!({})),
+        Command::Capabilities => {
+            send_daemon_request(cli.state_root.as_deref(), DaemonRequest::Capabilities)
+        }
         Command::Artifacts { command } => not_implemented_summary(
             "artifacts",
             json!({ "subcommand": render_artifacts(command) }),

@@ -536,6 +536,7 @@ pub enum DaemonRequest {
     Status,
     Shutdown,
     Doctor,
+    Capabilities,
     ConfigShow,
     SessionsList,
     JobsList,
@@ -552,6 +553,7 @@ pub enum DaemonResponse {
     Health(HealthCheck),
     Status(DaemonStatusSnapshot),
     Doctor(DoctorReport),
+    Capabilities(CapabilitySnapshot),
     Config(ConfigSnapshot),
     Sessions(SessionList),
     Jobs(JobList),
@@ -598,6 +600,13 @@ pub struct DoctorReport {
     pub status: DaemonStatusSnapshot,
     pub config: ConfigSnapshot,
     pub browser: BrowserStatusSnapshot,
+    pub capabilities: Option<CapabilityReport>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilitySnapshot {
+    pub report: Option<CapabilityReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -662,6 +671,8 @@ pub struct BrowserStatusSnapshot {
     pub reload_count: u64,
     pub screenshot_path: Option<String>,
     pub browser_path: Option<String>,
+    pub extension_connected: bool,
+    pub capability_report: Option<CapabilityReport>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -187,7 +187,32 @@ fn daemon_reports_browser_health_from_adapter() {
         DaemonResponse::Doctor(report) => {
             assert!(report.browser.running);
             assert!(report.health.browser_connected);
+            assert!(report.health.extension_connected);
             assert!(report.health.authenticated);
+            assert!(report.capabilities.is_some());
+            assert!(
+                report
+                    .capabilities
+                    .as_ref()
+                    .expect("capability report")
+                    .matrix
+                    .composer_ready
+            );
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let capabilities = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Capabilities,
+    )
+    .unwrap();
+
+    match capabilities {
+        DaemonResponse::Capabilities(snapshot) => {
+            let report = snapshot.report.expect("capability report");
+            assert!(report.matrix.submit_available);
+            assert!(report.matrix.model_picker_visible);
         }
         other => panic!("unexpected response: {other:?}"),
     }

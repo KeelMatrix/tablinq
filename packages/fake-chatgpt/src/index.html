@@ -12,18 +12,20 @@
 
       body {
         margin: 0;
+        min-height: 100vh;
         background: linear-gradient(160deg, #f4f7fb 0%, #dce7f2 100%);
         color: #12202f;
       }
 
       main {
-        max-width: 960px;
+        max-width: 1040px;
         margin: 0 auto;
         padding: 32px 20px 48px;
       }
 
-      .shell {
-        background: rgba(255, 255, 255, 0.84);
+      .shell,
+      .stacked-shell {
+        background: rgba(255, 255, 255, 0.88);
         border: 1px solid rgba(18, 32, 47, 0.1);
         border-radius: 24px;
         box-shadow: 0 24px 60px rgba(18, 32, 47, 0.14);
@@ -31,30 +33,40 @@
       }
 
       .toolbar,
-      .composer {
+      .composer,
+      .stacked-toolbar,
+      .stacked-composer {
         display: flex;
         gap: 12px;
         align-items: center;
         padding: 16px 20px;
       }
 
-      .toolbar {
+      .toolbar,
+      .stacked-toolbar {
         border-bottom: 1px solid rgba(18, 32, 47, 0.08);
+        flex-wrap: wrap;
       }
 
       button,
       select,
-      textarea {
+      textarea,
+      [contenteditable="true"] {
         font: inherit;
       }
 
-      textarea {
+      textarea,
+      [contenteditable="true"] {
         flex: 1;
         min-height: 112px;
         border-radius: 18px;
         border: 1px solid rgba(18, 32, 47, 0.12);
         padding: 14px 16px;
-        resize: vertical;
+        background: #ffffff;
+      }
+
+      [contenteditable="true"] {
+        white-space: pre-wrap;
       }
 
       .transcript {
@@ -68,46 +80,27 @@
         background: #ffffff;
         border: 1px solid rgba(18, 32, 47, 0.08);
       }
+
+      .variant-note {
+        margin-bottom: 18px;
+        opacity: 0.78;
+      }
+
+      .pill {
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(18, 32, 47, 0.12);
+        background: #fff;
+      }
     </style>
   </head>
-  <body>
+  <body data-ui-variant="classic">
     <main>
       <h1>Fake ChatGPT Harness</h1>
-      <p>
-        Minimal DOM for capability probes, prompt submission, uploads, and
-        artifact links.
+      <p class="variant-note" id="variant-note">
+        Local harness for capability probing and browser adapter tests.
       </p>
-      <section class="shell" aria-label="fake-chatgpt-shell">
-        <div class="toolbar">
-          <button
-            type="button"
-            data-slot="model-picker"
-            aria-haspopup="listbox"
-          >
-            GPT-5.4 Thinking
-          </button>
-          <button type="button" data-mode="search">Search</button>
-          <button type="button" data-mode="research">Research</button>
-          <button type="button" data-slot="effort-toggle">Standard</button>
-          <button type="button" data-slot="upload-entry">Attach</button>
-        </div>
-        <div class="composer">
-          <textarea
-            aria-label="Prompt composer"
-            data-slot="composer"
-            placeholder="Ask fake ChatGPT something"
-          ></textarea>
-          <button type="button" data-action="submit">Send</button>
-        </div>
-        <div class="transcript">
-          <article class="message" data-slot="assistant-message">
-            <p>Streaming output lands here.</p>
-            <a href="/artifact.txt" download data-slot="artifact-link"
-              >artifact.txt</a
-            >
-          </article>
-        </div>
-      </section>
+      <section id="app-root" aria-label="fake-chatgpt-shell"></section>
     </main>
     <script src="./main.js"></script>
   </body>

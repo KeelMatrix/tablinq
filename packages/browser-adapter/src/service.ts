@@ -63,6 +63,8 @@ async function main() {
         reload_count: 0,
         screenshot_path: null,
         browser_path: args.defaultBrowserPath ?? null,
+        extension_connected: false,
+        capability_report: null,
       }));
       response = {
         ok: false,

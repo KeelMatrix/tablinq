@@ -4,7 +4,10 @@ export default defineConfig({
   test: {
     environment: "node",
     globals: true,
-    include: ["packages/browser-adapter/test/**/*.test.ts"],
+    include: [
+      "packages/browser-adapter/test/**/*.test.ts",
+      "packages/extension/test/**/*.test.ts",
+    ],
     testTimeout: 60000,
   },
 });

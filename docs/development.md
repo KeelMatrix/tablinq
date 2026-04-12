@@ -13,6 +13,7 @@
 - `cargo run -p gpt -- daemon start`
 - `cargo run -p gpt -- daemon status`
 - `cargo run -p gpt -- doctor`
+- `cargo run -p gpt -- capabilities`
 - `cargo run -p gpt -- config show`
 - `cargo run -p gpt -- browser open`
 - `cargo run -p gpt -- browser profile-info`
@@ -28,15 +29,24 @@
 
 ## Current testing strategy
 
-- Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, browser health messaging, and CLI parsing.
-- TypeScript tests validate the JSON schemas, snapshot the selector-pack parser output, and exercise the browser adapter against `fake-chatgpt` with real Playwright flows.
-- `packages/fake-chatgpt` is the CI-safe target for later Playwright and extension tests.
+- Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, browser health messaging, capability snapshots, and CLI parsing.
+- TypeScript tests validate the JSON schemas, probe the extension against synthetic DOM fixtures, and exercise the browser adapter against both `fake-chatgpt` UI variants with real Playwright flows.
+- `packages/fake-chatgpt` is the CI-safe target for browser and extension fallback tests.
+
+## Current semantic bridge
+
+Part 4 added the semantic control surface that later command parts will build on:
+
+- `packages/extension/src/probe.ts`: ARIA-aware capability modules, strategy scoring, alias discovery, and DOM neighborhood snapshots.
+- `packages/extension/src/content-script.ts`: debounced capability publishing on DOM changes.
+- `packages/extension/src/service-worker.ts`: native-messaging and development WebSocket forwarding.
+- `gpt capabilities`: daemon-facing inspection of the last real capability matrix from the managed page.
 
 ## Next implementation boundary
 
-Part 4 should build the semantic bridge on top of the now-working browser runtime:
+Part 5 should build the first useful end-to-end ask flow on top of the semantic bridge:
 
-- MV3 extension bridge
-- real capability probing
-- DOM/ARIA utilities
-- strategy scoring and fallback
+- prompt insertion
+- submission
+- streaming output observation
+- conversation state tracking

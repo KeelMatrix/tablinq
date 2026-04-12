@@ -9,8 +9,8 @@ use chrono::Utc;
 use interprocess::local_socket::traits::Listener as LocalSocketListenerTrait;
 use serde_json::json;
 use shared_protocol::{
-    AckEvent, BrowserOpenRequest, DaemonErrorResponse, DaemonRequest, DaemonResponse,
-    DaemonStatusSnapshot, DoctorReport, ErrorCode, HealthCheck, HealthStatus,
+    AckEvent, BrowserOpenRequest, CapabilitySnapshot, DaemonErrorResponse, DaemonRequest,
+    DaemonResponse, DaemonStatusSnapshot, DoctorReport, ErrorCode, HealthCheck, HealthStatus,
 };
 
 pub fn run_service(config: AppConfig) -> Result<()> {
@@ -95,11 +95,18 @@ fn handle_request(
             accepted: true,
             message: "daemon stopping".to_owned(),
         }),
-        DaemonRequest::Doctor => DaemonResponse::Doctor(DoctorReport {
-            health: health_snapshot(config, browser.health()?),
-            status: status_snapshot(config, started_at),
-            config: config.snapshot(),
-            browser: browser.profile_info()?,
+        DaemonRequest::Doctor => {
+            let browser_snapshot = browser.profile_info()?;
+            DaemonResponse::Doctor(DoctorReport {
+                health: health_snapshot(config, browser_snapshot.clone()),
+                status: status_snapshot(config, started_at),
+                config: config.snapshot(),
+                capabilities: browser_snapshot.capability_report.clone(),
+                browser: browser_snapshot,
+            })
+        }
+        DaemonRequest::Capabilities => DaemonResponse::Capabilities(CapabilitySnapshot {
+            report: browser.capabilities()?,
         }),
         DaemonRequest::ConfigShow => DaemonResponse::Config(config.snapshot()),
         DaemonRequest::SessionsList => DaemonResponse::Sessions(db.list_sessions()?),
@@ -143,16 +150,19 @@ pub fn health_snapshot(
         status: HealthStatus::Ok,
         checked_at: Utc::now(),
         browser_connected: browser.running,
-        extension_connected: false,
+        extension_connected: browser.extension_connected,
         authenticated: browser.authenticated,
         details: Some(if config.warm_mode() {
             format!(
-                "control plane ready; warm mode enabled; browser_running={}",
-                browser.running
+                "control plane ready; warm mode enabled; browser_running={}; extension_connected={}",
+                browser.running, browser.extension_connected
             )
         } else {
             match browser.current_url {
-                Some(url) => format!("control plane ready; managed tab at {url}"),
+                Some(url) => format!(
+                    "control plane ready; managed tab at {url}; extension_connected={}",
+                    browser.extension_connected
+                ),
                 None => "control plane ready; browser runtime not started yet".to_owned(),
             }
         }),

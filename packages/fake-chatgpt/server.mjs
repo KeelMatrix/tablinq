@@ -13,7 +13,8 @@ const mimeTypes = {
 };
 
 createServer((request, response) => {
-  const pathname = request.url === "/" ? "/index.html" : request.url;
+  const url = new URL(request.url || "/", `http://127.0.0.1:${port}`);
+  const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
   const filePath = join(root, pathname);
 
   try {
