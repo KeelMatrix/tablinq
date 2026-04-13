@@ -2,7 +2,8 @@ pub mod build_info;
 mod openai;
 
 use crate::openai::{
-    ChatCompletionsRequest, PROVIDER_MODELS, model_object, openai_error, resolve_model,
+    ChatCompletionsRequest, PROVIDER_MODELS, RequestRole, model_object, openai_error,
+    request_role_name, resolve_model,
 };
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -37,6 +38,7 @@ const V1_CAPABILITIES_PATH: &str = "/v1/capabilities";
 const V1_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const V1_FILES_PATH: &str = "/v1/files";
 const V1_ARTIFACTS_PATH: &str = "/v1/artifacts";
+const V1_PROVIDER_PATH: &str = "/v1/provider";
 const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 const STAGED_UPLOAD_RETENTION_SECS: i64 = 24 * 60 * 60;
 
@@ -891,6 +893,10 @@ fn handle_connection(
             Ok(()) => handle_capabilities_request(core, capability_cache, &context.request_id)?,
             Err(response) => response,
         },
+        ("GET", V1_PROVIDER_PATH) => match authorize_request(config, &context.request, false) {
+            Ok(()) => handle_provider_request(snapshot, &context.request_id),
+            Err(response) => response,
+        },
         ("GET", V1_FILES_PATH) => match authorize_request(config, &context.request, false) {
             Ok(()) => handle_files_list_request(upload_store, &context.request_id)?,
             Err(response) => response,
@@ -945,6 +951,12 @@ fn handle_connection(
                         return write_http_response(&mut stream, &context.request_id, response);
                     }
                 };
+                if let Some(response) =
+                    request_role_policy_response(&context.request_id, prepared.request_role)
+                {
+                    log_response(logger, &context.request_id, response.status_code)?;
+                    return write_http_response(&mut stream, &context.request_id, response);
+                }
                 let client_id = client_id_for_request(&context.request, &remote_addr);
                 let _lease =
                     match scheduler.acquire(&context.request_id, prepared.job_id(), &client_id) {
@@ -1067,6 +1079,42 @@ fn handle_capabilities_request(
             "models": models,
         }),
     ))
+}
+
+fn handle_provider_request(snapshot: &GatewayStatusSnapshot, request_id: &str) -> HttpResponse {
+    json_response(
+        200,
+        json!({
+            "object": "tablinq.provider",
+            "request_id": request_id,
+            "provider": "tablinq",
+            "openai_compatible": true,
+            "base_url": format!("http://{}:{}/v1", snapshot.host, snapshot.port),
+            "request_annotations": {
+                "field": "tablinq_request_role",
+                "parent_request_id_field": "tablinq_parent_request_id",
+                "allowed_values": ["primary", "subagent", "branch"],
+                "default": "primary",
+                "policy": {
+                    "primary": "execute",
+                    "branch": "serialize",
+                    "subagent": "reject",
+                }
+            },
+            "presets": {
+                "openclaude": {
+                    "recommended_models": [
+                        "tablinq-instant",
+                        "tablinq-thinking-standard",
+                        "tablinq-search",
+                    ],
+                    "streaming": true,
+                    "max_parallel_requests": 1,
+                    "subagents": "disabled_by_default",
+                }
+            }
+        }),
+    )
 }
 
 fn handle_files_list_request(upload_store: &UploadStore, request_id: &str) -> Result<HttpResponse> {
@@ -1251,6 +1299,23 @@ fn artifact_object(core: &CoreService, artifact: ArtifactSummary) -> Result<Valu
     }))
 }
 
+fn request_role_policy_response(request_id: &str, role: RequestRole) -> Option<HttpResponse> {
+    match role {
+        RequestRole::Primary | RequestRole::Branch => None,
+        RequestRole::Subagent => Some(json_response(
+            429,
+            openai_error(
+                429,
+                "overloaded_error",
+                "subagents_disabled",
+                &format!(
+                    "{request_id}: subagent requests are disabled by default for the single-browser OpenClaude preset"
+                ),
+            ),
+        )),
+    }
+}
+
 fn file_id_from_path(path: &str) -> Option<&str> {
     path.strip_prefix(&format!("{V1_FILES_PATH}/"))
         .filter(|value| !value.contains('/'))
@@ -1278,6 +1343,8 @@ enum PreparedChatJob {
 struct PreparedChatRequest {
     request: ChatCompletionsRequest,
     model_id: &'static str,
+    request_role: RequestRole,
+    parent_request_id: Option<String>,
     job: PreparedChatJob,
 }
 
@@ -1299,6 +1366,8 @@ fn prepare_chat_completions_request(
         serde_json::from_slice(&context.request.body).context("decode chat completions request")?;
     openai::validate_chat_request(&request)?;
     let model = resolve_model(&request.model).context("resolve provider model")?;
+    let request_role = request.request_role();
+    let parent_request_id = request.tablinq_parent_request_id.clone();
     let flattened = openai::flatten_messages(&request)?;
     let files = upload_store.resolve_file_inputs(flattened.file_paths, &flattened.file_ids)?;
 
@@ -1322,6 +1391,8 @@ fn prepare_chat_completions_request(
     Ok(PreparedChatRequest {
         request,
         model_id: model.id,
+        request_role,
+        parent_request_id,
         job,
     })
 }
@@ -1347,6 +1418,8 @@ fn execute_chat_completions_request(
                 "model": prepared.model_id,
                 "request_id": context.request_id,
                 "tablinq_job_id": prepared.job_id(),
+                "tablinq_request_role": request_role_name(prepared.request_role),
+                "tablinq_parent_request_id": prepared.parent_request_id.as_deref(),
                 "choices": [{
                     "index": 0,
                     "delta": { "role": "assistant" },
@@ -1391,6 +1464,8 @@ fn execute_chat_completions_request(
                         "model": prepared.model_id,
                         "request_id": context.request_id,
                         "tablinq_job_id": prepared.job_id(),
+                        "tablinq_request_role": request_role_name(prepared.request_role),
+                        "tablinq_parent_request_id": prepared.parent_request_id.as_deref(),
                         "choices": [{
                             "index": 0,
                             "delta": {},
@@ -1423,6 +1498,8 @@ fn execute_chat_completions_request(
                     &context.request_id,
                     prepared.job_id(),
                     prepared.model_id,
+                    prepared.request_role,
+                    prepared.parent_request_id.as_deref(),
                     &result.report_text,
                     "stop",
                 )
@@ -1433,6 +1510,8 @@ fn execute_chat_completions_request(
                     &context.request_id,
                     prepared.job_id(),
                     prepared.model_id,
+                    prepared.request_role,
+                    prepared.parent_request_id.as_deref(),
                     &result.output_text,
                     "stop",
                 )
@@ -1476,6 +1555,8 @@ fn build_chat_completion_response(
     request_id: &str,
     job_id: &str,
     model_id: &str,
+    request_role: RequestRole,
+    parent_request_id: Option<&str>,
     content: &str,
     finish_reason: &str,
 ) -> HttpResponse {
@@ -1488,6 +1569,8 @@ fn build_chat_completion_response(
             "model": model_id,
             "request_id": request_id,
             "tablinq_job_id": job_id,
+            "tablinq_request_role": request_role_name(request_role),
+            "tablinq_parent_request_id": parent_request_id,
             "choices": [{
                 "index": 0,
                 "message": {
@@ -2432,6 +2515,25 @@ mod tests {
         .unwrap()
     }
 
+    fn openclaude_request_body(
+        model: &str,
+        prompt: &str,
+        role: &str,
+        stream: bool,
+        parent_request_id: Option<&str>,
+    ) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "model": model,
+            "stream": stream,
+            "tablinq_request_role": role,
+            "tablinq_parent_request_id": parent_request_id,
+            "messages": [
+                { "role": "user", "content": prompt }
+            ]
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn upload_store_cleans_up_expired_staged_files() {
         let dir = tempdir().unwrap();
@@ -2559,6 +2661,210 @@ mod tests {
         let stop = stop_gateway_process(Some(&state_root)).unwrap();
         assert_eq!(stop["status"], "stopped");
         handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn provider_endpoint_exposes_openclaude_preset_metadata() {
+        let _guard = integration_lock();
+        let (_dir, config) = test_config();
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_PROVIDER_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 200);
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["object"], "tablinq.provider");
+        assert_eq!(body["request_annotations"]["field"], "tablinq_request_role");
+        assert_eq!(body["presets"]["openclaude"]["max_parallel_requests"], 1);
+        assert_eq!(
+            body["presets"]["openclaude"]["subagents"],
+            "disabled_by_default"
+        );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn openclaude_primary_streaming_requests_keep_sse_shape() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(fake_url);
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body =
+            openclaude_request_body("tablinq-search", "latest roadmap", "primary", true, None);
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "oc-primary-1"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 200);
+        let text = String::from_utf8(response.body).unwrap();
+        assert!(text.contains("chat.completion.chunk"));
+        assert!(text.contains("\"tablinq_request_role\":\"primary\""));
+        assert!(text.contains("[DONE]"));
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn openclaude_subagent_requests_are_rejected_by_default_policy() {
+        let _guard = integration_lock();
+        let (_dir, config) = test_config();
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body = openclaude_request_body(
+            "tablinq-instant",
+            "parallel helper request",
+            "subagent",
+            false,
+            Some("oc-primary-1"),
+        );
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "oc-subagent-1"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 429);
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["error"]["code"], "subagents_disabled");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn openclaude_branch_requests_are_serialized_behind_primary_work() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.research_timeout_ms = Some(10_000);
+            gateway.queue_timeout_ms = Some(10_000);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let primary_body = openclaude_request_body(
+            "tablinq-research",
+            "hold the browser session",
+            "primary",
+            false,
+            None,
+        );
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let primary = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "oc-primary-1"),
+                ],
+                &primary_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(250));
+
+        let branch_body = openclaude_request_body(
+            "tablinq-instant",
+            "branch after primary",
+            "branch",
+            false,
+            Some("oc-primary-1"),
+        );
+        let host = snapshot.host.clone();
+        let auth_for_thread = auth.clone();
+        let branch = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "oc-branch-1"),
+                ],
+                &branch_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(150));
+
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/oc-primary-1/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+
+        let primary = primary.join().unwrap();
+        assert_eq!(primary.status_code, 409);
+        let branch = branch.join().unwrap();
+        assert_eq!(branch.status_code, 200);
+        let branch_body: Value = serde_json::from_slice(&branch.body).unwrap();
+        assert_eq!(branch_body["tablinq_request_role"], "branch");
+        assert_eq!(branch_body["tablinq_parent_request_id"], "oc-primary-1");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
     }
 
     #[test]

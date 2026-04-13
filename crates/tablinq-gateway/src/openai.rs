@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use shared_protocol::{CapabilityReport, Effort, Mode, ModelClass};
 
@@ -67,6 +67,18 @@ pub struct ChatCompletionsRequest {
     pub tablinq_files: Vec<String>,
     #[serde(default)]
     pub tablinq_file_ids: Vec<String>,
+    #[serde(default)]
+    pub tablinq_request_role: Option<RequestRole>,
+    #[serde(default)]
+    pub tablinq_parent_request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestRole {
+    Primary,
+    Subagent,
+    Branch,
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,6 +117,12 @@ pub struct FlattenedMessages {
     pub file_ids: Vec<String>,
 }
 
+impl ChatCompletionsRequest {
+    pub fn request_role(&self) -> RequestRole {
+        self.tablinq_request_role.unwrap_or(RequestRole::Primary)
+    }
+}
+
 pub fn resolve_model(model_id: &str) -> Option<&'static ProviderModelSpec> {
     PROVIDER_MODELS.iter().find(|spec| spec.id == model_id)
 }
@@ -135,6 +153,11 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
     }
     if request.n.unwrap_or(1) != 1 {
         bail!("n>1 is not supported by the browser-backed provider");
+    }
+    if let Some(parent_request_id) = request.tablinq_parent_request_id.as_deref() {
+        if parent_request_id.trim().is_empty() {
+            bail!("tablinq_parent_request_id must not be empty when provided");
+        }
     }
     if resolve_model(&request.model).is_none() {
         bail!("model {} is not supported", request.model);
@@ -325,4 +348,12 @@ pub fn openai_error(status: u16, error_type: &str, code: &str, message: &str) ->
         },
         "status": status,
     })
+}
+
+pub fn request_role_name(role: RequestRole) -> &'static str {
+    match role {
+        RequestRole::Primary => "primary",
+        RequestRole::Subagent => "subagent",
+        RequestRole::Branch => "branch",
+    }
 }
