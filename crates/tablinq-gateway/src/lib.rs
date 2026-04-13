@@ -11,9 +11,10 @@ use gptd::logging::JsonLogger;
 use gptd::{AppConfig, CoreService};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use shared_protocol::{
-    BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, ErrorCode, EventPayload,
-    StreamChunkKind,
+    ArtifactSummary, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, ErrorCode,
+    EventPayload, StreamChunkKind,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
@@ -34,7 +35,10 @@ const ADMIN_SHUTDOWN_PATH: &str = "/admin/shutdown";
 const V1_MODELS_PATH: &str = "/v1/models";
 const V1_CAPABILITIES_PATH: &str = "/v1/capabilities";
 const V1_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
+const V1_FILES_PATH: &str = "/v1/files";
+const V1_ARTIFACTS_PATH: &str = "/v1/artifacts";
 const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
+const STAGED_UPLOAD_RETENTION_SECS: i64 = 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GatewayStatusSnapshot {
@@ -92,6 +96,25 @@ struct SimpleHttpResponse {
     status_code: u16,
     headers: BTreeMap<String, String>,
     body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct StagedFileMetadata {
+    file_id: String,
+    file_name: String,
+    content_type: String,
+    size_bytes: u64,
+    sha256: String,
+    created_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    staged_path: String,
+}
+
+#[derive(Debug)]
+struct UploadStore {
+    root: PathBuf,
+    retention_secs: i64,
+    next_id: AtomicU64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -421,6 +444,196 @@ impl CapabilityCatalogCache {
     }
 }
 
+impl UploadStore {
+    fn load(config: &AppConfig) -> Result<Self> {
+        let root = gateway_uploads_dir(config);
+        fs::create_dir_all(&root).with_context(|| format!("create {}", root.display()))?;
+        let store = Self {
+            root,
+            retention_secs: STAGED_UPLOAD_RETENTION_SECS,
+            next_id: AtomicU64::new(0),
+        };
+        store.cleanup_expired()?;
+        Ok(store)
+    }
+
+    fn stage_upload(
+        &self,
+        file_name: &str,
+        content_type: Option<&str>,
+        body: &[u8],
+    ) -> Result<StagedFileMetadata> {
+        self.cleanup_expired()?;
+
+        let safe_name = sanitize_upload_file_name(file_name);
+        let created_at = Utc::now();
+        let file_id = format!(
+            "file-{}-{}",
+            created_at.timestamp_millis(),
+            self.next_id.fetch_add(1, Ordering::SeqCst)
+        );
+        let dir = self.root.join(&file_id);
+        fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+
+        let staged_path = dir.join(&safe_name);
+        fs::write(&staged_path, body)
+            .with_context(|| format!("write {}", staged_path.display()))?;
+
+        let metadata = StagedFileMetadata {
+            file_id: file_id.clone(),
+            file_name: safe_name,
+            content_type: normalize_content_type(content_type),
+            size_bytes: body.len() as u64,
+            sha256: sha256_hex(body),
+            created_at,
+            expires_at: created_at + chrono::Duration::seconds(self.retention_secs),
+            staged_path: staged_path.display().to_string(),
+        };
+        self.write_metadata(&dir, &metadata)?;
+        Ok(metadata)
+    }
+
+    fn resolve_file_inputs(
+        &self,
+        file_paths: Vec<String>,
+        file_ids: &[String],
+    ) -> Result<Vec<String>> {
+        self.cleanup_expired()?;
+        let mut resolved = file_paths;
+        for file_id in file_ids {
+            let metadata = self
+                .get(file_id)?
+                .with_context(|| format!("staged file {file_id} was not found"))?;
+            resolved.push(metadata.staged_path);
+        }
+        Ok(resolved)
+    }
+
+    fn get(&self, file_id: &str) -> Result<Option<StagedFileMetadata>> {
+        self.cleanup_expired()?;
+        let dir = self.root.join(file_id);
+        if !dir.exists() {
+            return Ok(None);
+        }
+        let metadata = read_staged_file_metadata(&dir)?;
+        if !Path::new(&metadata.staged_path).exists() {
+            let _ = fs::remove_dir_all(&dir);
+            return Ok(None);
+        }
+        Ok(Some(metadata))
+    }
+
+    fn list(&self) -> Result<Vec<StagedFileMetadata>> {
+        self.cleanup_expired()?;
+        let mut items = Vec::new();
+        for entry in
+            fs::read_dir(&self.root).with_context(|| format!("read {}", self.root.display()))?
+        {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            if let Ok(metadata) = read_staged_file_metadata(&entry.path()) {
+                if Path::new(&metadata.staged_path).exists() {
+                    items.push(metadata);
+                }
+            }
+        }
+        items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        Ok(items)
+    }
+
+    fn cleanup_expired(&self) -> Result<()> {
+        let now = Utc::now();
+        for entry in
+            fs::read_dir(&self.root).with_context(|| format!("read {}", self.root.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if !entry.file_type()?.is_dir() {
+                let _ = fs::remove_file(path);
+                continue;
+            }
+
+            let expired_or_invalid = match read_staged_file_metadata(&path) {
+                Ok(metadata) => {
+                    metadata.expires_at <= now || !Path::new(&metadata.staged_path).exists()
+                }
+                Err(_) => true,
+            };
+            if expired_or_invalid {
+                let _ = fs::remove_dir_all(&path);
+            }
+        }
+        Ok(())
+    }
+
+    fn write_metadata(&self, dir: &Path, metadata: &StagedFileMetadata) -> Result<()> {
+        let path = staged_metadata_path(dir);
+        let raw = serde_json::to_vec_pretty(metadata).context("encode staged upload metadata")?;
+        fs::write(&path, raw).with_context(|| format!("write {}", path.display()))
+    }
+}
+
+fn read_staged_file_metadata(dir: &Path) -> Result<StagedFileMetadata> {
+    let path = staged_metadata_path(dir);
+    let raw = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_slice(&raw).context("decode staged upload metadata")
+}
+
+fn staged_metadata_path(dir: &Path) -> PathBuf {
+    dir.join("metadata.json")
+}
+
+fn gateway_uploads_dir(config: &AppConfig) -> PathBuf {
+    config.paths.state_root.join("gateway-uploads")
+}
+
+fn sanitize_upload_file_name(file_name: &str) -> String {
+    let candidate = Path::new(file_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("upload.bin");
+    let mut sanitized = candidate
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control()
+            {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .trim_end_matches(['.', ' '])
+        .to_owned();
+    if sanitized.is_empty() {
+        sanitized = "upload.bin".to_owned();
+    }
+    sanitized
+}
+
+fn normalize_content_type(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("application/octet-stream")
+        .to_owned()
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut text = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut text, "{byte:02x}");
+    }
+    text
+}
+
 fn capability_cache_path(config: &AppConfig) -> PathBuf {
     config
         .paths
@@ -456,6 +669,7 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
     let logger = Arc::new(JsonLogger::new(&log_path)?);
     let core = Arc::new(CoreService::new(config.clone())?);
     let capability_cache = Arc::new(CapabilityCatalogCache::load(&config)?);
+    let upload_store = Arc::new(UploadStore::load(&config)?);
     let _lock = acquire_gateway_lock(&config)?;
 
     let listener =
@@ -535,6 +749,7 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
                 let request_counter = Arc::clone(&request_counter);
                 let scheduler = Arc::clone(&scheduler);
                 let capability_cache = Arc::clone(&capability_cache);
+                let upload_store = Arc::clone(&upload_store);
                 let config = config.clone();
                 thread::spawn(move || {
                     if let Err(err) = handle_connection(
@@ -547,6 +762,7 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
                         &request_counter,
                         &scheduler,
                         &capability_cache,
+                        &upload_store,
                         &logger,
                     ) {
                         let _ = logger.warn(
@@ -577,6 +793,7 @@ fn handle_connection(
     request_counter: &AtomicU64,
     scheduler: &GatewayScheduler,
     capability_cache: &CapabilityCatalogCache,
+    upload_store: &UploadStore,
     logger: &JsonLogger,
 ) -> Result<()> {
     stream
@@ -674,6 +891,40 @@ fn handle_connection(
             Ok(()) => handle_capabilities_request(core, capability_cache, &context.request_id)?,
             Err(response) => response,
         },
+        ("GET", V1_FILES_PATH) => match authorize_request(config, &context.request, false) {
+            Ok(()) => handle_files_list_request(upload_store, &context.request_id)?,
+            Err(response) => response,
+        },
+        ("POST", V1_FILES_PATH) => match authorize_request(config, &context.request, false) {
+            Ok(()) => handle_file_upload_request(upload_store, &context)?,
+            Err(response) => response,
+        },
+        ("GET", _)
+            if context
+                .request
+                .path
+                .starts_with(&format!("{V1_FILES_PATH}/")) =>
+        {
+            match authorize_request(config, &context.request, false) {
+                Ok(()) => handle_file_detail_request(upload_store, &context)?,
+                Err(response) => response,
+            }
+        }
+        ("GET", V1_ARTIFACTS_PATH) => match authorize_request(config, &context.request, false) {
+            Ok(()) => handle_artifacts_list_request(core, &context.request_id)?,
+            Err(response) => response,
+        },
+        ("GET", _)
+            if context
+                .request
+                .path
+                .starts_with(&format!("{V1_ARTIFACTS_PATH}/")) =>
+        {
+            match authorize_request(config, &context.request, false) {
+                Ok(()) => handle_artifact_request(core, &context)?,
+                Err(response) => response,
+            }
+        }
         ("POST", _) if context.request.path.starts_with(V1_REQUESTS_PREFIX) => {
             if let Err(response) = authorize_request(config, &context.request, false) {
                 response
@@ -685,7 +936,8 @@ fn handle_connection(
             if let Err(response) = authorize_request(config, &context.request, true) {
                 response
             } else {
-                let prepared = match prepare_chat_completions_request(core, &context) {
+                let prepared = match prepare_chat_completions_request(core, upload_store, &context)
+                {
                     Ok(prepared) => prepared,
                     Err(err) => {
                         let response = map_openai_error(&context.request_id, &err);
@@ -817,6 +1069,207 @@ fn handle_capabilities_request(
     ))
 }
 
+fn handle_files_list_request(upload_store: &UploadStore, request_id: &str) -> Result<HttpResponse> {
+    let files = upload_store
+        .list()?
+        .into_iter()
+        .map(staged_file_object)
+        .collect::<Vec<_>>();
+    Ok(json_response(
+        200,
+        json!({
+            "object": "list",
+            "request_id": request_id,
+            "data": files,
+        }),
+    ))
+}
+
+fn handle_file_upload_request(
+    upload_store: &UploadStore,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(file_name) = context
+        .request
+        .headers
+        .get("x-file-name")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(json_response(
+            400,
+            json!({
+                "request_id": context.request_id,
+                "error": "x-file-name header is required",
+            }),
+        ));
+    };
+    let metadata = upload_store.stage_upload(
+        file_name,
+        context
+            .request
+            .headers
+            .get("content-type")
+            .map(String::as_str),
+        &context.request.body,
+    )?;
+    Ok(json_response(
+        201,
+        json!({
+            "request_id": context.request_id,
+            "data": staged_file_object(metadata),
+        }),
+    ))
+}
+
+fn handle_file_detail_request(
+    upload_store: &UploadStore,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(file_id) = file_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+    let Some(metadata) = upload_store.get(file_id)? else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+    Ok(json_response(
+        200,
+        json!({
+            "request_id": context.request_id,
+            "data": staged_file_object(metadata),
+        }),
+    ))
+}
+
+fn handle_artifacts_list_request(core: &CoreService, request_id: &str) -> Result<HttpResponse> {
+    let artifacts = core
+        .list_artifacts()?
+        .artifacts
+        .into_iter()
+        .map(|artifact| artifact_object(core, artifact))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(json_response(
+        200,
+        json!({
+            "object": "list",
+            "request_id": request_id,
+            "data": artifacts,
+        }),
+    ))
+}
+
+fn handle_artifact_request(core: &CoreService, context: &RequestContext) -> Result<HttpResponse> {
+    let Some((artifact_id, wants_content)) = artifact_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+    let artifact = core
+        .list_artifacts()?
+        .artifacts
+        .into_iter()
+        .find(|item| item.artifact_id == artifact_id);
+    let Some(artifact) = artifact else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+
+    if wants_content {
+        let body = fs::read(&artifact.storage_path)
+            .with_context(|| format!("read {}", artifact.storage_path))?;
+        return Ok(HttpResponse {
+            status_code: 200,
+            reason_phrase: reason_phrase_for_status(200),
+            headers: vec![
+                ("Content-Type".to_owned(), artifact.content_type.clone()),
+                (
+                    "Content-Disposition".to_owned(),
+                    format!("attachment; filename=\"{}\"", artifact.file_name),
+                ),
+            ],
+            body,
+        });
+    }
+
+    Ok(json_response(
+        200,
+        json!({
+            "request_id": context.request_id,
+            "data": artifact_object(core, artifact)?,
+        }),
+    ))
+}
+
+fn staged_file_object(metadata: StagedFileMetadata) -> Value {
+    json!({
+        "id": metadata.file_id,
+        "object": "tablinq.file",
+        "file_name": metadata.file_name,
+        "content_type": metadata.content_type,
+        "size_bytes": metadata.size_bytes,
+        "sha256": metadata.sha256,
+        "created_at": metadata.created_at,
+        "expires_at": metadata.expires_at,
+    })
+}
+
+fn artifact_object(core: &CoreService, artifact: ArtifactSummary) -> Result<Value> {
+    let linked_job_ids = core.artifact_job_ids(&artifact.artifact_id)?;
+    Ok(json!({
+        "id": artifact.artifact_id,
+        "object": "tablinq.artifact",
+        "file_name": artifact.file_name,
+        "content_type": artifact.content_type,
+        "size_bytes": artifact.size_bytes,
+        "sha256": artifact.sha256,
+        "conversation_id": artifact.conversation_id,
+        "message_id": artifact.message_id,
+        "created_at": artifact.created_at,
+        "linked_job_ids": linked_job_ids,
+        "content_url": format!("{V1_ARTIFACTS_PATH}/{}/content", artifact.artifact_id),
+    }))
+}
+
+fn file_id_from_path(path: &str) -> Option<&str> {
+    path.strip_prefix(&format!("{V1_FILES_PATH}/"))
+        .filter(|value| !value.contains('/'))
+}
+
+fn artifact_id_from_path(path: &str) -> Option<(&str, bool)> {
+    let suffix = path.strip_prefix(&format!("{V1_ARTIFACTS_PATH}/"))?;
+    if let Some(artifact_id) = suffix.strip_suffix("/content") {
+        if artifact_id.contains('/') || artifact_id.is_empty() {
+            return None;
+        }
+        Some((artifact_id, true))
+    } else if suffix.contains('/') || suffix.is_empty() {
+        None
+    } else {
+        Some((suffix, false))
+    }
+}
+
 enum PreparedChatJob {
     Ask(PreparedAskJob),
     Research(PreparedResearchJob),
@@ -839,23 +1292,25 @@ impl PreparedChatRequest {
 
 fn prepare_chat_completions_request(
     core: &CoreService,
+    upload_store: &UploadStore,
     context: &RequestContext,
 ) -> Result<PreparedChatRequest> {
     let request: ChatCompletionsRequest =
         serde_json::from_slice(&context.request.body).context("decode chat completions request")?;
     openai::validate_chat_request(&request)?;
     let model = resolve_model(&request.model).context("resolve provider model")?;
-    let (prompt, files) = openai::flatten_messages(&request)?;
+    let flattened = openai::flatten_messages(&request)?;
+    let files = upload_store.resolve_file_inputs(flattened.file_paths, &flattened.file_ids)?;
 
     let job = if model.uses_research {
         PreparedChatJob::Research(core.prepare_research(shared_protocol::ResearchCommand {
-            query: prompt,
+            query: flattened.prompt,
             files,
             output_dir: None,
         })?)
     } else {
         PreparedChatJob::Ask(core.prepare_ask(shared_protocol::AskCommand {
-            prompt,
+            prompt: flattened.prompt,
             conversation_id: None,
             mode: model.mode,
             model_class: model.model_class,
@@ -1247,6 +1702,9 @@ fn map_openai_error_parts(err: &anyhow::Error) -> (u16, &'static str, &'static s
     if message.contains("cancelled") {
         return (409, "invalid_request_error", "cancelled", message);
     }
+    if message.contains("staged file") {
+        return (400, "invalid_request_error", "file_not_found", message);
+    }
     match error_code_for_message(&message) {
         ErrorCode::CapabilityMissing => {
             (400, "invalid_request_error", "capability_missing", message)
@@ -1633,6 +2091,7 @@ fn json_response(status_code: u16, body: Value) -> HttpResponse {
 fn reason_phrase_for_status(status_code: u16) -> &'static str {
     match status_code {
         200 => "OK",
+        201 => "Created",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
@@ -1948,6 +2407,54 @@ mod tests {
             "Bearer {}",
             config.gateway_api_key().expect("gateway api key")
         )
+    }
+
+    fn upload_file(
+        snapshot: &GatewayStatusSnapshot,
+        auth: &str,
+        file_name: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> SimpleHttpResponse {
+        http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_FILES_PATH,
+            &[
+                ("authorization", auth),
+                ("x-file-name", file_name),
+                ("content-type", content_type),
+            ],
+            body,
+            20_000,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn upload_store_cleans_up_expired_staged_files() {
+        let dir = tempdir().unwrap();
+        let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+        let store = UploadStore::load(&config).unwrap();
+        let metadata = store
+            .stage_upload("..\\unsafe?.txt", Some("text/plain"), b"hello")
+            .unwrap();
+        assert_eq!(metadata.file_name, "unsafe_.txt");
+
+        let upload_dir = gateway_uploads_dir(&config).join(&metadata.file_id);
+        let expired = StagedFileMetadata {
+            expires_at: Utc::now() - chrono::Duration::seconds(1),
+            ..metadata
+        };
+        fs::write(
+            staged_metadata_path(&upload_dir),
+            serde_json::to_vec_pretty(&expired).unwrap(),
+        )
+        .unwrap();
+
+        store.cleanup_expired().unwrap();
+        assert!(!upload_dir.exists());
     }
 
     #[test]
@@ -2309,6 +2816,217 @@ mod tests {
         handle.join().unwrap().unwrap();
         let _ = fake_server.kill();
         let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn files_upload_endpoint_stages_files_and_research_accepts_file_ids() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let upload = upload_file(
+            &snapshot,
+            &auth,
+            "brief.txt",
+            "text/plain",
+            b"customer brief",
+        );
+        assert_eq!(upload.status_code, 201);
+        let upload_body: Value = serde_json::from_slice(&upload.body).unwrap();
+        let file_id = upload_body["data"]["id"].as_str().unwrap().to_owned();
+
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "tablinq_file_ids": [file_id],
+            "messages": [
+                { "role": "user", "content": "summarize the upload" }
+            ]
+        }))
+        .unwrap();
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 200);
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(
+            body["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap()
+                .contains("brief.txt")
+        );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn artifacts_endpoints_list_metadata_and_stream_content() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let upload = upload_file(
+            &snapshot,
+            &auth,
+            "report.txt",
+            "text/plain",
+            b"artifact seed",
+        );
+        assert_eq!(upload.status_code, 201);
+        let upload_body: Value = serde_json::from_slice(&upload.body).unwrap();
+        let file_id = upload_body["data"]["id"].as_str().unwrap().to_owned();
+
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "tablinq_file_ids": [file_id],
+            "messages": [
+                { "role": "user", "content": "produce a downloadable report" }
+            ]
+        }))
+        .unwrap();
+        let completion = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(completion.status_code, 200);
+        let completion_body: Value = serde_json::from_slice(&completion.body).unwrap();
+        let job_id = completion_body["tablinq_job_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let artifacts = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_ARTIFACTS_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(artifacts.status_code, 200);
+        let artifacts_body: Value = serde_json::from_slice(&artifacts.body).unwrap();
+        let artifact = artifacts_body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| {
+                item["linked_job_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == &Value::String(job_id.clone()))
+            })
+            .unwrap();
+        let artifact_id = artifact["id"].as_str().unwrap().to_owned();
+
+        let detail = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            &format!("{V1_ARTIFACTS_PATH}/{artifact_id}"),
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(detail.status_code, 200);
+        let detail_body: Value = serde_json::from_slice(&detail.body).unwrap();
+        assert_eq!(detail_body["data"]["id"], artifact_id);
+        assert!(
+            detail_body["data"]["linked_job_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == &Value::String(job_id.clone()))
+        );
+
+        let content = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            &format!("{V1_ARTIFACTS_PATH}/{artifact_id}/content"),
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(content.status_code, 200);
+        let text = String::from_utf8(content.body).unwrap();
+        assert!(text.contains("report.txt"));
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn files_endpoint_keeps_duplicate_original_names_as_separate_staged_ids() {
+        let _guard = integration_lock();
+        let (_dir, config) = test_config();
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first = upload_file(&snapshot, &auth, "same.txt", "text/plain", b"one");
+        let second = upload_file(&snapshot, &auth, "same.txt", "text/plain", b"two");
+        assert_eq!(first.status_code, 201);
+        assert_eq!(second.status_code, 201);
+
+        let files = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_FILES_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(files.status_code, 200);
+        let body: Value = serde_json::from_slice(&files.body).unwrap();
+        let matching = body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["file_name"] == "same.txt")
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 2);
+        assert_ne!(matching[0]["id"], matching[1]["id"]);
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
     }
 
     #[test]

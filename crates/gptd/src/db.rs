@@ -416,6 +416,19 @@ impl Database {
         Ok(artifact)
     }
 
+    pub fn artifact_job_ids(&self, artifact_id: &str) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT job_id
+            FROM job_artifacts
+            WHERE artifact_id = ?1
+            ORDER BY job_id ASC
+            "#,
+        )?;
+        let rows = statement.query_map([artifact_id], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
     pub fn job_detail(&self, job_id: &str) -> Result<Option<JobDetail>> {
         let row = self
             .conn

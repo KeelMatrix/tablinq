@@ -581,6 +581,10 @@ impl CoreService {
         self.open_db()?.list_artifacts()
     }
 
+    pub fn artifact_job_ids(&self, artifact_id: &str) -> Result<Vec<String>> {
+        self.open_db()?.artifact_job_ids(artifact_id)
+    }
+
     pub fn pull_artifact(&self, command: PullArtifactCommand) -> Result<ArtifactPullResult> {
         let db = self.open_db()?;
         let artifact = if command.artifact_id == "last" {
