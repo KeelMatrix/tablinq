@@ -50,11 +50,31 @@ export async function startFakeChatGptServer(): Promise<{
 export async function stopFakeChatGptServer(
   child: ChildProcess,
 ): Promise<void> {
-  if (child.killed) {
+  if (child.killed || child.exitCode !== null) {
     return;
   }
 
   child.kill();
+  const exited = await new Promise<boolean>((resolve) => {
+    child.once("exit", () => resolve(true));
+    setTimeout(() => resolve(false), 2000);
+  });
+  if (exited) {
+    return;
+  }
+
+  if (process.platform === "win32" && child.pid) {
+    const killer = spawn("taskkill", ["/F", "/T", "/PID", String(child.pid)], {
+      stdio: "ignore",
+    });
+    await new Promise<void>((resolve) => {
+      killer.once("exit", () => resolve());
+      killer.once("error", () => resolve());
+    });
+    return;
+  }
+
+  child.kill("SIGKILL");
   await new Promise<void>((resolve) => {
     child.once("exit", () => resolve());
     setTimeout(resolve, 2000);
