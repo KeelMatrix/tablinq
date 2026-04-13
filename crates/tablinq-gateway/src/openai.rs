@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use shared_protocol::{CapabilityReport, Effort, Mode, ModelClass};
+use shared_protocol::{CapabilityMatrix, CapabilityReport, Effort, Mode, ModelClass};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderModelSpec {
@@ -241,32 +241,38 @@ pub fn model_object(
     report: Option<&CapabilityReport>,
     capability_source: &str,
 ) -> Value {
-    let (availability, warnings) = model_availability(spec, report);
+    let availability = model_availability(spec, report);
     json!({
         "id": spec.id,
         "object": "model",
         "created": 0,
         "owned_by": "tablinq",
         "tablinq_mode": mode_name(spec.mode),
-        "tablinq_availability": availability,
-        "tablinq_warning": warnings,
+        "tablinq_model_class": spec.model_class.map(model_class_name),
+        "tablinq_effort": spec.effort.map(effort_name),
+        "tablinq_execution_kind": if spec.uses_research { "research" } else { "ask" },
+        "tablinq_streaming": true,
+        "tablinq_files": true,
+        "tablinq_artifacts": true,
+        "tablinq_availability": availability.availability,
+        "tablinq_warning": availability.warnings,
         "tablinq_capability_source": capability_source,
         "tablinq_aliases": observed_aliases(spec, report),
     })
 }
 
-fn model_availability(
+pub fn model_availability(
     spec: &ProviderModelSpec,
     report: Option<&CapabilityReport>,
-) -> (&'static str, Vec<String>) {
+) -> CapabilityAvailability {
     let Some(report) = report else {
-        return (
-            "unknown",
-            vec![
+        return CapabilityAvailability {
+            availability: "unknown",
+            warnings: vec![
                 "live capability availability is unknown until the managed browser reports probes"
                     .to_owned(),
             ],
-        );
+        };
     };
 
     let matrix = &report.matrix;
@@ -282,15 +288,110 @@ fn model_availability(
         _ => false,
     };
     if available {
-        ("available", Vec::new())
+        CapabilityAvailability {
+            availability: "available",
+            warnings: Vec::new(),
+        }
     } else {
-        (
-            "unavailable",
-            vec![
+        CapabilityAvailability {
+            availability: "unavailable",
+            warnings: vec![
                 "the current managed session does not expose the required live capability"
                     .to_owned(),
             ],
-        )
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CapabilityAvailability {
+    pub availability: &'static str,
+    pub warnings: Vec<String>,
+}
+
+pub fn provider_capability_catalog(
+    report: Option<&CapabilityReport>,
+    capability_source: &str,
+) -> Value {
+    let model_ids = PROVIDER_MODELS
+        .iter()
+        .map(|spec| spec.id)
+        .collect::<Vec<_>>();
+    let available_model_ids = PROVIDER_MODELS
+        .iter()
+        .filter(|spec| model_availability(spec, report).availability == "available")
+        .map(|spec| spec.id)
+        .collect::<Vec<_>>();
+
+    json!({
+        "capability_source": capability_source,
+        "model_ids": model_ids.clone(),
+        "available_model_ids": available_model_ids,
+        "capabilities": {
+            "search": capability_status(
+                report.map(|value| &value.matrix),
+                "tablinq-search",
+                |matrix| matrix.composer_ready && matrix.submit_available && matrix.search_mode_visible,
+                "search mode is unavailable in the current managed session",
+            ),
+            "research": capability_status(
+                report.map(|value| &value.matrix),
+                "tablinq-research",
+                |matrix| matrix.research_mode_visible,
+                "research mode is unavailable in the current managed session",
+            ),
+            "uploads": capability_status(
+                report.map(|value| &value.matrix),
+                "all_models",
+                |matrix| matrix.upload_control_visible,
+                "file upload controls are unavailable in the current managed session",
+            ),
+            "artifacts": capability_status(
+                report.map(|value| &value.matrix),
+                "all_models",
+                |matrix| matrix.downloadable_artifacts_observable,
+                "downloadable artifacts are unavailable in the current managed session",
+            ),
+            "streaming": json!({
+                "availability": "available",
+                "stable_model_ids": model_ids,
+                "warning": Value::Null,
+            }),
+        },
+        "max_safe_parallelism": {
+            "requests": 1,
+            "branches": 1,
+            "subagents": 0,
+        },
+        "subagent_recommendation": {
+            "policy": "disabled",
+            "reason": "single-browser upstream execution is serialized through one managed session",
+        },
+    })
+}
+
+fn capability_status(
+    matrix: Option<&CapabilityMatrix>,
+    stable_model_ids: impl Serialize,
+    predicate: impl FnOnce(&CapabilityMatrix) -> bool,
+    unavailable_warning: &str,
+) -> Value {
+    match matrix {
+        Some(matrix) if predicate(matrix) => json!({
+            "availability": "available",
+            "stable_model_ids": stable_model_ids,
+            "warning": Value::Null,
+        }),
+        Some(_) => json!({
+            "availability": "unavailable",
+            "stable_model_ids": stable_model_ids,
+            "warning": unavailable_warning,
+        }),
+        None => json!({
+            "availability": "unknown",
+            "stable_model_ids": stable_model_ids,
+            "warning": "live capability availability is unknown until the managed browser reports probes",
+        }),
     }
 }
 
@@ -336,6 +437,21 @@ pub fn mode_name(mode: Mode) -> &'static str {
         Mode::Normal => "normal",
         Mode::Search => "search",
         Mode::Research => "research",
+    }
+}
+
+fn model_class_name(value: ModelClass) -> &'static str {
+    match value {
+        ModelClass::Instant => "instant",
+        ModelClass::Thinking => "thinking",
+    }
+}
+
+fn effort_name(value: Effort) -> &'static str {
+    match value {
+        Effort::None => "none",
+        Effort::Standard => "standard",
+        Effort::Extended => "extended",
     }
 }
 
