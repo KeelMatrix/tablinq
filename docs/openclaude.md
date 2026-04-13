@@ -1,35 +1,36 @@
-# OpenClaude Compatibility
+# OpenClaude
 
-Tablinq can be used as a local OpenAI-compatible provider through the gateway.
+Use Tablinq's local gateway as an OpenAI-compatible provider.
 
-Use these values for an OpenClaude preset:
+## Preset values
 
 - Base URL: `http://127.0.0.1:3847/v1`
-- API key: the local bearer token from `config/config.toml` under `gateway.api_key`
+- API key: `gateway.api_key` from `config.toml`
 - Streaming: `true`
 - Max parallel requests: `1`
 - Subagents: disabled by default
 
-Recommended model IDs:
+## Recommended models
 
 - `tablinq-instant`
 - `tablinq-thinking-standard`
+- `tablinq-thinking-extended`
 - `tablinq-search`
 
-Request annotations:
+## Request annotations
 
 - `tablinq_request_role = "primary"` for the main user request
 - `tablinq_request_role = "branch"` for serialized branch work
 - `tablinq_request_role = "subagent"` for delegated work that should be rejected by default
 - `tablinq_parent_request_id = "<request-id>"` when a branch or subagent belongs to a primary request
 
-Safe default policy:
+## Safe default policy
 
 - primary: execute
-- branch: serialize through the single browser session
+- branch: serialize
 - subagent: reject with `subagents_disabled`
 
-Example request body:
+## Example request
 
 ```json
 {
@@ -41,3 +42,5 @@ Example request body:
   ]
 }
 ```
+
+See [Provider mode](provider-mode.md) for bring-up, health checks, files, artifacts, and recovery commands.
