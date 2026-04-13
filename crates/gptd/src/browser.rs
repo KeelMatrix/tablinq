@@ -859,27 +859,26 @@ fn resolve_adapter_runtime() -> Result<AdapterRuntime> {
 fn adapter_runtime_candidates() -> Vec<(PathBuf, PathBuf)> {
     let mut candidates = Vec::new();
 
-    if let Ok(current_exe) = std::env::current_exe() {
-        if let Some(bin_dir) = current_exe.parent() {
-            if let Some(install_root) = bin_dir.parent() {
-                candidates.push((
-                    install_root
-                        .join("browser-adapter")
-                        .join("src")
-                        .join("service.js"),
-                    install_root.to_path_buf(),
-                ));
-                candidates.push((
-                    install_root
-                        .join("packages")
-                        .join("browser-adapter")
-                        .join("dist")
-                        .join("src")
-                        .join("service.js"),
-                    install_root.to_path_buf(),
-                ));
-            }
-        }
+    if let Ok(current_exe) = std::env::current_exe()
+        && let Some(bin_dir) = current_exe.parent()
+        && let Some(install_root) = bin_dir.parent()
+    {
+        candidates.push((
+            install_root
+                .join("browser-adapter")
+                .join("src")
+                .join("service.js"),
+            install_root.to_path_buf(),
+        ));
+        candidates.push((
+            install_root
+                .join("packages")
+                .join("browser-adapter")
+                .join("dist")
+                .join("src")
+                .join("service.js"),
+            install_root.to_path_buf(),
+        ));
     }
 
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");

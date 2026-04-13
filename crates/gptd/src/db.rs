@@ -279,6 +279,7 @@ impl Database {
         Ok(requested != 0)
     }
 
+#[allow(clippy::too_many_arguments)]
     pub fn upsert_conversation(
         &self,
         conversation_id: &str,
@@ -376,7 +377,7 @@ impl Database {
             ORDER BY created_at DESC
             "#,
         )?;
-        let rows = statement.query_map([], |row| map_artifact_row(row))?;
+        let rows = statement.query_map([], map_artifact_row)?;
         let artifacts = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(ArtifactList { artifacts })
     }

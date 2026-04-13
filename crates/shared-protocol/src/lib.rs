@@ -249,6 +249,7 @@ impl EventEnvelope {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum EventPayload {
     Ack(AckEvent),
     StreamChunk(StreamChunk),
@@ -603,6 +604,7 @@ pub enum DaemonRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum DaemonResponse {
     Ack(AckEvent),
     Health(HealthCheck),
@@ -623,6 +625,7 @@ pub enum DaemonResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum DaemonFrame {
     Event(EventPayload),
     Response(DaemonResponse),

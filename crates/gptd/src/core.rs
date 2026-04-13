@@ -192,7 +192,7 @@ impl CoreService {
         let outcome = lock_browser(&self.browser)?.ask(
             &prepared.job_id,
             &prepared.command,
-            |event| on_event(event),
+            &mut on_event,
             || {
                 lock_cancel_registry(&self.cancel_registry)
                     .map(|set| set.contains(&prepared.job_id))
@@ -762,9 +762,7 @@ fn lock_cancel_registry<'a>(
 }
 
 fn health_snapshot(config: &AppConfig, browser: BrowserStatusSnapshot) -> HealthCheck {
-    let status = if !browser.running {
-        HealthStatus::Degraded
-    } else if !browser.extension_connected || !browser.authenticated {
+    let status = if !browser.running || !browser.extension_connected || !browser.authenticated {
         HealthStatus::Degraded
     } else {
         HealthStatus::Ok
@@ -849,6 +847,7 @@ fn default_selector_pack_summary() -> Option<SelectorPackSummary> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_research_update<F>(
     db: &Database,
     job_id: &str,

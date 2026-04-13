@@ -126,10 +126,10 @@ fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
                 files: vec![upload_fixture.display().to_string()],
             },
             |event| {
-                if let EventPayload::StreamChunk(chunk) = event {
-                    if chunk.kind == StreamChunkKind::Delta {
-                        streamed.push_str(&chunk.text);
-                    }
+                if let EventPayload::StreamChunk(chunk) = event
+                    && chunk.kind == StreamChunkKind::Delta
+                {
+                    streamed.push_str(&chunk.text);
                 }
                 Ok(())
             },

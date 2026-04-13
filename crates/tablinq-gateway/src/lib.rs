@@ -256,12 +256,12 @@ impl GatewayScheduler {
 
         let deadline = Instant::now() + self.queue_timeout;
         loop {
-            if let Some(entry) = state.requests.get(request_id) {
-                if entry.cancelled {
-                    remove_queued_request(&mut state, request_id);
-                    self.changed.notify_all();
-                    bail!("request cancelled while queued");
-                }
+            if let Some(entry) = state.requests.get(request_id)
+                && entry.cancelled
+            {
+                remove_queued_request(&mut state, request_id);
+                self.changed.notify_all();
+                bail!("request cancelled while queued");
             }
 
             let ready = state.running < self.max_concurrent_upstream_jobs
@@ -535,10 +535,10 @@ impl UploadStore {
             if !entry.file_type()?.is_dir() {
                 continue;
             }
-            if let Ok(metadata) = read_staged_file_metadata(&entry.path()) {
-                if Path::new(&metadata.staged_path).exists() {
-                    items.push(metadata);
-                }
+            if let Ok(metadata) = read_staged_file_metadata(&entry.path())
+                && Path::new(&metadata.staged_path).exists()
+            {
+                items.push(metadata);
             }
         }
         items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
@@ -690,15 +690,13 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
         .set_nonblocking(true)
         .context("set gateway listener nonblocking")?;
 
-    if config.warm_mode() {
-        if let Err(err) = core.warm_browser_if_enabled() {
-            logger.warn(
-                "gateway warm browser open failed",
-                json!({
-                    "error": format!("{err:#}"),
-                }),
-            )?;
-        }
+    if config.warm_mode() && let Err(err) = core.warm_browser_if_enabled() {
+        logger.warn(
+            "gateway warm browser open failed",
+            json!({
+                "error": format!("{err:#}"),
+            }),
+        )?;
     }
 
     let snapshot = Arc::new(GatewayStatusSnapshot {
@@ -785,6 +783,7 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_connection(
     mut stream: TcpStream,
     remote_addr: String,
@@ -1684,24 +1683,25 @@ fn write_stream_delta(
     request_id: &str,
     event: EventPayload,
 ) -> Result<()> {
-    if let EventPayload::StreamChunk(chunk) = event {
-        if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
-            write_sse_event(
-                stream,
-                &json!({
-                    "id": stream_id,
-                    "object": "chat.completion.chunk",
-                    "created": Utc::now().timestamp(),
-                    "model": model_id,
-                    "request_id": request_id,
-                    "choices": [{
-                        "index": 0,
-                        "delta": { "content": chunk.text },
-                        "finish_reason": Value::Null,
-                    }],
-                }),
-            )?;
-        }
+    if let EventPayload::StreamChunk(chunk) = event
+        && chunk.kind == StreamChunkKind::Delta
+        && !chunk.text.is_empty()
+    {
+        write_sse_event(
+            stream,
+            &json!({
+                "id": stream_id,
+                "object": "chat.completion.chunk",
+                "created": Utc::now().timestamp(),
+                "model": model_id,
+                "request_id": request_id,
+                "choices": [{
+                    "index": 0,
+                    "delta": { "content": chunk.text },
+                    "finish_reason": Value::Null,
+                }],
+            }),
+        )?;
     }
     Ok(())
 }
@@ -1869,14 +1869,14 @@ fn ensure_browser_session(core: &CoreService) -> Result<()> {
 }
 
 fn discover_capabilities(core: &CoreService) -> Option<shared_protocol::CapabilityReport> {
-    if let Ok(snapshot) = core.browser_profile_info() {
-        if !snapshot.running {
-            let _ = core.browser_open(BrowserOpenRequest {
-                target_url: None,
-                browser_path: None,
-                headless: Some(true),
-            });
-        }
+    if let Ok(snapshot) = core.browser_profile_info()
+        && !snapshot.running
+    {
+        let _ = core.browser_open(BrowserOpenRequest {
+            target_url: None,
+            browser_path: None,
+            headless: Some(true),
+        });
     }
     core.capabilities()
         .ok()
@@ -2079,15 +2079,15 @@ fn start_gateway_process_with_binary(
 
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     loop {
-        if let Some(snapshot) = load_status_snapshot(&config)? {
-            if gateway_is_ready(&snapshot, config.gateway_request_timeout_ms()) {
-                return Ok(json!({
-                    "status": "started",
-                    "host": snapshot.host,
-                    "port": snapshot.port,
-                    "pid": snapshot.pid,
-                }));
-            }
+        if let Some(snapshot) = load_status_snapshot(&config)?
+            && gateway_is_ready(&snapshot, config.gateway_request_timeout_ms())
+        {
+            return Ok(json!({
+                "status": "started",
+                "host": snapshot.host,
+                "port": snapshot.port,
+                "pid": snapshot.pid,
+            }));
         }
 
         if let Some(status) = child.try_wait().context("poll gateway startup")? {
@@ -2276,10 +2276,10 @@ fn gateway_log_path(config: &AppConfig) -> PathBuf {
 fn acquire_gateway_lock(config: &AppConfig) -> Result<LockGuard> {
     let path = gateway_lock_path(config);
     if path.exists() {
-        if let Some(snapshot) = load_status_snapshot(config)? {
-            if gateway_is_responsive(&snapshot, config.gateway_request_timeout_ms()) {
-                bail!("gateway already running");
-            }
+        if let Some(snapshot) = load_status_snapshot(config)?
+            && gateway_is_responsive(&snapshot, config.gateway_request_timeout_ms())
+        {
+            bail!("gateway already running");
         }
         fs::remove_file(&path).with_context(|| format!("remove stale {}", path.display()))?;
     }
