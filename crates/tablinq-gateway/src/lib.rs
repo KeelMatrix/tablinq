@@ -2311,37 +2311,65 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         let completions = Arc::new(Mutex::new(Vec::new()));
-        let mut queued = Vec::new();
-        for (label, request_id) in [("second", "req-second"), ("third", "req-third")] {
-            let body = serde_json::to_vec(&json!({
-                "model": "tablinq-instant",
-                "messages": [
-                    { "role": "user", "content": format!("hello from {label}") }
-                ]
-            }))
+        let second_body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [
+                { "role": "user", "content": "hello from second" }
+            ]
+        }))
+        .unwrap();
+        let second_host = snapshot.host.clone();
+        let second_auth = auth.clone();
+        let second_completions = Arc::clone(&completions);
+        let second = thread::spawn(move || {
+            let response = http_request(
+                &second_host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", second_auth.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-second"),
+                ],
+                &second_body,
+                20_000,
+            )
             .unwrap();
-            let host = snapshot.host.clone();
-            let auth = auth.clone();
-            let completions = Arc::clone(&completions);
-            queued.push(thread::spawn(move || {
-                let response = http_request(
-                    &host,
-                    port,
-                    "POST",
-                    V1_CHAT_COMPLETIONS_PATH,
-                    &[
-                        ("authorization", auth.as_str()),
-                        ("content-type", "application/json"),
-                        ("x-request-id", request_id),
-                    ],
-                    &body,
-                    20_000,
-                )
-                .unwrap();
-                completions.lock().unwrap().push(label.to_owned());
-                response
-            }));
-        }
+            second_completions.lock().unwrap().push("second".to_owned());
+            response
+        });
+
+        thread::sleep(Duration::from_millis(100));
+
+        let third_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [
+                { "role": "user", "content": "hello from third" }
+            ]
+        }))
+        .unwrap();
+        let third_host = snapshot.host.clone();
+        let third_auth = auth.clone();
+        let third_completions = Arc::clone(&completions);
+        let third = thread::spawn(move || {
+            let response = http_request(
+                &third_host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", third_auth.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-third"),
+                ],
+                &third_body,
+                20_000,
+            )
+            .unwrap();
+            third_completions.lock().unwrap().push("third".to_owned());
+            response
+        });
 
         let cancel = http_request(
             &snapshot.host,
@@ -2359,8 +2387,8 @@ mod tests {
         assert_eq!(first.status_code, 409);
         let first_body: Value = serde_json::from_slice(&first.body).unwrap();
         assert_eq!(first_body["error"]["code"], "cancelled");
-        let second = queued.remove(0).join().unwrap();
-        let third = queued.remove(0).join().unwrap();
+        let second = second.join().unwrap();
+        let third = third.join().unwrap();
         assert_eq!(second.status_code, 200);
         assert_eq!(third.status_code, 200);
         assert_eq!(completions.lock().unwrap().as_slice(), ["second", "third"]);
@@ -2434,7 +2462,7 @@ mod tests {
             .unwrap()
         });
 
-        thread::sleep(Duration::from_millis(250));
+        thread::sleep(Duration::from_millis(50));
 
         let cancel = http_request(
             &snapshot.host,
