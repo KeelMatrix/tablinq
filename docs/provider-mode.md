@@ -1,75 +1,80 @@
 # Provider Mode
 
-Tablinq can run as a local browser-backed provider for OpenAI-compatible clients, OpenClaude, and Paperclip. The safe default is one warm browser session, one active upstream request, no subagents.
+Tablinq can run as a local OpenAI-compatible provider backed by the same managed browser session used by the CLI. The safe default is one warm browser session, one active upstream request, and no subagents.
 
-## Package And Install
+## Bring-up
 
-1. Build a local package with `scripts/package.ps1` or `./scripts/package.sh`.
-2. Install it with `scripts/install.ps1` or `./scripts/install.sh`.
-3. Load the unpacked extension from the installed `extension` directory.
-4. Start the control plane:
+1. Build and install Tablinq.
+2. Load the unpacked extension from the installed `extension` directory.
+3. Start the control plane:
    - `gpt daemon start`
    - `gpt gateway start`
-5. Open the managed browser once with `gpt browser open`.
-6. Sign in once in the managed profile.
-7. Check the merged operational view with `gpt status` or `gpt doctor`.
+4. Open the managed browser with `gpt browser open`.
+5. Sign in once in the managed profile.
+6. Verify health:
+   - `gpt status`
+   - `gpt doctor`
+   - `GET /health`
+   - `GET /ready`
+   - `GET /v1/provider`
 
-## OpenClaude
+## Core endpoints
 
-- Base URL: `http://127.0.0.1:3847/v1`
-- API key: `gateway.api_key` from `config.toml`
-- Streaming: `true`
-- Max parallel requests: `1`
-- Recommended models:
-  - `tablinq-instant`
-  - `tablinq-thinking-standard`
-  - `tablinq-search`
-- Request annotations:
-  - `tablinq_request_role = "primary"`
-  - `tablinq_request_role = "branch"`
-  - `tablinq_request_role = "subagent"`
-  - `tablinq_parent_request_id = "<request-id>"`
+- `GET /health`
+- `GET /ready`
+- `GET /v1/models`
+- `GET /v1/capabilities`
+- `GET /v1/provider`
+- `POST /v1/chat/completions`
+- `POST /v1/files`
+- `GET /v1/files`
+- `GET /v1/artifacts`
+- `GET /v1/artifacts/{id}`
+- `GET /v1/artifacts/{id}/content`
+- `POST /v1/requests/{request_id}/cancel`
 
-## Paperclip
+## Recommended models
 
-- Base URL: `http://127.0.0.1:3847/v1`
-- API key: `gateway.api_key` from `config.toml`
-- Transport: OpenAI-compatible HTTP
-- Max parallel requests: `1`
-- Recommended models:
-  - `tablinq-instant`
-  - `tablinq-search`
-  - `tablinq-research`
-- File flow:
-  1. `POST /v1/files`
-  2. pass staged IDs to `POST /v1/chat/completions`
-  3. read `GET /v1/artifacts`
-  4. pull `GET /v1/artifacts/{id}/content`
+- `tablinq-instant`
+- `tablinq-thinking-standard`
+- `tablinq-thinking-extended`
+- `tablinq-search`
+- `tablinq-research`
 
-## Safe Parallelism
+## Safe parallelism
 
-- Keep `max_parallel_requests = 1`.
-- Keep `max_parallel_branches = 1`.
-- Keep subagents disabled by default.
-- Respect `retry_after_ms` on `429` responses.
-- Prefer one warm browser session over multiple profiles.
+- keep `max_parallel_requests = 1`
+- keep `max_parallel_branches = 1`
+- keep subagents disabled by default
+- respect `retry_after_ms` on `429` responses
+- prefer one warm browser session over multiple managed profiles
 
-## Status, Logs, And Recovery
+## Request annotations
 
-- `gpt status` or `gpt doctor`: merged daemon, gateway, browser, auth, extension, queue, and log paths.
-- `gpt daemon status`: daemon-only status.
-- `gpt gateway status`: gateway-only status.
-- Logs:
-  - daemon: `<state-root>/logs/gptd.log`
-  - gateway: `<state-root>/logs/gateway.log`
-- Recovery commands:
-  - `gpt browser open`
-  - `gpt browser reset-profile`
-  - `gpt gateway stop`
-  - `gpt daemon stop`
-  - `gpt daemon start`
-  - `gpt gateway start`
+- `tablinq_request_role = "primary"`
+- `tablinq_request_role = "branch"`
+- `tablinq_request_role = "subagent"`
+- `tablinq_parent_request_id = "<request-id>"`
 
-## Resetting The Managed Profile
+`subagent` requests should be rejected by default. `branch` requests should be serialized through the same queue as primary requests.
 
-Use `gpt browser reset-profile` when the managed browser profile is wedged, stale, or signed into the wrong account. This clears the managed profile directory under `<state-root>/browser-profile`. You will need to reopen the browser and sign in again afterward.
+## Files and artifacts
+
+1. Upload files through `POST /v1/files`.
+2. Pass staged IDs through `tablinq_file_ids` or inline file references in chat content.
+3. Read generated artifact metadata from `GET /v1/artifacts`.
+4. Download artifact content from `GET /v1/artifacts/{id}/content`.
+
+## Recovery
+
+- `gpt status` or `gpt doctor`
+- `gpt browser open`
+- `gpt browser logout`
+- `gpt browser switch-account`
+- `gpt browser reset-profile`
+- `gpt gateway stop`
+- `gpt daemon stop`
+- `gpt daemon start`
+- `gpt gateway start`
+
+For client-specific setup, see [OpenClaude](openclaude.md) and [Paperclip](paperclip.md).

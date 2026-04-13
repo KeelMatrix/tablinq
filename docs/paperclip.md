@@ -1,42 +1,35 @@
-# Paperclip Compatibility
+# Paperclip
 
-Tablinq uses the HTTP gateway as the primary Paperclip integration path.
+Use Tablinq's local gateway as an OpenAI-compatible provider for Paperclip.
 
-Direct path:
+## Connection values
 
-- Paperclip -> Tablinq gateway
 - Base URL: `http://127.0.0.1:3847/v1`
-- API key: the local bearer token from `config/config.toml` under `gateway.api_key`
-- Transport: OpenAI-compatible HTTP
+- API key: `gateway.api_key` from `config.toml`
 - Streaming: `true`
 - Max parallel requests: `1`
 
-Recommended model IDs:
+## Recommended models
 
 - `tablinq-instant`
 - `tablinq-search`
 - `tablinq-research`
 
-File and artifact flow:
+## File and artifact flow
 
-1. Upload local files to `POST /v1/files` with `x-file-name`.
-2. Pass returned file IDs in `tablinq_file_ids` on `POST /v1/chat/completions`.
+1. Upload local files to `POST /v1/files`.
+2. Pass returned IDs through `tablinq_file_ids` on `POST /v1/chat/completions`.
 3. Read generated artifact metadata from `GET /v1/artifacts`.
 4. Download artifact content from `GET /v1/artifacts/{id}/content`.
 
-Usage and budget guidance:
+## Usage guidance
 
-- Treat usage as unknown or estimated.
-- Keep provider concurrency at `1`.
-- Respect `retry_after_ms` on `429` responses.
-- Prefer one warm browser session instead of parallel browser work.
+- treat usage accounting as provider-specific or estimated
+- keep concurrency at `1`
+- respect `retry_after_ms` on `429` responses
+- prefer one warm browser session instead of parallel browser work
 
-Dual-use options:
-
-- Paperclip -> Tablinq for direct local provider access
-- Paperclip -> OpenClaude -> Tablinq if you want OpenClaude policy behavior in front of the gateway
-
-Example request body:
+## Example request
 
 ```json
 {
@@ -44,7 +37,12 @@ Example request body:
   "stream": false,
   "tablinq_file_ids": ["file-123"],
   "messages": [
-    { "role": "user", "content": "Summarize the uploaded source and produce a report." }
+    {
+      "role": "user",
+      "content": "Summarize the uploaded source and produce a report."
+    }
   ]
 }
 ```
+
+See [Provider mode](provider-mode.md) for bring-up, health checks, and recovery commands.
