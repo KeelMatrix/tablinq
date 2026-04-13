@@ -331,6 +331,7 @@ fn daemon_streams_ask_responses_and_persists_conversations() {
         &DaemonRequest::Ask(AskCommand {
             prompt: "hello from daemon".to_owned(),
             conversation_id: None,
+            new_conversation: false,
             mode: Mode::Normal,
             model_class: None,
             effort: None,
@@ -404,6 +405,7 @@ fn daemon_reports_timeout_errors_for_stalled_asks() {
         &DaemonRequest::Ask(AskCommand {
             prompt: "this will stall".to_owned(),
             conversation_id: None,
+            new_conversation: false,
             mode: Mode::Normal,
             model_class: None,
             effort: None,
@@ -472,6 +474,7 @@ fn daemon_handles_configured_asks_on_renamed_controls() {
         &DaemonRequest::Ask(AskCommand {
             prompt: "configured aria ask".to_owned(),
             conversation_id: None,
+            new_conversation: false,
             mode: Mode::Research,
             model_class: Some(ModelClass::Thinking),
             effort: Some(Effort::Extended),
@@ -517,6 +520,7 @@ fn daemon_reports_capability_missing_errors_for_unavailable_modes() {
         &DaemonRequest::Ask(AskCommand {
             prompt: "search for release notes".to_owned(),
             conversation_id: None,
+            new_conversation: false,
             mode: Mode::Search,
             model_class: None,
             effort: None,
@@ -566,6 +570,7 @@ fn daemon_persists_uploaded_artifacts_and_pulls_them_locally() {
         &DaemonRequest::Ask(AskCommand {
             prompt: "summarize uploads".to_owned(),
             conversation_id: None,
+            new_conversation: false,
             mode: Mode::Normal,
             model_class: None,
             effort: None,
@@ -647,6 +652,7 @@ fn daemon_reports_upload_errors_when_attachment_controls_are_missing() {
         &DaemonRequest::Ask(AskCommand {
             prompt: "summarize uploads".to_owned(),
             conversation_id: None,
+            new_conversation: false,
             mode: Mode::Normal,
             model_class: None,
             effort: None,
@@ -697,6 +703,8 @@ fn daemon_runs_research_jobs_and_persists_details_across_restart() {
         &build_state_paths(dir.path()).ipc_endpoint,
         &DaemonRequest::Research(ResearchCommand {
             query: "investigate launch blockers".to_owned(),
+            conversation_id: None,
+            new_conversation: false,
             files: vec![upload_fixture.display().to_string()],
             output_dir: Some(output_dir.display().to_string()),
         }),
@@ -791,6 +799,8 @@ fn daemon_cancels_running_research_jobs() {
             &endpoint,
             &DaemonRequest::Research(ResearchCommand {
                 query: "cancel me".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
                 files: vec![],
                 output_dir: None,
             }),
@@ -858,6 +868,8 @@ fn daemon_reports_research_failures_with_research_error_code() {
         &build_state_paths(dir.path()).ipc_endpoint,
         &DaemonRequest::Research(ResearchCommand {
             query: "retry this".to_owned(),
+            conversation_id: None,
+            new_conversation: false,
             files: vec![],
             output_dir: None,
         }),

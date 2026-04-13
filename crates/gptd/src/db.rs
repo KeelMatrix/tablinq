@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use shared_protocol::{
-    ArtifactList, ArtifactMetadata, ArtifactSummary, FailureBundle, JobDetail, JobKind, JobList,
-    JobStatus, JobSummary, RequestExecutionKind, RequestHistory, RequestSummary, RequestUsage,
-    SessionList, SessionSummary,
+    ArtifactList, ArtifactMetadata, ArtifactSummary, ConversationSummary, FailureBundle, JobDetail,
+    JobKind, JobList, JobStatus, JobSummary, RequestExecutionKind, RequestHistory, RequestSummary,
+    RequestUsage, SessionList, SessionSummary,
 };
 use std::path::Path;
 
@@ -163,16 +163,47 @@ impl Database {
             "SELECT session_id, label, tab_url, last_seen_at FROM sessions ORDER BY last_seen_at DESC",
         )?;
         let rows = statement.query_map([], |row| {
-            Ok(SessionSummary {
-                session_id: row.get(0)?,
-                label: row.get(1)?,
-                tab_url: row.get(2)?,
-                last_seen_at: parse_timestamp(row.get::<_, String>(3)?)?,
-            })
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                parse_timestamp(row.get::<_, String>(3)?)?,
+            ))
         })?;
 
-        let sessions = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut sessions = Vec::new();
+        for row in rows {
+            let (session_id, label, tab_url, last_seen_at) = row?;
+            let recent_conversations = self.recent_conversations_for_session(&session_id, 10)?;
+            let latest_conversation_id = recent_conversations
+                .first()
+                .map(|conversation| conversation.conversation_id.clone());
+            sessions.push(SessionSummary {
+                session_id,
+                label,
+                tab_url,
+                last_seen_at,
+                latest_conversation_id,
+                recent_conversations,
+            });
+        }
         Ok(SessionList { sessions })
+    }
+
+    pub fn find_conversation(&self, conversation_id: &str) -> Result<Option<ConversationSummary>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT conversation_id, session_id, label, tab_url, last_prompt, last_response,
+                       last_seen_at
+                FROM conversations
+                WHERE conversation_id = ?1
+                "#,
+                [conversation_id],
+                map_conversation_row,
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn list_jobs(&self) -> Result<JobList> {
@@ -470,6 +501,25 @@ impl Database {
             )
             .optional()?;
         Ok(conversation_id)
+    }
+
+    fn recent_conversations_for_session(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ConversationSummary>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT conversation_id, session_id, label, tab_url, last_prompt, last_response,
+                   last_seen_at
+            FROM conversations
+            WHERE session_id = ?1
+            ORDER BY last_seen_at DESC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = statement.query_map(params![session_id, limit as i64], map_conversation_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     pub fn insert_artifact(
@@ -779,6 +829,18 @@ fn parse_timestamp(value: String) -> rusqlite::Result<DateTime<Utc>> {
         })
 }
 
+fn map_conversation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConversationSummary> {
+    Ok(ConversationSummary {
+        conversation_id: row.get(0)?,
+        session_id: row.get(1)?,
+        label: row.get(2)?,
+        tab_url: row.get(3)?,
+        last_prompt: row.get(4)?,
+        last_response: row.get(5)?,
+        last_seen_at: parse_timestamp(row.get::<_, String>(6)?)?,
+    })
+}
+
 fn map_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactSummary> {
     Ok(ArtifactSummary {
         artifact_id: row.get(0)?,
@@ -935,5 +997,60 @@ mod tests {
         );
         assert_eq!(history.requests.last().unwrap().request_id, "req-5");
         assert!(db.request_summary("req-0").unwrap().is_none());
+    }
+
+    #[test]
+    fn conversation_summaries_are_listed_and_persisted() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tablinq.sqlite3");
+        let now = Utc::now();
+
+        {
+            let db = Database::open(&path).unwrap();
+            db.upsert_session(
+                "browser-primary",
+                "Managed browser",
+                Some("http://example.test"),
+                now,
+            )
+            .unwrap();
+            db.upsert_conversation(
+                "conv-1",
+                "browser-primary",
+                "Managed conversation",
+                Some("http://example.test/?conversation=conv-1"),
+                Some("first prompt"),
+                Some("first response"),
+                now,
+            )
+            .unwrap();
+            db.upsert_conversation(
+                "conv-2",
+                "browser-primary",
+                "Managed conversation",
+                Some("http://example.test/?conversation=conv-2"),
+                Some("second prompt"),
+                Some("second response"),
+                now + Duration::seconds(1),
+            )
+            .unwrap();
+        }
+
+        let db = Database::open(&path).unwrap();
+        let conversation = db.find_conversation("conv-1").unwrap().unwrap();
+        assert_eq!(conversation.session_id, "browser-primary");
+        assert_eq!(conversation.last_prompt.as_deref(), Some("first prompt"));
+
+        let sessions = db.list_sessions().unwrap();
+        assert_eq!(sessions.sessions.len(), 1);
+        assert_eq!(
+            sessions.sessions[0].latest_conversation_id.as_deref(),
+            Some("conv-2")
+        );
+        assert_eq!(sessions.sessions[0].recent_conversations.len(), 2);
+        assert_eq!(
+            sessions.sessions[0].recent_conversations[0].conversation_id,
+            "conv-2"
+        );
     }
 }

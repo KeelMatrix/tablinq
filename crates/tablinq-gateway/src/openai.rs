@@ -71,6 +71,10 @@ pub struct ChatCompletionsRequest {
     pub tablinq_request_role: Option<RequestRole>,
     #[serde(default)]
     pub tablinq_parent_request_id: Option<String>,
+    #[serde(default)]
+    pub tablinq_conversation_id: Option<String>,
+    #[serde(default)]
+    pub tablinq_new_conversation: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -158,6 +162,14 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
         && parent_request_id.trim().is_empty()
     {
         bail!("tablinq_parent_request_id must not be empty when provided");
+    }
+    if let Some(conversation_id) = request.tablinq_conversation_id.as_deref()
+        && conversation_id.trim().is_empty()
+    {
+        bail!("tablinq_conversation_id must not be empty when provided");
+    }
+    if request.tablinq_new_conversation && request.tablinq_conversation_id.is_some() {
+        bail!("tablinq_conversation_id cannot be combined with tablinq_new_conversation");
     }
     if resolve_model(&request.model).is_none() {
         bail!("model {} is not supported", request.model);
