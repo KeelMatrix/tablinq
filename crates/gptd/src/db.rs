@@ -3,7 +3,8 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use shared_protocol::{
     ArtifactList, ArtifactMetadata, ArtifactSummary, FailureBundle, JobDetail, JobKind, JobList,
-    JobStatus, JobSummary, SessionList, SessionSummary,
+    JobStatus, JobSummary, RequestExecutionKind, RequestHistory, RequestSummary, RequestUsage,
+    SessionList, SessionSummary,
 };
 use std::path::Path;
 
@@ -104,7 +105,36 @@ const MIGRATIONS: &[(&str, &str)] = &[
             ON failure_bundles(created_at DESC);
         "#,
     ),
+    (
+        "0006_request_history",
+        r#"
+        CREATE TABLE IF NOT EXISTS request_history (
+            request_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            model_id TEXT,
+            request_role TEXT,
+            parent_request_id TEXT,
+            execution_kind TEXT NOT NULL,
+            status TEXT NOT NULL,
+            cancelled INTEGER NOT NULL DEFAULT 0,
+            start_time TEXT NOT NULL,
+            end_time TEXT,
+            duration_ms INTEGER,
+            queue_wait_ms INTEGER NOT NULL DEFAULT 0,
+            usage_status TEXT NOT NULL DEFAULT 'unknown',
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            total_tokens INTEGER,
+            warnings_json TEXT NOT NULL DEFAULT '[]'
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_request_history_start_time
+            ON request_history(start_time DESC);
+        "#,
+    ),
 ];
+
+const REQUEST_HISTORY_LIMIT: usize = 200;
 
 pub struct Database {
     conn: Connection,
@@ -162,6 +192,119 @@ impl Database {
 
         let jobs = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(JobList { jobs })
+    }
+
+    pub fn upsert_request_summary(&self, summary: &RequestSummary) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO request_history (
+                request_id, job_id, model_id, request_role, parent_request_id, execution_kind,
+                status, cancelled, start_time, end_time, duration_ms, queue_wait_ms,
+                usage_status, prompt_tokens, completion_tokens, total_tokens, warnings_json
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            ON CONFLICT(request_id) DO UPDATE SET
+                job_id = excluded.job_id,
+                model_id = excluded.model_id,
+                request_role = excluded.request_role,
+                parent_request_id = excluded.parent_request_id,
+                execution_kind = excluded.execution_kind,
+                status = excluded.status,
+                cancelled = excluded.cancelled,
+                start_time = excluded.start_time,
+                end_time = excluded.end_time,
+                duration_ms = excluded.duration_ms,
+                queue_wait_ms = excluded.queue_wait_ms,
+                usage_status = excluded.usage_status,
+                prompt_tokens = excluded.prompt_tokens,
+                completion_tokens = excluded.completion_tokens,
+                total_tokens = excluded.total_tokens,
+                warnings_json = excluded.warnings_json
+            "#,
+            params![
+                summary.request_id,
+                summary.job_id,
+                summary.model_id,
+                summary.request_role,
+                summary.parent_request_id,
+                request_execution_kind_as_str(summary.execution_kind),
+                job_status_as_str(summary.status),
+                if summary.cancelled { 1 } else { 0 },
+                summary.start_time.to_rfc3339(),
+                summary.end_time.map(|value| value.to_rfc3339()),
+                summary.duration_ms,
+                summary.queue_wait_ms,
+                summary.usage.status,
+                summary.usage.prompt_tokens,
+                summary.usage.completion_tokens,
+                summary.usage.total_tokens,
+                serde_json::to_string(&summary.warnings)?,
+            ],
+        )?;
+        self.prune_request_history(REQUEST_HISTORY_LIMIT)?;
+        Ok(())
+    }
+
+    pub fn request_summary(&self, request_id: &str) -> Result<Option<RequestSummary>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT request_id,
+                       job_id,
+                       model_id,
+                       request_role,
+                       parent_request_id,
+                       execution_kind,
+                       status,
+                       cancelled,
+                       start_time,
+                       end_time,
+                       duration_ms,
+                       queue_wait_ms,
+                       usage_status,
+                       prompt_tokens,
+                       completion_tokens,
+                       total_tokens,
+                       warnings_json
+                FROM request_history
+                WHERE request_id = ?1
+                "#,
+                [request_id],
+                map_request_summary_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_request_summaries(&self, limit: usize) -> Result<RequestHistory> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT request_id,
+                   job_id,
+                   model_id,
+                   request_role,
+                   parent_request_id,
+                   execution_kind,
+                   status,
+                   cancelled,
+                   start_time,
+                   end_time,
+                   duration_ms,
+                   queue_wait_ms,
+                   usage_status,
+                   prompt_tokens,
+                   completion_tokens,
+                   total_tokens,
+                   warnings_json
+            FROM request_history
+            ORDER BY start_time DESC
+            LIMIT ?1
+            "#,
+        )?;
+        let rows = statement.query_map([limit as i64], map_request_summary_row)?;
+        Ok(RequestHistory {
+            requests: rows.collect::<std::result::Result<Vec<_>, _>>()?,
+        })
     }
 
     pub fn upsert_session(
@@ -580,6 +723,22 @@ impl Database {
         Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
+    fn prune_request_history(&self, limit: usize) -> Result<()> {
+        self.conn.execute(
+            r#"
+            DELETE FROM request_history
+            WHERE request_id NOT IN (
+                SELECT request_id
+                FROM request_history
+                ORDER BY start_time DESC
+                LIMIT ?1
+            )
+            "#,
+            [limit as i64],
+        )?;
+        Ok(())
+    }
+
     fn apply_migrations(&self) -> Result<()> {
         self.conn.execute_batch(
             r#"
@@ -634,6 +793,37 @@ fn map_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactSummary
     })
 }
 
+fn map_request_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestSummary> {
+    let warnings_json = row.get::<_, String>(16)?;
+    let warnings = serde_json::from_str(&warnings_json).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(16, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+    Ok(RequestSummary {
+        request_id: row.get(0)?,
+        job_id: row.get(1)?,
+        model_id: row.get(2)?,
+        request_role: row.get(3)?,
+        parent_request_id: row.get(4)?,
+        execution_kind: parse_request_execution_kind(row.get::<_, String>(5)?.as_str()),
+        status: parse_job_status(row.get::<_, String>(6)?.as_str()),
+        cancelled: row.get::<_, i64>(7)? != 0,
+        start_time: parse_timestamp(row.get::<_, String>(8)?)?,
+        end_time: row
+            .get::<_, Option<String>>(9)?
+            .map(parse_timestamp)
+            .transpose()?,
+        duration_ms: row.get(10)?,
+        queue_wait_ms: row.get::<_, i64>(11)?.max(0) as u64,
+        usage: RequestUsage {
+            status: row.get(12)?,
+            prompt_tokens: row.get(13)?,
+            completion_tokens: row.get(14)?,
+            total_tokens: row.get(15)?,
+        },
+        warnings,
+    })
+}
+
 fn parse_job_status(value: &str) -> JobStatus {
     match value {
         "queued" => JobStatus::Queued,
@@ -651,6 +841,13 @@ fn parse_job_kind(value: &str) -> JobKind {
     match value {
         "research" => JobKind::Research,
         _ => JobKind::Ask,
+    }
+}
+
+fn parse_request_execution_kind(value: &str) -> RequestExecutionKind {
+    match value {
+        "research" => RequestExecutionKind::Research,
+        _ => RequestExecutionKind::Ask,
     }
 }
 
@@ -674,9 +871,17 @@ fn job_kind_as_str(value: JobKind) -> &'static str {
     }
 }
 
+fn request_execution_kind_as_str(value: RequestExecutionKind) -> &'static str {
+    match value {
+        RequestExecutionKind::Ask => "ask",
+        RequestExecutionKind::Research => "research",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -684,5 +889,51 @@ mod tests {
         let dir = tempdir().unwrap();
         let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
         assert_eq!(db.migration_count().unwrap(), MIGRATIONS.len() as u32);
+    }
+
+    #[test]
+    fn request_history_is_retained_with_a_fixed_bound() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
+        let start = Utc::now();
+
+        for index in 0..(REQUEST_HISTORY_LIMIT as u64 + 5) {
+            let timestamp = start + Duration::milliseconds(index as i64);
+            db.upsert_request_summary(&RequestSummary {
+                request_id: format!("req-{index}"),
+                job_id: format!("job-{index}"),
+                model_id: Some("tablinq-instant".to_owned()),
+                request_role: Some("primary".to_owned()),
+                parent_request_id: None,
+                execution_kind: RequestExecutionKind::Ask,
+                status: JobStatus::Completed,
+                cancelled: false,
+                start_time: timestamp,
+                end_time: Some(timestamp),
+                duration_ms: Some(1),
+                queue_wait_ms: 0,
+                usage: RequestUsage {
+                    status: "unknown".to_owned(),
+                    prompt_tokens: None,
+                    completion_tokens: None,
+                    total_tokens: None,
+                },
+                warnings: vec![
+                    "exact token usage is unavailable for the browser-backed provider".to_owned(),
+                ],
+            })
+            .unwrap();
+        }
+
+        let history = db
+            .list_request_summaries(REQUEST_HISTORY_LIMIT + 10)
+            .unwrap();
+        assert_eq!(history.requests.len(), REQUEST_HISTORY_LIMIT);
+        assert_eq!(
+            history.requests[0].request_id,
+            format!("req-{}", REQUEST_HISTORY_LIMIT as u64 + 4)
+        );
+        assert_eq!(history.requests.last().unwrap().request_id, "req-5");
+        assert!(db.request_summary("req-0").unwrap().is_none());
     }
 }

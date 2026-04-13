@@ -8,8 +8,8 @@ use shared_protocol::{
     BrowserOpenRequest, BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot,
     ConfigSnapshot, DoctorReport, ErrorCode, EventPayload, FailureBundle, GatewayRequestContext,
     HealthCheck, HealthStatus, JobDetail, JobKind, JobList, JobState, JobStatus,
-    PullArtifactCommand, ResearchCommand, ResearchResult, SelectorPackSummary, SessionList,
-    StreamChunk, StreamChunkKind,
+    PullArtifactCommand, RequestHistory, RequestSummary, ResearchCommand, ResearchResult,
+    SelectorPackSummary, SessionList, StreamChunk, StreamChunkKind,
 };
 use std::collections::HashSet;
 use std::fs;
@@ -548,6 +548,20 @@ impl CoreService {
         self.open_db()?
             .job_detail(job_id)?
             .with_context(|| format!("job {job_id} was not found"))
+    }
+
+    pub fn record_request_summary(&self, summary: &RequestSummary) -> Result<()> {
+        self.open_db()?.upsert_request_summary(summary)
+    }
+
+    pub fn request_summary(&self, request_id: &str) -> Result<RequestSummary> {
+        self.open_db()?
+            .request_summary(request_id)?
+            .with_context(|| format!("request {request_id} was not found"))
+    }
+
+    pub fn list_request_summaries(&self, limit: usize) -> Result<RequestHistory> {
+        self.open_db()?.list_request_summaries(limit)
     }
 
     pub fn cancel_job(&self, command: CancelJobCommand) -> Result<AckEvent> {
