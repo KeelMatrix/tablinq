@@ -181,6 +181,7 @@ fn handle_request(core: &CoreService, request: DaemonRequest) -> Result<DaemonRe
         }
         DaemonRequest::BrowserOpen(request) => DaemonResponse::Browser(core.browser_open(request)?),
         DaemonRequest::BrowserClose => DaemonResponse::Browser(core.browser_close()?),
+        DaemonRequest::BrowserLogout => DaemonResponse::Browser(core.browser_logout()?),
         DaemonRequest::BrowserResetProfile => {
             DaemonResponse::Browser(core.browser_reset_profile()?)
         }

@@ -143,6 +143,9 @@ pub enum BrowserCommand {
         headless: bool,
     },
     Close,
+    Logout,
+    #[command(name = "switch-account")]
+    SwitchAccount,
     ResetProfile,
     ProfileInfo,
 }
@@ -299,6 +302,9 @@ fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> R
             }),
         ),
         BrowserCommand::Close => send_daemon_request(state_root, DaemonRequest::BrowserClose),
+        BrowserCommand::Logout | BrowserCommand::SwitchAccount => {
+            send_daemon_request(state_root, DaemonRequest::BrowserLogout)
+        }
         BrowserCommand::ResetProfile => {
             send_daemon_request(state_root, DaemonRequest::BrowserResetProfile)
         }
@@ -733,6 +739,28 @@ mod tests {
     fn jobs_show_command_matches_golden_shape() {
         let cli = parse(&["gpt", "jobs", "show", "job-123"]);
         assert!(matches!(cli.command, Command::Jobs { .. }));
+    }
+
+    #[test]
+    fn browser_logout_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "browser", "logout"]);
+        assert!(matches!(
+            cli.command,
+            Command::Browser {
+                command: BrowserCommand::Logout
+            }
+        ));
+    }
+
+    #[test]
+    fn browser_switch_account_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "browser", "switch-account"]);
+        assert!(matches!(
+            cli.command,
+            Command::Browser {
+                command: BrowserCommand::SwitchAccount
+            }
+        ));
     }
 
     #[test]

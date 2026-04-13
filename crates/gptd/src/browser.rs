@@ -105,6 +105,17 @@ impl BrowserManager {
         Ok(snapshot)
     }
 
+    pub fn logout(&mut self) -> Result<BrowserStatusSnapshot> {
+        let target_url = self.current_target();
+        let browser_path = self.last_snapshot.browser_path.clone();
+        self.reset_profile()?;
+        self.open(BrowserOpenRequest {
+            target_url: Some(target_url),
+            browser_path,
+            headless: Some(false),
+        })
+    }
+
     pub fn profile_info(&mut self) -> Result<BrowserStatusSnapshot> {
         self.health()
     }

@@ -596,6 +596,7 @@ pub enum DaemonRequest {
     ArtifactPull(PullArtifactCommand),
     BrowserOpen(BrowserOpenRequest),
     BrowserClose,
+    BrowserLogout,
     BrowserResetProfile,
     BrowserProfileInfo,
 }
