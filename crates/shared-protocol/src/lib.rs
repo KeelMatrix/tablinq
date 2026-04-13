@@ -68,6 +68,7 @@ pub enum JobStatus {
     Running,
     WaitingForSources,
     Completed,
+    Cancelled,
     Failed,
     ArtifactReady,
 }

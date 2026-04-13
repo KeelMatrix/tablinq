@@ -690,7 +690,9 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
         .set_nonblocking(true)
         .context("set gateway listener nonblocking")?;
 
-    if config.warm_mode() && let Err(err) = core.warm_browser_if_enabled() {
+    if config.warm_mode()
+        && let Err(err) = core.warm_browser_if_enabled()
+    {
         logger.warn(
             "gateway warm browser open failed",
             json!({
@@ -975,7 +977,10 @@ fn handle_connection(
                     .job_cancel_requested(prepared.job_id())
                     .unwrap_or(false)
                 {
-                    let _ = core.fail_job(prepared.job_id(), "request cancelled before execution");
+                    let _ = core.mark_job_cancelled(
+                        prepared.job_id(),
+                        "request cancelled before execution",
+                    );
                     let response = cancellation_response(
                         &context.request_id,
                         prepared.job_id(),
@@ -1775,6 +1780,7 @@ fn handle_cancel_request(
             "target_request_id": request_id,
             "job_id": job_id,
             "accepted": ack.accepted,
+            "message": ack.message,
             "state": match disposition {
                 CancelDisposition::Queued => "queued",
                 CancelDisposition::Running => "running",
@@ -1851,6 +1857,8 @@ fn cancellation_response(request_id: &str, job_id: &str, message: &str) -> HttpR
             },
             "request_id": request_id,
             "job_id": job_id,
+            "cancelled": true,
+            "job_status": "cancelled",
         }),
     )
 }
@@ -4119,7 +4127,10 @@ mod tests {
         assert_eq!(cancel.status_code, 200);
         let cancel_body: Value = serde_json::from_slice(&cancel.body).unwrap();
         assert!(cancel_body["accepted"].as_bool().is_some());
-        assert_eq!(cancel_body["state"], "queued");
+        assert!(matches!(
+            cancel_body["state"].as_str(),
+            Some("queued" | "running")
+        ));
 
         let queued = queued.join().unwrap();
         assert_eq!(queued.status_code, 409);
@@ -4208,6 +4219,162 @@ mod tests {
         assert_eq!(running.status_code, 409);
         let body: Value = serde_json::from_slice(&running.body).unwrap();
         assert_eq!(body["error"]["code"], "cancelled");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn chat_completions_cancel_running_streaming_ask_request() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(fake_url);
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "stream": true,
+            "messages": [{ "role": "user", "content": "cancel a running ask stream" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let running = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-stream-cancel"),
+                ],
+                &body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(250));
+
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-stream-cancel/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+        let cancel_body: Value = serde_json::from_slice(&cancel.body).unwrap();
+        assert_eq!(cancel_body["accepted"], true);
+        assert_eq!(cancel_body["state"], "running");
+        assert!(
+            cancel_body["message"]
+                .as_str()
+                .unwrap()
+                .contains("cancellation requested")
+        );
+
+        let running = running.join().unwrap();
+        assert_eq!(running.status_code, 200);
+        let body = String::from_utf8(running.body).unwrap();
+        assert!(body.contains("\"code\":\"cancelled\""));
+        assert!(body.contains("[DONE]"));
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn chat_completions_cancel_during_reload_releases_the_queue_slot() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=reload"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.ask_timeout_ms = Some(10_000);
+            gateway.queue_timeout_ms = Some(10_000);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "cancel me while the page reloads" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let first = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-reload-cancel"),
+                ],
+                &first_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(250));
+
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-reload-cancel/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+
+        let second_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "run after the cancelled reload request" }]
+        }))
+        .unwrap();
+        let second = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "req-after-reload-cancel"),
+            ],
+            &second_body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(second.status_code, 200);
+
+        let first = first.join().unwrap();
+        assert_eq!(first.status_code, 409);
+        let first_body: Value = serde_json::from_slice(&first.body).unwrap();
+        assert_eq!(first_body["error"]["code"], "cancelled");
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();

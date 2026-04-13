@@ -279,7 +279,7 @@ impl Database {
         Ok(requested != 0)
     }
 
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_conversation(
         &self,
         conversation_id: &str,
@@ -641,6 +641,7 @@ fn parse_job_status(value: &str) -> JobStatus {
         "running" => JobStatus::Running,
         "waiting_for_sources" => JobStatus::WaitingForSources,
         "completed" => JobStatus::Completed,
+        "cancelled" => JobStatus::Cancelled,
         "artifact_ready" => JobStatus::ArtifactReady,
         _ => JobStatus::Failed,
     }
@@ -660,6 +661,7 @@ fn job_status_as_str(value: JobStatus) -> &'static str {
         JobStatus::Running => "running",
         JobStatus::WaitingForSources => "waiting_for_sources",
         JobStatus::Completed => "completed",
+        JobStatus::Cancelled => "cancelled",
         JobStatus::Failed => "failed",
         JobStatus::ArtifactReady => "artifact_ready",
     }

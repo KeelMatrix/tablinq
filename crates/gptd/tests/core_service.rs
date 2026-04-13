@@ -1,7 +1,7 @@
 use gptd::{AppConfig, CoreService};
 use shared_protocol::{
-    AskCommand, BrowserOpenRequest, EventPayload, GatewayRequestContext, JobKind, JobStatus, Mode,
-    PullArtifactCommand, ResearchCommand, StreamChunkKind,
+    AskCommand, BrowserOpenRequest, CancelJobCommand, EventPayload, GatewayRequestContext, JobKind,
+    JobStatus, Mode, PullArtifactCommand, ResearchCommand, StreamChunkKind,
 };
 use std::fs;
 use std::net::TcpListener;
@@ -278,4 +278,43 @@ fn capture_failure_bundle_persists_gateway_request_context() {
     assert_eq!(gateway_request.request_role.as_deref(), Some("primary"));
     assert_eq!(gateway_request.job_id.as_deref(), Some("job-provider-1"));
     assert!(gateway_request.streaming);
+}
+
+#[test]
+fn cancelled_jobs_report_cancelled_status_in_job_detail() {
+    let _guard = integration_lock();
+    let dir = tempdir().unwrap();
+
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let core = CoreService::new(config).unwrap();
+    let prepared = core
+        .prepare_ask(AskCommand {
+            prompt: "cancel before execution".to_owned(),
+            conversation_id: None,
+            mode: Mode::Normal,
+            model_class: None,
+            effort: None,
+            files: vec![],
+        })
+        .unwrap();
+
+    let ack = core
+        .cancel_job(CancelJobCommand {
+            job_id: prepared.job_id.clone(),
+        })
+        .unwrap();
+    assert!(ack.accepted);
+
+    let err = core
+        .execute_prepared_ask(&prepared, |_event| Ok(()))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("cancelled before execution"));
+
+    let detail = core.job_detail(&prepared.job_id).unwrap();
+    assert_eq!(detail.status, JobStatus::Cancelled);
+    assert_eq!(
+        detail.message.as_deref(),
+        Some("ask cancelled before execution")
+    );
+    assert!(!detail.cancel_requested);
 }

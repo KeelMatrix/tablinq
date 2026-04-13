@@ -825,7 +825,7 @@ fn daemon_cancels_running_research_jobs() {
     .unwrap();
     match detail {
         DaemonResponse::Job(job) => {
-            assert_eq!(job.status, JobStatus::Failed);
+            assert_eq!(job.status, JobStatus::Cancelled);
         }
         other => panic!("unexpected response: {other:?}"),
     }
