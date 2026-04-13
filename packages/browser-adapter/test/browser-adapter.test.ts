@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { ChildProcess } from "node:child_process";
 import {
   BrowserAdapter,
   chooseUniqueArtifactPath,
@@ -34,15 +35,49 @@ function withHarnessUrl(
   return url.toString();
 }
 
+let trackedAdapters: BrowserAdapter[] = [];
+let trackedServers: ChildProcess[] = [];
+
+function trackAdapter(adapter: BrowserAdapter): BrowserAdapter {
+  trackedAdapters.push(adapter);
+  return adapter;
+}
+
+async function startTrackedFakeChatGptServer() {
+  const server = await startFakeChatGptServer();
+  trackedServers.push(server.process);
+  return server;
+}
+
+beforeEach(() => {
+  trackedAdapters = [];
+  trackedServers = [];
+});
+
+afterEach(async () => {
+  await Promise.allSettled(
+    trackedAdapters
+      .slice()
+      .reverse()
+      .map((adapter) => adapter.shutdown()),
+  );
+  await Promise.allSettled(
+    trackedServers
+      .slice()
+      .reverse()
+      .map((server) => stopFakeChatGptServer(server)),
+  );
+});
+
 describe("browser adapter", () => {
   it("launches a managed browser and opens the fake harness", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: server.url,
-    });
+    }));
 
     const snapshot = await adapter.open({
       targetUrl: server.url,
@@ -66,13 +101,13 @@ describe("browser adapter", () => {
   ] as const)(
     "captures a full capability matrix for the %s harness",
     async (_label, variant) => {
-      const server = await startFakeChatGptServer();
+      const server = await startTrackedFakeChatGptServer();
       const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-      const adapter = new BrowserAdapter({
+      const adapter = trackAdapter(new BrowserAdapter({
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: withHarnessUrl(server.url, { variant }),
-      });
+      }));
 
       const snapshot = await adapter.open({
         targetUrl: withHarnessUrl(server.url, { variant }),
@@ -110,13 +145,13 @@ describe("browser adapter", () => {
   );
 
   it("reuses the managed page on repeated open", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: server.url,
-    });
+    }));
 
     await adapter.open({ targetUrl: server.url, headless: true });
     const firstPage = adapter.getManagedPageForTest();
@@ -132,24 +167,24 @@ describe("browser adapter", () => {
   });
 
   it("reuses the persistent profile across adapter restarts", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
     const profileDir = path.join(root, "profile");
     const downloadsDir = path.join(root, "downloads");
 
-    const first = new BrowserAdapter({
+    const first = trackAdapter(new BrowserAdapter({
       profileDir,
       downloadsDir,
       defaultTargetUrl: server.url,
-    });
+    }));
     await first.open({ targetUrl: server.url, headless: true });
     await first.shutdown();
 
-    const second = new BrowserAdapter({
+    const second = trackAdapter(new BrowserAdapter({
       profileDir,
       downloadsDir,
       defaultTargetUrl: server.url,
-    });
+    }));
     const snapshot = await second.open({
       targetUrl: server.url,
       headless: true,
@@ -163,13 +198,13 @@ describe("browser adapter", () => {
   });
 
   it("reconnects after the managed tab is closed", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: server.url,
-    });
+    }));
 
     await adapter.open({ targetUrl: server.url, headless: true });
     await adapter.getManagedPageForTest()!.close();
@@ -184,13 +219,13 @@ describe("browser adapter", () => {
   });
 
   it("captures screenshots on demand", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: server.url,
-    });
+    }));
     await adapter.open({ targetUrl: server.url, headless: true });
 
     const screenshotPath = path.join(root, "artifacts", "managed-page.png");
@@ -205,13 +240,13 @@ describe("browser adapter", () => {
   });
 
   it("detects reloads on the managed page", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: server.url,
-    });
+    }));
     await adapter.open({ targetUrl: server.url, headless: true });
 
     await adapter
@@ -226,13 +261,13 @@ describe("browser adapter", () => {
   });
 
   it("streams ask responses to completion", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: server.url,
-    });
+    }));
     await adapter.open({ targetUrl: server.url, headless: true });
 
     const chunks: string[] = [];
@@ -258,13 +293,13 @@ describe("browser adapter", () => {
   });
 
   it("refuses asks when the managed page is a signed-out local login screen", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: `${server.url}/login-expired.html`,
-    });
+    }));
     await adapter.open({
       targetUrl: `${server.url}/login-expired.html`,
       headless: true,
@@ -285,13 +320,13 @@ describe("browser adapter", () => {
   });
 
   it("selects model, effort, and search mode on the classic harness", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: server.url,
-    });
+    }));
     await adapter.open({ targetUrl: server.url, headless: true });
 
     await adapter.ask(
@@ -322,13 +357,13 @@ describe("browser adapter", () => {
   });
 
   it("selects renamed controls on the aria harness", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: withHarnessUrl(server.url, { variant: "aria" }),
-    });
+    }));
     await adapter.open({
       targetUrl: withHarnessUrl(server.url, { variant: "aria" }),
       headless: true,
@@ -362,15 +397,15 @@ describe("browser adapter", () => {
   });
 
   it("drives the live-like harness through ask, download recovery, and ready-state checks", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
     const fixture = path.join(root, "brief.txt");
     await writeFile(fixture, "brief body", "utf8");
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: withHarnessUrl(server.url, { variant: "live" }),
-    });
+    }));
     await adapter.open({
       targetUrl: withHarnessUrl(server.url, { variant: "live" }),
       headless: true,
@@ -428,13 +463,13 @@ describe("browser adapter", () => {
   });
 
   it("fails with a capability-missing error when search mode is unavailable", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: withHarnessUrl(server.url, { missing: ["search"] }),
-    });
+    }));
     await adapter.open({
       targetUrl: withHarnessUrl(server.url, { missing: ["search"] }),
       headless: true,
@@ -456,7 +491,7 @@ describe("browser adapter", () => {
   });
 
   it("uploads files and persists generated artifacts", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
     const fixtureDir = path.join(root, "fixtures");
     const firstFile = path.join(fixtureDir, "brief.txt");
@@ -465,11 +500,11 @@ describe("browser adapter", () => {
     await writeFile(firstFile, "brief body", "utf8");
     await writeFile(secondFile, "col\nvalue", "utf8");
 
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: server.url,
-    });
+    }));
     await adapter.open({ targetUrl: server.url, headless: true });
 
     const result = await adapter.ask(
@@ -498,17 +533,17 @@ describe("browser adapter", () => {
   });
 
   it("runs research jobs with progress updates and persisted artifacts", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
     const fixture = path.join(root, "brief.txt");
     await writeFile(fixture, "brief body", "utf8");
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: withHarnessUrl(server.url, {
         scenario: "research-success",
       }),
-    });
+    }));
     await adapter.open({
       targetUrl: withHarnessUrl(server.url, { scenario: "research-success" }),
       headless: true,
@@ -540,15 +575,15 @@ describe("browser adapter", () => {
   });
 
   it("fails research jobs with a research-specific error", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: withHarnessUrl(server.url, {
         scenario: "research-failure",
       }),
-    });
+    }));
     await adapter.open({
       targetUrl: withHarnessUrl(server.url, { scenario: "research-failure" }),
       headless: true,
@@ -570,15 +605,15 @@ describe("browser adapter", () => {
   });
 
   it("fails with an upload error when files are requested without an upload control", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
     const fixture = path.join(root, "brief.txt");
     await writeFile(fixture, "brief body", "utf8");
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: withHarnessUrl(server.url, { missing: ["upload"] }),
-    });
+    }));
     await adapter.open({
       targetUrl: withHarnessUrl(server.url, { missing: ["upload"] }),
       headless: true,
@@ -600,13 +635,13 @@ describe("browser adapter", () => {
   });
 
   it("fails cleanly when the harness never completes streaming", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: withHarnessUrl(server.url, { scenario: "timeout" }),
-    });
+    }));
     await adapter.open({
       targetUrl: withHarnessUrl(server.url, { scenario: "timeout" }),
       headless: true,
@@ -633,13 +668,13 @@ describe("browser adapter", () => {
   });
 
   it("continues ask streaming after a page reload", async () => {
-    const server = await startFakeChatGptServer();
+    const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = new BrowserAdapter({
+    const adapter = trackAdapter(new BrowserAdapter({
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: withHarnessUrl(server.url, { scenario: "reload" }),
-    });
+    }));
     await adapter.open({
       targetUrl: withHarnessUrl(server.url, { scenario: "reload" }),
       headless: true,
