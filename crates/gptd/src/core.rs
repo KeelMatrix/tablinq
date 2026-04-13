@@ -16,6 +16,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+const ARTIFACT_RETENTION_LIMIT: usize = 100;
+
 #[derive(Clone)]
 pub struct CoreService {
     config: AppConfig,
@@ -224,6 +226,7 @@ impl CoreService {
                     db.link_job_artifact(&prepared.job_id, &artifact.artifact_id)?;
                     on_event(EventPayload::ArtifactReady(artifact.clone()))?;
                 }
+                db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
                 db.insert_job(
                     &prepared.job_id,
                     JobStatus::Completed,
@@ -407,6 +410,7 @@ impl CoreService {
                     db.link_job_artifact(&prepared.job_id, &artifact.artifact_id)?;
                     on_event(EventPayload::ArtifactReady(artifact.clone()))?;
                 }
+                db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
                 db.insert_job(
                     &prepared.job_id,
                     JobStatus::Completed,
@@ -666,11 +670,17 @@ impl CoreService {
     }
 
     pub fn list_artifacts(&self) -> Result<ArtifactList> {
-        self.open_db()?.list_artifacts()
+        let db = self.open_db()?;
+        db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
+        db.list_artifacts()
     }
 
     pub fn artifact_job_ids(&self, artifact_id: &str) -> Result<Vec<String>> {
         self.open_db()?.artifact_job_ids(artifact_id)
+    }
+
+    pub fn artifact_request_ids(&self, artifact_id: &str) -> Result<Vec<String>> {
+        self.open_db()?.artifact_request_ids(artifact_id)
     }
 
     pub fn pull_artifact(&self, command: PullArtifactCommand) -> Result<ArtifactPullResult> {

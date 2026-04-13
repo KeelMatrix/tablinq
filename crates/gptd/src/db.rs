@@ -6,6 +6,7 @@ use shared_protocol::{
     JobKind, JobList, JobStatus, JobSummary, RequestExecutionKind, RequestHistory, RequestSummary,
     RequestUsage, SessionList, SessionSummary,
 };
+use std::fs;
 use std::path::Path;
 
 const MIGRATIONS: &[(&str, &str)] = &[
@@ -135,6 +136,8 @@ const MIGRATIONS: &[(&str, &str)] = &[
 ];
 
 const REQUEST_HISTORY_LIMIT: usize = 200;
+#[cfg(test)]
+const ARTIFACT_HISTORY_LIMIT: usize = 100;
 
 pub struct Database {
     conn: Connection,
@@ -550,6 +553,41 @@ impl Database {
         Ok(())
     }
 
+    pub fn prune_artifacts(&self, limit: usize) -> Result<usize> {
+        let stale = {
+            let mut statement = self.conn.prepare(
+                r#"
+                SELECT artifact_id, storage_path
+                FROM artifacts
+                WHERE artifact_id NOT IN (
+                    SELECT artifact_id
+                    FROM artifacts
+                    ORDER BY created_at DESC
+                    LIMIT ?1
+                )
+                "#,
+            )?;
+            let rows = statement.query_map([limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+
+        for (artifact_id, storage_path) in &stale {
+            let _ = fs::remove_file(storage_path);
+            self.conn.execute(
+                "DELETE FROM job_artifacts WHERE artifact_id = ?1",
+                [artifact_id.as_str()],
+            )?;
+            self.conn.execute(
+                "DELETE FROM artifacts WHERE artifact_id = ?1",
+                [artifact_id.as_str()],
+            )?;
+        }
+
+        Ok(stale.len())
+    }
+
     pub fn link_job_artifact(&self, job_id: &str, artifact_id: &str) -> Result<()> {
         self.conn.execute(
             r#"
@@ -617,6 +655,20 @@ impl Database {
             FROM job_artifacts
             WHERE artifact_id = ?1
             ORDER BY job_id ASC
+            "#,
+        )?;
+        let rows = statement.query_map([artifact_id], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn artifact_request_ids(&self, artifact_id: &str) -> Result<Vec<String>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT DISTINCT request_history.request_id
+            FROM job_artifacts
+            INNER JOIN request_history ON request_history.job_id = job_artifacts.job_id
+            WHERE job_artifacts.artifact_id = ?1
+            ORDER BY request_history.request_id ASC
             "#,
         )?;
         let rows = statement.query_map([artifact_id], |row| row.get::<_, String>(0))?;
@@ -997,6 +1049,41 @@ mod tests {
         );
         assert_eq!(history.requests.last().unwrap().request_id, "req-5");
         assert!(db.request_summary("req-0").unwrap().is_none());
+    }
+
+    #[test]
+    fn artifacts_are_pruned_with_a_fixed_bound() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
+        let now = Utc::now();
+
+        for index in 0..(ARTIFACT_HISTORY_LIMIT as u64 + 2) {
+            let storage_path = dir.path().join(format!("artifact-{index}.txt"));
+            fs::write(&storage_path, format!("artifact-{index}")).unwrap();
+            db.insert_artifact(
+                &ArtifactMetadata {
+                    artifact_id: format!("artifact-{index}"),
+                    conversation_id: Some("conv-1".to_owned()),
+                    message_id: Some(format!("msg-{index}")),
+                    file_name: format!("artifact-{index}.txt"),
+                    content_type: "text/plain".to_owned(),
+                    size_bytes: 10,
+                    sha256: format!("sha-{index}"),
+                    storage_path: storage_path.display().to_string(),
+                },
+                now + Duration::milliseconds(index as i64),
+            )
+            .unwrap();
+        }
+
+        let removed = db.prune_artifacts(ARTIFACT_HISTORY_LIMIT).unwrap();
+        assert_eq!(removed, 2);
+        assert_eq!(
+            db.list_artifacts().unwrap().artifacts.len(),
+            ARTIFACT_HISTORY_LIMIT
+        );
+        assert!(db.find_artifact("artifact-0").unwrap().is_none());
+        assert!(!dir.path().join("artifact-0.txt").exists());
     }
 
     #[test]

@@ -114,6 +114,10 @@ struct StagedFileMetadata {
     created_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
     staged_path: String,
+    #[serde(default)]
+    linked_request_ids: Vec<String>,
+    #[serde(default)]
+    linked_conversation_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -494,6 +498,8 @@ impl UploadStore {
             created_at,
             expires_at: created_at + chrono::Duration::seconds(self.retention_secs),
             staged_path: staged_path.display().to_string(),
+            linked_request_ids: vec![],
+            linked_conversation_ids: vec![],
         };
         self.write_metadata(&dir, &metadata)?;
         Ok(metadata)
@@ -547,6 +553,35 @@ impl UploadStore {
         }
         items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
         Ok(items)
+    }
+
+    fn mark_linked_usage(
+        &self,
+        file_ids: &[String],
+        request_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<()> {
+        if file_ids.is_empty() {
+            return Ok(());
+        }
+
+        self.cleanup_expired()?;
+        for file_id in file_ids {
+            let dir = self.root.join(file_id);
+            if !dir.exists() {
+                continue;
+            }
+            let mut metadata = match read_staged_file_metadata(&dir) {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            remember_link(&mut metadata.linked_request_ids, request_id);
+            if let Some(conversation_id) = conversation_id {
+                remember_link(&mut metadata.linked_conversation_ids, conversation_id);
+            }
+            self.write_metadata(&dir, &metadata)?;
+        }
+        Ok(())
     }
 
     fn cleanup_expired(&self) -> Result<()> {
@@ -618,6 +653,14 @@ fn sanitize_upload_file_name(file_name: &str) -> String {
         sanitized = "upload.bin".to_owned();
     }
     sanitized
+}
+
+fn remember_link(items: &mut Vec<String>, value: &str) {
+    if value.trim().is_empty() || items.iter().any(|item| item == value) {
+        return;
+    }
+    items.push(value.to_owned());
+    items.sort();
 }
 
 fn normalize_content_type(value: Option<&str>) -> String {
@@ -978,6 +1021,11 @@ fn handle_connection(
                     log_response(logger, &context.request_id, response.status_code)?;
                     return write_http_response(&mut stream, &context.request_id, response);
                 }
+                let _ = upload_store.mark_linked_usage(
+                    &prepared.file_ids,
+                    &context.request_id,
+                    prepared.conversation_id_hint(),
+                );
                 let request_started_at = Utc::now();
                 let client_id = client_id_for_request(&context.request, &remote_addr);
                 let queue_wait_started_at = Instant::now();
@@ -1031,6 +1079,7 @@ fn handle_connection(
                         queue_wait_ms,
                         RequestOutcome {
                             kind: RequestOutcomeKind::Cancelled,
+                            conversation_id: prepared.conversation_id_hint().map(str::to_owned),
                         },
                     ));
                     log_response(logger, &context.request_id, response.status_code)?;
@@ -1045,6 +1094,11 @@ fn handle_connection(
                     &client_id,
                 ) {
                     Ok(outcome) => {
+                        let _ = upload_store.mark_linked_usage(
+                            &prepared.file_ids,
+                            &context.request_id,
+                            outcome.conversation_id.as_deref(),
+                        );
                         let _ = core.record_request_summary(&build_request_summary(
                             &context,
                             &prepared,
@@ -1490,11 +1544,14 @@ fn staged_file_object(metadata: StagedFileMetadata) -> Value {
         "sha256": metadata.sha256,
         "created_at": metadata.created_at,
         "expires_at": metadata.expires_at,
+        "linked_request_ids": metadata.linked_request_ids,
+        "linked_conversation_ids": metadata.linked_conversation_ids,
     })
 }
 
 fn artifact_object(core: &CoreService, artifact: ArtifactSummary) -> Result<Value> {
     let linked_job_ids = core.artifact_job_ids(&artifact.artifact_id)?;
+    let linked_request_ids = core.artifact_request_ids(&artifact.artifact_id)?;
     Ok(json!({
         "id": artifact.artifact_id,
         "object": "tablinq.artifact",
@@ -1506,6 +1563,7 @@ fn artifact_object(core: &CoreService, artifact: ArtifactSummary) -> Result<Valu
         "message_id": artifact.message_id,
         "created_at": artifact.created_at,
         "linked_job_ids": linked_job_ids,
+        "linked_request_ids": linked_request_ids,
         "content_url": format!("{V1_ARTIFACTS_PATH}/{}/content", artifact.artifact_id),
     }))
 }
@@ -1647,6 +1705,7 @@ struct PreparedChatRequest {
     model_id: &'static str,
     request_role: RequestRole,
     parent_request_id: Option<String>,
+    file_ids: Vec<String>,
     job: PreparedChatJob,
 }
 
@@ -1664,6 +1723,13 @@ impl PreparedChatRequest {
             PreparedChatJob::Research(_) => shared_protocol::Mode::Research,
         }
     }
+
+    fn conversation_id_hint(&self) -> Option<&str> {
+        match &self.job {
+            PreparedChatJob::Ask(job) => job.command.conversation_id.as_deref(),
+            PreparedChatJob::Research(job) => job.command.conversation_id.as_deref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1673,9 +1739,10 @@ enum RequestOutcomeKind {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct RequestOutcome {
     kind: RequestOutcomeKind,
+    conversation_id: Option<String>,
 }
 
 fn prepare_chat_completions_request(
@@ -1724,6 +1791,7 @@ fn prepare_chat_completions_request(
         model_id: model.id,
         request_role,
         parent_request_id,
+        file_ids: flattened.file_ids,
         job,
     })
 }
@@ -1771,7 +1839,7 @@ fn execute_chat_completions_request(
                         event,
                     )
                 })
-                .map(|result| result.report_text),
+                .map(|result| result.conversation_id),
             PreparedChatJob::Ask(job) => core
                 .execute_prepared_ask(job, |event| {
                     write_stream_delta(
@@ -1782,11 +1850,11 @@ fn execute_chat_completions_request(
                         event,
                     )
                 })
-                .map(|result| result.output_text),
+                .map(|result| result.conversation_id),
         };
 
         match result {
-            Ok(_) => {
+            Ok(conversation_id) => {
                 write_sse_event(
                     stream,
                     &json!({
@@ -1816,6 +1884,7 @@ fn execute_chat_completions_request(
                 )?;
                 Ok(RequestOutcome {
                     kind: RequestOutcomeKind::Completed,
+                    conversation_id: Some(conversation_id),
                 })
             }
             Err(err) => {
@@ -1834,35 +1903,41 @@ fn execute_chat_completions_request(
             }
         }
     } else {
-        let response = match &prepared.job {
+        let (response, conversation_id) = match &prepared.job {
             PreparedChatJob::Research(job) => {
                 let result = core.execute_prepared_research(job, |_event| Ok(()))?;
                 let conversation = core.find_conversation(&result.conversation_id)?;
-                build_chat_completion_response(
-                    &context.request_id,
-                    prepared.job_id(),
-                    prepared.model_id,
-                    prepared.request_role,
-                    prepared.parent_request_id.as_deref(),
-                    Some(&result.conversation_id),
-                    conversation.as_ref().map(|item| item.session_id.as_str()),
-                    &result.report_text,
-                    "stop",
+                (
+                    build_chat_completion_response(
+                        &context.request_id,
+                        prepared.job_id(),
+                        prepared.model_id,
+                        prepared.request_role,
+                        prepared.parent_request_id.as_deref(),
+                        Some(&result.conversation_id),
+                        conversation.as_ref().map(|item| item.session_id.as_str()),
+                        &result.report_text,
+                        "stop",
+                    ),
+                    Some(result.conversation_id),
                 )
             }
             PreparedChatJob::Ask(job) => {
                 let result = core.execute_prepared_ask(job, |_event| Ok(()))?;
                 let conversation = core.find_conversation(&result.conversation_id)?;
-                build_chat_completion_response(
-                    &context.request_id,
-                    prepared.job_id(),
-                    prepared.model_id,
-                    prepared.request_role,
-                    prepared.parent_request_id.as_deref(),
-                    Some(&result.conversation_id),
-                    conversation.as_ref().map(|item| item.session_id.as_str()),
-                    &result.output_text,
-                    "stop",
+                (
+                    build_chat_completion_response(
+                        &context.request_id,
+                        prepared.job_id(),
+                        prepared.model_id,
+                        prepared.request_role,
+                        prepared.parent_request_id.as_deref(),
+                        Some(&result.conversation_id),
+                        conversation.as_ref().map(|item| item.session_id.as_str()),
+                        &result.output_text,
+                        "stop",
+                    ),
+                    Some(result.conversation_id),
                 )
             }
         };
@@ -1870,6 +1945,7 @@ fn execute_chat_completions_request(
         write_http_response(stream, &context.request_id, response)?;
         Ok(RequestOutcome {
             kind: RequestOutcomeKind::Completed,
+            conversation_id,
         })
     }
 }
@@ -1922,6 +1998,7 @@ fn outcome_from_error(err: &anyhow::Error) -> RequestOutcome {
         } else {
             RequestOutcomeKind::Failed
         },
+        conversation_id: None,
     }
 }
 
@@ -4242,8 +4319,18 @@ mod tests {
         assert_eq!(upload.status_code, 201);
         let upload_body: Value = serde_json::from_slice(&upload.body).unwrap();
         let file_id = upload_body["data"]["id"].as_str().unwrap().to_owned();
+        assert_eq!(upload_body["data"]["file_name"], "brief.txt");
+        assert_eq!(upload_body["data"]["content_type"], "text/plain");
+        assert_eq!(upload_body["data"]["size_bytes"], 14);
+        assert!(upload_body["data"]["sha256"].as_str().is_some());
+        assert!(
+            upload_body["data"]["linked_request_ids"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
 
-        let body = serde_json::to_vec(&json!({
+        let first_body = serde_json::to_vec(&json!({
             "model": "tablinq-research",
             "tablinq_file_ids": [file_id],
             "messages": [
@@ -4251,7 +4338,7 @@ mod tests {
             ]
         }))
         .unwrap();
-        let response = http_request(
+        let first = http_request(
             &snapshot.host,
             snapshot.port,
             "POST",
@@ -4260,17 +4347,74 @@ mod tests {
                 ("authorization", auth.as_str()),
                 ("content-type", "application/json"),
             ],
-            &body,
+            &first_body,
             20_000,
         )
         .unwrap();
-        assert_eq!(response.status_code, 200);
-        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(first.status_code, 200);
+        let first_json: Value = serde_json::from_slice(&first.body).unwrap();
         assert!(
-            body["choices"][0]["message"]["content"]
+            first_json["choices"][0]["message"]["content"]
                 .as_str()
                 .unwrap()
                 .contains("brief.txt")
+        );
+        let conversation_id = first_json["tablinq_conversation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let second_body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "tablinq_file_ids": [file_id],
+            "tablinq_conversation_id": conversation_id,
+            "messages": [
+                { "role": "user", "content": "reuse the same upload again" }
+            ]
+        }))
+        .unwrap();
+        let second = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "req-file-reuse-2"),
+            ],
+            &second_body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(second.status_code, 200);
+
+        let detail = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            &format!("{V1_FILES_PATH}/{file_id}"),
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(detail.status_code, 200);
+        let detail_json: Value = serde_json::from_slice(&detail.body).unwrap();
+        assert_eq!(detail_json["data"]["id"], file_id);
+        assert!(
+            detail_json["data"]["linked_request_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "req-file-reuse-2")
+        );
+        assert!(
+            detail_json["data"]["linked_conversation_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str().is_some())
         );
 
         stop_gateway_process(Some(&state_root)).unwrap();
@@ -4529,6 +4673,7 @@ mod tests {
             .as_str()
             .unwrap()
             .to_owned();
+        let request_id = completion_body["request_id"].as_str().unwrap().to_owned();
 
         let artifacts = http_request(
             &snapshot.host,
@@ -4576,6 +4721,15 @@ mod tests {
                 .iter()
                 .any(|value| value == &Value::String(job_id.clone()))
         );
+        assert!(
+            detail_body["data"]["linked_request_ids"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == &Value::String(request_id.clone()))
+        );
+        assert!(detail_body["data"]["created_at"].as_str().is_some());
+        assert!(detail_body["data"]["sha256"].as_str().is_some());
 
         let content = http_request(
             &snapshot.host,
@@ -4630,6 +4784,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(matching.len(), 2);
         assert_ne!(matching[0]["id"], matching[1]["id"]);
+        assert_eq!(matching[0]["file_name"], "same.txt");
+        assert_eq!(matching[1]["file_name"], "same.txt");
+        assert_ne!(matching[0]["sha256"], matching[1]["sha256"]);
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
