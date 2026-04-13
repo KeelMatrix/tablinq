@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "Tablinq Bridge",
   "version": "0.1.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqR6z0gcO1n4BdPKkNapFRo/O/TzrTfimr+Oh+zAQfWaMXKQHh2pfdirOnJp6oCzKtzUjosyUc/m5shPlCvwMsSXYOKBTRi+wD1IVpMMn9quxZIv+Jtx0/c4elmopKItiMjRr+ahkXRoajEeHywHaG1uWqkuugi8phWLQG1L1PLKG4QkQbkcYAkaiOBLYiwkkaFwgjqMz0Gh68WsBfcqa27TOQpMZeG+RjwFlKIdUQtLnEFVN4RhJVxb/P5vquv/obKeju/mZ8hxMW/fUkugJfV7h/4MQjQhk81XO2eThbj9Q7q+Lpi+oaVACTvNx5Gv3G07SvyCG+HituGlkar6ClwIDAQAB",
   "description": "Semantic bridge for a managed ChatGPT browser session.",
   "permissions": ["nativeMessaging", "storage", "tabs"],
   "host_permissions": [

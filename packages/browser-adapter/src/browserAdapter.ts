@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, extname, resolve } from "node:path";
 import {
@@ -96,7 +96,10 @@ let probeSource: string | undefined;
 function loadProbeSource(): string {
   if (!probeSource) {
     probeSource = readFileSync(
-      resolve(__dirname, "../../extension/src/probe.runtime.js"),
+      resolveTablinqAssetPath(
+        ["extension", "src", "probe.runtime.js"],
+        ["packages", "extension", "src", "probe.runtime.js"],
+      ),
       "utf8",
     ).replace(/^export\s+function\s+probeDocument/m, "function probeDocument");
   }
@@ -317,8 +320,7 @@ export class BrowserAdapter {
       "tablinq-capability-cache.json",
     );
     this.selectorPackPath = resolve(
-      __dirname,
-      "../../../selector-packs/v1/chatgpt-default.json",
+      resolveTablinqAssetPath(["selector-packs", "v1", "chatgpt-default.json"]),
     );
   }
 
@@ -1954,3 +1956,37 @@ function applyAskConfigurationInPage(report, request) {
   }
 }
 `;
+
+function resolveTablinqAssetPath(
+  installedRelativeSegments: string[],
+  repoRelativeSegments: string[] = installedRelativeSegments,
+): string {
+  const candidates: string[] = [];
+  const assetRoot = process.env.TABLINQ_ASSET_ROOT;
+  if (assetRoot) {
+    candidates.push(resolve(assetRoot, ...installedRelativeSegments));
+    candidates.push(resolve(assetRoot, ...repoRelativeSegments));
+  }
+
+  for (const upward of [
+    "..",
+    "../..",
+    "../../..",
+    "../../../..",
+    "../../../../..",
+  ]) {
+    candidates.push(resolve(__dirname, upward, ...installedRelativeSegments));
+    candidates.push(resolve(__dirname, upward, ...repoRelativeSegments));
+  }
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return resolve(
+    assetRoot ?? __dirname,
+    ...(assetRoot ? installedRelativeSegments : repoRelativeSegments),
+  );
+}

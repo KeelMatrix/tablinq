@@ -3,6 +3,7 @@ members = [
   "crates/gpt",
   "crates/gptd",
   "crates/shared-protocol",
+  "crates/tablinq-host",
 ]
 resolver = "2"
 

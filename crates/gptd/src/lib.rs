@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod build_info;
 pub mod config;
 pub mod db;
 pub mod ipc;

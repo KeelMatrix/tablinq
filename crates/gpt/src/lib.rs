@@ -1,3 +1,5 @@
+mod build_info;
+
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::json;
@@ -23,6 +25,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum Command {
+    Version(VersionArgs),
     Ask(AskArgs),
     Research(ResearchArgs),
     Capabilities,
@@ -51,6 +54,12 @@ pub enum Command {
         #[command(subcommand)]
         command: BrowserCommand,
     },
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct VersionArgs {
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -148,6 +157,7 @@ pub enum CliEffort {
 
 pub fn run(cli: &Cli) -> Result<String> {
     match &cli.command {
+        Command::Version(args) => Ok(build_info::render(args.json)),
         Command::Daemon { command } => match command {
             DaemonCommand::Start => start_daemon(cli.state_root.as_deref()),
             DaemonCommand::Status => {
@@ -487,6 +497,15 @@ mod tests {
 
         assert_eq!(cli.state_root, None);
         assert!(matches!(cli.command, Command::Ask(_)));
+    }
+
+    #[test]
+    fn version_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "version", "--json"]);
+        assert!(matches!(
+            cli.command,
+            Command::Version(VersionArgs { json: true })
+        ));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import type { CapabilityBridgeMessage } from "./probe";
+import type { CapabilityBridgeMessage } from "./probe.js";
 
 export type BridgeTransport = "native_messaging" | "websocket_dev";
 

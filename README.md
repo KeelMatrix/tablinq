@@ -36,14 +36,18 @@ flowchart LR
 2. Run `pnpm install`.
 3. Run `cargo test`.
 4. Run `pnpm test`.
-5. Optionally start the fake harness with `pnpm --filter @tablinq/fake-chatgpt start`.
-6. Start the local control plane with `cargo run -p gpt -- daemon start`.
-7. Open a managed browser with `cargo run -p gpt -- browser open`.
-8. Inspect it with `cargo run -p gpt -- browser profile-info` or `cargo run -p gpt -- doctor`.
+5. Build installable artifacts with `scripts/package.ps1` on Windows or `./scripts/package.sh` on Unix-like systems.
+6. Install locally with `scripts/install.ps1` on Windows or `./scripts/install.sh` on Unix-like systems.
+7. Optionally start the fake harness with `pnpm --filter @tablinq/fake-chatgpt start`.
+8. Start the local control plane with `cargo run -p gpt -- daemon start`.
+9. Open a managed browser with `cargo run -p gpt -- browser open`.
+10. Inspect it with `cargo run -p gpt -- browser profile-info` or `cargo run -p gpt -- doctor`.
 
-## Part 9 Scope
+Install and troubleshooting detail lives in [docs/install.md](/C:/Users/user/Desktop/gpt-cli/docs/install.md) and [docs/troubleshooting.md](/C:/Users/user/Desktop/gpt-cli/docs/troubleshooting.md).
 
-This repository now includes Part 9 drift resistance, diagnostics, and recovery on top of the existing ask, upload, and research paths. The stable boundaries in this part are:
+## Part 10 Scope
+
+This repository now includes Part 10 packaging, install, and Windows-first polish on top of the existing ask, upload, research, and diagnostics paths. The stable boundaries in this part are:
 
 - internal enums for `mode`, `model_class`, and `effort`
 - JSON schema definitions for commands, events, streamed chunks, capability reports, job states, artifacts, failure bundles, and health checks
@@ -66,10 +70,16 @@ This repository now includes Part 9 drift resistance, diagnostics, and recovery 
 - local failure bundles with screenshot, DOM snapshot, ARIA snapshot, active URL, strategy attempts, capability matrix, and logs linkage
 - selector-pack loading from external versioned JSON instead of adapter-local metadata only
 - daemon-side recovery guidance for browser relaunch, tab recreation, profile access problems, auth-required cases, and safe mode
+- real emitted JavaScript builds for the browser adapter and MV3 extension instead of source-only package stubs
+- package/install scripts for Windows and Unix-like local installs
+- a dedicated user-level native messaging host binary and registration flow for Windows
+- explicit `gpt version` and `gptd version` build metadata output
 - CLI commands for `ask`, `research`, `artifacts list`, `artifacts pull`, `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list|show|cancel`, and `browser open|close|reset-profile|profile-info`
+- packaged extension assets and stable extension identity for unpacked local loads
 
 ## Implemented Commands
 
+- `gpt version`
 - `gpt daemon start`
 - `gpt daemon status`
 - `gpt daemon stop`
@@ -91,7 +101,8 @@ This repository now includes Part 9 drift resistance, diagnostics, and recovery 
 - `gpt browser close`
 - `gpt browser reset-profile`
 - `gpt browser profile-info`
+- `gptd version`
 
-Part 10 will focus on packaging and Windows-first install polish.
+Part 11 will focus on the final hardening and live-site adaptation pass.
 
-More detail lives in [docs/architecture.md](/C:/Users/user/Desktop/gpt-cli/docs/architecture.md) and [docs/development.md](/C:/Users/user/Desktop/gpt-cli/docs/development.md).
+More detail lives in [docs/architecture.md](/C:/Users/user/Desktop/gpt-cli/docs/architecture.md), [docs/development.md](/C:/Users/user/Desktop/gpt-cli/docs/development.md), [docs/install.md](/C:/Users/user/Desktop/gpt-cli/docs/install.md), and [docs/troubleshooting.md](/C:/Users/user/Desktop/gpt-cli/docs/troubleshooting.md).

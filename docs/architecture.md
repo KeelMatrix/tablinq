@@ -1,6 +1,6 @@
 # Architecture Notes
 
-## Part 9 decisions
+## Part 10 decisions
 
 - The stable protocol version is `tablinq.v1`.
 - Rust owns durable types, validation, and CLI/daemon entry points.
@@ -12,7 +12,7 @@
 - SQLite migrations run at daemon boot and back the job, artifact, and session registries from day one.
 - Single-instance protection is enforced with a startup lock file plus responsive-daemon checks; stale lock files are reclaimed.
 - The daemon owns one browser adapter child process and talks to it over JSON lines on stdio.
-- The browser adapter is a long-lived TypeScript service launched through `npx tsx` and backed by Playwright persistent contexts.
+- The browser adapter is a long-lived TypeScript service launched from a packaged `service.js` entry when present, or through `npx tsx` in a developer checkout.
 - Browser health is surfaced to the daemon as a `BrowserStatusSnapshot`, which now includes `extension_connected` and the last `CapabilityReport`.
 - Ask execution is streamed over the local daemon socket as `EventPayload` frames followed by a final `DaemonResponse`.
 - Runtime alias and last-known-good strategy data are cached per normalized workspace URL inside the managed browser profile so selection can reuse the latest discovered labels.
@@ -22,6 +22,8 @@
 - Research runs as a dedicated long-running job path instead of being treated as an ordinary ask.
 - Job details, cancellation requests, and job-to-artifact mappings are persisted in SQLite alongside the existing job summary table.
 - Failure bundles are persisted both as SQLite records and as on-disk crash-bundle directories containing DOM, ARIA, and screenshot artifacts.
+- Packaged installs now use `bin/`, `browser-adapter/src/`, `extension/`, `selector-packs/`, and `schemas/` as the stable runtime layout.
+- Windows installs register `tablinq-host` as a user-level native messaging host and keep both state and packaged artifacts under `%LOCALAPPDATA%\\Tablinq`.
 
 ## Protocol surface
 

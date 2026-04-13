@@ -1,0 +1,110 @@
+param(
+  [string]$Profile = "release",
+  [string]$OutputDir = (Join-Path $PSScriptRoot "..\\dist\\package")
+)
+
+$ErrorActionPreference = "Stop"
+
+function Invoke-Step {
+  param(
+    [string]$FilePath,
+    [string[]]$ArgumentList = @(),
+    [string]$WorkingDirectory
+  )
+
+  Write-Host "> $FilePath $($ArgumentList -join ' ')"
+  & $FilePath @ArgumentList
+  if ($LASTEXITCODE -ne 0) {
+    throw "Command failed: $FilePath $($ArgumentList -join ' ')"
+  }
+}
+
+function Get-ExtensionIdFromKey {
+  param([string]$ManifestPath)
+
+  $manifest = Get-Content $ManifestPath | ConvertFrom-Json
+  if (-not $manifest.key) {
+    throw "Extension manifest is missing a stable key: $ManifestPath"
+  }
+
+  $publicKeyBytes = [Convert]::FromBase64String($manifest.key)
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $hash = $sha256.ComputeHash($publicKeyBytes)
+  }
+  finally {
+    $sha256.Dispose()
+  }
+  $alphabet = "abcdefghijklmnop".ToCharArray()
+  $builder = [System.Text.StringBuilder]::new()
+
+  for ($index = 0; $index -lt 16; $index += 1) {
+    $byte = $hash[$index]
+    [void]$builder.Append($alphabet[($byte -shr 4) -band 0x0f])
+    [void]$builder.Append($alphabet[$byte -band 0x0f])
+  }
+
+  $builder.ToString()
+}
+
+function Copy-DirectoryContents {
+  param(
+    [string]$Source,
+    [string]$Destination
+  )
+
+  New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+  Copy-Item -Path (Join-Path $Source "*") -Destination $Destination -Recurse -Force
+}
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$outputRoot = (Resolve-Path (New-Item -ItemType Directory -Force -Path $OutputDir)).Path
+$packageRoot = Join-Path $outputRoot "tablinq"
+$binRoot = Join-Path $packageRoot "bin"
+
+if (Test-Path $packageRoot) {
+  Remove-Item -Recurse -Force $packageRoot
+}
+
+New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
+
+Push-Location $repoRoot
+try {
+  Invoke-Step cargo @("build", "--profile", $Profile, "-p", "gpt", "-p", "gptd", "-p", "tablinq-host") $repoRoot
+  Invoke-Step pnpm @("build") $repoRoot
+  Invoke-Step pnpm @("--filter", "@tablinq/browser-adapter", "deploy", "--legacy", "--prod", (Join-Path $packageRoot "browser-adapter")) $repoRoot
+
+  $targetDir = Join-Path $repoRoot "target\\$Profile"
+  foreach ($binary in @("gpt.exe", "gptd.exe", "tablinq-host.exe")) {
+    Copy-Item -Path (Join-Path $targetDir $binary) -Destination (Join-Path $binRoot $binary) -Force
+  }
+
+  Copy-DirectoryContents (Join-Path $repoRoot "packages\\browser-adapter\\dist\\src") (Join-Path $packageRoot "browser-adapter\\src")
+  Copy-DirectoryContents (Join-Path $repoRoot "packages\\extension\\dist\\src") (Join-Path $packageRoot "extension\\src")
+  Copy-Item -Path (Join-Path $repoRoot "packages\\extension\\manifest.json") -Destination (Join-Path $packageRoot "extension\\manifest.json") -Force
+  Copy-DirectoryContents (Join-Path $repoRoot "selector-packs") (Join-Path $packageRoot "selector-packs")
+  Copy-DirectoryContents (Join-Path $repoRoot "schemas") (Join-Path $packageRoot "schemas")
+  Copy-DirectoryContents (Join-Path $repoRoot "docs") (Join-Path $packageRoot "docs")
+  Copy-Item -Path (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md") -Force
+
+  $extensionId = Get-ExtensionIdFromKey -ManifestPath (Join-Path $packageRoot "extension\\manifest.json")
+  $buildMetadata = & (Join-Path $binRoot "gpt.exe") version --json | ConvertFrom-Json
+  $packageMetadata = [ordered]@{
+    package_version = $buildMetadata.version
+    commit = $buildMetadata.git_commit
+    dirty = $buildMetadata.git_dirty
+    target = $buildMetadata.target
+    profile = $buildMetadata.profile
+    built_at_unix_epoch = $buildMetadata.built_at_unix_epoch
+    extension_id = $extensionId
+    extension_path = (Join-Path $packageRoot "extension")
+    browser_adapter_entry = (Join-Path $packageRoot "browser-adapter\\src\\service.js")
+  }
+
+  $packageMetadata | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $packageRoot "package-metadata.json")
+  Write-Host "Packaged Tablinq to $packageRoot"
+  Write-Host "Extension ID: $extensionId"
+}
+finally {
+  Pop-Location
+}
