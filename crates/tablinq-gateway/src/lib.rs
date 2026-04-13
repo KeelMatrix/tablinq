@@ -3,7 +3,7 @@ mod openai;
 
 use crate::openai::{
     ChatCompletionsRequest, PROVIDER_MODELS, RequestRole, model_object, openai_error,
-    request_role_name, resolve_model,
+    provider_capability_catalog, request_role_name, resolve_model,
 };
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -895,7 +895,9 @@ fn handle_connection(
             Err(response) => response,
         },
         ("GET", V1_PROVIDER_PATH) => match authorize_request(config, &context.request, false) {
-            Ok(()) => handle_provider_request(snapshot, &context.request_id),
+            Ok(()) => {
+                handle_provider_request(core, capability_cache, snapshot, &context.request_id)
+            }
             Err(response) => response,
         },
         ("GET", V1_FILES_PATH) => match authorize_request(config, &context.request, false) {
@@ -1051,6 +1053,7 @@ fn handle_models_request(
             "data": models,
             "request_id": request_id,
             "tablinq_capability_source": catalog.source,
+            "tablinq_model_ids": PROVIDER_MODELS.iter().map(|spec| spec.id).collect::<Vec<_>>(),
             "gateway": {
                 "host": snapshot.host,
                 "port": snapshot.port,
@@ -1089,11 +1092,31 @@ fn handle_capabilities_request(
             "selector_pack_version": catalog.report.as_ref().map(|report| report.selector_pack_version.clone()),
             "aliases": aliases,
             "models": models,
+            "provider": provider_capability_catalog(catalog.report.as_ref(), catalog.source),
         }),
     ))
 }
 
-fn handle_provider_request(snapshot: &GatewayStatusSnapshot, request_id: &str) -> HttpResponse {
+fn handle_provider_request(
+    core: &CoreService,
+    capability_cache: &CapabilityCatalogCache,
+    snapshot: &GatewayStatusSnapshot,
+    request_id: &str,
+) -> HttpResponse {
+    let catalog = capability_cache
+        .resolve(core)
+        .unwrap_or_else(|_| CapabilityCatalog {
+            source: "unknown",
+            cache_key: "unavailable".to_owned(),
+            profile_dir: core
+                .config()
+                .paths
+                .browser_profile_dir
+                .display()
+                .to_string(),
+            workspace_key: core.config().browser_target_url().to_owned(),
+            report: None,
+        });
     json_response(
         200,
         json!({
@@ -1102,6 +1125,9 @@ fn handle_provider_request(snapshot: &GatewayStatusSnapshot, request_id: &str) -
             "provider": "tablinq",
             "openai_compatible": true,
             "base_url": format!("http://{}:{}/v1", snapshot.host, snapshot.port),
+            "capability_source": catalog.source,
+            "model_ids": PROVIDER_MODELS.iter().map(|spec| spec.id).collect::<Vec<_>>(),
+            "provider_capabilities": provider_capability_catalog(catalog.report.as_ref(), catalog.source),
             "refusal_conditions": [
                 {
                     "code": "auth_required",
@@ -1145,6 +1171,7 @@ fn handle_provider_request(snapshot: &GatewayStatusSnapshot, request_id: &str) -
                     "streaming": true,
                     "max_parallel_requests": 1,
                     "subagents": "disabled_by_default",
+                    "subagent_recommendation": "disable",
                 },
                 "paperclip": {
                     "transport": "openai_compatible_http",
@@ -1158,6 +1185,7 @@ fn handle_provider_request(snapshot: &GatewayStatusSnapshot, request_id: &str) -
                     "artifacts": true,
                     "files": true,
                     "usage_accounting": "unknown_or_estimated",
+                    "subagent_recommendation": "disable",
                     "budget_guidance": {
                         "rate_limit_hint": "keep provider concurrency at 1",
                         "retry_backoff_hint": "respect queue_timeout and retry_after_ms on 429 responses",
@@ -2983,7 +3011,9 @@ mod tests {
     #[test]
     fn provider_endpoint_exposes_openclaude_preset_metadata() {
         let _guard = integration_lock();
-        let (_dir, config) = test_config();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(fake_url);
         let state_root = config.paths.state_root.clone();
         let auth = auth_header(&config);
         let (handle, snapshot) = spawn_gateway(config);
@@ -3001,7 +3031,32 @@ mod tests {
         assert_eq!(response.status_code, 200);
         let body: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["object"], "tablinq.provider");
+        assert_eq!(body["capability_source"], "live");
         assert_eq!(body["request_annotations"]["field"], "tablinq_request_role");
+        assert_eq!(
+            body["provider_capabilities"]["capabilities"]["search"]["availability"],
+            "available"
+        );
+        assert_eq!(
+            body["provider_capabilities"]["capabilities"]["research"]["availability"],
+            "available"
+        );
+        assert_eq!(
+            body["provider_capabilities"]["capabilities"]["uploads"]["availability"],
+            "available"
+        );
+        assert_eq!(
+            body["provider_capabilities"]["capabilities"]["artifacts"]["availability"],
+            "available"
+        );
+        assert_eq!(
+            body["provider_capabilities"]["max_safe_parallelism"]["requests"],
+            1
+        );
+        assert_eq!(
+            body["provider_capabilities"]["subagent_recommendation"]["policy"],
+            "disabled"
+        );
         assert_eq!(body["presets"]["openclaude"]["max_parallel_requests"], 1);
         assert_eq!(
             body["presets"]["openclaude"]["subagents"],
@@ -3010,6 +3065,8 @@ mod tests {
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
     }
 
     #[test]
@@ -3039,6 +3096,10 @@ mod tests {
         assert_eq!(body["presets"]["paperclip"]["max_parallel_requests"], 1);
         assert_eq!(body["presets"]["paperclip"]["files"], true);
         assert_eq!(body["presets"]["paperclip"]["artifacts"], true);
+        assert_eq!(
+            body["presets"]["paperclip"]["subagent_recommendation"],
+            "disable"
+        );
         assert_eq!(
             body["presets"]["paperclip"]["usage_accounting"],
             "unknown_or_estimated"
@@ -3244,20 +3305,30 @@ mod tests {
         let body: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["object"], "list");
         assert_eq!(body["tablinq_capability_source"], "live");
-        assert!(
-            body["data"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|item| item["id"] == "tablinq-instant")
+        assert_eq!(
+            body["tablinq_model_ids"],
+            json!([
+                "tablinq-instant",
+                "tablinq-thinking-standard",
+                "tablinq-thinking-extended",
+                "tablinq-search",
+                "tablinq-research",
+            ])
         );
-        assert!(
-            body["data"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|item| item["id"] == "tablinq-search")
-        );
+        let models = body["data"].as_array().unwrap();
+        assert_eq!(models.len(), 5);
+        assert_eq!(models[0]["id"], "tablinq-instant");
+        assert_eq!(models[0]["tablinq_model_class"], "instant");
+        assert_eq!(models[0]["tablinq_effort"], "none");
+        assert_eq!(models[1]["id"], "tablinq-thinking-standard");
+        assert_eq!(models[1]["tablinq_model_class"], "thinking");
+        assert_eq!(models[1]["tablinq_effort"], "standard");
+        assert_eq!(models[2]["id"], "tablinq-thinking-extended");
+        assert_eq!(models[2]["tablinq_effort"], "extended");
+        assert_eq!(models[3]["id"], "tablinq-search");
+        assert_eq!(models[3]["tablinq_mode"], "search");
+        assert_eq!(models[4]["id"], "tablinq-research");
+        assert_eq!(models[4]["tablinq_execution_kind"], "research");
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
@@ -3289,6 +3360,16 @@ mod tests {
         let body: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["object"], "tablinq.capability_catalog");
         assert_eq!(body["source"], "live");
+        assert_eq!(
+            body["provider"]["available_model_ids"],
+            json!([
+                "tablinq-instant",
+                "tablinq-thinking-standard",
+                "tablinq-thinking-extended",
+                "tablinq-search",
+                "tablinq-research",
+            ])
+        );
         assert!(body["models"].as_array().unwrap().iter().any(|item| {
             item["id"] == "tablinq-thinking-standard"
                 && item["tablinq_aliases"]["model_classes"]
@@ -3309,7 +3390,8 @@ mod tests {
         let _guard = integration_lock();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
-        config.file.browser_target_url = Some(format!("{fake_url}/?missing=search"));
+        config.file.browser_target_url =
+            Some(format!("{fake_url}/?missing=effort,search,research"));
         let state_root = config.paths.state_root.clone();
         let auth = auth_header(&config);
         let (handle, snapshot) = spawn_gateway(config);
@@ -3332,8 +3414,33 @@ mod tests {
             .iter()
             .find(|item| item["id"] == "tablinq-search")
             .unwrap();
+        let thinking = body["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "tablinq-thinking-standard")
+            .unwrap();
+        let research = body["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "tablinq-research")
+            .unwrap();
+        assert_eq!(thinking["tablinq_availability"], "unavailable");
         assert_eq!(search["tablinq_availability"], "unavailable");
+        assert_eq!(research["tablinq_availability"], "unavailable");
         assert!(!search["tablinq_warning"].as_array().unwrap().is_empty());
+        assert_eq!(
+            body["provider"]["capabilities"]["search"]["availability"],
+            "unavailable"
+        );
+        assert_eq!(
+            body["provider"]["capabilities"]["research"]["availability"],
+            "unavailable"
+        );
+        let available_ids = body["provider"]["available_model_ids"].as_array().unwrap();
+        assert_eq!(available_ids.len(), 1);
+        assert_eq!(available_ids[0], "tablinq-instant");
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
@@ -4112,7 +4219,29 @@ mod tests {
             .unwrap()
         });
 
-        thread::sleep(Duration::from_millis(50));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = http_request(
+                &snapshot.host,
+                snapshot.port,
+                "GET",
+                ADMIN_STATUS_PATH,
+                &[("authorization", auth.as_str())],
+                &[],
+                5_000,
+            )
+            .unwrap();
+            assert_eq!(status.status_code, 200);
+            let status_body: Value = serde_json::from_slice(&status.body).unwrap();
+            if status_body["scheduler"]["queued"].as_u64().unwrap_or(0) >= 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "queued request never reached the scheduler"
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
 
         let cancel = http_request(
             &snapshot.host,
