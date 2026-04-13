@@ -618,7 +618,11 @@ pub struct GatewayConfigSnapshot {
     pub api_key_present: bool,
     pub max_concurrent_upstream_jobs: u32,
     pub queue_length: u32,
+    pub queue_timeout_ms: u64,
+    pub per_client_limit: u32,
     pub request_timeout_ms: u64,
+    pub ask_timeout_ms: u64,
+    pub research_timeout_ms: u64,
     pub safe_mode_behavior: String,
 }
 

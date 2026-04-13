@@ -204,11 +204,17 @@ pub fn model_object(spec: &ProviderModelSpec, report: Option<&CapabilityReport>)
     })
 }
 
-fn model_availability(spec: &ProviderModelSpec, report: Option<&CapabilityReport>) -> (&'static str, Vec<String>) {
+fn model_availability(
+    spec: &ProviderModelSpec,
+    report: Option<&CapabilityReport>,
+) -> (&'static str, Vec<String>) {
     let Some(report) = report else {
         return (
             "unknown",
-            vec!["live capability availability is unknown until the managed browser reports probes".to_owned()],
+            vec![
+                "live capability availability is unknown until the managed browser reports probes"
+                    .to_owned(),
+            ],
         );
     };
 
@@ -218,7 +224,9 @@ fn model_availability(spec: &ProviderModelSpec, report: Option<&CapabilityReport
         "tablinq-thinking-standard" | "tablinq-thinking-extended" => {
             matrix.composer_ready && matrix.submit_available && matrix.thinking_effort_visible
         }
-        "tablinq-search" => matrix.composer_ready && matrix.submit_available && matrix.search_mode_visible,
+        "tablinq-search" => {
+            matrix.composer_ready && matrix.submit_available && matrix.search_mode_visible
+        }
         "tablinq-research" => matrix.research_mode_visible,
         _ => false,
     };
@@ -227,7 +235,10 @@ fn model_availability(spec: &ProviderModelSpec, report: Option<&CapabilityReport
     } else {
         (
             "unavailable",
-            vec!["the current managed session does not expose the required live capability".to_owned()],
+            vec![
+                "the current managed session does not expose the required live capability"
+                    .to_owned(),
+            ],
         )
     }
 }

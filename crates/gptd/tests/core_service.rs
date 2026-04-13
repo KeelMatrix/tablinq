@@ -182,3 +182,28 @@ fn core_service_runs_research_jobs_without_cli() {
     let _ = fake_server.kill();
     let _ = fake_server.wait();
 }
+
+#[test]
+fn prepared_jobs_persist_across_restart() {
+    let _guard = integration_lock();
+    let dir = tempdir().unwrap();
+
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let core = CoreService::new(config.clone()).unwrap();
+    let prepared = core
+        .prepare_ask(AskCommand {
+            prompt: "hold this in the queue".to_owned(),
+            conversation_id: None,
+            mode: Mode::Normal,
+            model_class: None,
+            effort: None,
+            files: vec![],
+        })
+        .unwrap();
+    drop(core);
+
+    let restarted = CoreService::new(config).unwrap();
+    let detail = restarted.job_detail(&prepared.job_id).unwrap();
+    assert_eq!(detail.status, JobStatus::Queued);
+    assert_eq!(detail.input_text.as_deref(), Some("hold this in the queue"));
+}

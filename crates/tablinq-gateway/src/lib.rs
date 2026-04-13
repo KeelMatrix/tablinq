@@ -6,20 +6,20 @@ use crate::openai::{
 };
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use gptd::core::error_code_for_message;
+use gptd::core::{PreparedAskJob, PreparedResearchJob, error_code_for_message};
 use gptd::logging::JsonLogger;
 use gptd::{AppConfig, CoreService};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use shared_protocol::{BrowserOpenRequest, ErrorCode, EventPayload, StreamChunkKind};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -30,6 +30,7 @@ const ADMIN_STATUS_PATH: &str = "/admin/status";
 const ADMIN_SHUTDOWN_PATH: &str = "/admin/shutdown";
 const V1_MODELS_PATH: &str = "/v1/models";
 const V1_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
+const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GatewayStatusSnapshot {
@@ -41,7 +42,11 @@ pub struct GatewayStatusSnapshot {
     pub api_key_present: bool,
     pub max_concurrent_upstream_jobs: u32,
     pub queue_length: u32,
+    pub queue_timeout_ms: u64,
+    pub per_client_limit: u32,
     pub request_timeout_ms: u64,
+    pub ask_timeout_ms: u64,
+    pub research_timeout_ms: u64,
     pub safe_mode_behavior: String,
     pub log_path: String,
 }
@@ -81,34 +86,217 @@ struct SimpleHttpResponse {
     body: Vec<u8>,
 }
 
-struct UpstreamSlot<'a> {
-    counter: &'a AtomicU32,
+#[derive(Debug, Clone, Copy, Serialize)]
+struct SchedulerSnapshot {
+    running: u32,
+    queued: u32,
+    max_concurrent_upstream_jobs: u32,
+    queue_length: u32,
+    queue_timeout_ms: u64,
+    per_client_limit: u32,
 }
 
-impl<'a> UpstreamSlot<'a> {
-    fn try_acquire(counter: &'a AtomicU32, limit: u32) -> Option<Self> {
-        let mut current = counter.load(Ordering::SeqCst);
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestState {
+    Queued,
+    Running,
+}
+
+#[derive(Debug, Clone)]
+struct TrackedRequest {
+    job_id: String,
+    client_id: String,
+    state: RequestState,
+    cancelled: bool,
+}
+
+#[derive(Debug, Default)]
+struct SchedulerState {
+    running: u32,
+    queue: VecDeque<String>,
+    requests: BTreeMap<String, TrackedRequest>,
+}
+
+#[derive(Debug)]
+struct GatewayScheduler {
+    max_concurrent_upstream_jobs: u32,
+    queue_length: u32,
+    queue_timeout: Duration,
+    per_client_limit: u32,
+    inner: Mutex<SchedulerState>,
+    changed: Condvar,
+}
+
+#[derive(Debug)]
+struct SchedulerLease<'a> {
+    scheduler: &'a GatewayScheduler,
+    request_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CancelDisposition {
+    Queued,
+    Running,
+}
+
+impl GatewayScheduler {
+    fn new(config: &AppConfig) -> Self {
+        Self {
+            max_concurrent_upstream_jobs: config.gateway_max_concurrent_upstream_jobs(),
+            queue_length: config.gateway_queue_length(),
+            queue_timeout: Duration::from_millis(config.gateway_queue_timeout_ms()),
+            per_client_limit: config.gateway_per_client_limit(),
+            inner: Mutex::new(SchedulerState::default()),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn acquire<'a>(
+        &'a self,
+        request_id: &str,
+        job_id: &str,
+        client_id: &str,
+    ) -> Result<SchedulerLease<'a>> {
+        let mut state = lock_scheduler(&self.inner)?;
+        if client_request_count(&state, client_id) >= self.per_client_limit {
+            bail!("per-client queue limit reached");
+        }
+        if state.running < self.max_concurrent_upstream_jobs && state.queue.is_empty() {
+            state.running += 1;
+            state.requests.insert(
+                request_id.to_owned(),
+                TrackedRequest {
+                    job_id: job_id.to_owned(),
+                    client_id: client_id.to_owned(),
+                    state: RequestState::Running,
+                    cancelled: false,
+                },
+            );
+            return Ok(SchedulerLease {
+                scheduler: self,
+                request_id: request_id.to_owned(),
+            });
+        }
+
+        if state.queue.len() as u32 >= self.queue_length {
+            bail!("queue full");
+        }
+        state.queue.push_back(request_id.to_owned());
+        state.requests.insert(
+            request_id.to_owned(),
+            TrackedRequest {
+                job_id: job_id.to_owned(),
+                client_id: client_id.to_owned(),
+                state: RequestState::Queued,
+                cancelled: false,
+            },
+        );
+
+        let deadline = Instant::now() + self.queue_timeout;
         loop {
-            if current >= limit {
-                return None;
+            if let Some(entry) = state.requests.get(request_id) {
+                if entry.cancelled {
+                    remove_queued_request(&mut state, request_id);
+                    self.changed.notify_all();
+                    bail!("request cancelled while queued");
+                }
             }
-            match counter.compare_exchange(
-                current,
-                current + 1,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => return Some(Self { counter }),
-                Err(observed) => current = observed,
+
+            let ready = state.running < self.max_concurrent_upstream_jobs
+                && state.queue.front().map(String::as_str) == Some(request_id);
+            if ready {
+                state.queue.pop_front();
+                state.running += 1;
+                if let Some(entry) = state.requests.get_mut(request_id) {
+                    entry.state = RequestState::Running;
+                }
+                return Ok(SchedulerLease {
+                    scheduler: self,
+                    request_id: request_id.to_owned(),
+                });
             }
+
+            let now = Instant::now();
+            if now >= deadline {
+                remove_queued_request(&mut state, request_id);
+                self.changed.notify_all();
+                bail!("queue timeout exceeded");
+            }
+
+            let timeout = deadline.saturating_duration_since(now);
+            let (next_state, wait_result) = self
+                .changed
+                .wait_timeout(state, timeout)
+                .map_err(|_| anyhow::anyhow!("gateway scheduler lock poisoned"))?;
+            state = next_state;
+            if wait_result.timed_out() {
+                remove_queued_request(&mut state, request_id);
+                self.changed.notify_all();
+                bail!("queue timeout exceeded");
+            }
+        }
+    }
+
+    fn cancel(&self, request_id: &str) -> Result<Option<(String, CancelDisposition)>> {
+        let mut state = lock_scheduler(&self.inner)?;
+        let Some(entry) = state.requests.get_mut(request_id) else {
+            return Ok(None);
+        };
+        entry.cancelled = true;
+        let disposition = match entry.state {
+            RequestState::Queued => CancelDisposition::Queued,
+            RequestState::Running => CancelDisposition::Running,
+        };
+        let job_id = entry.job_id.clone();
+        self.changed.notify_all();
+        Ok(Some((job_id, disposition)))
+    }
+
+    fn snapshot(&self) -> Result<SchedulerSnapshot> {
+        let state = lock_scheduler(&self.inner)?;
+        Ok(SchedulerSnapshot {
+            running: state.running,
+            queued: state.queue.len() as u32,
+            max_concurrent_upstream_jobs: self.max_concurrent_upstream_jobs,
+            queue_length: self.queue_length,
+            queue_timeout_ms: self.queue_timeout.as_millis() as u64,
+            per_client_limit: self.per_client_limit,
+        })
+    }
+}
+
+impl Drop for SchedulerLease<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.scheduler.inner.lock() {
+            if state.requests.remove(&self.request_id).is_some() && state.running > 0 {
+                state.running -= 1;
+            }
+            self.scheduler.changed.notify_all();
         }
     }
 }
 
-impl Drop for UpstreamSlot<'_> {
-    fn drop(&mut self) {
-        self.counter.fetch_sub(1, Ordering::SeqCst);
+fn lock_scheduler<'a>(
+    mutex: &'a Mutex<SchedulerState>,
+) -> Result<std::sync::MutexGuard<'a, SchedulerState>> {
+    mutex
+        .lock()
+        .map_err(|_| anyhow::anyhow!("gateway scheduler lock poisoned"))
+}
+
+fn remove_queued_request(state: &mut SchedulerState, request_id: &str) {
+    state.requests.remove(request_id);
+    if let Some(index) = state.queue.iter().position(|value| value == request_id) {
+        state.queue.remove(index);
     }
+}
+
+fn client_request_count(state: &SchedulerState, client_id: &str) -> u32 {
+    state
+        .requests
+        .values()
+        .filter(|entry| entry.client_id == client_id)
+        .count() as u32
 }
 
 pub fn run_gateway(config: AppConfig) -> Result<()> {
@@ -153,7 +341,11 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
         api_key_present: config.gateway_api_key().is_some(),
         max_concurrent_upstream_jobs: config.gateway_max_concurrent_upstream_jobs(),
         queue_length: config.gateway_queue_length(),
+        queue_timeout_ms: config.gateway_queue_timeout_ms(),
+        per_client_limit: config.gateway_per_client_limit(),
         request_timeout_ms: config.gateway_request_timeout_ms(),
+        ask_timeout_ms: config.ask_timeout_ms(),
+        research_timeout_ms: config.research_timeout_ms(),
         safe_mode_behavior: config.gateway_safe_mode_behavior().to_owned(),
         log_path: log_path.display().to_string(),
     });
@@ -168,12 +360,14 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
             "safe_mode_behavior": snapshot.safe_mode_behavior,
             "max_concurrent_upstream_jobs": snapshot.max_concurrent_upstream_jobs,
             "queue_length": snapshot.queue_length,
+            "queue_timeout_ms": snapshot.queue_timeout_ms,
+            "per_client_limit": snapshot.per_client_limit,
         }),
     )?;
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let request_counter = Arc::new(AtomicU64::new(0));
-    let active_upstream = Arc::new(AtomicU32::new(0));
+    let scheduler = Arc::new(GatewayScheduler::new(&config));
 
     while !shutdown.load(Ordering::SeqCst) {
         match listener.accept() {
@@ -183,7 +377,7 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
                 let snapshot = Arc::clone(&snapshot);
                 let shutdown = Arc::clone(&shutdown);
                 let request_counter = Arc::clone(&request_counter);
-                let active_upstream = Arc::clone(&active_upstream);
+                let scheduler = Arc::clone(&scheduler);
                 let config = config.clone();
                 thread::spawn(move || {
                     if let Err(err) = handle_connection(
@@ -194,7 +388,7 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
                         &snapshot,
                         &shutdown,
                         &request_counter,
-                        &active_upstream,
+                        &scheduler,
                         &logger,
                     ) {
                         let _ = logger.warn(
@@ -226,7 +420,7 @@ fn handle_connection(
     snapshot: &GatewayStatusSnapshot,
     shutdown: &AtomicBool,
     request_counter: &AtomicU64,
-    active_upstream: &AtomicU32,
+    scheduler: &GatewayScheduler,
     logger: &JsonLogger,
 ) -> Result<()> {
     stream
@@ -264,9 +458,13 @@ fn handle_connection(
         }
     };
 
-    log_request(logger, &context.request_id, &context.request, remote_addr)?;
+    log_request(logger, &context.request_id, &context.request, &remote_addr)?;
+    let scheduler_status = scheduler.snapshot()?;
 
-    let response = match (context.request.method.as_str(), context.request.path.as_str()) {
+    let response = match (
+        context.request.method.as_str(),
+        context.request.path.as_str(),
+    ) {
         ("GET", HEALTH_PATH) => json_response(
             200,
             json!({
@@ -275,6 +473,7 @@ fn handle_connection(
                 "status": core.health_snapshot()?.status,
                 "health": core.health_snapshot()?,
                 "gateway": snapshot,
+                "scheduler": scheduler_status,
             }),
         ),
         ("GET", READY_PATH) => json_response(
@@ -284,6 +483,7 @@ fn handle_connection(
                 "request_id": context.request_id,
                 "ready": true,
                 "gateway": snapshot,
+                "scheduler": scheduler_status,
             }),
         ),
         ("GET", ADMIN_STATUS_PATH) => match authorize_request(config, &context.request, false) {
@@ -292,6 +492,7 @@ fn handle_connection(
                 json!({
                     "request_id": context.request_id,
                     "gateway": snapshot,
+                    "scheduler": scheduler_status,
                 }),
             ),
             Err(response) => response,
@@ -313,34 +514,61 @@ fn handle_connection(
             Ok(()) => handle_models_request(core, snapshot, &context.request_id),
             Err(response) => response,
         },
+        ("POST", _) if context.request.path.starts_with(V1_REQUESTS_PREFIX) => {
+            if let Err(response) = authorize_request(config, &context.request, false) {
+                response
+            } else {
+                handle_cancel_request(core, scheduler, &context)?
+            }
+        }
         ("POST", V1_CHAT_COMPLETIONS_PATH) => {
             if let Err(response) = authorize_request(config, &context.request, true) {
                 response
-            } else if let Some(_slot) = UpstreamSlot::try_acquire(
-                active_upstream,
-                config.gateway_max_concurrent_upstream_jobs(),
-            ) {
-                if let Err(err) = handle_chat_completions_request(
-                    &mut stream,
-                    core,
-                    &context,
-                    logger,
-                ) {
+            } else {
+                let prepared = match prepare_chat_completions_request(core, &context) {
+                    Ok(prepared) => prepared,
+                    Err(err) => {
+                        let response = map_openai_error(&context.request_id, &err);
+                        log_response(logger, &context.request_id, response.status_code)?;
+                        return write_http_response(&mut stream, &context.request_id, response);
+                    }
+                };
+                let client_id = client_id_for_request(&context.request, &remote_addr);
+                let _lease =
+                    match scheduler.acquire(&context.request_id, prepared.job_id(), &client_id) {
+                        Ok(lease) => lease,
+                        Err(err) => {
+                            let _ = core.fail_job(prepared.job_id(), &format!("{err:#}"));
+                            let response = queue_error_response(
+                                &context.request_id,
+                                &scheduler.snapshot().unwrap_or(scheduler_status),
+                                &err,
+                            );
+                            log_response(logger, &context.request_id, response.status_code)?;
+                            return write_http_response(&mut stream, &context.request_id, response);
+                        }
+                    };
+                if core
+                    .job_cancel_requested(prepared.job_id())
+                    .unwrap_or(false)
+                {
+                    let _ = core.fail_job(prepared.job_id(), "request cancelled before execution");
+                    let response = cancellation_response(
+                        &context.request_id,
+                        prepared.job_id(),
+                        "request cancelled before execution",
+                    );
+                    log_response(logger, &context.request_id, response.status_code)?;
+                    return write_http_response(&mut stream, &context.request_id, response);
+                }
+                if let Err(err) =
+                    execute_chat_completions_request(&mut stream, core, &context, logger, &prepared)
+                {
                     let response = map_openai_error(&context.request_id, &err);
                     log_response(logger, &context.request_id, response.status_code)?;
                     return write_http_response(&mut stream, &context.request_id, response);
                 }
                 return Ok(());
-            } else {
-                json_response(
-                    429,
-                    openai_error(
-                        429,
-                        "overloaded_error",
-                        "queue_full",
-                        "the gateway is at its upstream concurrency limit",
-                    ),
-                )
             }
         }
         _ => json_response(
@@ -380,20 +608,70 @@ fn handle_models_request(
     )
 }
 
-fn handle_chat_completions_request(
-    stream: &mut TcpStream,
+enum PreparedChatJob {
+    Ask(PreparedAskJob),
+    Research(PreparedResearchJob),
+}
+
+struct PreparedChatRequest {
+    request: ChatCompletionsRequest,
+    model_id: &'static str,
+    job: PreparedChatJob,
+}
+
+impl PreparedChatRequest {
+    fn job_id(&self) -> &str {
+        match &self.job {
+            PreparedChatJob::Ask(job) => &job.job_id,
+            PreparedChatJob::Research(job) => &job.job_id,
+        }
+    }
+}
+
+fn prepare_chat_completions_request(
     core: &CoreService,
     context: &RequestContext,
-    logger: &JsonLogger,
-) -> Result<()> {
+) -> Result<PreparedChatRequest> {
     let request: ChatCompletionsRequest =
         serde_json::from_slice(&context.request.body).context("decode chat completions request")?;
     openai::validate_chat_request(&request)?;
     let model = resolve_model(&request.model).context("resolve provider model")?;
     let (prompt, files) = openai::flatten_messages(&request)?;
+
+    let job = if model.uses_research {
+        PreparedChatJob::Research(core.prepare_research(shared_protocol::ResearchCommand {
+            query: prompt,
+            files,
+            output_dir: None,
+        })?)
+    } else {
+        PreparedChatJob::Ask(core.prepare_ask(shared_protocol::AskCommand {
+            prompt,
+            conversation_id: None,
+            mode: model.mode,
+            model_class: model.model_class,
+            effort: model.effort,
+            files,
+        })?)
+    };
+
+    Ok(PreparedChatRequest {
+        request,
+        model_id: model.id,
+        job,
+    })
+}
+
+fn execute_chat_completions_request(
+    stream: &mut TcpStream,
+    core: &CoreService,
+    context: &RequestContext,
+    logger: &JsonLogger,
+    prepared: &PreparedChatRequest,
+) -> Result<()> {
     ensure_browser_session(core)?;
 
-    if request.stream {
+    if prepared.request.stream {
         let stream_id = format!("chatcmpl-{}", Utc::now().timestamp_millis());
         write_sse_headers(stream, &context.request_id)?;
         write_sse_event(
@@ -402,8 +680,9 @@ fn handle_chat_completions_request(
                 "id": stream_id,
                 "object": "chat.completion.chunk",
                 "created": Utc::now().timestamp(),
-                "model": model.id,
+                "model": prepared.model_id,
                 "request_id": context.request_id,
+                "tablinq_job_id": prepared.job_id(),
                 "choices": [{
                     "index": 0,
                     "delta": { "role": "assistant" },
@@ -412,29 +691,29 @@ fn handle_chat_completions_request(
             }),
         )?;
 
-        let result = if model.uses_research {
-            core.research(
-                shared_protocol::ResearchCommand {
-                    query: prompt,
-                    files,
-                    output_dir: None,
-                },
-                |event| write_stream_delta(stream, &stream_id, model.id, &context.request_id, event),
-            )
-            .map(|result| result.report_text)
-        } else {
-            core.ask(
-                shared_protocol::AskCommand {
-                    prompt,
-                    conversation_id: None,
-                    mode: model.mode,
-                    model_class: model.model_class,
-                    effort: model.effort,
-                    files,
-                },
-                |event| write_stream_delta(stream, &stream_id, model.id, &context.request_id, event),
-            )
-            .map(|result| result.output_text)
+        let result = match &prepared.job {
+            PreparedChatJob::Research(job) => core
+                .execute_prepared_research(job, |event| {
+                    write_stream_delta(
+                        stream,
+                        &stream_id,
+                        prepared.model_id,
+                        &context.request_id,
+                        event,
+                    )
+                })
+                .map(|result| result.report_text),
+            PreparedChatJob::Ask(job) => core
+                .execute_prepared_ask(job, |event| {
+                    write_stream_delta(
+                        stream,
+                        &stream_id,
+                        prepared.model_id,
+                        &context.request_id,
+                        event,
+                    )
+                })
+                .map(|result| result.output_text),
         };
 
         match result {
@@ -445,8 +724,9 @@ fn handle_chat_completions_request(
                         "id": stream_id,
                         "object": "chat.completion.chunk",
                         "created": Utc::now().timestamp(),
-                        "model": model.id,
+                        "model": prepared.model_id,
                         "request_id": context.request_id,
+                        "tablinq_job_id": prepared.job_id(),
                         "choices": [{
                             "index": 0,
                             "delta": {},
@@ -459,7 +739,8 @@ fn handle_chat_completions_request(
                     "gateway streamed chat completion",
                     json!({
                         "request_id": context.request_id,
-                        "model": model.id,
+                        "model": prepared.model_id,
+                        "job_id": prepared.job_id(),
                     }),
                 )?;
                 Ok(())
@@ -471,39 +752,27 @@ fn handle_chat_completions_request(
             }
         }
     } else {
-        let response = if model.uses_research {
-            let result = core.research(
-                shared_protocol::ResearchCommand {
-                    query: prompt,
-                    files,
-                    output_dir: None,
-                },
-                |_event| Ok(()),
-            )?;
-            build_chat_completion_response(
-                &context.request_id,
-                model.id,
-                &result.report_text,
-                "stop",
-            )
-        } else {
-            let result = core.ask(
-                shared_protocol::AskCommand {
-                    prompt,
-                    conversation_id: None,
-                    mode: model.mode,
-                    model_class: model.model_class,
-                    effort: model.effort,
-                    files,
-                },
-                |_event| Ok(()),
-            )?;
-            build_chat_completion_response(
-                &context.request_id,
-                model.id,
-                &result.output_text,
-                "stop",
-            )
+        let response = match &prepared.job {
+            PreparedChatJob::Research(job) => {
+                let result = core.execute_prepared_research(job, |_event| Ok(()))?;
+                build_chat_completion_response(
+                    &context.request_id,
+                    prepared.job_id(),
+                    prepared.model_id,
+                    &result.report_text,
+                    "stop",
+                )
+            }
+            PreparedChatJob::Ask(job) => {
+                let result = core.execute_prepared_ask(job, |_event| Ok(()))?;
+                build_chat_completion_response(
+                    &context.request_id,
+                    prepared.job_id(),
+                    prepared.model_id,
+                    &result.output_text,
+                    "stop",
+                )
+            }
         };
         log_response(logger, &context.request_id, response.status_code)?;
         write_http_response(stream, &context.request_id, response)
@@ -541,6 +810,7 @@ fn write_stream_delta(
 
 fn build_chat_completion_response(
     request_id: &str,
+    job_id: &str,
     model_id: &str,
     content: &str,
     finish_reason: &str,
@@ -553,6 +823,7 @@ fn build_chat_completion_response(
             "created": Utc::now().timestamp(),
             "model": model_id,
             "request_id": request_id,
+            "tablinq_job_id": job_id,
             "choices": [{
                 "index": 0,
                 "message": {
@@ -563,6 +834,121 @@ fn build_chat_completion_response(
             }],
             "usage": Value::Null,
             "warnings": ["usage is unavailable for the browser-backed provider"],
+        }),
+    )
+}
+
+fn handle_cancel_request(
+    core: &CoreService,
+    scheduler: &GatewayScheduler,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(request_id) = cancel_request_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+
+    let Some((job_id, disposition)) = scheduler.cancel(request_id)? else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+
+    let ack = core.cancel_job(shared_protocol::CancelJobCommand {
+        job_id: job_id.clone(),
+    })?;
+    Ok(json_response(
+        200,
+        json!({
+            "request_id": context.request_id,
+            "target_request_id": request_id,
+            "job_id": job_id,
+            "accepted": ack.accepted,
+            "state": match disposition {
+                CancelDisposition::Queued => "queued",
+                CancelDisposition::Running => "running",
+            },
+        }),
+    ))
+}
+
+fn cancel_request_id_from_path(path: &str) -> Option<&str> {
+    let suffix = path.strip_prefix(V1_REQUESTS_PREFIX)?;
+    suffix.strip_suffix("/cancel")
+}
+
+fn client_id_for_request(request: &HttpRequest, remote_addr: &str) -> String {
+    request
+        .headers
+        .get("x-client-id")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            remote_addr
+                .rsplit_once(':')
+                .map(|(host, _)| host.to_owned())
+                .unwrap_or_else(|| remote_addr.to_owned())
+        })
+}
+
+fn queue_error_response(
+    request_id: &str,
+    scheduler: &SchedulerSnapshot,
+    err: &anyhow::Error,
+) -> HttpResponse {
+    let message = format!("{err:#}");
+    let (status, error_type, code) = if message.contains("queue timeout") {
+        (429, "overloaded_error", "queue_timeout")
+    } else if message.contains("per-client queue limit") {
+        (429, "overloaded_error", "client_limit_exceeded")
+    } else if message.contains("cancelled") {
+        (409, "invalid_request_error", "cancelled")
+    } else {
+        (429, "overloaded_error", "queue_full")
+    };
+    let body = json!({
+        "error": {
+            "message": message,
+            "type": error_type,
+            "param": Value::Null,
+            "code": code,
+        },
+        "request_id": request_id,
+        "retry_after_ms": scheduler.queue_timeout_ms,
+        "scheduler": scheduler,
+    });
+    HttpResponse {
+        status_code: status,
+        reason_phrase: reason_phrase_for_status(status),
+        headers: vec![
+            ("Content-Type".to_owned(), "application/json".to_owned()),
+            ("Retry-After".to_owned(), "1".to_owned()),
+        ],
+        body: serde_json::to_vec(&body).unwrap_or_default(),
+    }
+}
+
+fn cancellation_response(request_id: &str, job_id: &str, message: &str) -> HttpResponse {
+    json_response(
+        409,
+        json!({
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "param": Value::Null,
+                "code": "cancelled",
+            },
+            "request_id": request_id,
+            "job_id": job_id,
         }),
     )
 }
@@ -590,7 +976,9 @@ fn discover_capabilities(core: &CoreService) -> Option<shared_protocol::Capabili
             });
         }
     }
-    core.capabilities().ok().and_then(|snapshot| snapshot.report)
+    core.capabilities()
+        .ok()
+        .and_then(|snapshot| snapshot.report)
 }
 
 fn authorize_request(
@@ -629,7 +1017,12 @@ fn map_openai_error(request_id: &str, err: &anyhow::Error) -> HttpResponse {
     let (status, error_type, code, message) = map_openai_error_parts(err);
     json_response(
         status,
-        openai_error(status, error_type, code, &format!("{request_id}: {message}")),
+        openai_error(
+            status,
+            error_type,
+            code,
+            &format!("{request_id}: {message}"),
+        ),
     )
 }
 
@@ -642,13 +1035,13 @@ fn map_openai_error_value(request_id: &str, err: &anyhow::Error) -> Value {
 
 fn map_openai_error_parts(err: &anyhow::Error) -> (u16, &'static str, &'static str, String) {
     let message = format!("{err:#}");
+    if message.contains("cancelled") {
+        return (409, "invalid_request_error", "cancelled", message);
+    }
     match error_code_for_message(&message) {
-        ErrorCode::CapabilityMissing => (
-            400,
-            "invalid_request_error",
-            "capability_missing",
-            message,
-        ),
+        ErrorCode::CapabilityMissing => {
+            (400, "invalid_request_error", "capability_missing", message)
+        }
         ErrorCode::AuthRequired => (503, "authentication_error", "auth_required", message),
         ErrorCode::BrowserLaunch | ErrorCode::ProfileLocked => (
             503,
@@ -664,6 +1057,10 @@ fn map_openai_error_parts(err: &anyhow::Error) -> (u16, &'static str, &'static s
         ErrorCode::Transport => {
             if message.contains("queue full") {
                 (429, "overloaded_error", "queue_full", message)
+            } else if message.contains("queue timeout") {
+                (429, "overloaded_error", "queue_timeout", message)
+            } else if message.contains("per-client queue limit") {
+                (429, "overloaded_error", "client_limit_exceeded", message)
             } else {
                 (500, "server_error", "transport_error", message)
             }
@@ -778,7 +1175,11 @@ pub fn gateway_status(state_root: Option<&Path>) -> Result<Value> {
             "pid": snapshot.pid,
             "max_concurrent_upstream_jobs": snapshot.max_concurrent_upstream_jobs,
             "queue_length": snapshot.queue_length,
+            "queue_timeout_ms": snapshot.queue_timeout_ms,
+            "per_client_limit": snapshot.per_client_limit,
             "request_timeout_ms": snapshot.request_timeout_ms,
+            "ask_timeout_ms": snapshot.ask_timeout_ms,
+            "research_timeout_ms": snapshot.research_timeout_ms,
             "safe_mode_behavior": snapshot.safe_mode_behavior,
         }))
     } else {
@@ -977,7 +1378,7 @@ fn log_request(
     logger: &JsonLogger,
     request_id: &str,
     request: &HttpRequest,
-    remote_addr: String,
+    remote_addr: &str,
 ) -> Result<()> {
     logger.info(
         "gateway request",
@@ -1002,27 +1403,31 @@ fn log_response(logger: &JsonLogger, request_id: &str, status_code: u16) -> Resu
 }
 
 fn json_response(status_code: u16, body: Value) -> HttpResponse {
-    let reason_phrase = match status_code {
+    let body = serde_json::to_vec(&body).expect("serialize JSON response");
+    HttpResponse {
+        status_code,
+        reason_phrase: reason_phrase_for_status(status_code),
+        headers: vec![
+            ("content-type".to_owned(), "application/json".to_owned()),
+            ("connection".to_owned(), "close".to_owned()),
+        ],
+        body,
+    }
+}
+
+fn reason_phrase_for_status(status_code: u16) -> &'static str {
+    match status_code {
         200 => "OK",
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        409 => "Conflict",
         429 => "Too Many Requests",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
         503 => "Service Unavailable",
         504 => "Gateway Timeout",
         _ => "Internal Server Error",
-    };
-    let body = serde_json::to_vec(&body).expect("serialize JSON response");
-    HttpResponse {
-        status_code,
-        reason_phrase,
-        headers: vec![
-            ("content-type".to_owned(), "application/json".to_owned()),
-            ("connection".to_owned(), "close".to_owned()),
-        ],
-        body,
     }
 }
 
@@ -1221,7 +1626,15 @@ mod tests {
     use std::net::TcpListener;
     use std::path::Path;
     use std::process::{Child, Stdio};
+    use std::sync::{Arc, Mutex, OnceLock};
     use tempfile::{TempDir, tempdir};
+
+    fn integration_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     fn spawn_fake_chatgpt() -> (Child, String) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("allocate tcp port");
@@ -1278,6 +1691,7 @@ mod tests {
         if let Some(gateway) = config.file.gateway.as_mut() {
             gateway.port = Some(0);
             gateway.request_timeout_ms = Some(20_000);
+            gateway.queue_timeout_ms = Some(20_000);
         }
         (dir, config)
     }
@@ -1291,6 +1705,7 @@ mod tests {
 
     #[test]
     fn gateway_health_and_readiness_endpoints_respond() {
+        let _guard = integration_lock();
         let (_dir, config) = test_config();
         let state_root = config.paths.state_root.clone();
         let (handle, snapshot) = spawn_gateway(config);
@@ -1325,6 +1740,7 @@ mod tests {
 
     #[test]
     fn gateway_rejects_unauthorized_admin_requests() {
+        let _guard = integration_lock();
         let (_dir, config) = test_config();
         let state_root = config.paths.state_root.clone();
         let (handle, snapshot) = spawn_gateway(config);
@@ -1347,6 +1763,7 @@ mod tests {
 
     #[test]
     fn gateway_propagates_request_ids_in_headers_and_logs() {
+        let _guard = integration_lock();
         let (_dir, config) = test_config();
         let state_root = config.paths.state_root.clone();
         let log_path = gateway_log_path(&config);
@@ -1376,6 +1793,7 @@ mod tests {
 
     #[test]
     fn gateway_status_and_stop_helpers_work_against_running_service() {
+        let _guard = integration_lock();
         let (_dir, config) = test_config();
         let state_root = config.paths.state_root.clone();
         let (handle, _snapshot) = spawn_gateway(config);
@@ -1391,6 +1809,7 @@ mod tests {
 
     #[test]
     fn models_endpoint_returns_openai_model_catalog() {
+        let _guard = integration_lock();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -1411,16 +1830,20 @@ mod tests {
         assert_eq!(response.status_code, 200);
         let body: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["object"], "list");
-        assert!(body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["id"] == "tablinq-instant"));
-        assert!(body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["id"] == "tablinq-search"));
+        assert!(
+            body["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["id"] == "tablinq-instant")
+        );
+        assert!(
+            body["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["id"] == "tablinq-search")
+        );
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
@@ -1430,6 +1853,7 @@ mod tests {
 
     #[test]
     fn chat_completions_non_streaming_returns_openai_shape() {
+        let _guard = integration_lock();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -1463,10 +1887,12 @@ mod tests {
         assert_eq!(body["object"], "chat.completion");
         assert_eq!(body["model"], "tablinq-instant");
         assert_eq!(body["choices"][0]["message"]["role"], "assistant");
-        assert!(body["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Fake response for"));
+        assert!(
+            body["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Fake response for")
+        );
         assert_eq!(body["choices"][0]["finish_reason"], "stop");
 
         stop_gateway_process(Some(&state_root)).unwrap();
@@ -1477,6 +1903,7 @@ mod tests {
 
     #[test]
     fn chat_completions_streaming_emits_sse_chunks_and_done() {
+        let _guard = integration_lock();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -1522,6 +1949,7 @@ mod tests {
 
     #[test]
     fn chat_completions_maps_capability_errors_to_openai_shape() {
+        let _guard = integration_lock();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?missing=search"));
@@ -1560,19 +1988,298 @@ mod tests {
     }
 
     #[test]
-    fn chat_completions_reject_when_gateway_is_busy() {
+    fn chat_completions_run_queued_requests_in_fifo_order() {
+        let _guard = integration_lock();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
-        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=timeout"));
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.research_timeout_ms = Some(10_000);
+            gateway.queue_timeout_ms = Some(10_000);
+        }
         let state_root = config.paths.state_root.clone();
         let auth = auth_header(&config);
         let (handle, snapshot) = spawn_gateway(config);
 
         let first_body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [{ "role": "user", "content": "hold the slot long enough to queue" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let first = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-first"),
+                ],
+                &first_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(200));
+
+        let completions = Arc::new(Mutex::new(Vec::new()));
+        let mut queued = Vec::new();
+        for (label, request_id) in [("second", "req-second"), ("third", "req-third")] {
+            let body = serde_json::to_vec(&json!({
+                "model": "tablinq-instant",
+                "messages": [
+                    { "role": "user", "content": format!("hello from {label}") }
+                ]
+            }))
+            .unwrap();
+            let host = snapshot.host.clone();
+            let auth = auth.clone();
+            let completions = Arc::clone(&completions);
+            queued.push(thread::spawn(move || {
+                let response = http_request(
+                    &host,
+                    port,
+                    "POST",
+                    V1_CHAT_COMPLETIONS_PATH,
+                    &[
+                        ("authorization", auth.as_str()),
+                        ("content-type", "application/json"),
+                        ("x-request-id", request_id),
+                    ],
+                    &body,
+                    20_000,
+                )
+                .unwrap();
+                completions.lock().unwrap().push(label.to_owned());
+                response
+            }));
+        }
+
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-first/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+
+        let first = first.join().unwrap();
+        assert_eq!(first.status_code, 409);
+        let first_body: Value = serde_json::from_slice(&first.body).unwrap();
+        assert_eq!(first_body["error"]["code"], "cancelled");
+        let second = queued.remove(0).join().unwrap();
+        let third = queued.remove(0).join().unwrap();
+        assert_eq!(second.status_code, 200);
+        assert_eq!(third.status_code, 200);
+        assert_eq!(completions.lock().unwrap().as_slice(), ["second", "third"]);
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn chat_completions_cancel_queued_request() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.research_timeout_ms = Some(5_000);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first_body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [{ "role": "user", "content": "occupy the only slot" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let first = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-running"),
+                ],
+                &first_body,
+                20_000,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(250));
+
+        let queued_body = serde_json::to_vec(&json!({
             "model": "tablinq-instant",
-            "messages": [
-                { "role": "user", "content": "this will stall" }
-            ]
+            "messages": [{ "role": "user", "content": "cancel me while queued" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let auth_for_thread = auth.clone();
+        let queued = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-cancel-me"),
+                ],
+                &queued_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(250));
+
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-cancel-me/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+        let cancel_body: Value = serde_json::from_slice(&cancel.body).unwrap();
+        assert_eq!(cancel_body["accepted"], true);
+        assert_eq!(cancel_body["state"], "queued");
+
+        let queued = queued.join().unwrap();
+        assert_eq!(queued.status_code, 409);
+        let queued_body: Value = serde_json::from_slice(&queued.body).unwrap();
+        assert_eq!(queued_body["error"]["code"], "cancelled");
+
+        let cancel_running = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-running/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel_running.status_code, 200);
+
+        let first = first.join().unwrap().unwrap();
+        assert_eq!(first.status_code, 409);
+        let first_body: Value = serde_json::from_slice(&first.body).unwrap();
+        assert_eq!(first_body["error"]["code"], "cancelled");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn chat_completions_cancel_running_research_request() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.research_timeout_ms = Some(10_000);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [{ "role": "user", "content": "cancel a running research job" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let running = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-running-cancel"),
+                ],
+                &body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(500));
+
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-running-cancel/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+        let cancel_body: Value = serde_json::from_slice(&cancel.body).unwrap();
+        assert_eq!(cancel_body["accepted"], true);
+        assert_eq!(cancel_body["state"], "running");
+
+        let running = running.join().unwrap();
+        assert_eq!(running.status_code, 409);
+        let body: Value = serde_json::from_slice(&running.body).unwrap();
+        assert_eq!(body["error"]["code"], "cancelled");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn chat_completions_return_queue_timeout_when_wait_expires() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.research_timeout_ms = Some(5_000);
+            gateway.queue_timeout_ms = Some(250);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first_body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [{ "role": "user", "content": "occupy the only slot" }]
         }))
         .unwrap();
         let host = snapshot.host.clone();
@@ -1593,13 +2300,11 @@ mod tests {
             )
         });
 
-        thread::sleep(Duration::from_millis(500));
+        thread::sleep(Duration::from_millis(150));
 
         let second_body = serde_json::to_vec(&json!({
             "model": "tablinq-instant",
-            "messages": [
-                { "role": "user", "content": "hello" }
-            ]
+            "messages": [{ "role": "user", "content": "time out in queue" }]
         }))
         .unwrap();
         let second = http_request(
@@ -1617,10 +2322,10 @@ mod tests {
         .unwrap();
         assert_eq!(second.status_code, 429);
         let body: Value = serde_json::from_slice(&second.body).unwrap();
-        assert_eq!(body["error"]["code"], "queue_full");
+        assert_eq!(body["error"]["code"], "queue_timeout");
 
         let first = first.join().unwrap().unwrap();
-        assert_eq!(first.status_code, 504);
+        assert_eq!(first.status_code, 200);
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
