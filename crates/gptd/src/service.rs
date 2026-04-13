@@ -26,7 +26,9 @@ pub fn run_service(config: AppConfig) -> Result<()> {
     let listener = ipc::bind(&config.paths.ipc_endpoint)?;
     let core = Arc::new(CoreService::new(config.clone())?);
 
-    if config.warm_mode() && let Err(err) = core.warm_browser_if_enabled() {
+    if config.warm_mode()
+        && let Err(err) = core.warm_browser_if_enabled()
+    {
         logger.warn(
             "warm browser open failed",
             json!({

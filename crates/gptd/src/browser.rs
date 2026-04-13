@@ -10,6 +10,9 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 pub struct BrowserManager {
     config: AppConfig,
@@ -304,8 +307,7 @@ impl BrowserManager {
 
     fn teardown_process(&mut self) {
         if let Some(mut process) = self.process.take() {
-            let _ = process.child.kill();
-            let _ = process.child.wait();
+            process.terminate();
         }
     }
 
@@ -341,7 +343,8 @@ impl Drop for BrowserManager {
 struct AdapterProcess {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    frames: Receiver<Result<AdapterFrame>>,
+    reader_thread: Option<JoinHandle<()>>,
 }
 
 struct AdapterRuntime {
@@ -384,11 +387,14 @@ impl AdapterProcess {
         let mut child = command.spawn().context("spawn browser adapter")?;
         let stdin = child.stdin.take().context("adapter stdin unavailable")?;
         let stdout = child.stdout.take().context("adapter stdout unavailable")?;
+        let (tx, rx) = mpsc::channel();
+        let reader_thread = Some(spawn_adapter_reader(stdout, tx));
 
         Ok(Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            frames: rx,
+            reader_thread,
         })
     }
 
@@ -402,16 +408,7 @@ impl AdapterProcess {
             .context("write adapter newline")?;
         self.stdin.flush().context("flush adapter request")?;
 
-        let mut line = String::new();
-        self.stdout
-            .read_line(&mut line)
-            .context("read adapter response")?;
-        if line.trim().is_empty() {
-            bail!("browser adapter closed without a response");
-        }
-
-        let response: AdapterFrame =
-            serde_json::from_str(line.trim_end()).context("decode adapter response")?;
+        let response = self.next_frame_blocking("response")?;
         match response {
             AdapterFrame::Response { ok, state, error } => {
                 if ok {
@@ -444,16 +441,7 @@ impl AdapterProcess {
             .flush()
             .context("flush adapter diagnostics request")?;
 
-        let mut line = String::new();
-        self.stdout
-            .read_line(&mut line)
-            .context("read adapter diagnostics response")?;
-        if line.trim().is_empty() {
-            bail!("browser adapter closed without a diagnostics response");
-        }
-
-        let response: AdapterFrame =
-            serde_json::from_str(line.trim_end()).context("decode adapter diagnostics response")?;
+        let response = self.next_frame_blocking("diagnostics response")?;
         match response {
             AdapterFrame::Diagnostics {
                 ok,
@@ -507,21 +495,7 @@ impl AdapterProcess {
         self.stdin.flush().context("flush adapter ask request")?;
 
         loop {
-            if should_cancel() {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
-                bail!("ask cancelled");
-            }
-            let mut line = String::new();
-            self.stdout
-                .read_line(&mut line)
-                .context("read adapter ask frame")?;
-            if line.trim().is_empty() {
-                bail!("browser adapter closed without an ask result");
-            }
-
-            let frame: AdapterFrame =
-                serde_json::from_str(line.trim_end()).context("decode adapter ask frame")?;
+            let frame = self.next_frame_interruptible("ask", should_cancel)?;
             match frame {
                 AdapterFrame::StreamChunk { chunk } => {
                     on_event(EventPayload::StreamChunk(StreamChunk {
@@ -536,11 +510,6 @@ impl AdapterProcess {
                         },
                         text: chunk.text,
                     }))?;
-                    if should_cancel() {
-                        let _ = self.child.kill();
-                        let _ = self.child.wait();
-                        bail!("ask cancelled");
-                    }
                 }
                 AdapterFrame::AskResult {
                     ok,
@@ -614,16 +583,7 @@ impl AdapterProcess {
             .context("flush adapter research request")?;
 
         loop {
-            let mut line = String::new();
-            self.stdout
-                .read_line(&mut line)
-                .context("read adapter research frame")?;
-            if line.trim().is_empty() {
-                bail!("browser adapter closed without a research result");
-            }
-
-            let frame: AdapterFrame =
-                serde_json::from_str(line.trim_end()).context("decode adapter research frame")?;
+            let frame = self.next_frame_interruptible("research", should_cancel)?;
             match frame {
                 AdapterFrame::ResearchUpdate { update } => {
                     on_update(ResearchUpdate {
@@ -635,11 +595,6 @@ impl AdapterProcess {
                         chunk_kind: update.chunk_kind,
                         chunk_text: update.chunk_text,
                     })?;
-                    if should_cancel() {
-                        let _ = self.child.kill();
-                        let _ = self.child.wait();
-                        bail!("research cancelled");
-                    }
                 }
                 AdapterFrame::ResearchResult {
                     ok,
@@ -679,6 +634,41 @@ impl AdapterProcess {
                     bail!("unexpected adapter frame while running research")
                 }
             }
+        }
+    }
+
+    fn next_frame_blocking(&mut self, context: &str) -> Result<AdapterFrame> {
+        match self.frames.recv() {
+            Ok(result) => result,
+            Err(_) => bail!("browser adapter closed without a {context}"),
+        }
+    }
+
+    fn next_frame_interruptible(
+        &mut self,
+        context: &str,
+        should_cancel: &mut impl FnMut() -> bool,
+    ) -> Result<AdapterFrame> {
+        loop {
+            if should_cancel() {
+                self.terminate();
+                bail!("{context} cancelled");
+            }
+            match self.frames.recv_timeout(Duration::from_millis(50)) {
+                Ok(result) => return result,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => {
+                    bail!("browser adapter closed without a {context} result")
+                }
+            }
+        }
+    }
+
+    fn terminate(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(reader_thread) = self.reader_thread.take() {
+            let _ = reader_thread.join();
         }
     }
 }
@@ -918,4 +908,33 @@ fn is_js_entry(path: &Path) -> bool {
         .and_then(|value| value.to_str())
         .map(|value| value.eq_ignore_ascii_case("js"))
         .unwrap_or(false)
+}
+
+fn spawn_adapter_reader(
+    stdout: ChildStdout,
+    tx: mpsc::Sender<Result<AdapterFrame>>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let mut stdout = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match stdout.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let line = line.trim_end();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let frame = serde_json::from_str(line).context("decode adapter frame");
+                    if tx.send(frame).is_err() {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(err).context("read adapter frame"));
+                    break;
+                }
+            }
+        }
+    })
 }

@@ -143,10 +143,14 @@ impl CoreService {
         let db = self.open_db()?;
         if db.job_cancel_requested(&prepared.job_id)? {
             let message = "ask cancelled before execution";
-            self.fail_job(&prepared.job_id, message)?;
+            self.cancel_job_with_detail(
+                &prepared.job_id,
+                prepared.command.conversation_id.as_deref(),
+                message,
+            )?;
             on_event(EventPayload::JobState(JobState {
                 job_id: prepared.job_id.clone(),
-                status: JobStatus::Failed,
+                status: JobStatus::Cancelled,
                 message: Some(message.to_owned()),
                 conversation_id: prepared.command.conversation_id.clone(),
                 updated_at: Utc::now(),
@@ -255,9 +259,14 @@ impl CoreService {
             Err(err) => {
                 let failed_at = Utc::now();
                 let message = format!("{err:#}");
+                let status = if is_cancelled_message(&message) {
+                    JobStatus::Cancelled
+                } else {
+                    JobStatus::Failed
+                };
                 db.insert_job(
                     &prepared.job_id,
-                    JobStatus::Failed,
+                    status,
                     Some(&message),
                     prepared.command.conversation_id.as_deref(),
                     prepared.created_at,
@@ -266,7 +275,7 @@ impl CoreService {
                 db.update_job_output(&prepared.job_id, None, None, None)?;
                 on_event(EventPayload::JobState(JobState {
                     job_id: prepared.job_id.clone(),
-                    status: JobStatus::Failed,
+                    status,
                     message: Some(message),
                     conversation_id: prepared.command.conversation_id.clone(),
                     updated_at: failed_at,
@@ -315,10 +324,10 @@ impl CoreService {
         let db = self.open_db()?;
         if db.job_cancel_requested(&prepared.job_id)? {
             let message = "research cancelled before execution";
-            self.fail_job(&prepared.job_id, message)?;
+            self.cancel_job_with_detail(&prepared.job_id, None, message)?;
             on_event(EventPayload::JobState(JobState {
                 job_id: prepared.job_id.clone(),
-                status: JobStatus::Failed,
+                status: JobStatus::Cancelled,
                 message: Some(message.to_owned()),
                 conversation_id: None,
                 updated_at: Utc::now(),
@@ -416,14 +425,19 @@ impl CoreService {
             Err(err) => {
                 let failed_at = Utc::now();
                 let message = format!("{err:#}");
-                let status_message = if message.contains("cancelled") {
+                let status = if is_cancelled_message(&message) {
+                    JobStatus::Cancelled
+                } else {
+                    JobStatus::Failed
+                };
+                let status_message = if status == JobStatus::Cancelled {
                     "research cancelled"
                 } else {
                     "research failed"
                 };
                 db.insert_job(
                     &prepared.job_id,
-                    JobStatus::Failed,
+                    status,
                     Some(&message),
                     conversation_id.as_deref(),
                     prepared.created_at,
@@ -441,7 +455,7 @@ impl CoreService {
                 )?;
                 on_event(EventPayload::JobState(JobState {
                     job_id: prepared.job_id.clone(),
-                    status: JobStatus::Failed,
+                    status,
                     message: Some(status_message.to_owned()),
                     conversation_id,
                     updated_at: failed_at,
@@ -541,7 +555,10 @@ impl CoreService {
         let detail = db
             .job_detail(&command.job_id)?
             .with_context(|| format!("job {} was not found", command.job_id))?;
-        if matches!(detail.status, JobStatus::Completed | JobStatus::Failed) {
+        if matches!(
+            detail.status,
+            JobStatus::Completed | JobStatus::Cancelled | JobStatus::Failed
+        ) {
             Ok(AckEvent {
                 accepted: false,
                 message: format!("job {} is already finished", command.job_id),
@@ -574,6 +591,35 @@ impl CoreService {
             Utc::now(),
         )?;
         db.set_job_cancel_requested(job_id, false)?;
+        Ok(())
+    }
+
+    pub fn mark_job_cancelled(&self, job_id: &str, message: &str) -> Result<()> {
+        self.cancel_job_with_detail(job_id, None, message)
+    }
+
+    fn cancel_job_with_detail(
+        &self,
+        job_id: &str,
+        conversation_id: Option<&str>,
+        message: &str,
+    ) -> Result<()> {
+        let db = self.open_db()?;
+        let detail = db
+            .job_detail(job_id)?
+            .with_context(|| format!("job {job_id} was not found"))?;
+        db.insert_job(
+            job_id,
+            JobStatus::Cancelled,
+            Some(message),
+            conversation_id.or(detail.conversation_id.as_deref()),
+            detail.created_at,
+            Utc::now(),
+        )?;
+        db.set_job_cancel_requested(job_id, false)?;
+        let _ = lock_cancel_registry(&self.cancel_registry).map(|mut set| {
+            set.remove(job_id);
+        });
         Ok(())
     }
 
@@ -759,6 +805,10 @@ fn lock_cancel_registry<'a>(
     registry
         .lock()
         .map_err(|_| anyhow!("cancel registry lock poisoned"))
+}
+
+fn is_cancelled_message(message: &str) -> bool {
+    message.contains("cancelled")
 }
 
 fn health_snapshot(config: &AppConfig, browser: BrowserStatusSnapshot) -> HealthCheck {
