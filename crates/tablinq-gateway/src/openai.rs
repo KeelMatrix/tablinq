@@ -191,7 +191,11 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<(String, Vec
     Ok((sections.join("\n\n"), files))
 }
 
-pub fn model_object(spec: &ProviderModelSpec, report: Option<&CapabilityReport>) -> Value {
+pub fn model_object(
+    spec: &ProviderModelSpec,
+    report: Option<&CapabilityReport>,
+    capability_source: &str,
+) -> Value {
     let (availability, warnings) = model_availability(spec, report);
     json!({
         "id": spec.id,
@@ -201,6 +205,8 @@ pub fn model_object(spec: &ProviderModelSpec, report: Option<&CapabilityReport>)
         "tablinq_mode": mode_name(spec.mode),
         "tablinq_availability": availability,
         "tablinq_warning": warnings,
+        "tablinq_capability_source": capability_source,
+        "tablinq_aliases": observed_aliases(spec, report),
     })
 }
 
@@ -241,6 +247,43 @@ fn model_availability(
             ],
         )
     }
+}
+
+fn observed_aliases(spec: &ProviderModelSpec, report: Option<&CapabilityReport>) -> Value {
+    let Some(report) = report else {
+        return json!({
+            "modes": Vec::<String>::new(),
+            "model_classes": Vec::<String>::new(),
+            "efforts": Vec::<String>::new(),
+        });
+    };
+
+    let mode_key = match spec.mode {
+        Mode::Normal => "normal",
+        Mode::Search => "search",
+        Mode::Research => "research",
+    };
+    let model_class_key = match spec.model_class {
+        Some(ModelClass::Instant) => Some("instant"),
+        Some(ModelClass::Thinking) => Some("thinking"),
+        None => None,
+    };
+    let effort_key = match spec.effort {
+        Some(Effort::None) => Some("none"),
+        Some(Effort::Standard) => Some("standard"),
+        Some(Effort::Extended) => Some("extended"),
+        None => None,
+    };
+
+    json!({
+        "modes": report.aliases.modes.get(mode_key).cloned().unwrap_or_default(),
+        "model_classes": model_class_key
+            .and_then(|key| report.aliases.model_classes.get(key).cloned())
+            .unwrap_or_default(),
+        "efforts": effort_key
+            .and_then(|key| report.aliases.efforts.get(key).cloned())
+            .unwrap_or_default(),
+    })
 }
 
 pub fn mode_name(mode: Mode) -> &'static str {
