@@ -154,10 +154,10 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
     if request.n.unwrap_or(1) != 1 {
         bail!("n>1 is not supported by the browser-backed provider");
     }
-    if let Some(parent_request_id) = request.tablinq_parent_request_id.as_deref() {
-        if parent_request_id.trim().is_empty() {
-            bail!("tablinq_parent_request_id must not be empty when provided");
-        }
+    if let Some(parent_request_id) = request.tablinq_parent_request_id.as_deref()
+        && parent_request_id.trim().is_empty()
+    {
+        bail!("tablinq_parent_request_id must not be empty when provided");
     }
     if resolve_model(&request.model).is_none() {
         bail!("model {} is not supported", request.model);
@@ -182,17 +182,17 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<FlattenedMes
                 for part in parts {
                     match part.kind.as_str() {
                         "text" => {
-                            if let Some(text) = part.text.as_ref() {
-                                if !text.trim().is_empty() {
-                                    text_parts.push(text.trim().to_owned());
-                                }
+                            if let Some(text) = part.text.as_ref()
+                                && !text.trim().is_empty()
+                            {
+                                text_parts.push(text.trim().to_owned());
                             }
                         }
                         "input_text" => {
-                            if let Some(text) = part.input_text.as_ref() {
-                                if !text.trim().is_empty() {
-                                    text_parts.push(text.trim().to_owned());
-                                }
+                            if let Some(text) = part.input_text.as_ref()
+                                && !text.trim().is_empty()
+                            {
+                                text_parts.push(text.trim().to_owned());
                             }
                         }
                         "input_file" => {

@@ -123,10 +123,10 @@ fn wait_for_job_id(state_root: &Path) -> String {
             &DaemonRequest::JobsList,
         )
         .unwrap();
-        if let DaemonResponse::Jobs(list) = response {
-            if let Some(job) = list.jobs.first() {
-                return job.job_id.clone();
-            }
+        if let DaemonResponse::Jobs(list) = response
+            && let Some(job) = list.jobs.first()
+        {
+            return job.job_id.clone();
         }
         thread::sleep(StdDuration::from_millis(50));
     }
@@ -150,7 +150,7 @@ fn daemon_boots_and_responds_over_local_socket() {
     match response {
         DaemonResponse::Health(health) => {
             assert_eq!(health.status, HealthStatus::Degraded);
-            assert_eq!(health.browser_connected, false);
+            assert!(!health.browser_connected);
         }
         other => panic!("unexpected response: {other:?}"),
     }
@@ -338,7 +338,7 @@ fn daemon_streams_ask_responses_and_persists_conversations() {
         }),
         |event| {
             match event {
-                EventPayload::StreamChunk(chunk) if chunk.text.len() > 0 => {
+                EventPayload::StreamChunk(chunk) if !chunk.text.is_empty() => {
                     streamed.push_str(&chunk.text);
                 }
                 EventPayload::JobState(state) if state.status == JobStatus::Running => {
