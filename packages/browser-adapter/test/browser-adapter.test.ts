@@ -257,6 +257,33 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("refuses asks when the managed page is a signed-out local login screen", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: `${server.url}/login-expired.html`,
+    });
+    await adapter.open({
+      targetUrl: `${server.url}/login-expired.html`,
+      headless: true,
+    });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-auth-expired",
+          prompt: "should refuse while signed out",
+        },
+        () => {},
+      ),
+    ).rejects.toThrow("auth required");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("selects model, effort, and search mode on the classic harness", async () => {
     const server = await startFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));

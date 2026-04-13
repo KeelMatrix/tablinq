@@ -765,6 +765,8 @@ struct AdapterResearchUpdate {
 fn is_recoverable_adapter_error(message: &str) -> bool {
     message.contains("Execution context was destroyed")
         || message.contains("Cannot find context")
+        || message.contains("Frame has been detached")
+        || message.contains("navigation")
         || message.contains("managed page is not open")
         || message.contains("Target page, context or browser has been closed")
         || message.contains("browser adapter closed without")
@@ -772,6 +774,9 @@ fn is_recoverable_adapter_error(message: &str) -> bool {
 
 fn should_reset_after_failure(message: &str) -> bool {
     message.contains("cancelled")
+        || message.contains("managed page is not open")
+        || message.contains("Target page, context or browser has been closed")
+        || message.contains("browser adapter closed without")
 }
 
 fn idle_snapshot(

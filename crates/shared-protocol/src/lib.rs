@@ -429,6 +429,7 @@ pub struct FailureBundle {
     pub logs_path: Option<String>,
     pub strategy_attempts: Vec<StrategyAttempt>,
     pub capability_matrix: CapabilityMatrix,
+    pub gateway_request: Option<GatewayRequestContext>,
 }
 
 impl FailureBundle {
@@ -443,7 +444,35 @@ impl FailureBundle {
         for attempt in &self.strategy_attempts {
             attempt.validate()?;
         }
+        if let Some(context) = &self.gateway_request {
+            context.validate()?;
+        }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayRequestContext {
+    pub request_id: String,
+    pub request_path: String,
+    pub client_id: Option<String>,
+    pub model: Option<String>,
+    pub request_role: Option<String>,
+    pub parent_request_id: Option<String>,
+    pub job_id: Option<String>,
+    pub streaming: bool,
+}
+
+impl GatewayRequestContext {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_required("request_id", &self.request_id)?;
+        validate_required("request_path", &self.request_path)?;
+        validate_optional("client_id", self.client_id.as_deref())?;
+        validate_optional("model", self.model.as_deref())?;
+        validate_optional("request_role", self.request_role.as_deref())?;
+        validate_optional("parent_request_id", self.parent_request_id.as_deref())?;
+        validate_optional("job_id", self.job_id.as_deref())
     }
 }
 

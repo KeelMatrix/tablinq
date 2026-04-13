@@ -62,7 +62,9 @@ pub fn run_service(config: AppConfig) -> Result<()> {
                             "error": error_message,
                         }),
                     )?;
-                    if let Ok(bundle) = core.capture_failure_bundle(failure_mode, &error_message) {
+                    if let Ok(bundle) =
+                        core.capture_failure_bundle(failure_mode, &error_message, None)
+                    {
                         let _ = ipc::write_frame(
                             &stream,
                             &DaemonFrame::Event(EventPayload::Failure(bundle)),
@@ -82,6 +84,7 @@ pub fn run_service(config: AppConfig) -> Result<()> {
                         if let Ok(bundle) = core.capture_failure_bundle(
                             Some(shared_protocol::Mode::Research),
                             &error_message,
+                            None,
                         ) {
                             let _ = ipc::write_frame(
                                 &stream,

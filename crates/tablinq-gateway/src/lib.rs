@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use shared_protocol::{
     ArtifactSummary, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, ErrorCode,
-    EventPayload, StreamChunkKind,
+    EventPayload, GatewayRequestContext, StreamChunkKind,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
@@ -946,7 +946,7 @@ fn handle_connection(
                 {
                     Ok(prepared) => prepared,
                     Err(err) => {
-                        let response = map_openai_error(&context.request_id, &err);
+                        let response = map_openai_error(&context.request_id, &err, None);
                         log_response(logger, &context.request_id, response.status_code)?;
                         return write_http_response(&mut stream, &context.request_id, response);
                     }
@@ -985,10 +985,18 @@ fn handle_connection(
                     log_response(logger, &context.request_id, response.status_code)?;
                     return write_http_response(&mut stream, &context.request_id, response);
                 }
-                if let Err(err) =
-                    execute_chat_completions_request(&mut stream, core, &context, logger, &prepared)
-                {
-                    let response = map_openai_error(&context.request_id, &err);
+                if let Err(err) = execute_chat_completions_request(
+                    &mut stream,
+                    core,
+                    &context,
+                    logger,
+                    &prepared,
+                    &client_id,
+                ) {
+                    let failure_bundle_id =
+                        capture_gateway_failure_bundle(core, &context, &prepared, &client_id, &err);
+                    let response =
+                        map_openai_error(&context.request_id, &err, failure_bundle_id.as_deref());
                     log_response(logger, &context.request_id, response.status_code)?;
                     return write_http_response(&mut stream, &context.request_id, response);
                 }
@@ -1090,6 +1098,28 @@ fn handle_provider_request(snapshot: &GatewayStatusSnapshot, request_id: &str) -
             "provider": "tablinq",
             "openai_compatible": true,
             "base_url": format!("http://{}:{}/v1", snapshot.host, snapshot.port),
+            "refusal_conditions": [
+                {
+                    "code": "auth_required",
+                    "behavior": "refuse",
+                    "when": "the managed browser session is signed out or has expired",
+                },
+                {
+                    "code": "capability_missing",
+                    "behavior": "refuse",
+                    "when": "the selected live account or workspace no longer exposes the requested model or mode",
+                },
+                {
+                    "code": "ui_drift",
+                    "behavior": "refuse",
+                    "when": "the live page no longer matches the known automation controls",
+                },
+                {
+                    "code": "upstream_timeout",
+                    "behavior": "refuse",
+                    "when": "the managed page stalls instead of producing a stable streamed response",
+                }
+            ],
             "request_annotations": {
                 "field": "tablinq_request_role",
                 "parent_request_id_field": "tablinq_parent_request_id",
@@ -1319,17 +1349,108 @@ fn artifact_object(core: &CoreService, artifact: ArtifactSummary) -> Result<Valu
 fn request_role_policy_response(request_id: &str, role: RequestRole) -> Option<HttpResponse> {
     match role {
         RequestRole::Primary | RequestRole::Branch => None,
-        RequestRole::Subagent => Some(json_response(
-            429,
-            openai_error(
+        RequestRole::Subagent => {
+            let mut body = openai_error(
                 429,
                 "overloaded_error",
                 "subagents_disabled",
                 &format!(
                     "{request_id}: subagent requests are disabled by default for the single-browser OpenClaude preset"
                 ),
-            ),
-        )),
+            );
+            body["request_id"] = Value::String(request_id.to_owned());
+            body["tablinq_refusal_reason"] = Value::String("subagents_disabled".to_owned());
+            body["tablinq_guidance"] = json!(provider_guidance_for_code("subagents_disabled"));
+            Some(json_response(429, body))
+        }
+    }
+}
+
+fn capture_gateway_failure_bundle(
+    core: &CoreService,
+    context: &RequestContext,
+    prepared: &PreparedChatRequest,
+    client_id: &str,
+    err: &anyhow::Error,
+) -> Option<String> {
+    if !should_capture_gateway_failure_bundle(err) {
+        return None;
+    }
+    let message = format!("{err:#}");
+    core.capture_failure_bundle(
+        Some(prepared.mode()),
+        &message,
+        Some(GatewayRequestContext {
+            request_id: context.request_id.clone(),
+            request_path: context.request.path.clone(),
+            client_id: Some(client_id.to_owned()),
+            model: Some(prepared.model_id.to_owned()),
+            request_role: Some(request_role_name(prepared.request_role).to_owned()),
+            parent_request_id: prepared.parent_request_id.clone(),
+            job_id: Some(prepared.job_id().to_owned()),
+            streaming: prepared.request.stream,
+        }),
+    )
+    .ok()
+    .map(|bundle| bundle.bundle_id)
+}
+
+fn should_capture_gateway_failure_bundle(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}");
+    matches!(
+        error_code_for_message(&message),
+        ErrorCode::AuthRequired
+            | ErrorCode::CapabilityMissing
+            | ErrorCode::BrowserLaunch
+            | ErrorCode::ProfileLocked
+            | ErrorCode::ActionTimeout
+            | ErrorCode::UiDrift
+            | ErrorCode::ResearchJobFailed
+    )
+}
+
+fn provider_guidance_for_code(code: &str) -> Vec<&'static str> {
+    match code {
+        "auth_required" => vec![
+            "provider mode refuses requests when the managed browser is signed out; sign in in the managed profile and retry",
+            "run gpt doctor or GET /ready to confirm the browser session is authenticated before retrying queued work",
+        ],
+        "capability_missing" => vec![
+            "provider mode refuses requests when the selected model or mode is unavailable instead of guessing a fallback",
+            "refresh GET /v1/capabilities after account, workspace, or UI changes before retrying the request",
+        ],
+        "browser_unavailable" => vec![
+            "provider mode refuses requests until the managed browser can be opened exclusively",
+            "close other managed-profile browser instances or reset the managed profile if the browser stays unavailable",
+        ],
+        "upstream_timeout" => vec![
+            "provider mode refuses long-stalled requests instead of inventing a partial answer",
+            "inspect the latest failure bundle and retry after the managed tab is responsive again",
+        ],
+        "ui_drift" => vec![
+            "provider mode refuses when the live page no longer matches known controls",
+            "inspect the linked failure bundle before retrying so selector or capability drift is actionable",
+        ],
+        "research_job_failed" => vec![
+            "provider mode refuses failed research runs instead of returning incomplete research output",
+        ],
+        "subagents_disabled" => vec![
+            "provider mode keeps subagents disabled by default to protect the single warm browser session",
+        ],
+        _ => Vec::new(),
+    }
+}
+
+fn refusal_reason_for_code(code: &str) -> Option<&str> {
+    match code {
+        "auth_required"
+        | "capability_missing"
+        | "browser_unavailable"
+        | "upstream_timeout"
+        | "ui_drift"
+        | "research_job_failed"
+        | "subagents_disabled" => Some(code),
+        _ => None,
     }
 }
 
@@ -1370,6 +1491,13 @@ impl PreparedChatRequest {
         match &self.job {
             PreparedChatJob::Ask(job) => &job.job_id,
             PreparedChatJob::Research(job) => &job.job_id,
+        }
+    }
+
+    fn mode(&self) -> shared_protocol::Mode {
+        match &self.job {
+            PreparedChatJob::Ask(job) => job.command.mode,
+            PreparedChatJob::Research(_) => shared_protocol::Mode::Research,
         }
     }
 }
@@ -1420,6 +1548,7 @@ fn execute_chat_completions_request(
     context: &RequestContext,
     logger: &JsonLogger,
     prepared: &PreparedChatRequest,
+    client_id: &str,
 ) -> Result<()> {
     ensure_browser_session(core)?;
 
@@ -1502,7 +1631,16 @@ fn execute_chat_completions_request(
                 Ok(())
             }
             Err(err) => {
-                write_sse_event(stream, &map_openai_error_value(&context.request_id, &err))?;
+                let failure_bundle_id =
+                    capture_gateway_failure_bundle(core, context, prepared, client_id, &err);
+                write_sse_event(
+                    stream,
+                    &map_openai_error_value(
+                        &context.request_id,
+                        &err,
+                        failure_bundle_id.as_deref(),
+                    ),
+                )?;
                 write_sse_done(stream)?;
                 Ok(())
             }
@@ -1777,23 +1915,59 @@ fn authorize_request(
     }
 }
 
-fn map_openai_error(request_id: &str, err: &anyhow::Error) -> HttpResponse {
+fn map_openai_error(
+    request_id: &str,
+    err: &anyhow::Error,
+    failure_bundle_id: Option<&str>,
+) -> HttpResponse {
     let (status, error_type, code, message) = map_openai_error_parts(err);
     json_response(
         status,
-        openai_error(
-            status,
-            error_type,
+        annotate_openai_error_value(
+            request_id,
+            openai_error(
+                status,
+                error_type,
+                code,
+                &format!("{request_id}: {message}"),
+            ),
             code,
-            &format!("{request_id}: {message}"),
+            failure_bundle_id,
         ),
     )
 }
 
-fn map_openai_error_value(request_id: &str, err: &anyhow::Error) -> Value {
+fn map_openai_error_value(
+    request_id: &str,
+    err: &anyhow::Error,
+    failure_bundle_id: Option<&str>,
+) -> Value {
     let (status, error_type, code, message) = map_openai_error_parts(err);
-    let mut value = openai_error(status, error_type, code, &message);
+    annotate_openai_error_value(
+        request_id,
+        openai_error(status, error_type, code, &message),
+        code,
+        failure_bundle_id,
+    )
+}
+
+fn annotate_openai_error_value(
+    request_id: &str,
+    mut value: Value,
+    code: &str,
+    failure_bundle_id: Option<&str>,
+) -> Value {
     value["request_id"] = Value::String(request_id.to_owned());
+    if let Some(bundle_id) = failure_bundle_id {
+        value["tablinq_failure_bundle_id"] = Value::String(bundle_id.to_owned());
+    }
+    let guidance = provider_guidance_for_code(code);
+    if !guidance.is_empty() {
+        value["tablinq_guidance"] = json!(guidance);
+    }
+    if let Some(reason) = refusal_reason_for_code(code) {
+        value["tablinq_refusal_reason"] = Value::String(reason.to_owned());
+    }
     value
 }
 
@@ -3187,11 +3361,40 @@ mod tests {
         assert_eq!(response.status_code, 400);
         let body: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["error"]["code"], "capability_missing");
+        assert_eq!(body["tablinq_refusal_reason"], "capability_missing");
+        assert!(body["tablinq_failure_bundle_id"].as_str().is_some());
+        assert!(
+            body["tablinq_guidance"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value
+                    .as_str()
+                    .is_some_and(|text| text.contains("refuses requests")))
+        );
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
         let _ = fake_server.kill();
         let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn openai_auth_errors_include_refusal_guidance() {
+        let err = anyhow::anyhow!("auth required: managed browser session is not authenticated");
+        let response = map_openai_error("req-auth-expired", &err, Some("bundle-auth-1"));
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(response.status_code, 503);
+        assert_eq!(body["error"]["code"], "auth_required");
+        assert_eq!(body["tablinq_refusal_reason"], "auth_required");
+        assert_eq!(body["tablinq_failure_bundle_id"], "bundle-auth-1");
+        assert!(
+            body["tablinq_guidance"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str().is_some_and(|text| text.contains("sign in")))
+        );
     }
 
     #[test]

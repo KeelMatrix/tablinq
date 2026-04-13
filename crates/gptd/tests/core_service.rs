@@ -1,7 +1,7 @@
 use gptd::{AppConfig, CoreService};
 use shared_protocol::{
-    AskCommand, BrowserOpenRequest, EventPayload, JobKind, JobStatus, Mode, PullArtifactCommand,
-    ResearchCommand, StreamChunkKind,
+    AskCommand, BrowserOpenRequest, EventPayload, GatewayRequestContext, JobKind, JobStatus, Mode,
+    PullArtifactCommand, ResearchCommand, StreamChunkKind,
 };
 use std::fs;
 use std::net::TcpListener;
@@ -238,4 +238,44 @@ fn prepared_jobs_persist_across_restart() {
     let detail = restarted.job_detail(&prepared.job_id).unwrap();
     assert_eq!(detail.status, JobStatus::Queued);
     assert_eq!(detail.input_text.as_deref(), Some("hold this in the queue"));
+}
+
+#[test]
+fn capture_failure_bundle_persists_gateway_request_context() {
+    let _guard = integration_lock();
+    let dir = tempdir().unwrap();
+
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let core = CoreService::new(config).unwrap();
+    let bundle = core
+        .capture_failure_bundle(
+            Some(Mode::Search),
+            "ui drift: provider request could not recover",
+            Some(GatewayRequestContext {
+                request_id: "req-provider-1".to_owned(),
+                request_path: "/v1/chat/completions".to_owned(),
+                client_id: Some("openclaude".to_owned()),
+                model: Some("tablinq-search".to_owned()),
+                request_role: Some("primary".to_owned()),
+                parent_request_id: None,
+                job_id: Some("job-provider-1".to_owned()),
+                streaming: true,
+            }),
+        )
+        .unwrap();
+
+    let stored = core
+        .doctor_report()
+        .unwrap()
+        .latest_failure_bundle
+        .expect("latest failure bundle");
+    let gateway_request = stored.gateway_request.expect("gateway request context");
+    assert_eq!(bundle.bundle_id, stored.bundle_id);
+    assert_eq!(gateway_request.request_id, "req-provider-1");
+    assert_eq!(gateway_request.request_path, "/v1/chat/completions");
+    assert_eq!(gateway_request.client_id.as_deref(), Some("openclaude"));
+    assert_eq!(gateway_request.model.as_deref(), Some("tablinq-search"));
+    assert_eq!(gateway_request.request_role.as_deref(), Some("primary"));
+    assert_eq!(gateway_request.job_id.as_deref(), Some("job-provider-1"));
+    assert!(gateway_request.streaming);
 }
