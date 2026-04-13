@@ -15,7 +15,8 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use shared_protocol::{
     ArtifactSummary, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, ErrorCode,
-    EventPayload, GatewayRequestContext, StreamChunkKind,
+    EventPayload, GatewayRequestContext, JobStatus, RequestExecutionKind, RequestSummary,
+    RequestUsage, StreamChunkKind,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
@@ -39,8 +40,10 @@ const V1_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const V1_FILES_PATH: &str = "/v1/files";
 const V1_ARTIFACTS_PATH: &str = "/v1/artifacts";
 const V1_PROVIDER_PATH: &str = "/v1/provider";
+const V1_USAGE_PATH: &str = "/v1/usage";
 const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 const STAGED_UPLOAD_RETENTION_SECS: i64 = 24 * 60 * 60;
+const REQUEST_SUMMARY_LIMIT: usize = 50;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GatewayStatusSnapshot {
@@ -900,6 +903,16 @@ fn handle_connection(
             }
             Err(response) => response,
         },
+        ("GET", V1_USAGE_PATH) => match authorize_request(config, &context.request, false) {
+            Ok(()) => handle_usage_request(core, &context.request_id)?,
+            Err(response) => response,
+        },
+        ("GET", _) if request_id_from_path(&context.request.path).is_some() => {
+            match authorize_request(config, &context.request, false) {
+                Ok(()) => handle_request_summary_request(core, &context)?,
+                Err(response) => response,
+            }
+        }
         ("GET", V1_FILES_PATH) => match authorize_request(config, &context.request, false) {
             Ok(()) => handle_files_list_request(upload_store, &context.request_id)?,
             Err(response) => response,
@@ -960,21 +973,38 @@ fn handle_connection(
                     log_response(logger, &context.request_id, response.status_code)?;
                     return write_http_response(&mut stream, &context.request_id, response);
                 }
+                let request_started_at = Utc::now();
                 let client_id = client_id_for_request(&context.request, &remote_addr);
+                let queue_wait_started_at = Instant::now();
                 let _lease =
                     match scheduler.acquire(&context.request_id, prepared.job_id(), &client_id) {
                         Ok(lease) => lease,
                         Err(err) => {
-                            let _ = core.fail_job(prepared.job_id(), &format!("{err:#}"));
+                            let queue_wait_ms = queue_wait_started_at.elapsed().as_millis() as u64;
+                            if format!("{err:#}").contains("cancelled") {
+                                let _ =
+                                    core.mark_job_cancelled(prepared.job_id(), &format!("{err:#}"));
+                            } else {
+                                let _ = core.fail_job(prepared.job_id(), &format!("{err:#}"));
+                            }
                             let response = queue_error_response(
                                 &context.request_id,
                                 &scheduler.snapshot().unwrap_or(scheduler_status),
                                 &err,
                             );
+                            let _ = core.record_request_summary(&build_request_summary(
+                                &context,
+                                &prepared,
+                                request_started_at,
+                                Utc::now(),
+                                queue_wait_ms,
+                                outcome_from_error(&err),
+                            ));
                             log_response(logger, &context.request_id, response.status_code)?;
                             return write_http_response(&mut stream, &context.request_id, response);
                         }
                     };
+                let queue_wait_ms = queue_wait_started_at.elapsed().as_millis() as u64;
                 if core
                     .job_cancel_requested(prepared.job_id())
                     .unwrap_or(false)
@@ -988,10 +1018,20 @@ fn handle_connection(
                         prepared.job_id(),
                         "request cancelled before execution",
                     );
+                    let _ = core.record_request_summary(&build_request_summary(
+                        &context,
+                        &prepared,
+                        request_started_at,
+                        Utc::now(),
+                        queue_wait_ms,
+                        RequestOutcome {
+                            kind: RequestOutcomeKind::Cancelled,
+                        },
+                    ));
                     log_response(logger, &context.request_id, response.status_code)?;
                     return write_http_response(&mut stream, &context.request_id, response);
                 }
-                if let Err(err) = execute_chat_completions_request(
+                match execute_chat_completions_request(
                     &mut stream,
                     core,
                     &context,
@@ -999,12 +1039,36 @@ fn handle_connection(
                     &prepared,
                     &client_id,
                 ) {
-                    let failure_bundle_id =
-                        capture_gateway_failure_bundle(core, &context, &prepared, &client_id, &err);
-                    let response =
-                        map_openai_error(&context.request_id, &err, failure_bundle_id.as_deref());
-                    log_response(logger, &context.request_id, response.status_code)?;
-                    return write_http_response(&mut stream, &context.request_id, response);
+                    Ok(outcome) => {
+                        let _ = core.record_request_summary(&build_request_summary(
+                            &context,
+                            &prepared,
+                            request_started_at,
+                            Utc::now(),
+                            queue_wait_ms,
+                            outcome,
+                        ));
+                    }
+                    Err(err) => {
+                        let _ = core.record_request_summary(&build_request_summary(
+                            &context,
+                            &prepared,
+                            request_started_at,
+                            Utc::now(),
+                            queue_wait_ms,
+                            outcome_from_error(&err),
+                        ));
+                        let failure_bundle_id = capture_gateway_failure_bundle(
+                            core, &context, &prepared, &client_id, &err,
+                        );
+                        let response = map_openai_error(
+                            &context.request_id,
+                            &err,
+                            failure_bundle_id.as_deref(),
+                        );
+                        log_response(logger, &context.request_id, response.status_code)?;
+                        return write_http_response(&mut stream, &context.request_id, response);
+                    }
                 }
                 return Ok(());
             }
@@ -1194,6 +1258,57 @@ fn handle_provider_request(
             }
         }),
     )
+}
+
+fn handle_usage_request(core: &CoreService, request_id: &str) -> Result<HttpResponse> {
+    let history = core.list_request_summaries(REQUEST_SUMMARY_LIMIT)?;
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.request_summary_list",
+            "request_id": request_id,
+            "data": history.requests,
+            "limit": REQUEST_SUMMARY_LIMIT,
+            "warnings": ["token usage is unavailable for the browser-backed provider"],
+        }),
+    ))
+}
+
+fn handle_request_summary_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(target_request_id) = request_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+
+    let summary = match core.request_summary(target_request_id) {
+        Ok(summary) => summary,
+        Err(_) => {
+            return Ok(json_response(
+                404,
+                json!({
+                    "request_id": context.request_id,
+                    "error": "not_found",
+                }),
+            ));
+        }
+    };
+
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.request_summary",
+            "request_id": context.request_id,
+            "data": summary,
+        }),
+    ))
 }
 
 fn handle_files_list_request(upload_store: &UploadStore, request_id: &str) -> Result<HttpResponse> {
@@ -1534,6 +1649,18 @@ impl PreparedChatRequest {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RequestOutcomeKind {
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RequestOutcome {
+    kind: RequestOutcomeKind,
+}
+
 fn prepare_chat_completions_request(
     core: &CoreService,
     upload_store: &UploadStore,
@@ -1581,7 +1708,7 @@ fn execute_chat_completions_request(
     logger: &JsonLogger,
     prepared: &PreparedChatRequest,
     client_id: &str,
-) -> Result<()> {
+) -> Result<RequestOutcome> {
     ensure_browser_session(core)?;
 
     if prepared.request.stream {
@@ -1660,7 +1787,9 @@ fn execute_chat_completions_request(
                         "job_id": prepared.job_id(),
                     }),
                 )?;
-                Ok(())
+                Ok(RequestOutcome {
+                    kind: RequestOutcomeKind::Completed,
+                })
             }
             Err(err) => {
                 let failure_bundle_id =
@@ -1674,7 +1803,7 @@ fn execute_chat_completions_request(
                     ),
                 )?;
                 write_sse_done(stream)?;
-                Ok(())
+                Ok(outcome_from_error(&err))
             }
         }
     } else {
@@ -1705,7 +1834,61 @@ fn execute_chat_completions_request(
             }
         };
         log_response(logger, &context.request_id, response.status_code)?;
-        write_http_response(stream, &context.request_id, response)
+        write_http_response(stream, &context.request_id, response)?;
+        Ok(RequestOutcome {
+            kind: RequestOutcomeKind::Completed,
+        })
+    }
+}
+
+fn build_request_summary(
+    context: &RequestContext,
+    prepared: &PreparedChatRequest,
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    queue_wait_ms: u64,
+    outcome: RequestOutcome,
+) -> RequestSummary {
+    RequestSummary {
+        request_id: context.request_id.clone(),
+        job_id: prepared.job_id().to_owned(),
+        model_id: Some(prepared.model_id.to_owned()),
+        request_role: Some(request_role_name(prepared.request_role).to_owned()),
+        parent_request_id: prepared.parent_request_id.clone(),
+        execution_kind: match &prepared.job {
+            PreparedChatJob::Ask(_) => RequestExecutionKind::Ask,
+            PreparedChatJob::Research(_) => RequestExecutionKind::Research,
+        },
+        status: match outcome.kind {
+            RequestOutcomeKind::Completed => JobStatus::Completed,
+            RequestOutcomeKind::Failed => JobStatus::Failed,
+            RequestOutcomeKind::Cancelled => JobStatus::Cancelled,
+        },
+        cancelled: outcome.kind == RequestOutcomeKind::Cancelled,
+        start_time,
+        end_time: Some(end_time),
+        duration_ms: Some((end_time - start_time).num_milliseconds().max(0) as u64),
+        queue_wait_ms,
+        usage: RequestUsage {
+            status: "unknown".to_owned(),
+            prompt_tokens: None,
+            completion_tokens: None,
+            total_tokens: None,
+        },
+        warnings: vec![
+            "exact token usage is unavailable for the browser-backed provider".to_owned(),
+        ],
+    }
+}
+
+fn outcome_from_error(err: &anyhow::Error) -> RequestOutcome {
+    let message = format!("{err:#}");
+    RequestOutcome {
+        kind: if message.contains("cancelled") {
+            RequestOutcomeKind::Cancelled
+        } else {
+            RequestOutcomeKind::Failed
+        },
     }
 }
 
@@ -1820,6 +2003,15 @@ fn handle_cancel_request(
 fn cancel_request_id_from_path(path: &str) -> Option<&str> {
     let suffix = path.strip_prefix(V1_REQUESTS_PREFIX)?;
     suffix.strip_suffix("/cancel")
+}
+
+fn request_id_from_path(path: &str) -> Option<&str> {
+    let suffix = path.strip_prefix(V1_REQUESTS_PREFIX)?;
+    if suffix.is_empty() || suffix.contains('/') {
+        None
+    } else {
+        Some(suffix)
+    }
 }
 
 fn client_id_for_request(request: &HttpRequest, remote_addr: &str) -> String {
@@ -3499,6 +3691,147 @@ mod tests {
     }
 
     #[test]
+    fn request_summary_endpoint_persists_latency_and_unknown_usage_for_success() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(fake_url);
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "summarize latency" }]
+        }))
+        .unwrap();
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "req-metrics-success"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 200);
+
+        let summary = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            "/v1/requests/req-metrics-success",
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(summary.status_code, 200);
+        let summary_body: Value = serde_json::from_slice(&summary.body).unwrap();
+        assert_eq!(summary_body["data"]["request_id"], "req-metrics-success");
+        assert_eq!(summary_body["data"]["status"], "completed");
+        assert_eq!(summary_body["data"]["execution_kind"], "ask");
+        assert_eq!(summary_body["data"]["cancelled"], false);
+        assert!(summary_body["data"]["duration_ms"].as_u64().is_some());
+        assert!(summary_body["data"]["queue_wait_ms"].as_u64().is_some());
+        assert_eq!(summary_body["data"]["usage"]["status"], "unknown");
+        assert!(
+            summary_body["data"]["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str()
+                    == Some("exact token usage is unavailable for the browser-backed provider"))
+        );
+
+        let usage = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_USAGE_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(usage.status_code, 200);
+        let usage_body: Value = serde_json::from_slice(&usage.body).unwrap();
+        assert_eq!(usage_body["object"], "tablinq.request_summary_list");
+        assert!(
+            usage_body["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value["request_id"] == "req-metrics-success")
+        );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn request_summary_endpoint_records_failed_requests_with_latency() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-failure"));
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [{ "role": "user", "content": "record a failed summary" }]
+        }))
+        .unwrap();
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "req-metrics-failure"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 502);
+
+        let summary = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            "/v1/requests/req-metrics-failure",
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(summary.status_code, 200);
+        let summary_body: Value = serde_json::from_slice(&summary.body).unwrap();
+        assert_eq!(summary_body["data"]["status"], "failed");
+        assert_eq!(summary_body["data"]["execution_kind"], "research");
+        assert_eq!(summary_body["data"]["cancelled"], false);
+        assert!(summary_body["data"]["duration_ms"].as_u64().is_some());
+        assert!(summary_body["data"]["end_time"].as_str().is_some());
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
     fn chat_completions_streaming_emits_sse_chunks_and_done() {
         let _guard = integration_lock();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
@@ -4348,6 +4681,22 @@ mod tests {
         assert_eq!(running.status_code, 409);
         let body: Value = serde_json::from_slice(&running.body).unwrap();
         assert_eq!(body["error"]["code"], "cancelled");
+
+        let summary = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            "/v1/requests/req-running-cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(summary.status_code, 200);
+        let summary_body: Value = serde_json::from_slice(&summary.body).unwrap();
+        assert_eq!(summary_body["data"]["status"], "cancelled");
+        assert_eq!(summary_body["data"]["cancelled"], true);
+        assert!(summary_body["data"]["duration_ms"].as_u64().is_some());
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();

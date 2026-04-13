@@ -170,7 +170,7 @@ fn daemon_creates_config_and_applies_db_migrations() {
     assert!(config.paths.db_path.exists());
 
     let db = Database::open(&config.paths.db_path).unwrap();
-    assert_eq!(db.migration_count().unwrap(), 5);
+    assert_eq!(db.migration_count().unwrap(), 6);
 
     stop_daemon(dir.path(), &mut child);
 }

@@ -82,6 +82,13 @@ pub enum JobKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum RequestExecutionKind {
+    Ask,
+    Research,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum StreamChunkKind {
     Delta,
     Citation,
@@ -763,6 +770,40 @@ pub struct JobSummary {
 #[serde(deny_unknown_fields)]
 pub struct JobList {
     pub jobs: Vec<JobSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RequestUsage {
+    pub status: String,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RequestSummary {
+    pub request_id: String,
+    pub job_id: String,
+    pub model_id: Option<String>,
+    pub request_role: Option<String>,
+    pub parent_request_id: Option<String>,
+    pub execution_kind: RequestExecutionKind,
+    pub status: JobStatus,
+    pub cancelled: bool,
+    pub start_time: DateTime<Utc>,
+    pub end_time: Option<DateTime<Utc>>,
+    pub duration_ms: Option<u64>,
+    pub queue_wait_ms: u64,
+    pub usage: RequestUsage,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RequestHistory {
+    pub requests: Vec<RequestSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
