@@ -6,10 +6,10 @@ use chrono::{DateTime, Utc};
 use shared_protocol::{
     AckEvent, ArtifactList, ArtifactPullResult, AskCommand, AskResult, BrowserDoctor,
     BrowserOpenRequest, BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot,
-    ConfigSnapshot, DoctorReport, ErrorCode, EventPayload, FailureBundle, HealthCheck,
-    HealthStatus, JobDetail, JobKind, JobList, JobState, JobStatus, PullArtifactCommand,
-    ResearchCommand, ResearchResult, SelectorPackSummary, SessionList, StreamChunk,
-    StreamChunkKind,
+    ConfigSnapshot, DoctorReport, ErrorCode, EventPayload, FailureBundle, GatewayRequestContext,
+    HealthCheck, HealthStatus, JobDetail, JobKind, JobList, JobState, JobStatus,
+    PullArtifactCommand, ResearchCommand, ResearchResult, SelectorPackSummary, SessionList,
+    StreamChunk, StreamChunkKind,
 };
 use std::collections::HashSet;
 use std::fs;
@@ -640,6 +640,7 @@ impl CoreService {
         &self,
         mode: Option<shared_protocol::Mode>,
         message: &str,
+        gateway_request: Option<GatewayRequestContext>,
     ) -> Result<FailureBundle> {
         let db = self.open_db()?;
         let created_at = Utc::now();
@@ -689,6 +690,7 @@ impl CoreService {
             logs_path: Some(self.config.paths.log_path.display().to_string()),
             strategy_attempts: diagnostics.strategy_attempts,
             capability_matrix: diagnostics.capability_matrix,
+            gateway_request,
         };
         let bundle_json_path = bundle_dir.join("bundle.json");
         fs::write(&bundle_json_path, serde_json::to_vec_pretty(&bundle)?)

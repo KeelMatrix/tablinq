@@ -1361,11 +1361,18 @@ async function captureAriaSnapshot(page: Page): Promise<string> {
 function inferAuthenticated(currentUrl: string): boolean {
   try {
     const url = new URL(currentUrl);
+    const localHost =
+      url.hostname === "127.0.0.1" || url.hostname === "localhost";
+    if (localHost) {
+      const path = url.pathname.toLowerCase();
+      if (path.includes("login") || path.includes("auth")) {
+        return false;
+      }
+    }
     return (
       url.hostname === "chatgpt.com" ||
       url.hostname === "chat.openai.com" ||
-      url.hostname === "127.0.0.1" ||
-      url.hostname === "localhost"
+      localHost
     );
   } catch {
     return false;
