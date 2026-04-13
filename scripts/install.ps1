@@ -1,7 +1,9 @@
 param(
   [string]$PackageRoot = (Join-Path $PSScriptRoot "..\\dist\\package\\tablinq"),
   [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "Tablinq\\install"),
-  [string]$StateRoot = (Join-Path $env:LOCALAPPDATA "Tablinq")
+  [string]$StateRoot = (Join-Path $env:LOCALAPPDATA "Tablinq"),
+  [switch]$AutoStartDaemon,
+  [switch]$AutoStartGateway
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,6 +78,36 @@ function Write-NativeHostManifest {
   $payload | ConvertTo-Json -Depth 4 | Set-Content -Path $ManifestPath
 }
 
+function Get-StartupFolder {
+  Join-Path $env:APPDATA "Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+}
+
+function Write-StartupLauncher {
+  param(
+    [string]$Path,
+    [string]$GptExecutable,
+    [string]$StateRoot,
+    [string]$CommandText
+  )
+
+  $content = @"
+@echo off
+start "" /min "$GptExecutable" --state-root "$StateRoot" $CommandText
+"@
+  Set-Content -Path $Path -Value $content -Encoding ascii
+}
+
+function Install-StartupLauncher {
+  param(
+    [string]$SourcePath,
+    [string]$FileName
+  )
+
+  $startupFolder = Get-StartupFolder
+  New-Item -ItemType Directory -Force -Path $startupFolder | Out-Null
+  Copy-Item -Path $SourcePath -Destination (Join-Path $startupFolder $FileName) -Force
+}
+
 if (-not (Test-Path $PackageRoot)) {
   throw "Package root does not exist: $PackageRoot"
 }
@@ -88,6 +120,7 @@ New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 Copy-Item -Path (Join-Path $PackageRoot "*") -Destination $InstallRoot -Recurse -Force
 
 $gptBin = Join-Path $InstallRoot "bin\\gpt.exe"
+$gatewayBin = Join-Path $InstallRoot "bin\\tablinq-gateway.exe"
 $hostBin = Join-Path $InstallRoot "bin\\tablinq-host.exe"
 $extensionManifestPath = Join-Path $InstallRoot "extension\\manifest.json"
 $extensionId = Get-ExtensionIdFromKey -ManifestPath $extensionManifestPath
@@ -107,13 +140,37 @@ New-Item -Path $edgeRegistryKey -Force -Value $edgeManifestPath | Out-Null
 
 & $gptBin --state-root $StateRoot config show | Out-Null
 
+$startupHelperDir = Join-Path $InstallRoot "startup"
+New-Item -ItemType Directory -Force -Path $startupHelperDir | Out-Null
+$daemonStartupHelper = Join-Path $startupHelperDir "start-tablinq-daemon.cmd"
+$gatewayStartupHelper = Join-Path $startupHelperDir "start-tablinq-gateway.cmd"
+Write-StartupLauncher -Path $daemonStartupHelper -GptExecutable $gptBin -StateRoot $StateRoot -CommandText "daemon start"
+Write-StartupLauncher -Path $gatewayStartupHelper -GptExecutable $gptBin -StateRoot $StateRoot -CommandText "gateway start"
+
+if ($AutoStartDaemon) {
+  Install-StartupLauncher -SourcePath $daemonStartupHelper -FileName "Tablinq Daemon.cmd"
+}
+
+if ($AutoStartGateway) {
+  Install-StartupLauncher -SourcePath $gatewayStartupHelper -FileName "Tablinq Gateway.cmd"
+}
+
 Write-Host "Installed Tablinq to $InstallRoot"
 Write-Host "State root: $StateRoot"
 Write-Host "Detected browser: $(if ($browserPath) { $browserPath } else { 'not found' })"
 Write-Host "Extension path: $(Join-Path $InstallRoot 'extension')"
 Write-Host "Extension ID: $extensionId"
+Write-Host "Gateway binary: $gatewayBin"
+Write-Host "Startup helper scripts:"
+Write-Host "  daemon: $daemonStartupHelper"
+Write-Host "  gateway: $gatewayStartupHelper"
+if ($AutoStartDaemon -or $AutoStartGateway) {
+  Write-Host "Startup folder: $(Get-StartupFolder)"
+}
 Write-Host "First run:"
 Write-Host "  1. Load the unpacked extension from $(Join-Path $InstallRoot 'extension') in Edge or Chrome."
 Write-Host "  2. Run: $gptBin daemon start"
-Write-Host "  3. Run: $gptBin browser open"
-Write-Host "  4. Log in once in the managed browser profile."
+Write-Host "  3. Run: $gptBin gateway start"
+Write-Host "  4. Run: $gptBin browser open"
+Write-Host "  5. Log in once in the managed browser profile."
+Write-Host "  6. Run: $gptBin status"

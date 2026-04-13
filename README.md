@@ -40,10 +40,11 @@ flowchart LR
 6. Install locally with `scripts/install.ps1` on Windows or `./scripts/install.sh` on Unix-like systems.
 7. Optionally start the fake harness with `pnpm --filter @tablinq/fake-chatgpt start`.
 8. Start the local control plane with `cargo run -p gpt -- daemon start`.
-9. Open a managed browser with `cargo run -p gpt -- browser open`.
-10. Inspect it with `cargo run -p gpt -- browser profile-info` or `cargo run -p gpt -- doctor`.
+9. Start the provider gateway with `cargo run -p gpt -- gateway start`.
+10. Open a managed browser with `cargo run -p gpt -- browser open`.
+11. Inspect it with `cargo run -p gpt -- status` or `cargo run -p gpt -- doctor`.
 
-Install and troubleshooting detail lives in [docs/install.md](/C:/Users/user/Desktop/gpt-cli/docs/install.md) and [docs/troubleshooting.md](/C:/Users/user/Desktop/gpt-cli/docs/troubleshooting.md).
+Install, provider, and troubleshooting detail lives in [docs/install.md](/C:/Users/user/Desktop/gpt-cli/docs/install.md), [docs/provider-mode.md](/C:/Users/user/Desktop/gpt-cli/docs/provider-mode.md), and [docs/troubleshooting.md](/C:/Users/user/Desktop/gpt-cli/docs/troubleshooting.md).
 
 ## Part 11 Scope
 
@@ -86,9 +87,13 @@ This repository now includes the Part 11 hardening and live-site adaptation pass
 ## Implemented Commands
 
 - `gpt version`
+- `gpt status`
 - `gpt daemon start`
 - `gpt daemon status`
 - `gpt daemon stop`
+- `gpt gateway start`
+- `gpt gateway status`
+- `gpt gateway stop`
 - `gpt ask "hello"`
 - `gpt ask --model instant --mode search "hello"`
 - `gpt ask --model thinking --effort extended "hello"`

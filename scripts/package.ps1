@@ -70,12 +70,12 @@ New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
 
 Push-Location $repoRoot
 try {
-  Invoke-Step cargo @("build", "--profile", $Profile, "-p", "gpt", "-p", "gptd", "-p", "tablinq-host") $repoRoot
+  Invoke-Step cargo @("build", "--profile", $Profile, "-p", "gpt", "-p", "gptd", "-p", "tablinq-gateway", "-p", "tablinq-host") $repoRoot
   Invoke-Step pnpm @("build") $repoRoot
   Invoke-Step pnpm @("--filter", "@tablinq/browser-adapter", "deploy", "--legacy", "--prod", (Join-Path $packageRoot "browser-adapter")) $repoRoot
 
   $targetDir = Join-Path $repoRoot "target\\$Profile"
-  foreach ($binary in @("gpt.exe", "gptd.exe", "tablinq-host.exe")) {
+  foreach ($binary in @("gpt.exe", "gptd.exe", "tablinq-gateway.exe", "tablinq-host.exe")) {
     Copy-Item -Path (Join-Path $targetDir $binary) -Destination (Join-Path $binRoot $binary) -Force
   }
 
@@ -97,6 +97,10 @@ try {
     profile = $buildMetadata.profile
     built_at_unix_epoch = $buildMetadata.built_at_unix_epoch
     extension_id = $extensionId
+    cli_binary = (Join-Path $binRoot "gpt.exe")
+    daemon_binary = (Join-Path $binRoot "gptd.exe")
+    gateway_binary = (Join-Path $binRoot "tablinq-gateway.exe")
+    native_host_binary = (Join-Path $binRoot "tablinq-host.exe")
     extension_path = (Join-Path $packageRoot "extension")
     browser_adapter_entry = (Join-Path $packageRoot "browser-adapter\\src\\service.js")
   }
