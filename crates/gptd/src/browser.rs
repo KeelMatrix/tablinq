@@ -771,7 +771,7 @@ fn is_recoverable_adapter_error(message: &str) -> bool {
 }
 
 fn should_reset_after_failure(message: &str) -> bool {
-    message.contains("timed out") || message.contains("cancelled")
+    message.contains("cancelled")
 }
 
 fn idle_snapshot(
