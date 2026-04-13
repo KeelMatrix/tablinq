@@ -19,7 +19,39 @@ fn integration_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-fn spawn_fake_chatgpt() -> (Child, String) {
+struct TestChild {
+    child: Child,
+}
+
+impl TestChild {
+    fn spawn(mut command: Command) -> Self {
+        let child = command.spawn().expect("spawn test child");
+        Self { child }
+    }
+}
+
+impl std::ops::Deref for TestChild {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for TestChild {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.child
+    }
+}
+
+impl Drop for TestChild {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn spawn_fake_chatgpt() -> (TestChild, String) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("allocate tcp port");
     let port = listener.local_addr().expect("resolve local address").port();
     drop(listener);
@@ -30,14 +62,14 @@ fn spawn_fake_chatgpt() -> (Child, String) {
         .join("packages")
         .join("fake-chatgpt")
         .join("server.mjs");
-    let child = Command::new("node")
+    let mut command = Command::new("node");
+    command
         .arg(server_path)
         .env("PORT", port.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn fake-chatgpt");
+        .stderr(Stdio::null());
+    let child = TestChild::spawn(command);
 
     let url = format!("http://127.0.0.1:{port}");
     let deadline = Instant::now() + Duration::from_secs(10);
