@@ -6,10 +6,10 @@ use chrono::{DateTime, Utc};
 use shared_protocol::{
     AckEvent, ArtifactList, ArtifactPullResult, AskCommand, AskResult, BrowserDoctor,
     BrowserOpenRequest, BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot,
-    ConfigSnapshot, DoctorReport, ErrorCode, EventPayload, FailureBundle, GatewayRequestContext,
-    HealthCheck, HealthStatus, JobDetail, JobKind, JobList, JobState, JobStatus,
-    PullArtifactCommand, RequestHistory, RequestSummary, ResearchCommand, ResearchResult,
-    SelectorPackSummary, SessionList, StreamChunk, StreamChunkKind,
+    ConfigSnapshot, ConversationSummary, DoctorReport, ErrorCode, EventPayload, FailureBundle,
+    GatewayRequestContext, HealthCheck, HealthStatus, JobDetail, JobKind, JobList, JobState,
+    JobStatus, PullArtifactCommand, RequestHistory, RequestSummary, ResearchCommand,
+    ResearchResult, SelectorPackSummary, SessionList, StreamChunk, StreamChunkKind,
 };
 use std::collections::HashSet;
 use std::fs;
@@ -91,7 +91,7 @@ impl CoreService {
             job_id: prepared.job_id.clone(),
             status: JobStatus::Queued,
             message: Some("queued research job".to_owned()),
-            conversation_id: None,
+            conversation_id: prepared.command.conversation_id.clone(),
             updated_at: prepared.created_at,
             artifacts: vec![],
         }))?;
@@ -108,12 +108,19 @@ impl CoreService {
         let db = self.open_db()?;
         let created_at = Utc::now();
         let job_id = format!("job-{}", created_at.timestamp_millis());
-        let conversation_id = match command.conversation_id.clone() {
-            Some(value) => Some(value),
-            None => db.latest_conversation_id()?,
+        let conversation_id = match (command.new_conversation, command.conversation_id.clone()) {
+            (true, _) => None,
+            (false, Some(value)) => {
+                if db.find_conversation(&value)?.is_none() {
+                    anyhow::bail!("conversation {value} was not found");
+                }
+                Some(value)
+            }
+            (false, None) => db.latest_conversation_id()?,
         };
         let mut effective = command.clone();
         effective.conversation_id = conversation_id.clone();
+        effective.new_conversation = false;
 
         db.insert_job(
             &job_id,
@@ -296,19 +303,32 @@ impl CoreService {
         let db = self.open_db()?;
         let created_at = Utc::now();
         let job_id = format!("job-{}", created_at.timestamp_millis());
+        let conversation_id = match (command.new_conversation, command.conversation_id.clone()) {
+            (true, _) => None,
+            (false, Some(value)) => {
+                if db.find_conversation(&value)?.is_none() {
+                    anyhow::bail!("conversation {value} was not found");
+                }
+                Some(value)
+            }
+            (false, None) => db.latest_conversation_id()?,
+        };
+        let mut effective = command.clone();
+        effective.conversation_id = conversation_id.clone();
+        effective.new_conversation = false;
         db.insert_job(
             &job_id,
             JobStatus::Queued,
             Some("queued research job"),
-            None,
+            conversation_id.as_deref(),
             created_at,
             created_at,
         )?;
-        db.upsert_job_detail(&job_id, JobKind::Research, Some(&command.query), None)?;
+        db.upsert_job_detail(&job_id, JobKind::Research, Some(&effective.query), None)?;
 
         Ok(PreparedResearchJob {
             job_id,
-            command,
+            command: effective,
             created_at,
         })
     }
@@ -324,12 +344,16 @@ impl CoreService {
         let db = self.open_db()?;
         if db.job_cancel_requested(&prepared.job_id)? {
             let message = "research cancelled before execution";
-            self.cancel_job_with_detail(&prepared.job_id, None, message)?;
+            self.cancel_job_with_detail(
+                &prepared.job_id,
+                prepared.command.conversation_id.as_deref(),
+                message,
+            )?;
             on_event(EventPayload::JobState(JobState {
                 job_id: prepared.job_id.clone(),
                 status: JobStatus::Cancelled,
                 message: Some(message.to_owned()),
-                conversation_id: None,
+                conversation_id: prepared.command.conversation_id.clone(),
                 updated_at: Utc::now(),
                 artifacts: vec![],
             }))?;
@@ -538,6 +562,10 @@ impl CoreService {
 
     pub fn list_sessions(&self) -> Result<SessionList> {
         self.open_db()?.list_sessions()
+    }
+
+    pub fn find_conversation(&self, conversation_id: &str) -> Result<Option<ConversationSummary>> {
+        self.open_db()?.find_conversation(conversation_id)
     }
 
     pub fn list_jobs(&self) -> Result<JobList> {

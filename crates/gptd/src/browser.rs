@@ -567,6 +567,7 @@ impl AdapterProcess {
         let request = AdapterRequest::Research {
             job_id: job_id.to_owned(),
             query: command.query.clone(),
+            conversation_id: command.conversation_id.clone(),
             files: command.files.clone(),
             output_dir: command.output_dir.clone(),
             timeout_ms: Some(timeout_ms),
@@ -695,6 +696,7 @@ enum AdapterRequest {
     Research {
         job_id: String,
         query: String,
+        conversation_id: Option<String>,
         files: Vec<String>,
         output_dir: Option<String>,
         timeout_ms: Option<u64>,

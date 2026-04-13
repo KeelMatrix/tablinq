@@ -155,6 +155,7 @@ export interface AskExecutionCommand {
 export interface ResearchExecutionCommand {
   jobId: string;
   query: string;
+  conversationId?: string | null;
   files?: string[];
   outputDir?: string | null;
   timeoutMs?: number;
@@ -642,7 +643,9 @@ export class BrowserAdapter {
     onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
   ): Promise<ResearchResultSnapshot> {
     await this.ensureContext(false, this.currentBrowserPath ?? undefined);
-    const page = await this.ensureManagedPage(this.currentTargetUrl);
+    const page = await this.ensureManagedPage(
+      this.resolveConversationTarget(command.conversationId),
+    );
     if (!inferAuthenticated(page.url())) {
       throw new Error(
         "auth required: managed browser session is not authenticated",

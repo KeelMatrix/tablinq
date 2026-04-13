@@ -40,6 +40,7 @@ const V1_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const V1_FILES_PATH: &str = "/v1/files";
 const V1_ARTIFACTS_PATH: &str = "/v1/artifacts";
 const V1_PROVIDER_PATH: &str = "/v1/provider";
+const V1_SESSIONS_PATH: &str = "/v1/sessions";
 const V1_USAGE_PATH: &str = "/v1/usage";
 const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 const STAGED_UPLOAD_RETENTION_SECS: i64 = 24 * 60 * 60;
@@ -907,6 +908,10 @@ fn handle_connection(
             Ok(()) => handle_usage_request(core, &context.request_id)?,
             Err(response) => response,
         },
+        ("GET", V1_SESSIONS_PATH) => match authorize_request(config, &context.request, false) {
+            Ok(()) => handle_sessions_request(core, &context.request_id)?,
+            Err(response) => response,
+        },
         ("GET", _) if request_id_from_path(&context.request.path).is_some() => {
             match authorize_request(config, &context.request, false) {
                 Ok(()) => handle_request_summary_request(core, &context)?,
@@ -1270,6 +1275,18 @@ fn handle_usage_request(core: &CoreService, request_id: &str) -> Result<HttpResp
             "data": history.requests,
             "limit": REQUEST_SUMMARY_LIMIT,
             "warnings": ["token usage is unavailable for the browser-backed provider"],
+        }),
+    ))
+}
+
+fn handle_sessions_request(core: &CoreService, request_id: &str) -> Result<HttpResponse> {
+    let sessions = core.list_sessions()?;
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.session_list",
+            "request_id": request_id,
+            "data": sessions.sessions,
         }),
     ))
 }
@@ -1674,17 +1691,27 @@ fn prepare_chat_completions_request(
     let parent_request_id = request.tablinq_parent_request_id.clone();
     let flattened = openai::flatten_messages(&request)?;
     let files = upload_store.resolve_file_inputs(flattened.file_paths, &flattened.file_ids)?;
+    let conversation_id = request
+        .tablinq_conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let new_conversation = request.tablinq_new_conversation;
 
     let job = if model.uses_research {
         PreparedChatJob::Research(core.prepare_research(shared_protocol::ResearchCommand {
             query: flattened.prompt,
+            conversation_id,
+            new_conversation,
             files,
             output_dir: None,
         })?)
     } else {
         PreparedChatJob::Ask(core.prepare_ask(shared_protocol::AskCommand {
             prompt: flattened.prompt,
-            conversation_id: None,
+            conversation_id,
+            new_conversation,
             mode: model.mode,
             model_class: model.model_class,
             effort: model.effort,
@@ -1810,24 +1837,30 @@ fn execute_chat_completions_request(
         let response = match &prepared.job {
             PreparedChatJob::Research(job) => {
                 let result = core.execute_prepared_research(job, |_event| Ok(()))?;
+                let conversation = core.find_conversation(&result.conversation_id)?;
                 build_chat_completion_response(
                     &context.request_id,
                     prepared.job_id(),
                     prepared.model_id,
                     prepared.request_role,
                     prepared.parent_request_id.as_deref(),
+                    Some(&result.conversation_id),
+                    conversation.as_ref().map(|item| item.session_id.as_str()),
                     &result.report_text,
                     "stop",
                 )
             }
             PreparedChatJob::Ask(job) => {
                 let result = core.execute_prepared_ask(job, |_event| Ok(()))?;
+                let conversation = core.find_conversation(&result.conversation_id)?;
                 build_chat_completion_response(
                     &context.request_id,
                     prepared.job_id(),
                     prepared.model_id,
                     prepared.request_role,
                     prepared.parent_request_id.as_deref(),
+                    Some(&result.conversation_id),
+                    conversation.as_ref().map(|item| item.session_id.as_str()),
                     &result.output_text,
                     "stop",
                 )
@@ -1911,6 +1944,7 @@ fn write_stream_delta(
                 "created": Utc::now().timestamp(),
                 "model": model_id,
                 "request_id": request_id,
+                "tablinq_conversation_id": chunk.conversation_id,
                 "choices": [{
                     "index": 0,
                     "delta": { "content": chunk.text },
@@ -1928,6 +1962,8 @@ fn build_chat_completion_response(
     model_id: &str,
     request_role: RequestRole,
     parent_request_id: Option<&str>,
+    conversation_id: Option<&str>,
+    session_id: Option<&str>,
     content: &str,
     finish_reason: &str,
 ) -> HttpResponse {
@@ -1942,6 +1978,8 @@ fn build_chat_completion_response(
             "tablinq_job_id": job_id,
             "tablinq_request_role": request_role_name(request_role),
             "tablinq_parent_request_id": parent_request_id,
+            "tablinq_conversation_id": conversation_id,
+            "tablinq_session_id": session_id,
             "choices": [{
                 "index": 0,
                 "message": {
@@ -2203,6 +2241,14 @@ fn map_openai_error_parts(err: &anyhow::Error) -> (u16, &'static str, &'static s
     let message = format!("{err:#}");
     if message.contains("cancelled") {
         return (409, "invalid_request_error", "cancelled", message);
+    }
+    if message.contains("was not found") && message.contains("conversation") {
+        return (
+            404,
+            "invalid_request_error",
+            "conversation_not_found",
+            message,
+        );
     }
     if message.contains("staged file") {
         return (400, "invalid_request_error", "file_not_found", message);
@@ -3676,6 +3722,8 @@ mod tests {
         assert_eq!(body["object"], "chat.completion");
         assert_eq!(body["model"], "tablinq-instant");
         assert_eq!(body["choices"][0]["message"]["role"], "assistant");
+        assert!(body["tablinq_conversation_id"].as_str().is_some());
+        assert_eq!(body["tablinq_session_id"], "browser-primary");
         assert!(
             body["choices"][0]["message"]["content"]
                 .as_str()
@@ -3683,6 +3731,234 @@ mod tests {
                 .contains("Fake response for")
         );
         assert_eq!(body["choices"][0]["finish_reason"], "stop");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn chat_completions_support_fresh_and_existing_conversations() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(fake_url);
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "start the first conversation" }]
+        }))
+        .unwrap();
+        let first = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &first_body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(first.status_code, 200);
+        let first_json: Value = serde_json::from_slice(&first.body).unwrap();
+        let first_conversation_id = first_json["tablinq_conversation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(first_json["tablinq_session_id"], "browser-primary");
+
+        let continue_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "tablinq_conversation_id": first_conversation_id,
+            "messages": [{ "role": "user", "content": "continue the existing conversation" }]
+        }))
+        .unwrap();
+        let continued = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &continue_body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(continued.status_code, 200);
+        let continued_json: Value = serde_json::from_slice(&continued.body).unwrap();
+        assert_eq!(
+            continued_json["tablinq_conversation_id"].as_str(),
+            Some(first_conversation_id.as_str())
+        );
+        assert_eq!(continued_json["tablinq_session_id"], "browser-primary");
+
+        let fresh_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "tablinq_new_conversation": true,
+            "messages": [{ "role": "user", "content": "start a fresh conversation" }]
+        }))
+        .unwrap();
+        let fresh = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &fresh_body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(fresh.status_code, 200);
+        let fresh_json: Value = serde_json::from_slice(&fresh.body).unwrap();
+        assert_ne!(
+            fresh_json["tablinq_conversation_id"].as_str(),
+            Some(first_conversation_id.as_str())
+        );
+        assert_eq!(fresh_json["tablinq_session_id"], "browser-primary");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn chat_completions_reject_unknown_conversation_ids() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(fake_url);
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "tablinq_conversation_id": "conv-missing",
+            "messages": [{ "role": "user", "content": "fail with a missing conversation" }]
+        }))
+        .unwrap();
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 404);
+        let json: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(json["error"]["code"], "conversation_not_found");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn sessions_endpoint_lists_recent_conversations() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(fake_url);
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "session listing baseline" }]
+        }))
+        .unwrap();
+        let first = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &first_body,
+            20_000,
+        )
+        .unwrap();
+        let first_json: Value = serde_json::from_slice(&first.body).unwrap();
+        let first_conversation_id = first_json["tablinq_conversation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let second_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "tablinq_new_conversation": true,
+            "messages": [{ "role": "user", "content": "session listing fresh conversation" }]
+        }))
+        .unwrap();
+        let second = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &second_body,
+            20_000,
+        )
+        .unwrap();
+        let second_json: Value = serde_json::from_slice(&second.body).unwrap();
+        let second_conversation_id = second_json["tablinq_conversation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let sessions = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_SESSIONS_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(sessions.status_code, 200);
+        let sessions_json: Value = serde_json::from_slice(&sessions.body).unwrap();
+        assert_eq!(sessions_json["object"], "tablinq.session_list");
+        let session = &sessions_json["data"][0];
+        assert_eq!(session["session_id"], "browser-primary");
+        assert_eq!(session["latest_conversation_id"], second_conversation_id);
+        let recent = session["recent_conversations"].as_array().unwrap();
+        assert!(
+            recent
+                .iter()
+                .any(|item| item["conversation_id"] == first_conversation_id)
+        );
+        assert!(
+            recent
+                .iter()
+                .any(|item| item["conversation_id"] == second_conversation_id)
+        );
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();

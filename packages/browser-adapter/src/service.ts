@@ -40,6 +40,7 @@ type AdapterRequest =
       type: "research";
       job_id: string;
       query: string;
+      conversation_id?: string | null;
       files?: string[];
       output_dir?: string | null;
       timeout_ms?: number;
@@ -133,6 +134,7 @@ async function main() {
           {
             jobId: request.job_id,
             query: request.query,
+            conversationId: request.conversation_id,
             files: request.files ?? [],
             outputDir: request.output_dir,
             timeoutMs: request.timeout_ms,

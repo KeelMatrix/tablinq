@@ -162,6 +162,7 @@ impl CommandPayload {
 pub struct AskCommand {
     pub prompt: String,
     pub conversation_id: Option<String>,
+    pub new_conversation: bool,
     pub mode: Mode,
     pub model_class: Option<ModelClass>,
     pub effort: Option<Effort>,
@@ -172,6 +173,12 @@ impl AskCommand {
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_required("prompt", &self.prompt)?;
         validate_optional("conversation_id", self.conversation_id.as_deref())?;
+        if self.new_conversation && self.conversation_id.is_some() {
+            return Err(ValidationError::InvalidFieldCombination {
+                field: "conversation_id".to_owned(),
+                message: "conversation_id cannot be combined with new_conversation".to_owned(),
+            });
+        }
         validate_paths("files", &self.files)
     }
 }
@@ -180,6 +187,8 @@ impl AskCommand {
 #[serde(deny_unknown_fields)]
 pub struct ResearchCommand {
     pub query: String,
+    pub conversation_id: Option<String>,
+    pub new_conversation: bool,
     pub files: Vec<String>,
     pub output_dir: Option<String>,
 }
@@ -187,6 +196,13 @@ pub struct ResearchCommand {
 impl ResearchCommand {
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_required("query", &self.query)?;
+        validate_optional("conversation_id", self.conversation_id.as_deref())?;
+        if self.new_conversation && self.conversation_id.is_some() {
+            return Err(ValidationError::InvalidFieldCombination {
+                field: "conversation_id".to_owned(),
+                message: "conversation_id cannot be combined with new_conversation".to_owned(),
+            });
+        }
         validate_optional("output_dir", self.output_dir.as_deref())?;
         validate_paths("files", &self.files)
     }
@@ -747,12 +763,26 @@ pub struct SessionSummary {
     pub label: String,
     pub tab_url: Option<String>,
     pub last_seen_at: DateTime<Utc>,
+    pub latest_conversation_id: Option<String>,
+    pub recent_conversations: Vec<ConversationSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SessionList {
     pub sessions: Vec<SessionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationSummary {
+    pub conversation_id: String,
+    pub session_id: String,
+    pub label: String,
+    pub tab_url: Option<String>,
+    pub last_prompt: Option<String>,
+    pub last_response: Option<String>,
+    pub last_seen_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1030,6 +1060,8 @@ pub enum ValidationError {
     EmptyField(&'static str),
     #[error("{0} must contain at least one item")]
     EmptyCollection(&'static str),
+    #[error("{field} is invalid: {message}")]
+    InvalidFieldCombination { field: String, message: String },
     #[error("selector pack format version {found} is unsupported; expected {expected}")]
     UnsupportedSelectorPackFormat { found: u32, expected: u32 },
     #[error("{field} contains duplicate strategy id {strategy_id}")]
@@ -1093,6 +1125,7 @@ mod tests {
             command: CommandPayload::Ask(AskCommand {
                 prompt: "hello".to_owned(),
                 conversation_id: Some("conv-1".to_owned()),
+                new_conversation: false,
                 mode: Mode::Search,
                 model_class: Some(ModelClass::Thinking),
                 effort: Some(Effort::Standard),

@@ -120,6 +120,7 @@ fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
             AskCommand {
                 prompt: "summarize uploads".to_owned(),
                 conversation_id: None,
+                new_conversation: false,
                 mode: Mode::Normal,
                 model_class: None,
                 effort: None,
@@ -188,6 +189,8 @@ fn core_service_runs_research_jobs_without_cli() {
         .research(
             ResearchCommand {
                 query: "investigate launch blockers".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
                 files: vec![],
                 output_dir: Some(output_dir.display().to_string()),
             },
@@ -226,6 +229,7 @@ fn prepared_jobs_persist_across_restart() {
         .prepare_ask(AskCommand {
             prompt: "hold this in the queue".to_owned(),
             conversation_id: None,
+            new_conversation: false,
             mode: Mode::Normal,
             model_class: None,
             effort: None,
@@ -291,6 +295,7 @@ fn cancelled_jobs_report_cancelled_status_in_job_detail() {
         .prepare_ask(AskCommand {
             prompt: "cancel before execution".to_owned(),
             conversation_id: None,
+            new_conversation: false,
             mode: Mode::Normal,
             model_class: None,
             effort: None,

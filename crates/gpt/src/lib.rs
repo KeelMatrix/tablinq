@@ -592,6 +592,7 @@ fn build_ask_command(args: &AskArgs) -> AskCommand {
     AskCommand {
         prompt: args.prompt.clone(),
         conversation_id: args.conversation.clone(),
+        new_conversation: false,
         mode: map_mode(args.mode),
         model_class: args.model_class.map(map_model),
         effort: args.effort.map(map_effort),
@@ -606,6 +607,8 @@ fn build_ask_command(args: &AskArgs) -> AskCommand {
 fn build_research_command(args: &ResearchArgs) -> ResearchCommand {
     ResearchCommand {
         query: args.query.clone(),
+        conversation_id: None,
+        new_conversation: false,
         files: args
             .files
             .iter()
