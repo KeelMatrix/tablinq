@@ -1,23 +1,15 @@
-use crate::browser::{BrowserDiagnosticsSnapshot, BrowserManager, ResearchUpdate};
 use crate::config::AppConfig;
-use crate::db::Database;
+use crate::core::{CoreService, error_code_for_message};
 use crate::ipc;
 use crate::lockfile;
 use crate::logging::JsonLogger;
-use anyhow::{Context, Result, anyhow, bail};
-use chrono::Utc;
+use anyhow::Result;
 use interprocess::local_socket::traits::Listener as LocalSocketListenerTrait;
 use serde_json::json;
 use shared_protocol::{
-    AckEvent, AskCommand, BrowserDoctor, BrowserOpenRequest, CapabilitySnapshot,
-    DaemonErrorResponse, DaemonFrame, DaemonRequest, DaemonResponse, DaemonStatusSnapshot,
-    DoctorReport, ErrorCode, EventPayload, FailureBundle, HealthCheck, HealthStatus, JobKind,
-    JobState, JobStatus, ResearchCommand, SelectorPackSummary, StreamChunk, StreamChunkKind,
+    DaemonErrorResponse, DaemonFrame, DaemonRequest, DaemonResponse, EventPayload,
 };
-use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::thread;
 
 pub fn run_service(config: AppConfig) -> Result<()> {
@@ -31,19 +23,11 @@ pub fn run_service(config: AppConfig) -> Result<()> {
     )?;
 
     let _lock = lockfile::acquire(&config.paths)?;
-    let db = Database::open(&config.paths.db_path)?;
-    db.fail_incomplete_jobs("daemon restarted before the job finished", Utc::now())?;
     let listener = ipc::bind(&config.paths.ipc_endpoint)?;
-    let started_at = Utc::now();
-    let browser = Arc::new(Mutex::new(BrowserManager::new(&config)));
-    let cancel_registry = Arc::new(Mutex::new(HashSet::<String>::new()));
+    let core = Arc::new(CoreService::new(config.clone())?);
 
     if config.warm_mode() {
-        if let Err(err) = lock_browser(&browser)?.open(BrowserOpenRequest {
-            target_url: None,
-            browser_path: None,
-            headless: None,
-        }) {
+        if let Err(err) = core.warm_browser_if_enabled() {
             logger.warn(
                 "warm browser open failed",
                 json!({
@@ -62,92 +46,80 @@ pub fn run_service(config: AppConfig) -> Result<()> {
     )?;
 
     loop {
-        let stream = listener.accept().context("accept daemon connection")?;
+        let stream = listener.accept()?;
         let (request, stream) = ipc::read_request(stream)?;
         logger.info("daemon request", json!({ "request": request }))?;
 
         let should_shutdown = matches!(request, DaemonRequest::Shutdown);
-        if let DaemonRequest::Ask(command) = request {
-            if let Err(err) =
-                handle_ask_request(&config, &db, &browser, &stream, started_at, command)
-            {
-                let error_message = format!("{err:#}");
-                logger.warn(
-                    "daemon request failed",
-                    json!({
-                        "error": error_message,
-                    }),
-                )?;
-                let _ = capture_failure_bundle(
-                    &config,
-                    &db,
-                    &browser,
-                    Some(&stream),
-                    None,
-                    &error_message,
-                );
-                ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)))?;
-            }
-            continue;
-        }
-        if let DaemonRequest::Research(command) = request {
-            let config = config.clone();
-            let browser = Arc::clone(&browser);
-            let cancel_registry = Arc::clone(&cancel_registry);
-            thread::spawn(move || {
-                let logger = JsonLogger::new(&config.paths.log_path).ok();
-                if let Err(err) =
-                    handle_research_request(&config, &browser, &cancel_registry, &stream, command)
-                {
+        match request {
+            DaemonRequest::Ask(command) => {
+                let failure_mode = Some(command.mode);
+                if let Err(err) = handle_ask_request(&core, &stream, command) {
                     let error_message = format!("{err:#}");
-                    let db = Database::open(&config.paths.db_path).ok();
-                    if let Some(db) = db.as_ref() {
-                        let _ = capture_failure_bundle(
-                            &config,
-                            db,
-                            &browser,
-                            Some(&stream),
+                    logger.warn(
+                        "daemon request failed",
+                        json!({
+                            "error": error_message,
+                        }),
+                    )?;
+                    if let Ok(bundle) = core.capture_failure_bundle(failure_mode, &error_message) {
+                        let _ = ipc::write_frame(
+                            &stream,
+                            &DaemonFrame::Event(EventPayload::Failure(bundle)),
+                        );
+                    }
+                    ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)))?;
+                }
+                continue;
+            }
+            DaemonRequest::Research(command) => {
+                let core = Arc::clone(&core);
+                let config = config.clone();
+                thread::spawn(move || {
+                    let logger = JsonLogger::new(&config.paths.log_path).ok();
+                    if let Err(err) = handle_research_request(&core, &stream, command) {
+                        let error_message = format!("{err:#}");
+                        if let Ok(bundle) = core.capture_failure_bundle(
                             Some(shared_protocol::Mode::Research),
                             &error_message,
-                        );
+                        ) {
+                            let _ = ipc::write_frame(
+                                &stream,
+                                &DaemonFrame::Event(EventPayload::Failure(bundle)),
+                            );
+                        }
+                        let _ = ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
+                        if let Some(logger) = logger {
+                            let _ = logger.warn(
+                                "daemon research request failed",
+                                json!({
+                                    "error": error_message,
+                                }),
+                            );
+                        }
                     }
-                    let _ = ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
-                    if let Some(logger) = logger {
-                        let _ = logger.warn(
-                            "daemon research request failed",
-                            json!({
-                                "error": error_message,
-                            }),
-                        );
-                    }
-                }
-            });
-            continue;
-        }
-        let response = match handle_request(
-            &config,
-            &db,
-            &browser,
-            &cancel_registry,
-            started_at,
-            request,
-        ) {
-            Ok(response) => response,
-            Err(err) => {
-                logger.warn(
-                    "daemon request failed",
-                    json!({
-                        "error": format!("{err:#}"),
-                    }),
-                )?;
-                map_error(err)
+                });
+                continue;
             }
-        };
-        ipc::write_response(stream, &response)?;
-
-        if should_shutdown {
-            logger.warn("daemon stopping", json!({ "reason": "shutdown request" }))?;
-            break;
+            other => {
+                let response = match handle_request(&core, other) {
+                    Ok(response) => response,
+                    Err(err) => {
+                        logger.warn(
+                            "daemon request failed",
+                            json!({
+                                "error": format!("{err:#}"),
+                            }),
+                        )?;
+                        map_error(err)
+                    }
+                };
+                ipc::write_response(stream, &response)?;
+                if should_shutdown {
+                    logger.warn("daemon stopping", json!({ "reason": "shutdown request" }))?;
+                    break;
+                }
+            }
         }
     }
 
@@ -155,822 +127,68 @@ pub fn run_service(config: AppConfig) -> Result<()> {
 }
 
 fn handle_ask_request(
-    config: &AppConfig,
-    db: &Database,
-    browser: &Arc<Mutex<BrowserManager>>,
+    core: &CoreService,
     stream: &interprocess::local_socket::Stream,
-    _started_at: chrono::DateTime<Utc>,
-    command: AskCommand,
+    command: shared_protocol::AskCommand,
 ) -> Result<()> {
-    if config.safe_mode() {
-        bail!("safe mode enabled: prompt execution is disabled; run doctor or capabilities only");
-    }
-    let now = Utc::now();
-    let job_id = format!("job-{}", now.timestamp_millis());
-    let conversation_id = match command.conversation_id.clone() {
-        Some(value) => Some(value),
-        None => db.latest_conversation_id()?,
-    };
-    let mut effective = command.clone();
-    effective.conversation_id = conversation_id.clone();
-
-    db.insert_job(
-        &job_id,
-        JobStatus::Starting,
-        Some("starting ask"),
-        effective.conversation_id.as_deref(),
-        now,
-        now,
-    )?;
-    db.upsert_job_detail(&job_id, JobKind::Ask, Some(&effective.prompt), None)?;
-    emit_job_state(
-        stream,
-        JobState {
-            job_id: job_id.clone(),
-            status: JobStatus::Starting,
-            message: Some("starting ask".to_owned()),
-            conversation_id: effective.conversation_id.clone(),
-            updated_at: now,
-            artifacts: vec![],
-        },
-    )?;
-
-    db.insert_job(
-        &job_id,
-        JobStatus::Running,
-        Some("streaming response"),
-        effective.conversation_id.as_deref(),
-        now,
-        now,
-    )?;
-    emit_job_state(
-        stream,
-        JobState {
-            job_id: job_id.clone(),
-            status: JobStatus::Running,
-            message: Some("streaming response".to_owned()),
-            conversation_id: effective.conversation_id.clone(),
-            updated_at: now,
-            artifacts: vec![],
-        },
-    )?;
-
-    match lock_browser(browser)?.ask(&job_id, &effective, |event| {
+    let result = core.ask(command, |event| {
         ipc::write_frame(stream, &DaemonFrame::Event(event.clone()))?;
         Ok(())
-    }) {
-        Ok(result) => {
-            let completed_at = result.completed_at;
-            for artifact in &result.artifacts {
-                db.insert_artifact(artifact, completed_at)?;
-                db.link_job_artifact(&job_id, &artifact.artifact_id)?;
-                ipc::write_frame(
-                    stream,
-                    &DaemonFrame::Event(EventPayload::ArtifactReady(artifact.clone())),
-                )?;
-            }
-            db.insert_job(
-                &job_id,
-                JobStatus::Completed,
-                Some("ask completed"),
-                Some(&result.conversation_id),
-                now,
-                completed_at,
-            )?;
-            db.upsert_session(
-                "browser-primary",
-                "Managed browser",
-                Some(&result.current_url),
-                completed_at,
-            )?;
-            db.upsert_conversation(
-                &result.conversation_id,
-                "browser-primary",
-                "Managed conversation",
-                Some(&result.current_url),
-                Some(&effective.prompt),
-                Some(&result.output_text),
-                completed_at,
-            )?;
-            db.update_job_output(
-                &job_id,
-                Some(&result.output_text),
-                Some(&result.current_url),
-                None,
-            )?;
-            emit_job_state(
-                stream,
-                JobState {
-                    job_id: job_id.clone(),
-                    status: JobStatus::Completed,
-                    message: Some("ask completed".to_owned()),
-                    conversation_id: Some(result.conversation_id.clone()),
-                    updated_at: completed_at,
-                    artifacts: result.artifacts.clone(),
-                },
-            )?;
-            ipc::write_frame(stream, &DaemonFrame::Response(DaemonResponse::Ask(result)))?;
-            Ok(())
-        }
-        Err(err) => {
-            let failed_at = Utc::now();
-            let message = format!("{err:#}");
-            db.insert_job(
-                &job_id,
-                JobStatus::Failed,
-                Some(&message),
-                effective.conversation_id.as_deref(),
-                now,
-                failed_at,
-            )?;
-            db.update_job_output(&job_id, None, None, None)?;
-            emit_job_state(
-                stream,
-                JobState {
-                    job_id,
-                    status: JobStatus::Failed,
-                    message: Some(message),
-                    conversation_id: effective.conversation_id,
-                    updated_at: failed_at,
-                    artifacts: vec![],
-                },
-            )?;
-            Err(err)
-        }
-    }
+    })?;
+    ipc::write_frame(stream, &DaemonFrame::Response(DaemonResponse::Ask(result)))
 }
 
 fn handle_research_request(
-    config: &AppConfig,
-    browser: &Arc<Mutex<BrowserManager>>,
-    cancel_registry: &Arc<Mutex<HashSet<String>>>,
+    core: &CoreService,
     stream: &interprocess::local_socket::Stream,
-    command: ResearchCommand,
+    command: shared_protocol::ResearchCommand,
 ) -> Result<()> {
-    if config.safe_mode() {
-        bail!("safe mode enabled: prompt execution is disabled; run doctor or capabilities only");
-    }
-    let db = Database::open(&config.paths.db_path)?;
-    let created_at = Utc::now();
-    let job_id = format!("job-{}", created_at.timestamp_millis());
-
-    db.insert_job(
-        &job_id,
-        JobStatus::Queued,
-        Some("queued research job"),
-        None,
-        created_at,
-        created_at,
-    )?;
-    db.upsert_job_detail(&job_id, JobKind::Research, Some(&command.query), None)?;
-    emit_job_state(
+    let result = core.research(command, |event| {
+        ipc::write_frame(stream, &DaemonFrame::Event(event.clone()))?;
+        Ok(())
+    })?;
+    ipc::write_frame(
         stream,
-        JobState {
-            job_id: job_id.clone(),
-            status: JobStatus::Queued,
-            message: Some("queued research job".to_owned()),
-            conversation_id: None,
-            updated_at: created_at,
-            artifacts: vec![],
-        },
-    )?;
-
-    let mut conversation_id = None;
-    let mut current_url = None;
-    let mut report_text = String::new();
-    let mut next_seq = 0u64;
-
-    let outcome = lock_browser(browser)?.research(
-        &job_id,
-        &command,
-        |update| {
-            apply_research_update(
-                &db,
-                stream,
-                &job_id,
-                created_at,
-                &mut conversation_id,
-                &mut current_url,
-                &mut report_text,
-                &mut next_seq,
-                update,
-            )
-        },
-        || {
-            lock_cancel_registry(cancel_registry)
-                .map(|set| set.contains(&job_id))
-                .unwrap_or(false)
-        },
-    );
-
-    let _ = lock_cancel_registry(cancel_registry).map(|mut set| {
-        set.remove(&job_id);
-    });
-    let _ = db.set_job_cancel_requested(&job_id, false);
-
-    match outcome {
-        Ok(mut result) => {
-            let output_path = maybe_write_research_output(&command, &job_id, &result.report_text)?;
-            result.output_path = output_path.clone();
-            let completed_at = result.completed_at;
-            for artifact in &result.artifacts {
-                db.insert_artifact(artifact, completed_at)?;
-                db.link_job_artifact(&job_id, &artifact.artifact_id)?;
-                ipc::write_frame(
-                    stream,
-                    &DaemonFrame::Event(EventPayload::ArtifactReady(artifact.clone())),
-                )?;
-            }
-            db.insert_job(
-                &job_id,
-                JobStatus::Completed,
-                Some("research completed"),
-                Some(&result.conversation_id),
-                created_at,
-                completed_at,
-            )?;
-            db.update_job_output(
-                &job_id,
-                Some(&result.report_text),
-                Some(&result.current_url),
-                output_path.as_deref(),
-            )?;
-            db.upsert_session(
-                "browser-primary",
-                "Managed browser",
-                Some(&result.current_url),
-                completed_at,
-            )?;
-            db.upsert_conversation(
-                &result.conversation_id,
-                "browser-primary",
-                "Managed conversation",
-                Some(&result.current_url),
-                Some(&command.query),
-                Some(&result.report_text),
-                completed_at,
-            )?;
-            emit_job_state(
-                stream,
-                JobState {
-                    job_id: job_id.clone(),
-                    status: JobStatus::Completed,
-                    message: Some("research completed".to_owned()),
-                    conversation_id: Some(result.conversation_id.clone()),
-                    updated_at: completed_at,
-                    artifacts: result.artifacts.clone(),
-                },
-            )?;
-            ipc::write_frame(
-                stream,
-                &DaemonFrame::Response(DaemonResponse::Research(result)),
-            )?;
-            Ok(())
-        }
-        Err(err) => {
-            let failed_at = Utc::now();
-            let message = format!("{err:#}");
-            let status_message = if message.contains("cancelled") {
-                "research cancelled"
-            } else {
-                "research failed"
-            };
-            db.insert_job(
-                &job_id,
-                JobStatus::Failed,
-                Some(&message),
-                conversation_id.as_deref(),
-                created_at,
-                failed_at,
-            )?;
-            db.update_job_output(
-                &job_id,
-                if report_text.is_empty() {
-                    None
-                } else {
-                    Some(report_text.as_str())
-                },
-                current_url.as_deref(),
-                None,
-            )?;
-            emit_job_state(
-                stream,
-                JobState {
-                    job_id,
-                    status: JobStatus::Failed,
-                    message: Some(status_message.to_owned()),
-                    conversation_id,
-                    updated_at: failed_at,
-                    artifacts: vec![],
-                },
-            )?;
-            ipc::write_frame(stream, &DaemonFrame::Response(map_error(err)))?;
-            Ok(())
-        }
-    }
+        &DaemonFrame::Response(DaemonResponse::Research(result)),
+    )
 }
 
-fn handle_request(
-    config: &AppConfig,
-    db: &Database,
-    browser: &Arc<Mutex<BrowserManager>>,
-    cancel_registry: &Arc<Mutex<HashSet<String>>>,
-    started_at: chrono::DateTime<Utc>,
-    request: DaemonRequest,
-) -> Result<DaemonResponse> {
+fn handle_request(core: &CoreService, request: DaemonRequest) -> Result<DaemonResponse> {
     Ok(match request {
-        DaemonRequest::Ping => {
-            DaemonResponse::Health(health_snapshot(config, lock_browser(browser)?.health()?))
-        }
-        DaemonRequest::Status => DaemonResponse::Status(status_snapshot(config, started_at)),
-        DaemonRequest::Shutdown => DaemonResponse::Ack(AckEvent {
+        DaemonRequest::Ping => DaemonResponse::Health(core.health_snapshot()?),
+        DaemonRequest::Status => DaemonResponse::Status(core.status_snapshot()),
+        DaemonRequest::Shutdown => DaemonResponse::Ack(shared_protocol::AckEvent {
             accepted: true,
             message: "daemon stopping".to_owned(),
         }),
-        DaemonRequest::Doctor => {
-            let browser_snapshot = lock_browser(browser)?.profile_info()?;
-            let diagnostics = lock_browser(browser)?.diagnostics(None).ok();
-            let browser_detection = diagnostics
-                .as_ref()
-                .map(|value| BrowserDoctor {
-                    browser_detected: value.browser_detected,
-                    detected_browser_path: value.detected_browser_path.clone(),
-                    profile_accessible: value.profile_accessible,
-                    profile_access_error: value.profile_access_error.clone(),
-                })
-                .unwrap_or_else(|| BrowserDoctor {
-                    browser_detected: cfg!(windows) || config.browser_path().is_some(),
-                    detected_browser_path: config.browser_path().map(ToOwned::to_owned),
-                    profile_accessible: true,
-                    profile_access_error: None,
-                });
-            let latest_failure_bundle = db.latest_failure_bundle()?;
-            let failure_bundle_count = db.count_failure_bundles()?;
-            DaemonResponse::Doctor(DoctorReport {
-                health: health_snapshot(config, browser_snapshot.clone()),
-                status: status_snapshot(config, started_at),
-                config: config.snapshot(),
-                capabilities: browser_snapshot.capability_report.clone(),
-                browser: browser_snapshot,
-                selector_pack: diagnostics
-                    .as_ref()
-                    .and_then(|value| value.selector_pack.clone())
-                    .or_else(default_selector_pack_summary),
-                strategy_telemetry: diagnostics
-                    .as_ref()
-                    .map(|value| value.strategy_telemetry.clone())
-                    .unwrap_or_default(),
-                failure_bundle_count,
-                latest_failure_bundle,
-                browser_detection,
-                recovery_guidance: recovery_guidance(
-                    config,
-                    health_snapshot(config, lock_browser(browser)?.health()?),
-                    diagnostics.as_ref(),
-                ),
-            })
-        }
+        DaemonRequest::Doctor => DaemonResponse::Doctor(core.doctor_report()?),
         DaemonRequest::Ask(_) => unreachable!("ask requests are handled as streaming responses"),
         DaemonRequest::Research(_) => {
             unreachable!("research requests are handled as streaming responses")
         }
-        DaemonRequest::Capabilities => DaemonResponse::Capabilities(CapabilitySnapshot {
-            report: lock_browser(browser)?.capabilities()?,
-        }),
-        DaemonRequest::ConfigShow => DaemonResponse::Config(config.snapshot()),
-        DaemonRequest::SessionsList => DaemonResponse::Sessions(db.list_sessions()?),
-        DaemonRequest::JobsList => DaemonResponse::Jobs(db.list_jobs()?),
-        DaemonRequest::JobsShow(job_id) => DaemonResponse::Job(
-            db.job_detail(&job_id)?
-                .with_context(|| format!("job {job_id} was not found"))?,
-        ),
-        DaemonRequest::JobsCancel(command) => {
-            let detail = db
-                .job_detail(&command.job_id)?
-                .with_context(|| format!("job {} was not found", command.job_id))?;
-            if matches!(detail.status, JobStatus::Completed | JobStatus::Failed) {
-                DaemonResponse::Ack(AckEvent {
-                    accepted: false,
-                    message: format!("job {} is already finished", command.job_id),
-                })
-            } else {
-                db.set_job_cancel_requested(&command.job_id, true)?;
-                lock_cancel_registry(cancel_registry)?.insert(command.job_id.clone());
-                DaemonResponse::Ack(AckEvent {
-                    accepted: true,
-                    message: format!("cancellation requested for {}", command.job_id),
-                })
-            }
-        }
-        DaemonRequest::ArtifactsList => DaemonResponse::Artifacts(db.list_artifacts()?),
+        DaemonRequest::Capabilities => DaemonResponse::Capabilities(core.capabilities()?),
+        DaemonRequest::ConfigShow => DaemonResponse::Config(core.config_snapshot()),
+        DaemonRequest::SessionsList => DaemonResponse::Sessions(core.list_sessions()?),
+        DaemonRequest::JobsList => DaemonResponse::Jobs(core.list_jobs()?),
+        DaemonRequest::JobsShow(job_id) => DaemonResponse::Job(core.job_detail(&job_id)?),
+        DaemonRequest::JobsCancel(command) => DaemonResponse::Ack(core.cancel_job(command)?),
+        DaemonRequest::ArtifactsList => DaemonResponse::Artifacts(core.list_artifacts()?),
         DaemonRequest::ArtifactPull(command) => {
-            let artifact = if command.artifact_id == "last" {
-                db.latest_artifact()?
-            } else {
-                db.find_artifact(&command.artifact_id)?
-            }
-            .with_context(|| format!("artifact {} was not found", command.artifact_id))?;
-
-            let destination_dir = PathBuf::from(&command.destination_dir);
-            fs::create_dir_all(&destination_dir)
-                .with_context(|| format!("create {}", destination_dir.display()))?;
-            let destination_path =
-                unique_destination_path(&destination_dir, Path::new(&artifact.file_name));
-            fs::copy(&artifact.storage_path, &destination_path).with_context(|| {
-                format!(
-                    "copy managed artifact {} to {}",
-                    artifact.storage_path,
-                    destination_path.display()
-                )
-            })?;
-
-            DaemonResponse::ArtifactPull(shared_protocol::ArtifactPullResult {
-                artifact,
-                destination_path: destination_path.display().to_string(),
-            })
+            DaemonResponse::ArtifactPull(core.pull_artifact(command)?)
         }
-        DaemonRequest::BrowserOpen(request) => {
-            let snapshot = lock_browser(browser)?.open(request)?;
-            db.upsert_session(
-                "browser-primary",
-                "Managed browser",
-                snapshot.current_url.as_deref(),
-                Utc::now(),
-            )?;
-            DaemonResponse::Browser(snapshot)
-        }
-        DaemonRequest::BrowserClose => DaemonResponse::Browser(lock_browser(browser)?.close()?),
+        DaemonRequest::BrowserOpen(request) => DaemonResponse::Browser(core.browser_open(request)?),
+        DaemonRequest::BrowserClose => DaemonResponse::Browser(core.browser_close()?),
         DaemonRequest::BrowserResetProfile => {
-            DaemonResponse::Browser(lock_browser(browser)?.reset_profile()?)
+            DaemonResponse::Browser(core.browser_reset_profile()?)
         }
-        DaemonRequest::BrowserProfileInfo => {
-            DaemonResponse::Browser(lock_browser(browser)?.profile_info()?)
-        }
+        DaemonRequest::BrowserProfileInfo => DaemonResponse::Browser(core.browser_profile_info()?),
     })
 }
 
-pub fn status_snapshot(
-    config: &AppConfig,
-    started_at: chrono::DateTime<Utc>,
-) -> DaemonStatusSnapshot {
-    DaemonStatusSnapshot {
-        pid: std::process::id(),
-        started_at,
-        state_root: config.paths.state_root.display().to_string(),
-        ipc_endpoint: config.paths.ipc_endpoint.clone(),
-        lock_path: config.paths.lock_path.display().to_string(),
-        db_path: config.paths.db_path.display().to_string(),
-        warm_mode: config.warm_mode(),
-    }
-}
-
-pub fn health_snapshot(
-    config: &AppConfig,
-    browser: shared_protocol::BrowserStatusSnapshot,
-) -> HealthCheck {
-    let status = if !browser.running {
-        HealthStatus::Degraded
-    } else if !browser.extension_connected || !browser.authenticated {
-        HealthStatus::Degraded
-    } else {
-        HealthStatus::Ok
-    };
-    HealthCheck {
-        status,
-        checked_at: Utc::now(),
-        browser_connected: browser.running,
-        extension_connected: browser.extension_connected,
-        authenticated: browser.authenticated,
-        details: Some(if config.warm_mode() {
-            format!(
-                "control plane ready; warm mode enabled; browser_running={}; extension_connected={}",
-                browser.running, browser.extension_connected
-            )
-        } else {
-            match browser.current_url {
-                Some(url) => format!(
-                    "control plane ready; managed tab at {url}; extension_connected={}",
-                    browser.extension_connected
-                ),
-                None => "control plane ready; browser runtime not started yet".to_owned(),
-            }
-        }),
-    }
-}
-
-pub fn map_error(err: anyhow::Error) -> DaemonResponse {
+fn map_error(err: anyhow::Error) -> DaemonResponse {
     let message = format!("{err:#}");
     DaemonResponse::Error(DaemonErrorResponse {
         error_code: error_code_for_message(&message),
         message,
     })
-}
-
-fn error_code_for_message(message: &str) -> ErrorCode {
-    if message.contains("profile locked") || message.contains("SingletonLock") {
-        ErrorCode::ProfileLocked
-    } else if message.contains("auth required") {
-        ErrorCode::AuthRequired
-    } else if message.contains("browser launch failed")
-        || message.contains("spawn browser adapter")
-        || message.contains("supported browser executable")
-    {
-        ErrorCode::BrowserLaunch
-    } else if message.contains("capability missing") {
-        ErrorCode::CapabilityMissing
-    } else if message.contains("research job failed")
-        || message.contains("research failed")
-        || message.contains("research cancelled")
-    {
-        ErrorCode::ResearchJobFailed
-    } else if message.contains("upload failed") {
-        ErrorCode::UploadFailed
-    } else if message.contains("download failed") {
-        ErrorCode::DownloadFailed
-    } else if message.contains("ui drift") {
-        ErrorCode::UiDrift
-    } else if message.contains("timed out") {
-        ErrorCode::ActionTimeout
-    } else {
-        ErrorCode::Transport
-    }
-}
-
-fn emit_job_state(stream: &interprocess::local_socket::Stream, state: JobState) -> Result<()> {
-    ipc::write_frame(stream, &DaemonFrame::Event(EventPayload::JobState(state)))
-}
-
-fn capture_failure_bundle(
-    config: &AppConfig,
-    db: &Database,
-    browser: &Arc<Mutex<BrowserManager>>,
-    stream: Option<&interprocess::local_socket::Stream>,
-    mode: Option<shared_protocol::Mode>,
-    message: &str,
-) -> Result<FailureBundle> {
-    let created_at = Utc::now();
-    let bundle_id = format!("bundle-{}", created_at.timestamp_millis());
-    let bundle_dir = config.paths.crash_bundles_dir.join(&bundle_id);
-    fs::create_dir_all(&bundle_dir).with_context(|| format!("create {}", bundle_dir.display()))?;
-
-    let diagnostics = lock_browser(browser)
-        .and_then(|mut manager| manager.diagnostics(Some(&bundle_dir)))
-        .unwrap_or_else(|_| {
-            let placeholder_screenshot = bundle_dir.join("failure.png");
-            let _ = fs::write(&placeholder_screenshot, []);
-            BrowserDiagnosticsSnapshot {
-                current_url: None,
-                capability_matrix: Default::default(),
-                strategy_attempts: vec![],
-                dom_snapshot: String::new(),
-                aria_snapshot: String::new(),
-                screenshot_path: Some(placeholder_screenshot.display().to_string()),
-                selector_pack: default_selector_pack_summary(),
-                strategy_telemetry: vec![],
-                browser_detected: cfg!(windows),
-                detected_browser_path: None,
-                profile_accessible: true,
-                profile_access_error: None,
-            }
-        });
-
-    let dom_snapshot_path = bundle_dir.join("dom.json");
-    fs::write(&dom_snapshot_path, diagnostics.dom_snapshot.as_bytes())
-        .with_context(|| format!("write {}", dom_snapshot_path.display()))?;
-    let aria_snapshot_path = bundle_dir.join("aria.json");
-    fs::write(&aria_snapshot_path, diagnostics.aria_snapshot.as_bytes())
-        .with_context(|| format!("write {}", aria_snapshot_path.display()))?;
-
-    let bundle = FailureBundle {
-        bundle_id: bundle_id.clone(),
-        error_code: error_code_for_message(message),
-        message: message.to_owned(),
-        created_at,
-        url: diagnostics.current_url,
-        mode,
-        screenshot_path: diagnostics.screenshot_path,
-        dom_snapshot_path: Some(dom_snapshot_path.display().to_string()),
-        aria_snapshot_path: Some(aria_snapshot_path.display().to_string()),
-        logs_path: Some(config.paths.log_path.display().to_string()),
-        strategy_attempts: diagnostics.strategy_attempts,
-        capability_matrix: diagnostics.capability_matrix,
-    };
-    let bundle_json_path = bundle_dir.join("bundle.json");
-    fs::write(&bundle_json_path, serde_json::to_vec_pretty(&bundle)?)
-        .with_context(|| format!("write {}", bundle_json_path.display()))?;
-    db.insert_failure_bundle(&bundle)?;
-    if let Some(stream) = stream {
-        let _ = ipc::write_frame(
-            stream,
-            &DaemonFrame::Event(EventPayload::Failure(bundle.clone())),
-        );
-    }
-    Ok(bundle)
-}
-
-fn lock_browser<'a>(
-    browser: &'a Arc<Mutex<BrowserManager>>,
-) -> Result<MutexGuard<'a, BrowserManager>> {
-    browser
-        .lock()
-        .map_err(|_| anyhow!("browser manager lock poisoned"))
-}
-
-fn lock_cancel_registry<'a>(
-    registry: &'a Arc<Mutex<HashSet<String>>>,
-) -> Result<MutexGuard<'a, HashSet<String>>> {
-    registry
-        .lock()
-        .map_err(|_| anyhow!("cancel registry lock poisoned"))
-}
-
-fn recovery_guidance(
-    config: &AppConfig,
-    health: HealthCheck,
-    diagnostics: Option<&BrowserDiagnosticsSnapshot>,
-) -> Vec<String> {
-    let mut guidance = Vec::new();
-    if config.safe_mode() {
-        guidance.push(
-            "safe mode is enabled; ask and research are disabled until config.toml is updated"
-                .to_owned(),
-        );
-    }
-    if !health.browser_connected {
-        guidance.push(
-            "browser is not running; use `gpt browser open` to launch or recreate the managed tab"
-                .to_owned(),
-        );
-    } else {
-        guidance.push("daemon can recreate the managed tab and relaunch the browser adapter when the page crashes or closes".to_owned());
-    }
-    if !health.authenticated {
-        guidance.push("authentication is required; open the managed browser and sign in before running ask or research".to_owned());
-    }
-    if !health.extension_connected {
-        guidance.push("extension probe is disconnected; reload the managed page or relaunch the browser to refresh capabilities".to_owned());
-    }
-    if let Some(diagnostics) = diagnostics {
-        if !diagnostics.profile_accessible {
-            guidance.push("browser profile is not writable; close other managed browser instances or reset the profile directory".to_owned());
-        }
-        if !diagnostics.browser_detected {
-            guidance.push(
-                "no supported browser was detected; set an explicit browser path in config.toml"
-                    .to_owned(),
-            );
-        }
-    }
-    guidance
-}
-
-fn default_selector_pack_summary() -> Option<SelectorPackSummary> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("selector-packs")
-        .join("v1")
-        .join("chatgpt-default.json");
-    let raw = fs::read_to_string(&path).ok()?;
-    let parsed: shared_protocol::SelectorPack = serde_json::from_str(&raw).ok()?;
-    Some(SelectorPackSummary {
-        pack_id: parsed.pack_id,
-        version: format!("v{}", parsed.format_version),
-        updated_at: Some(parsed.updated_at),
-        path: Some(path.display().to_string()),
-    })
-}
-
-fn apply_research_update(
-    db: &Database,
-    stream: &interprocess::local_socket::Stream,
-    job_id: &str,
-    created_at: chrono::DateTime<Utc>,
-    conversation_id: &mut Option<String>,
-    current_url: &mut Option<String>,
-    report_text: &mut String,
-    next_seq: &mut u64,
-    update: ResearchUpdate,
-) -> Result<()> {
-    let updated_at = Utc::now();
-    if let Some(value) = update.conversation_id.clone() {
-        *conversation_id = Some(value);
-    }
-    if let Some(value) = update.current_url.clone() {
-        *current_url = Some(value);
-    }
-
-    db.insert_job(
-        job_id,
-        update.status,
-        update.message.as_deref(),
-        update
-            .conversation_id
-            .as_deref()
-            .or(conversation_id.as_deref()),
-        created_at,
-        updated_at,
-    )?;
-
-    if let Some(chunk_text) = update.chunk_text.clone() {
-        if matches!(
-            update.chunk_kind.unwrap_or(StreamChunkKind::Delta),
-            StreamChunkKind::Delta
-        ) {
-            report_text.push_str(&chunk_text);
-        }
-        ipc::write_frame(
-            stream,
-            &DaemonFrame::Event(EventPayload::StreamChunk(StreamChunk {
-                job_id: job_id.to_owned(),
-                conversation_id: update.conversation_id.clone().or(conversation_id.clone()),
-                message_id: update.message_id.clone(),
-                seq: *next_seq,
-                kind: update.chunk_kind.unwrap_or(StreamChunkKind::Delta),
-                text: chunk_text,
-            })),
-        )?;
-        *next_seq += 1;
-    }
-
-    db.update_job_output(
-        job_id,
-        if report_text.is_empty() {
-            None
-        } else {
-            Some(report_text.as_str())
-        },
-        current_url.as_deref(),
-        None,
-    )?;
-    emit_job_state(
-        stream,
-        JobState {
-            job_id: job_id.to_owned(),
-            status: update.status,
-            message: update.message,
-            conversation_id: update.conversation_id.or(conversation_id.clone()),
-            updated_at,
-            artifacts: vec![],
-        },
-    )
-}
-
-fn maybe_write_research_output(
-    command: &ResearchCommand,
-    job_id: &str,
-    report_text: &str,
-) -> Result<Option<String>> {
-    let Some(output_dir) = command.output_dir.as_deref() else {
-        return Ok(None);
-    };
-
-    let output_dir = PathBuf::from(output_dir);
-    fs::create_dir_all(&output_dir).with_context(|| format!("create {}", output_dir.display()))?;
-    let destination = unique_destination_path(
-        &output_dir,
-        Path::new(&format!("{}-report.md", sanitize_file_stem(job_id))),
-    );
-    fs::write(&destination, report_text)
-        .with_context(|| format!("write {}", destination.display()))?;
-    Ok(Some(destination.display().to_string()))
-}
-
-fn sanitize_file_stem(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
-fn unique_destination_path(destination_dir: &Path, file_name: &Path) -> PathBuf {
-    let candidate = destination_dir.join(file_name);
-    if !candidate.exists() {
-        return candidate;
-    }
-
-    let stem = file_name
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .unwrap_or("artifact");
-    let extension = file_name.extension().and_then(|value| value.to_str());
-
-    for index in 2.. {
-        let name = match extension {
-            Some(extension) => format!("{stem}-{index}.{extension}"),
-            None => format!("{stem}-{index}"),
-        };
-        let candidate = destination_dir.join(name);
-        if !candidate.exists() {
-            return candidate;
-        }
-    }
-
-    unreachable!("destination path generation should always return");
 }
