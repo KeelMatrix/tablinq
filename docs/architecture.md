@@ -1,6 +1,6 @@
 # Architecture Notes
 
-## Part 10 decisions
+## Part 11 decisions
 
 - The stable protocol version is `tablinq.v1`.
 - Rust owns durable types, validation, and CLI/daemon entry points.
@@ -24,6 +24,9 @@
 - Failure bundles are persisted both as SQLite records and as on-disk crash-bundle directories containing DOM, ARIA, and screenshot artifacts.
 - Packaged installs now use `bin/`, `browser-adapter/src/`, `extension/`, `selector-packs/`, and `schemas/` as the stable runtime layout.
 - Windows installs register `tablinq-host` as a user-level native messaging host and keep both state and packaged artifacts under `%LOCALAPPDATA%\\Tablinq`.
+- Live-site page actions are isolated in `packages/browser-adapter/src/pageAdapter.runtime.js` so current ChatGPT-specific control heuristics stay out of the long-lived Playwright control loop.
+- The adapter now restores a usable managed page after artifact-triggered frame loss by recreating the page and retargeting the active conversation URL when needed.
+- Timeout policy is explicit and conservative: navigation, probing, interaction-surface waits, upload acknowledgement, ask completion, research completion, and download capture each use dedicated limits instead of one shared timeout.
 
 ## Protocol surface
 
@@ -57,7 +60,8 @@ The IPC endpoint is derived deterministically from the state root, so the CLI an
 - On non-Windows platforms, the adapter falls back to detected Chromium-compatible executables or an explicit configured browser path.
 - The adapter keeps one managed page alive, recreates it if the tab is closed or crashes, and tracks top-level reloads for diagnostics.
 - The adapter evaluates the extension probe module inside the managed page, loads selector-pack metadata from external JSON, and keeps last-known-good strategy choices per observed UI signature.
-- The adapter now owns prompt insertion, submit clicks, DOM-stream observation, timeout detection, conversation/message capture, and control selection for model/mode/effort requests.
+- The adapter now owns prompt insertion, submit clicks, DOM-stream observation, timeout detection, conversation/message capture, control selection for model/mode/effort requests, and post-download page recovery.
+- In-page ask and research reads now flow through the dedicated runtime module rather than large embedded source strings in `browserAdapter.ts`.
 - The daemon retries recoverable ask/research failures once by relaunching the adapter and recreating the managed tab.
 - Safe mode is a config-level execution guard that keeps probes and doctor working while blocking ask and research submission.
 - `doctor` now includes daemon health, browser detection, profile access checks, selector-pack metadata, strategy telemetry, recent failure-bundle summary, and recovery guidance.
@@ -112,6 +116,7 @@ The fake harness now exposes two intentionally different UI shapes:
 
 - a classic variant with grouped `data-slot` anchors
 - an ARIA-first variant with renamed controls and moved upload/composer affordances
+- a live-like variant with `#prompt-textarea`, send/stop button toggles, current-style model/mode controls, upload chips, and artifact downloads
 
 It also exposes Part 8 control, upload, download, research, and streaming scenarios:
 
@@ -131,6 +136,13 @@ Part 9 adds verification on top of those scenarios for:
 - failure-bundle creation on timeout and other adapter-visible failures
 - doctor reporting of selector-pack and telemetry state
 - recovery guidance for browser launch, auth, profile access, and probe drift cases
+
+Part 11 extends that verification with:
+
+- runtime alias mapping for current ChatGPT-style visible labels and controls
+- live-like prompt/submit/upload/download behavior driven through the isolated page runtime module
+- artifact-download recovery checks that keep the managed page usable after a download invalidates the active frame
+- an optional manual smoke checklist for real-site login, ask, search, thinking, upload, download, and research flows
 
 ## Selector-pack expectations
 

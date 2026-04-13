@@ -133,6 +133,16 @@ export function probeDocument(options = {}) {
   const firstVisibleBySelector = (selector) =>
     firstVisible(documentRoot.querySelectorAll(selector));
 
+  const firstVisibleBySelectors = (selectors) => {
+    for (const selector of selectors) {
+      const match = firstVisibleBySelector(selector);
+      if (match) {
+        return match;
+      }
+    }
+    return null;
+  };
+
   const findNamedControl = (tokens) => {
     const candidates = documentRoot.querySelectorAll(
       [
@@ -161,7 +171,14 @@ export function probeDocument(options = {}) {
   const findTextbox = () => {
     const candidates = documentRoot.querySelectorAll(
       [
+        "#prompt-textarea",
         "[data-slot='composer']",
+        "[data-testid='composer-root'] textarea",
+        "[data-testid='composer-root'] [contenteditable='true']",
+        "textarea[aria-label*='Message']",
+        "textarea[placeholder*='message']",
+        "[role='textbox'][aria-label*='Message']",
+        "[contenteditable='true'][aria-label*='Message']",
         "textarea",
         "[role='textbox']",
         "[contenteditable='true']",
@@ -190,6 +207,16 @@ export function probeDocument(options = {}) {
   };
 
   const findSubmitNearComposer = () => {
+    const explicit = firstVisibleBySelectors([
+      "[data-action='submit']",
+      "[data-testid='send-button']",
+      "button[aria-label='Submit prompt']",
+      "button[aria-label*='Send']",
+      "button[type='submit']",
+    ]);
+    if (explicit) {
+      return explicit;
+    }
     const composer = findTextbox();
     const containers = composer
       ? [
@@ -223,7 +250,7 @@ export function probeDocument(options = {}) {
         continue;
       }
       const name = accessibleName(label);
-      if (!hasToken(name, ["attach", "upload", "file", "add files"])) {
+      if (!hasToken(name, ["attach", "upload", "file", "files", "photos"])) {
         continue;
       }
       if (
@@ -295,6 +322,20 @@ export function probeDocument(options = {}) {
           find: () => firstVisibleBySelector("[data-slot='composer']"),
         },
         {
+          id: "chatgpt-prompt-textarea",
+          score: 0.99,
+          find: () => firstVisibleBySelector("#prompt-textarea"),
+        },
+        {
+          id: "chatgpt-composer-root",
+          score: 0.97,
+          find: () =>
+            firstVisibleBySelectors([
+              "[data-testid='composer-root'] textarea",
+              "[data-testid='composer-root'] [contenteditable='true']",
+            ]),
+        },
+        {
           id: "aria-textbox",
           score: 0.94,
           find: () => findTextbox(),
@@ -326,6 +367,16 @@ export function probeDocument(options = {}) {
           find: () => firstVisibleBySelector("[data-action='submit']"),
         },
         {
+          id: "chatgpt-send-button",
+          score: 0.97,
+          find: () =>
+            firstVisibleBySelectors([
+              "[data-testid='send-button']",
+              "button[aria-label='Send prompt']",
+              "button[aria-label*='Send']",
+            ]),
+        },
+        {
           id: "button-send",
           score: 0.92,
           find: () => findNamedControl(["send", "submit"]),
@@ -346,6 +397,19 @@ export function probeDocument(options = {}) {
           find: () => firstVisibleBySelector("[data-slot='model-picker']"),
         },
         {
+          id: "chatgpt-model-controls",
+          score: 0.96,
+          find: () =>
+            findNamedControl([
+              "gpt-5.3",
+              "gpt-5.4",
+              "instant",
+              "thinking",
+              "engine",
+              "model",
+            ]),
+        },
+        {
           id: "aria-model-trigger",
           score: 0.9,
           find: () =>
@@ -360,6 +424,15 @@ export function probeDocument(options = {}) {
           id: "data-slot-effort-toggle",
           score: 1,
           find: () => firstVisibleBySelector("[data-slot='effort-toggle']"),
+        },
+        {
+          id: "chatgpt-effort-toggle",
+          score: 0.93,
+          find: () =>
+            firstVisibleBySelectors([
+              "button[aria-label*='Standard']",
+              "button[aria-label*='Extended']",
+            ]) ?? findNamedControl(["standard", "extended", "reasoning"]),
         },
         {
           id: "aria-effort-toggle",
@@ -378,6 +451,15 @@ export function probeDocument(options = {}) {
           find: () => firstVisibleBySelector("[data-mode='search']"),
         },
         {
+          id: "chatgpt-search-toggle",
+          score: 0.92,
+          find: () =>
+            firstVisibleBySelectors([
+              "button[aria-label*='Search']",
+              "button[aria-label*='web']",
+            ]) ?? findNamedControl(["search", "browse", "web"]),
+        },
+        {
           id: "aria-search-toggle",
           score: 0.88,
           find: () => findNamedControl(["search", "browse", "web"]),
@@ -393,6 +475,15 @@ export function probeDocument(options = {}) {
           find: () => firstVisibleBySelector("[data-mode='research']"),
         },
         {
+          id: "chatgpt-research-toggle",
+          score: 0.92,
+          find: () =>
+            firstVisibleBySelectors([
+              "button[aria-label*='Research']",
+              "button[aria-label*='Deep research']",
+            ]) ?? findNamedControl(["research", "deep research"]),
+        },
+        {
           id: "aria-research-toggle",
           score: 0.88,
           find: () => findNamedControl(["research", "deep research"]),
@@ -406,6 +497,16 @@ export function probeDocument(options = {}) {
           id: "data-slot-upload-entry",
           score: 1,
           find: () => firstVisibleBySelector("[data-slot='upload-entry']"),
+        },
+        {
+          id: "chatgpt-upload-entry",
+          score: 0.94,
+          find: () =>
+            firstVisibleBySelectors([
+              "[data-testid='upload-button']",
+              "button[aria-label*='Add photos']",
+              "button[aria-label*='Add files']",
+            ]) ?? findUploadLabel(),
         },
         {
           id: "native-file-input",
@@ -429,6 +530,16 @@ export function probeDocument(options = {}) {
           id: "data-slot-artifact-link",
           score: 1,
           find: () => firstVisibleBySelector("[data-slot='artifact-link']"),
+        },
+        {
+          id: "chatgpt-download-link",
+          score: 0.94,
+          find: () =>
+            firstVisibleBySelectors([
+              "[data-testid='artifact-download']",
+              "a[aria-label*='Download']",
+              "button[aria-label*='Download']",
+            ]) ?? findNamedControl(["download", "artifact", "export", "save"]),
         },
         {
           id: "download-link",
@@ -540,10 +651,10 @@ export function probeDocument(options = {}) {
     }
     if (capability === "model_picker_visible") {
       for (const name of names) {
-        if (hasToken(name, ["instant"])) {
+        if (hasToken(name, ["instant", "fast", "quick"])) {
           addAlias("model_classes", "instant", name);
         }
-        if (hasToken(name, ["thinking"])) {
+        if (hasToken(name, ["thinking", "reason", "deep"])) {
           addAlias("model_classes", "thinking", name);
         }
       }
@@ -553,13 +664,13 @@ export function probeDocument(options = {}) {
     }
     if (capability === "thinking_effort_visible") {
       for (const name of names) {
-        if (hasToken(name, ["extended"])) {
+        if (hasToken(name, ["extended", "heavy", "longer"])) {
           addAlias("efforts", "extended", name);
         }
-        if (hasToken(name, ["standard"])) {
+        if (hasToken(name, ["standard", "default"])) {
           addAlias("efforts", "standard", name);
         }
-        if (!hasToken(name, ["standard", "extended"])) {
+        if (hasToken(name, ["none", "auto"])) {
           addAlias("efforts", "none", name);
         }
       }
@@ -589,7 +700,11 @@ export function probeDocument(options = {}) {
 
   const runtime = {
     ui_signature: [
+      window.location.hostname || "unknown-host",
       body?.dataset.uiVariant || "unlabelled",
+      body?.querySelector("#prompt-textarea")
+        ? "prompt-textarea"
+        : "no-prompt-id",
       body?.querySelector("[data-slot]") ? "slot-ui" : "aria-ui",
       body?.querySelector("[role='textbox']")
         ? "role-textbox"

@@ -45,9 +45,9 @@ flowchart LR
 
 Install and troubleshooting detail lives in [docs/install.md](/C:/Users/user/Desktop/gpt-cli/docs/install.md) and [docs/troubleshooting.md](/C:/Users/user/Desktop/gpt-cli/docs/troubleshooting.md).
 
-## Part 10 Scope
+## Part 11 Scope
 
-This repository now includes Part 10 packaging, install, and Windows-first polish on top of the existing ask, upload, research, and diagnostics paths. The stable boundaries in this part are:
+This repository now includes the Part 11 hardening and live-site adaptation pass on top of the packaged local install flow. The stable boundaries in this part are:
 
 - internal enums for `mode`, `model_class`, and `effort`
 - JSON schema definitions for commands, events, streamed chunks, capability reports, job states, artifacts, failure bundles, and health checks
@@ -74,6 +74,12 @@ This repository now includes Part 10 packaging, install, and Windows-first polis
 - package/install scripts for Windows and Unix-like local installs
 - a dedicated user-level native messaging host binary and registration flow for Windows
 - explicit `gpt version` and `gptd version` build metadata output
+- an isolated in-page runtime module for live-site composer, submit, mode/model/effort, upload acknowledgement, ask snapshot, and research snapshot actions
+- live-like selector-pack and probe coverage for current ChatGPT-style `#prompt-textarea`, send/stop buttons, model/mode controls, upload entry points, and download affordances
+- conservative timeout, retry, and recovery policies for navigation, probing, interaction-surface waits, upload acknowledgement, streaming completion, and managed download capture
+- post-download managed-page recovery that recreates the tab when a download invalidates the active frame
+- a live-like fake harness variant that exercises current ChatGPT-shaped controls while keeping CI on local fixtures only
+- an optional manual live-site smoke checklist for login, ask, mode/model selection, upload, download, and research verification
 - CLI commands for `ask`, `research`, `artifacts list`, `artifacts pull`, `daemon start|status|stop`, `doctor`, `capabilities`, `config show`, `sessions list`, `jobs list|show|cancel`, and `browser open|close|reset-profile|profile-info`
 - packaged extension assets and stable extension identity for unpacked local loads
 
@@ -103,6 +109,6 @@ This repository now includes Part 10 packaging, install, and Windows-first polis
 - `gpt browser profile-info`
 - `gptd version`
 
-Part 11 will focus on the final hardening and live-site adaptation pass.
+Optional real-site verification lives in [docs/live-smoke-checklist.md](/C:/Users/user/Desktop/gpt-cli/docs/live-smoke-checklist.md).
 
-More detail lives in [docs/architecture.md](/C:/Users/user/Desktop/gpt-cli/docs/architecture.md), [docs/development.md](/C:/Users/user/Desktop/gpt-cli/docs/development.md), [docs/install.md](/C:/Users/user/Desktop/gpt-cli/docs/install.md), and [docs/troubleshooting.md](/C:/Users/user/Desktop/gpt-cli/docs/troubleshooting.md).
+More detail lives in [docs/architecture.md](/C:/Users/user/Desktop/gpt-cli/docs/architecture.md), [docs/development.md](/C:/Users/user/Desktop/gpt-cli/docs/development.md), [docs/install.md](/C:/Users/user/Desktop/gpt-cli/docs/install.md), [docs/troubleshooting.md](/C:/Users/user/Desktop/gpt-cli/docs/troubleshooting.md), and [docs/live-smoke-checklist.md](/C:/Users/user/Desktop/gpt-cli/docs/live-smoke-checklist.md).

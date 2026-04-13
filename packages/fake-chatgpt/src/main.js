@@ -1,7 +1,11 @@
 const root = document.querySelector("#app-root");
 const note = document.querySelector("#variant-note");
 const params = new URLSearchParams(window.location.search);
-const variant = params.get("variant") === "aria" ? "aria" : "classic";
+const requestedVariant = params.get("variant");
+const variant =
+  requestedVariant === "aria" || requestedVariant === "live"
+    ? requestedVariant
+    : "classic";
 const scenario = params.get("scenario") || "success";
 const missingControls = new Set(
   (params.get("missing") || "")
@@ -22,7 +26,9 @@ document.body.dataset.researchStatusMessage = "";
 note.textContent =
   variant === "aria"
     ? "ARIA-first variant with moved controls, renamed labels, and semantic groups."
-    : "Classic variant with grouped controls and direct toolbar buttons.";
+    : variant === "live"
+      ? "Live-like variant with prompt-textarea, send/stop buttons, upload chips, and download controls."
+      : "Classic variant with grouped controls and direct toolbar buttons.";
 
 function hasControl(name) {
   return !missingControls.has(name);
@@ -118,6 +124,51 @@ function ariaUploadControl() {
   `;
 }
 
+function liveModelControls() {
+  if (!hasControl("model")) {
+    return "";
+  }
+  return `
+    <div class="pill" role="group" aria-label="Choose a model">
+      <button type="button" data-model="instant" aria-pressed="false">GPT-5.3 Instant</button>
+      <button type="button" data-model="thinking" aria-pressed="true">GPT-5.4 Thinking</button>
+    </div>
+  `;
+}
+
+function liveModeControls() {
+  return [
+    hasControl("search")
+      ? `<button type="button" data-mode="search" aria-label="Search" aria-pressed="false">Search</button>`
+      : "",
+    hasControl("research")
+      ? `<button type="button" data-mode="research" aria-label="Deep research" aria-pressed="false">Deep research</button>`
+      : "",
+  ].join("");
+}
+
+function liveEffortControls() {
+  if (!hasControl("effort")) {
+    return "";
+  }
+  return `
+    <div class="pill" role="group" aria-label="Reasoning effort">
+      <button type="button" data-effort="standard" aria-label="Standard reasoning" aria-pressed="true">Standard</button>
+      <button type="button" data-effort="extended" aria-label="Extended reasoning" aria-pressed="false">Extended</button>
+    </div>
+  `;
+}
+
+function liveUploadControl() {
+  if (!hasControl("upload")) {
+    return "";
+  }
+  return `
+    <button type="button" data-testid="upload-button" aria-label="Add photos and files">Add files</button>
+    <input id="live-upload-input" type="file" hidden multiple />
+  `;
+}
+
 root.innerHTML =
   variant === "aria"
     ? `
@@ -157,7 +208,55 @@ root.innerHTML =
         </div>
       </section>
     `
-    : `
+    : variant === "live"
+      ? `
+      <main aria-label="chatgpt workspace">
+        <section class="stacked-toolbar">
+          ${liveModelControls()}
+          ${liveModeControls()}
+          ${liveEffortControls()}
+          ${liveUploadControl()}
+        </section>
+        <form data-testid="composer-root" class="stacked-composer">
+          <textarea
+            id="prompt-textarea"
+            aria-label="Message ChatGPT"
+            placeholder="Message ChatGPT"
+          ></textarea>
+          <div class="pill">
+            <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+            <button
+              type="button"
+              data-testid="stop-button"
+              aria-label="Stop generating"
+              hidden
+            >
+              Stop
+            </button>
+          </div>
+        </form>
+        <div class="stacked-toolbar" data-slot="upload-list"></div>
+        <section class="transcript">
+          <article
+            class="message"
+            data-message-author-role="assistant"
+            data-stream-state="idle"
+          >
+            <div class="markdown">
+              <p>Streaming output lands here.</p>
+            </div>
+            <a
+              href="#"
+              data-testid="artifact-download"
+              aria-label="Download report"
+            >
+              Download report
+            </a>
+          </article>
+        </section>
+      </main>
+    `
+      : `
       <section class="shell" aria-label="fake-chatgpt-shell">
         <div class="toolbar">
           ${classicModelControls()}
@@ -195,19 +294,26 @@ root.innerHTML =
     `;
 
 const composer = document.querySelector(
-  "[data-slot='composer'], [role='textbox']",
+  "#prompt-textarea, [data-slot='composer'], [role='textbox']",
 );
-const submit = document.querySelector(
-  "[data-action='submit'], [aria-label='Submit prompt']",
+const sendButton = document.querySelector(
+  "[data-action='submit'], [aria-label='Submit prompt'], [data-testid='send-button'], [aria-label='Send prompt']",
 );
-const uploadEntry = document.querySelector("[data-slot='upload-entry']");
+const stopButton = document.querySelector("[data-testid='stop-button']");
+const uploadEntry = document.querySelector(
+  "[data-slot='upload-entry'], [data-testid='upload-button']",
+);
 const uploadInput = document.querySelector("input[type='file']");
 const uploadList = document.querySelector("[data-slot='upload-list']");
 const messageArticle = document.querySelector(
-  "[data-slot='assistant-message']",
+  "[data-slot='assistant-message'], [data-message-author-role='assistant']",
 );
-const message = document.querySelector("[data-slot='assistant-message'] p");
-const artifactLink = document.querySelector("[data-slot='artifact-link']");
+const message = document.querySelector(
+  "[data-slot='assistant-message'] p, [data-message-author-role='assistant'] .markdown p",
+);
+const artifactLink = document.querySelector(
+  "[data-slot='artifact-link'], [data-testid='artifact-download']",
+);
 let activeTimer = null;
 
 function currentConversationId() {
@@ -257,20 +363,36 @@ function renderUploadedFiles(fileNames) {
     return;
   }
   uploadList.innerHTML = fileNames
-    .map(
-      (fileName) =>
-        `<span class="pill" data-slot="uploaded-file">${fileName}</span>`,
+    .map((fileName) =>
+      variant === "live"
+        ? `<span class="pill" data-testid="upload-chip" aria-label="Attached file ${fileName}">${fileName}</span>`
+        : `<span class="pill" data-slot="uploaded-file">${fileName}</span>`,
     )
     .join("");
+}
+
+function setStreamingControls(running) {
+  if (sendButton instanceof HTMLElement) {
+    sendButton.hidden = running;
+  }
+  if (stopButton instanceof HTMLElement) {
+    stopButton.hidden = !running;
+  }
 }
 
 function resetArtifactLink() {
   if (!artifactLink) {
     return;
   }
-  artifactLink.setAttribute("href", "/artifact.txt");
-  artifactLink.setAttribute("download", "artifact.txt");
-  artifactLink.setAttribute("data-artifact-ready", "false");
+  if (variant === "live") {
+    artifactLink.setAttribute("href", "#");
+    artifactLink.removeAttribute("download");
+    artifactLink.removeAttribute("data-artifact-ready");
+  } else {
+    artifactLink.setAttribute("href", "/artifact.txt");
+    artifactLink.setAttribute("download", "artifact.txt");
+    artifactLink.setAttribute("data-artifact-ready", "false");
+  }
 }
 
 function setUploadedFiles(fileNames) {
@@ -312,7 +434,9 @@ function prepareArtifact(promptText) {
     "download",
     `${safeStem || "artifact"}-summary.txt`,
   );
-  artifactLink.setAttribute("data-artifact-ready", "true");
+  if (variant !== "live") {
+    artifactLink.setAttribute("data-artifact-ready", "true");
+  }
 }
 
 function applyPressedState(selector, selectedValue) {
@@ -388,6 +512,7 @@ function finishStream(state) {
   state.index = state.responseText.length;
   renderChunk(state);
   setStreamState("done");
+  setStreamingControls(false);
   prepareArtifact(state.promptText);
   clearState(state.conversationId);
 }
@@ -407,6 +532,7 @@ function finishResearch(state) {
   renderResearchChunk(state);
   setResearchState("done", "research completed");
   setStreamState("done");
+  setStreamingControls(false);
   prepareArtifact(state.promptText);
   clearResearchState(state.conversationId);
 }
@@ -430,6 +556,7 @@ function tickResearch(state) {
 
   if (scenario === "research-failure" && state.index >= 24) {
     setResearchState("failed", "temporary upstream issue; retryable");
+    setStreamingControls(false);
     persistResearchState(state);
     stopTimer();
     return;
@@ -466,6 +593,7 @@ function startResearch(promptText) {
   writeConversationState(conversationId, messageId);
   setStreamState("running");
   setResearchState("waiting_for_sources", "gathering sources");
+  setStreamingControls(true);
   message.textContent = "";
   renderResearchChunk(state);
   persistResearchState(state);
@@ -519,6 +647,7 @@ function startStream(promptText) {
 
   writeConversationState(conversationId, messageId);
   setStreamState("running");
+  setStreamingControls(true);
   message.textContent = "";
   renderChunk(state);
   persistState(state);
@@ -542,6 +671,7 @@ function resumeStreamIfNeeded() {
     return;
   }
 
+  setStreamingControls(true);
   scheduleNextTick(state);
 }
 
@@ -560,6 +690,7 @@ function resumeResearchIfNeeded() {
     state.phase === "waiting" ? "gathering sources" : "drafting report",
   );
   renderResearchChunk(state);
+  setStreamingControls(true);
   activeTimer = setTimeout(() => tickResearch(state), 80);
 }
 
@@ -602,9 +733,10 @@ window.__tablinqCancelStream = () => {
   const conversationId = currentConversationId();
   clearState(conversationId);
   setStreamState("cancelled");
+  setStreamingControls(false);
 };
 
-submit?.addEventListener("click", () => {
+sendButton?.addEventListener("click", () => {
   if (!composer || !message) {
     return;
   }
@@ -622,8 +754,13 @@ submit?.addEventListener("click", () => {
   startStream(promptText);
 });
 
+stopButton?.addEventListener("click", () => {
+  window.__tablinqCancelStream();
+});
+
 syncSelectedState();
 renderUploadedFiles(uploadedFiles());
 resetArtifactLink();
+setStreamingControls(false);
 resumeResearchIfNeeded();
 resumeStreamIfNeeded();

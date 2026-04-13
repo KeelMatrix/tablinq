@@ -11,7 +11,7 @@ import { startFakeChatGptServer, stopFakeChatGptServer } from "./helpers";
 function withHarnessUrl(
   baseUrl: string,
   options: {
-    variant?: "classic" | "aria";
+    variant?: "classic" | "aria" | "live";
     scenario?:
       | "success"
       | "timeout"
@@ -62,6 +62,7 @@ describe("browser adapter", () => {
   it.each([
     ["classic", "classic"],
     ["aria fallback", "aria"],
+    ["live-like", "live"],
   ] as const)(
     "captures a full capability matrix for the %s harness",
     async (_label, variant) => {
@@ -328,6 +329,72 @@ describe("browser adapter", () => {
       model: "thinking",
       effort: "extended",
     });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("drives the live-like harness through ask, download recovery, and ready-state checks", async () => {
+    const server = await startFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const adapter = new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: withHarnessUrl(server.url, { variant: "live" }),
+    });
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { variant: "live" }),
+      headless: true,
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-live-variant",
+        prompt: "configure live",
+        mode: "research",
+        modelClass: "instant",
+        effort: "extended",
+        files: [fixture],
+      },
+      () => {},
+    );
+    const artifactBody = await readFile(
+      result.artifacts[0]!.storage_path,
+      "utf8",
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      currentUrl: window.location.href,
+      composerReady: Boolean(document.querySelector("#prompt-textarea")),
+      sendHidden:
+        document
+          .querySelector("[data-testid='send-button']")
+          ?.hasAttribute("hidden") ?? false,
+      stopHidden:
+        document
+          .querySelector("[data-testid='stop-button']")
+          ?.hasAttribute("hidden") ?? true,
+      uploadChipCount: document.querySelectorAll("[data-testid='upload-chip']")
+        .length,
+    }));
+
+    expect(state).toEqual({
+      currentUrl: withHarnessUrl(server.url, {
+        variant: "live",
+      }).concat(`&conversation=${result.conversation_id}`),
+      composerReady: true,
+      sendHidden: false,
+      stopHidden: true,
+      uploadChipCount: 0,
+    });
+    expect(result.output_text).toBe("Fake response for: configure live");
+    expect(result.artifacts).toHaveLength(1);
+    expect(artifactBody).toContain("Mode: research");
+    expect(artifactBody).toContain("Model: instant");
+    expect(artifactBody).toContain("Effort: extended");
+    expect(artifactBody).toContain("Uploads: brief.txt");
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
