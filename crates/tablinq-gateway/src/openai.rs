@@ -65,6 +65,8 @@ pub struct ChatCompletionsRequest {
     pub n: Option<u32>,
     #[serde(default)]
     pub tablinq_files: Vec<String>,
+    #[serde(default)]
+    pub tablinq_file_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +94,15 @@ pub struct MessagePart {
     pub input_text: Option<String>,
     #[serde(default)]
     pub file_path: Option<String>,
+    #[serde(default)]
+    pub file_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlattenedMessages {
+    pub prompt: String,
+    pub file_paths: Vec<String>,
+    pub file_ids: Vec<String>,
 }
 
 pub fn resolve_model(model_id: &str) -> Option<&'static ProviderModelSpec> {
@@ -131,9 +142,10 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
     Ok(())
 }
 
-pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<(String, Vec<String>)> {
+pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<FlattenedMessages> {
     let mut sections = Vec::new();
-    let mut files = request.tablinq_files.clone();
+    let mut file_paths = request.tablinq_files.clone();
+    let mut file_ids = request.tablinq_file_ids.clone();
 
     for message in &request.messages {
         let mut text_parts = Vec::new();
@@ -161,13 +173,19 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<(String, Vec
                             }
                         }
                         "input_file" => {
-                            let Some(file_path) = part.file_path.as_ref() else {
-                                bail!("input_file parts must include file_path");
-                            };
-                            if file_path.trim().is_empty() {
-                                bail!("input_file file_path must not be empty");
+                            if let Some(file_id) = part.file_id.as_ref() {
+                                if file_id.trim().is_empty() {
+                                    bail!("input_file file_id must not be empty");
+                                }
+                                file_ids.push(file_id.trim().to_owned());
+                            } else if let Some(file_path) = part.file_path.as_ref() {
+                                if file_path.trim().is_empty() {
+                                    bail!("input_file file_path must not be empty");
+                                }
+                                file_paths.push(file_path.trim().to_owned());
+                            } else {
+                                bail!("input_file parts must include file_id or file_path");
                             }
-                            files.push(file_path.trim().to_owned());
                         }
                         other => bail!("message content part type {other} is not supported"),
                     }
@@ -188,7 +206,11 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<(String, Vec
         bail!("messages do not contain any supported text content");
     }
 
-    Ok((sections.join("\n\n"), files))
+    Ok(FlattenedMessages {
+        prompt: sections.join("\n\n"),
+        file_paths,
+        file_ids,
+    })
 }
 
 pub fn model_object(
