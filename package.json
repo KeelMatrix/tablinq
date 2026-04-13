@@ -10,6 +10,7 @@
     "build": "pnpm -r --if-present build",
     "lint": "pnpm exec tsc -p packages/browser-adapter/tsconfig.json --noEmit && pnpm exec tsc -p packages/extension/tsconfig.json --noEmit",
     "format": "pnpm exec prettier --check \"**/*.{json,md,ts,js,html,yml,yaml}\"",
+    "package:windows": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1",
     "test": "pnpm exec vitest run"
   },
   "devDependencies": {

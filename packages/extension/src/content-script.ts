@@ -2,7 +2,7 @@ import {
   probeDocument,
   type CapabilityBridgeMessage,
   type ProbeDocumentOptions,
-} from "./probe";
+} from "./probe.js";
 
 interface ChromeRuntimeLike {
   sendMessage?: (message: CapabilityBridgeMessage) => void;

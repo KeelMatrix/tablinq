@@ -10,6 +10,18 @@ pub const SELECTOR_PACK_FORMAT_VERSION: u32 = 1;
 pub const CONFIG_VERSION: u32 = 1;
 pub const APP_NAME: &str = "Tablinq";
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BuildMetadata {
+    pub application: String,
+    pub version: String,
+    pub git_commit: Option<String>,
+    pub git_dirty: bool,
+    pub target: String,
+    pub profile: String,
+    pub built_at_unix_epoch: u64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {

@@ -8,3 +8,5 @@ if (Test-Path $cargoBin) {
 Write-Host "Node: $(node --version)"
 Write-Host "pnpm: $(pnpm --version)"
 Write-Host "cargo: $(cargo --version)"
+Write-Host "Package: scripts/package.ps1"
+Write-Host "Install: scripts/install.ps1"

@@ -35,6 +35,8 @@
 
 - `scripts/bootstrap.ps1`: checks the local toolchain and adds the user Rust install to `PATH` for the current PowerShell session when needed.
 - `scripts/test.ps1`: runs `cargo test` and `pnpm test` in one step.
+- `scripts/package.ps1`: builds release Rust binaries, emits the browser adapter and MV3 extension JavaScript bundles, and assembles `dist/package/tablinq`.
+- `scripts/install.ps1`: copies the packaged layout into `%LOCALAPPDATA%\Tablinq\install`, initializes `%LOCALAPPDATA%\Tablinq`, verifies Edge/Chrome, and registers the native messaging host in the user hive.
 
 ## Current testing strategy
 
@@ -62,8 +64,10 @@ Part 9 hardens the execution paths around drift and failure recovery:
 
 ## Next implementation boundary
 
-Part 10 should package the now-hardened local system for easier Windows-first installation:
+Part 10 is now implemented:
 
-- packaging and install scripts
-- native messaging/bootstrap polish
-- end-user install and troubleshooting docs
+- package builds now emit runnable JavaScript assets for `packages/browser-adapter` and `packages/extension`
+- `gptd` prefers the packaged `service.js` adapter entry and falls back to the repo `service.ts` entry for developer checkouts
+- a dedicated `tablinq-host` binary is packaged and registered as the Windows user-level native messaging host
+- `gpt version` and `gptd version` expose build metadata for packaged installs
+- end-user docs now cover install, login, troubleshooting, selector-pack updates, and profile reset

@@ -294,19 +294,35 @@ struct AdapterProcess {
     stdout: BufReader<ChildStdout>,
 }
 
+struct AdapterRuntime {
+    entry: PathBuf,
+    asset_root: PathBuf,
+    launch_with_node: bool,
+}
+
 impl AdapterProcess {
     fn spawn(config: &AppConfig) -> Result<Self> {
-        let entry = resolve_adapter_entry();
-        let mut command = Command::new(if cfg!(windows) { "npx.cmd" } else { "npx" });
+        let runtime = resolve_adapter_runtime()?;
+        let mut command = Command::new(if runtime.launch_with_node {
+            if cfg!(windows) { "node.exe" } else { "node" }
+        } else if cfg!(windows) {
+            "npx.cmd"
+        } else {
+            "npx"
+        });
+        if runtime.launch_with_node {
+            command.arg(&runtime.entry);
+        } else {
+            command.arg("tsx").arg(&runtime.entry);
+        }
         command
-            .arg("tsx")
-            .arg(entry)
             .arg("--profile-dir")
             .arg(&config.paths.browser_profile_dir)
             .arg("--downloads-dir")
             .arg(&config.paths.downloads_dir)
             .arg("--default-target-url")
             .arg(config.browser_target_url())
+            .env("TABLINQ_ASSET_ROOT", &runtime.asset_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -729,19 +745,106 @@ fn idle_snapshot(
     }
 }
 
-fn resolve_adapter_entry() -> PathBuf {
+fn resolve_adapter_runtime() -> Result<AdapterRuntime> {
     if let Ok(value) = std::env::var("TABLINQ_BROWSER_ADAPTER_ENTRY") {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return PathBuf::from(trimmed);
+            let entry = PathBuf::from(trimmed);
+            if entry.exists() {
+                let asset_root = std::env::var("TABLINQ_ASSET_ROOT")
+                    .ok()
+                    .filter(|value| !value.trim().is_empty())
+                    .map(PathBuf::from)
+                    .or_else(|| infer_asset_root(&entry))
+                    .unwrap_or_else(|| {
+                        entry
+                            .parent()
+                            .unwrap_or_else(|| Path::new("."))
+                            .to_path_buf()
+                    });
+                return Ok(AdapterRuntime {
+                    launch_with_node: is_js_entry(&entry),
+                    entry,
+                    asset_root,
+                });
+            }
         }
     }
 
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("packages")
-        .join("browser-adapter")
-        .join("src")
-        .join("service.ts")
+    for (entry, asset_root) in adapter_runtime_candidates() {
+        if entry.exists() {
+            return Ok(AdapterRuntime {
+                launch_with_node: is_js_entry(&entry),
+                entry,
+                asset_root,
+            });
+        }
+    }
+
+    bail!("browser adapter entry could not be resolved")
+}
+
+fn adapter_runtime_candidates() -> Vec<(PathBuf, PathBuf)> {
+    let mut candidates = Vec::new();
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(bin_dir) = current_exe.parent() {
+            if let Some(install_root) = bin_dir.parent() {
+                candidates.push((
+                    install_root
+                        .join("browser-adapter")
+                        .join("src")
+                        .join("service.js"),
+                    install_root.to_path_buf(),
+                ));
+                candidates.push((
+                    install_root
+                        .join("packages")
+                        .join("browser-adapter")
+                        .join("dist")
+                        .join("src")
+                        .join("service.js"),
+                    install_root.to_path_buf(),
+                ));
+            }
+        }
+    }
+
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    candidates.push((
+        repo_root
+            .join("packages")
+            .join("browser-adapter")
+            .join("dist")
+            .join("src")
+            .join("service.js"),
+        repo_root.clone(),
+    ));
+    candidates.push((
+        repo_root
+            .join("packages")
+            .join("browser-adapter")
+            .join("src")
+            .join("service.ts"),
+        repo_root,
+    ));
+
+    candidates
+}
+
+fn infer_asset_root(entry: &Path) -> Option<PathBuf> {
+    entry.ancestors().find_map(|ancestor| {
+        if ancestor.join("selector-packs").exists() || ancestor.join("packages").exists() {
+            Some(ancestor.to_path_buf())
+        } else {
+            None
+        }
+    })
+}
+
+fn is_js_entry(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case("js"))
+        .unwrap_or(false)
 }
