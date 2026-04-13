@@ -11,7 +11,10 @@ use gptd::logging::JsonLogger;
 use gptd::{AppConfig, CoreService};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use shared_protocol::{BrowserOpenRequest, ErrorCode, EventPayload, StreamChunkKind};
+use shared_protocol::{
+    BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, ErrorCode, EventPayload,
+    StreamChunkKind,
+};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -29,6 +32,7 @@ const READY_PATH: &str = "/ready";
 const ADMIN_STATUS_PATH: &str = "/admin/status";
 const ADMIN_SHUTDOWN_PATH: &str = "/admin/shutdown";
 const V1_MODELS_PATH: &str = "/v1/models";
+const V1_CAPABILITIES_PATH: &str = "/v1/capabilities";
 const V1_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 
@@ -84,6 +88,35 @@ struct SimpleHttpResponse {
     status_code: u16,
     headers: BTreeMap<String, String>,
     body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct CapabilityCacheEntry {
+    cache_key: String,
+    profile_dir: String,
+    workspace_key: String,
+    cached_at: DateTime<Utc>,
+    report: CapabilityReport,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct CapabilityCacheState {
+    entries: BTreeMap<String, CapabilityCacheEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct CapabilityCatalog {
+    source: &'static str,
+    cache_key: String,
+    profile_dir: String,
+    workspace_key: String,
+    report: Option<CapabilityReport>,
+}
+
+#[derive(Debug)]
+struct CapabilityCatalogCache {
+    path: PathBuf,
+    inner: Mutex<CapabilityCacheState>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -299,10 +332,126 @@ fn client_request_count(state: &SchedulerState, client_id: &str) -> u32 {
         .count() as u32
 }
 
+impl CapabilityCatalogCache {
+    fn load(config: &AppConfig) -> Result<Self> {
+        let path = capability_cache_path(config);
+        let state = if path.exists() {
+            let raw =
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+            serde_json::from_str(&raw).context("decode capability cache")?
+        } else {
+            CapabilityCacheState::default()
+        };
+        Ok(Self {
+            path,
+            inner: Mutex::new(state),
+        })
+    }
+
+    fn resolve(&self, core: &CoreService) -> Result<CapabilityCatalog> {
+        let live = discover_capabilities(core);
+        let profile = core.browser_profile_info().ok();
+        let (cache_key, profile_dir, workspace_key) = catalog_identity(profile.as_ref(), core);
+
+        if let Some(report) = live {
+            self.remember(&cache_key, &profile_dir, &workspace_key, &report)?;
+            return Ok(CapabilityCatalog {
+                source: "live",
+                cache_key,
+                profile_dir,
+                workspace_key,
+                report: Some(report),
+            });
+        }
+
+        if let Some(entry) = self.cached(&cache_key)? {
+            return Ok(CapabilityCatalog {
+                source: "cached",
+                cache_key,
+                profile_dir,
+                workspace_key,
+                report: Some(entry.report),
+            });
+        }
+
+        Ok(CapabilityCatalog {
+            source: "unknown",
+            cache_key,
+            profile_dir,
+            workspace_key,
+            report: None,
+        })
+    }
+
+    fn cached(&self, cache_key: &str) -> Result<Option<CapabilityCacheEntry>> {
+        let state = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("capability cache lock poisoned"))?;
+        Ok(state.entries.get(cache_key).cloned())
+    }
+
+    fn remember(
+        &self,
+        cache_key: &str,
+        profile_dir: &str,
+        workspace_key: &str,
+        report: &CapabilityReport,
+    ) -> Result<()> {
+        let mut state = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow::anyhow!("capability cache lock poisoned"))?;
+        state.entries.insert(
+            cache_key.to_owned(),
+            CapabilityCacheEntry {
+                cache_key: cache_key.to_owned(),
+                profile_dir: profile_dir.to_owned(),
+                workspace_key: workspace_key.to_owned(),
+                cached_at: Utc::now(),
+                report: report.clone(),
+            },
+        );
+        let raw = serde_json::to_vec_pretty(&*state).context("encode capability cache")?;
+        fs::write(&self.path, raw).with_context(|| format!("write {}", self.path.display()))
+    }
+}
+
+fn capability_cache_path(config: &AppConfig) -> PathBuf {
+    config
+        .paths
+        .state_root
+        .join("gateway-capability-cache.json")
+}
+
+fn catalog_identity(
+    snapshot: Option<&BrowserStatusSnapshot>,
+    core: &CoreService,
+) -> (String, String, String) {
+    let profile_dir = snapshot
+        .map(|value| value.profile_dir.clone())
+        .unwrap_or_else(|| {
+            core.config()
+                .paths
+                .browser_profile_dir
+                .display()
+                .to_string()
+        });
+    let workspace_key = snapshot
+        .and_then(|value| value.current_url.clone().or(Some(value.target_url.clone())))
+        .unwrap_or_else(|| core.config().browser_target_url().to_owned());
+    (
+        format!("{profile_dir}::{workspace_key}"),
+        profile_dir,
+        workspace_key,
+    )
+}
+
 pub fn run_gateway(config: AppConfig) -> Result<()> {
     let log_path = gateway_log_path(&config);
     let logger = Arc::new(JsonLogger::new(&log_path)?);
     let core = Arc::new(CoreService::new(config.clone())?);
+    let capability_cache = Arc::new(CapabilityCatalogCache::load(&config)?);
     let lock = acquire_gateway_lock(&config)?;
 
     let listener =
@@ -378,6 +527,7 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
                 let shutdown = Arc::clone(&shutdown);
                 let request_counter = Arc::clone(&request_counter);
                 let scheduler = Arc::clone(&scheduler);
+                let capability_cache = Arc::clone(&capability_cache);
                 let config = config.clone();
                 thread::spawn(move || {
                     if let Err(err) = handle_connection(
@@ -389,6 +539,7 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
                         &shutdown,
                         &request_counter,
                         &scheduler,
+                        &capability_cache,
                         &logger,
                     ) {
                         let _ = logger.warn(
@@ -421,6 +572,7 @@ fn handle_connection(
     shutdown: &AtomicBool,
     request_counter: &AtomicU64,
     scheduler: &GatewayScheduler,
+    capability_cache: &CapabilityCatalogCache,
     logger: &JsonLogger,
 ) -> Result<()> {
     stream
@@ -511,7 +663,11 @@ fn handle_connection(
             Err(response) => response,
         },
         ("GET", V1_MODELS_PATH) => match authorize_request(config, &context.request, true) {
-            Ok(()) => handle_models_request(core, snapshot, &context.request_id),
+            Ok(()) => handle_models_request(core, capability_cache, snapshot, &context.request_id),
+            Err(response) => response,
+        },
+        ("GET", V1_CAPABILITIES_PATH) => match authorize_request(config, &context.request, true) {
+            Ok(()) => handle_capabilities_request(core, capability_cache, &context.request_id)?,
             Err(response) => response,
         },
         ("POST", _) if context.request.path.starts_with(V1_REQUESTS_PREFIX) => {
@@ -586,13 +742,27 @@ fn handle_connection(
 
 fn handle_models_request(
     core: &CoreService,
+    capability_cache: &CapabilityCatalogCache,
     snapshot: &GatewayStatusSnapshot,
     request_id: &str,
 ) -> HttpResponse {
-    let capability_report = discover_capabilities(core);
+    let catalog = capability_cache
+        .resolve(core)
+        .unwrap_or_else(|_| CapabilityCatalog {
+            source: "unknown",
+            cache_key: "unavailable".to_owned(),
+            profile_dir: core
+                .config()
+                .paths
+                .browser_profile_dir
+                .display()
+                .to_string(),
+            workspace_key: core.config().browser_target_url().to_owned(),
+            report: None,
+        });
     let models = PROVIDER_MODELS
         .iter()
-        .map(|spec| model_object(spec, capability_report.as_ref()))
+        .map(|spec| model_object(spec, catalog.report.as_ref(), catalog.source))
         .collect::<Vec<_>>();
     json_response(
         200,
@@ -600,12 +770,47 @@ fn handle_models_request(
             "object": "list",
             "data": models,
             "request_id": request_id,
+            "tablinq_capability_source": catalog.source,
             "gateway": {
                 "host": snapshot.host,
                 "port": snapshot.port,
             }
         }),
     )
+}
+
+fn handle_capabilities_request(
+    core: &CoreService,
+    capability_cache: &CapabilityCatalogCache,
+    request_id: &str,
+) -> Result<HttpResponse> {
+    let catalog = capability_cache.resolve(core)?;
+    let aliases = catalog
+        .report
+        .as_ref()
+        .map(|report| report.aliases.clone())
+        .unwrap_or_default();
+    let models = PROVIDER_MODELS
+        .iter()
+        .map(|spec| model_object(spec, catalog.report.as_ref(), catalog.source))
+        .collect::<Vec<_>>();
+
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.capability_catalog",
+            "request_id": request_id,
+            "source": catalog.source,
+            "cache_key": catalog.cache_key,
+            "profile_dir": catalog.profile_dir,
+            "workspace_key": catalog.workspace_key,
+            "reported_at": catalog.report.as_ref().map(|report| report.reported_at),
+            "selector_pack_id": catalog.report.as_ref().map(|report| report.selector_pack_id.clone()),
+            "selector_pack_version": catalog.report.as_ref().map(|report| report.selector_pack_version.clone()),
+            "aliases": aliases,
+            "models": models,
+        }),
+    ))
 }
 
 enum PreparedChatJob {
@@ -1830,6 +2035,7 @@ mod tests {
         assert_eq!(response.status_code, 200);
         let body: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["object"], "list");
+        assert_eq!(body["tablinq_capability_source"], "live");
         assert!(
             body["data"]
                 .as_array()
@@ -1844,6 +2050,82 @@ mod tests {
                 .iter()
                 .any(|item| item["id"] == "tablinq-search")
         );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn capabilities_endpoint_reports_alias_remaps_for_stable_models() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?variant=aria"));
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_CAPABILITIES_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 200);
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["object"], "tablinq.capability_catalog");
+        assert_eq!(body["source"], "live");
+        assert!(body["models"].as_array().unwrap().iter().any(|item| {
+            item["id"] == "tablinq-thinking-standard"
+                && item["tablinq_aliases"]["model_classes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|alias| alias.as_str().is_some())
+        }));
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn capabilities_endpoint_marks_missing_features_unavailable() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?missing=search"));
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_CAPABILITIES_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 200);
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        let search = body["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == "tablinq-search")
+            .unwrap();
+        assert_eq!(search["tablinq_availability"], "unavailable");
+        assert!(!search["tablinq_warning"].as_array().unwrap().is_empty());
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
@@ -2331,5 +2613,59 @@ mod tests {
         handle.join().unwrap().unwrap();
         let _ = fake_server.kill();
         let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn capability_cache_returns_cached_catalog_for_profile_workspace_key() {
+        let _guard = integration_lock();
+        let dir = tempdir().unwrap();
+        let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+        let cache = CapabilityCatalogCache::load(&config).unwrap();
+        let report = CapabilityReport {
+            reported_at: Utc::now(),
+            selector_pack_id: "chatgpt-default".to_owned(),
+            selector_pack_version: "v1".to_owned(),
+            matrix: shared_protocol::CapabilityMatrix {
+                composer_ready: true,
+                submit_available: true,
+                model_picker_visible: true,
+                thinking_effort_visible: true,
+                search_mode_visible: true,
+                research_mode_visible: true,
+                upload_control_visible: true,
+                downloadable_artifacts_observable: true,
+            },
+            aliases: shared_protocol::RuntimeAliases {
+                modes: BTreeMap::from([
+                    ("normal".to_owned(), vec!["Chat".to_owned()]),
+                    ("search".to_owned(), vec!["Browse the web".to_owned()]),
+                    ("research".to_owned(), vec!["Deep research".to_owned()]),
+                ]),
+                model_classes: BTreeMap::from([
+                    ("instant".to_owned(), vec!["Instant answers".to_owned()]),
+                    ("thinking".to_owned(), vec!["Deep thinking".to_owned()]),
+                ]),
+                efforts: BTreeMap::from([
+                    ("standard".to_owned(), vec!["Standard reasoning".to_owned()]),
+                    ("extended".to_owned(), vec!["Extended reasoning".to_owned()]),
+                ]),
+            },
+        };
+
+        cache
+            .remember(
+                "profile-a::workspace-a",
+                "profile-a",
+                "workspace-a",
+                &report,
+            )
+            .unwrap();
+        let cached = cache.cached("profile-a::workspace-a").unwrap().unwrap();
+        assert_eq!(cached.profile_dir, "profile-a");
+        assert_eq!(cached.workspace_key, "workspace-a");
+        assert_eq!(
+            cached.report.aliases.model_classes["thinking"],
+            vec!["Deep thinking".to_owned()]
+        );
     }
 }
