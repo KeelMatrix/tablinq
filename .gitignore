@@ -1,6 +1,8 @@
 # === Project meta (exclude planning files) ===
 app-idea.txt
 app-plan.txt
+app-refactor-1.txt
+AGENTS.md
 
 # === Rust ===
 target/

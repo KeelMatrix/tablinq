@@ -2,7 +2,7 @@ mod build_info;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use serde_json::json;
+use serde_json::{Value, json};
 use shared_protocol::{
     AskCommand, BrowserOpenRequest, CancelJobCommand, DaemonRequest, DaemonResponse, Effort,
     EventPayload, Mode, ModelClass, PullArtifactCommand, ResearchCommand, StreamChunkKind,
@@ -30,6 +30,10 @@ pub enum Command {
     Research(ResearchArgs),
     Capabilities,
     Doctor,
+    Gateway {
+        #[command(subcommand)]
+        command: GatewayCommand,
+    },
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
@@ -88,6 +92,13 @@ pub struct ResearchArgs {
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum DaemonCommand {
+    Start,
+    Status,
+    Stop,
+}
+
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum GatewayCommand {
     Start,
     Status,
     Stop,
@@ -156,52 +167,105 @@ pub enum CliEffort {
 }
 
 pub fn run(cli: &Cli) -> Result<String> {
+    render_execution(execute(cli)?)
+}
+
+enum CliExecution {
+    Text(String),
+    Json(Value),
+    Printed,
+}
+
+fn execute(cli: &Cli) -> Result<CliExecution> {
     match &cli.command {
-        Command::Version(args) => Ok(build_info::render(args.json)),
+        Command::Version(args) => Ok(CliExecution::Text(build_info::render(args.json))),
         Command::Daemon { command } => match command {
-            DaemonCommand::Start => start_daemon(cli.state_root.as_deref()),
-            DaemonCommand::Status => {
-                send_daemon_request(cli.state_root.as_deref(), DaemonRequest::Status)
+            DaemonCommand::Start => {
+                Ok(CliExecution::Text(start_daemon(cli.state_root.as_deref())?))
             }
-            DaemonCommand::Stop => {
-                send_daemon_request(cli.state_root.as_deref(), DaemonRequest::Shutdown)
-            }
+            DaemonCommand::Status => Ok(CliExecution::Json(send_daemon_request(
+                cli.state_root.as_deref(),
+                DaemonRequest::Status,
+            )?)),
+            DaemonCommand::Stop => Ok(CliExecution::Json(send_daemon_request(
+                cli.state_root.as_deref(),
+                DaemonRequest::Shutdown,
+            )?)),
         },
-        Command::Doctor => send_daemon_request(cli.state_root.as_deref(), DaemonRequest::Doctor),
+        Command::Doctor => Ok(CliExecution::Json(send_daemon_request(
+            cli.state_root.as_deref(),
+            DaemonRequest::Doctor,
+        )?)),
+        Command::Gateway { command } => match command {
+            GatewayCommand::Start => Ok(CliExecution::Json(
+                tablinq_gateway::start_gateway_process(cli.state_root.as_deref())?,
+            )),
+            GatewayCommand::Status => Ok(CliExecution::Json(tablinq_gateway::gateway_status(
+                cli.state_root.as_deref(),
+            )?)),
+            GatewayCommand::Stop => Ok(CliExecution::Json(tablinq_gateway::stop_gateway_process(
+                cli.state_root.as_deref(),
+            )?)),
+        },
         Command::Config { command } => match command {
-            ConfigCommand::Show => config_show(cli.state_root.as_deref()),
+            ConfigCommand::Show => Ok(CliExecution::Json(config_show(cli.state_root.as_deref())?)),
         },
         Command::Sessions { command } => match command {
-            SessionsCommand::List => {
-                send_daemon_request(cli.state_root.as_deref(), DaemonRequest::SessionsList)
-            }
+            SessionsCommand::List => Ok(CliExecution::Json(send_daemon_request(
+                cli.state_root.as_deref(),
+                DaemonRequest::SessionsList,
+            )?)),
         },
         Command::Jobs { command } => match command {
-            JobsCommand::List => {
-                send_daemon_request(cli.state_root.as_deref(), DaemonRequest::JobsList)
-            }
-            JobsCommand::Show { job_id } => send_daemon_request(
+            JobsCommand::List => Ok(CliExecution::Json(send_daemon_request(
+                cli.state_root.as_deref(),
+                DaemonRequest::JobsList,
+            )?)),
+            JobsCommand::Show { job_id } => Ok(CliExecution::Json(send_daemon_request(
                 cli.state_root.as_deref(),
                 DaemonRequest::JobsShow(job_id.clone()),
-            ),
-            JobsCommand::Cancel { job_id } => send_daemon_request(
+            )?)),
+            JobsCommand::Cancel { job_id } => Ok(CliExecution::Json(send_daemon_request(
                 cli.state_root.as_deref(),
                 DaemonRequest::JobsCancel(CancelJobCommand {
                     job_id: job_id.clone(),
                 }),
-            ),
+            )?)),
         },
-        Command::Ask(args) => run_ask(cli.state_root.as_deref(), args),
-        Command::Research(args) => run_research(cli.state_root.as_deref(), args),
-        Command::Capabilities => {
-            send_daemon_request(cli.state_root.as_deref(), DaemonRequest::Capabilities)
+        Command::Ask(args) => {
+            execute_ask_with_terminal_presentation(cli.state_root.as_deref(), args)?;
+            Ok(CliExecution::Printed)
         }
-        Command::Artifacts { command } => run_artifacts_command(cli.state_root.as_deref(), command),
-        Command::Browser { command } => run_browser_command(cli.state_root.as_deref(), command),
+        Command::Research(args) => {
+            execute_research_with_terminal_presentation(cli.state_root.as_deref(), args)?;
+            Ok(CliExecution::Printed)
+        }
+        Command::Capabilities => Ok(CliExecution::Json(send_daemon_request(
+            cli.state_root.as_deref(),
+            DaemonRequest::Capabilities,
+        )?)),
+        Command::Artifacts { command } => Ok(CliExecution::Json(run_artifacts_command(
+            cli.state_root.as_deref(),
+            command,
+        )?)),
+        Command::Browser { command } => Ok(CliExecution::Json(run_browser_command(
+            cli.state_root.as_deref(),
+            command,
+        )?)),
     }
 }
 
-fn run_artifacts_command(state_root: Option<&Path>, command: &ArtifactsCommand) -> Result<String> {
+fn render_execution(execution: CliExecution) -> Result<String> {
+    match execution {
+        CliExecution::Text(text) => Ok(text),
+        CliExecution::Json(value) => {
+            serde_json::to_string_pretty(&value).context("serialize CLI JSON output")
+        }
+        CliExecution::Printed => Ok(String::new()),
+    }
+}
+
+fn run_artifacts_command(state_root: Option<&Path>, command: &ArtifactsCommand) -> Result<Value> {
     match command {
         ArtifactsCommand::List => send_daemon_request(state_root, DaemonRequest::ArtifactsList),
         ArtifactsCommand::Pull {
@@ -217,7 +281,7 @@ fn run_artifacts_command(state_root: Option<&Path>, command: &ArtifactsCommand) 
     }
 }
 
-fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> Result<String> {
+fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> Result<Value> {
     match command {
         BrowserCommand::Open {
             target_url,
@@ -241,27 +305,16 @@ fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> R
     }
 }
 
-fn send_daemon_request(state_root: Option<&Path>, request: DaemonRequest) -> Result<String> {
+fn send_daemon_request(state_root: Option<&Path>, request: DaemonRequest) -> Result<Value> {
     let paths = build_state_paths(resolve_state_root(state_root));
     let response = gptd::send_request(&paths.ipc_endpoint, &request)
         .with_context(|| format!("connect to daemon at {}", paths.ipc_endpoint))?;
-    serde_json::to_string_pretty(&response).context("serialize daemon response")
+    serde_json::to_value(response).context("serialize daemon response")
 }
 
-fn run_ask(state_root: Option<&Path>, args: &AskArgs) -> Result<String> {
+fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskArgs) -> Result<()> {
     let paths = build_state_paths(resolve_state_root(state_root));
-    let command = AskCommand {
-        prompt: args.prompt.clone(),
-        conversation_id: args.conversation.clone(),
-        mode: map_mode(args.mode),
-        model_class: args.model_class.map(map_model),
-        effort: args.effort.map(map_effort),
-        files: args
-            .files
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect(),
-    };
+    let command = build_ask_command(args);
 
     let mut stdout = io::stdout();
     let mut printed_any = false;
@@ -287,27 +340,19 @@ fn run_ask(state_root: Option<&Path>, args: &AskArgs) -> Result<String> {
             if !printed_any && !result.output_text.is_empty() {
                 writeln!(stdout, "{}", result.output_text)?;
             }
-            Ok(String::new())
+            Ok(())
         }
         DaemonResponse::Error(error) => bail!("{}", error.message),
         other => bail!("unexpected ask response: {other:?}"),
     }
 }
 
-fn run_research(state_root: Option<&Path>, args: &ResearchArgs) -> Result<String> {
+fn execute_research_with_terminal_presentation(
+    state_root: Option<&Path>,
+    args: &ResearchArgs,
+) -> Result<()> {
     let paths = build_state_paths(resolve_state_root(state_root));
-    let command = ResearchCommand {
-        query: args.query.clone(),
-        files: args
-            .files
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect(),
-        output_dir: args
-            .output_dir
-            .as_ref()
-            .map(|path| path.display().to_string()),
-    };
+    let command = build_research_command(args);
 
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
@@ -353,16 +398,16 @@ fn run_research(state_root: Option<&Path>, args: &ResearchArgs) -> Result<String
             if !printed_any && !result.report_text.is_empty() {
                 writeln!(stdout, "{}", result.report_text)?;
             }
-            Ok(String::new())
+            Ok(())
         }
         DaemonResponse::Error(error) => bail!("{}", error.message),
         other => bail!("unexpected research response: {other:?}"),
     }
 }
 
-fn config_show(state_root: Option<&Path>) -> Result<String> {
+fn config_show(state_root: Option<&Path>) -> Result<Value> {
     let config = gptd::AppConfig::load_or_create(state_root)?;
-    serde_json::to_string_pretty(&config.snapshot()).context("serialize config snapshot")
+    serde_json::to_value(config.snapshot()).context("serialize config snapshot")
 }
 
 fn start_daemon(state_root: Option<&Path>) -> Result<String> {
@@ -444,6 +489,36 @@ struct JobStatusLine {
     message: String,
 }
 
+fn build_ask_command(args: &AskArgs) -> AskCommand {
+    AskCommand {
+        prompt: args.prompt.clone(),
+        conversation_id: args.conversation.clone(),
+        mode: map_mode(args.mode),
+        model_class: args.model_class.map(map_model),
+        effort: args.effort.map(map_effort),
+        files: args
+            .files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+    }
+}
+
+fn build_research_command(args: &ResearchArgs) -> ResearchCommand {
+    ResearchCommand {
+        query: args.query.clone(),
+        files: args
+            .files
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        output_dir: args
+            .output_dir
+            .as_ref()
+            .map(|path| path.display().to_string()),
+    }
+}
+
 fn map_mode(value: CliMode) -> Mode {
     match value {
         CliMode::Normal => Mode::Normal,
@@ -470,6 +545,7 @@ fn map_effort(value: CliEffort) -> Effort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn parse(args: &[&str]) -> Cli {
         Cli::parse_from(args)
@@ -522,6 +598,17 @@ mod tests {
     }
 
     #[test]
+    fn gateway_status_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "gateway", "status"]);
+        assert!(matches!(
+            cli.command,
+            Command::Gateway {
+                command: GatewayCommand::Status
+            }
+        ));
+    }
+
+    #[test]
     fn artifact_pull_command_matches_golden_shape() {
         let cli = parse(&["gpt", "artifacts", "pull", "last", "--to", "."]);
 
@@ -547,5 +634,52 @@ mod tests {
     fn jobs_show_command_matches_golden_shape() {
         let cli = parse(&["gpt", "jobs", "show", "job-123"]);
         assert!(matches!(cli.command, Command::Jobs { .. }));
+    }
+
+    #[test]
+    fn build_ask_command_maps_cli_flags_into_protocol_command() {
+        let args = AskArgs {
+            prompt: "hello".to_owned(),
+            mode: CliMode::Search,
+            model_class: Some(CliModelClass::Thinking),
+            effort: Some(CliEffort::Extended),
+            files: vec![PathBuf::from("notes.txt")],
+            conversation: Some("conv-7".to_owned()),
+        };
+
+        let command = build_ask_command(&args);
+        assert_eq!(command.mode, Mode::Search);
+        assert_eq!(command.model_class, Some(ModelClass::Thinking));
+        assert_eq!(command.effort, Some(Effort::Extended));
+        assert_eq!(command.files, vec!["notes.txt".to_owned()]);
+        assert_eq!(command.conversation_id.as_deref(), Some("conv-7"));
+    }
+
+    #[test]
+    fn render_execution_pretty_prints_json_values() {
+        let output = render_execution(CliExecution::Json(json!({
+            "status": "ok"
+        })))
+        .unwrap();
+
+        assert!(output.contains("\"status\": \"ok\""));
+        assert!(output.contains('\n'));
+    }
+
+    #[test]
+    fn config_show_command_renders_pretty_json() {
+        let dir = tempdir().unwrap();
+        let cli = Cli::parse_from([
+            "gpt",
+            "--state-root",
+            dir.path().to_str().unwrap(),
+            "config",
+            "show",
+        ]);
+
+        let output = run(&cli).unwrap();
+
+        assert!(output.contains("\"state_root\""));
+        assert!(output.contains("\"config_path\""));
     }
 }

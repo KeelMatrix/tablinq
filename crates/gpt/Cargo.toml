@@ -10,6 +10,7 @@ clap.workspace = true
 gptd = { path = "../gptd" }
 serde_json.workspace = true
 shared-protocol = { path = "../shared-protocol" }
+tablinq-gateway = { path = "../tablinq-gateway" }
 thiserror.workspace = true
 
 [dev-dependencies]

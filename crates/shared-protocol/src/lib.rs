@@ -612,6 +612,18 @@ pub struct DaemonStatusSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct GatewayConfigSnapshot {
+    pub host: String,
+    pub port: u16,
+    pub api_key_present: bool,
+    pub max_concurrent_upstream_jobs: u32,
+    pub queue_length: u32,
+    pub request_timeout_ms: u64,
+    pub safe_mode_behavior: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigSnapshot {
     pub version: u32,
     pub state_root: String,
@@ -629,6 +641,7 @@ pub struct ConfigSnapshot {
     pub safe_mode: bool,
     pub browser_target_url: String,
     pub browser_path: Option<String>,
+    pub gateway: GatewayConfigSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

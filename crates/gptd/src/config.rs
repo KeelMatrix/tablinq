@@ -1,10 +1,23 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
-    CONFIG_VERSION, ConfigSnapshot, StatePaths, build_state_paths, resolve_state_root,
+    CONFIG_VERSION, ConfigSnapshot, GatewayConfigSnapshot, StatePaths, build_state_paths,
+    resolve_state_root,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct GatewayFileConfig {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub api_key: Option<String>,
+    pub max_concurrent_upstream_jobs: Option<u32>,
+    pub queue_length: Option<u32>,
+    pub request_timeout_ms: Option<u64>,
+    pub safe_mode_behavior: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
@@ -14,6 +27,7 @@ pub struct FileConfig {
     pub safe_mode: Option<bool>,
     pub browser_target_url: Option<String>,
     pub browser_path: Option<String>,
+    pub gateway: Option<GatewayFileConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +65,15 @@ impl AppConfig {
             safe_mode: self.safe_mode(),
             browser_target_url: self.browser_target_url().to_owned(),
             browser_path: self.browser_path().map(ToOwned::to_owned),
+            gateway: GatewayConfigSnapshot {
+                host: self.gateway_host().to_owned(),
+                port: self.gateway_port(),
+                api_key_present: self.gateway_api_key().is_some(),
+                max_concurrent_upstream_jobs: self.gateway_max_concurrent_upstream_jobs(),
+                queue_length: self.gateway_queue_length(),
+                request_timeout_ms: self.gateway_request_timeout_ms(),
+                safe_mode_behavior: self.gateway_safe_mode_behavior().to_owned(),
+            },
         }
     }
 
@@ -75,6 +98,64 @@ impl AppConfig {
             .browser_path
             .as_deref()
             .filter(|value| !value.trim().is_empty())
+    }
+
+    pub fn gateway_host(&self) -> &str {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.host.as_deref())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("127.0.0.1")
+    }
+
+    pub fn gateway_port(&self) -> u16 {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.port)
+            .unwrap_or(3847)
+    }
+
+    pub fn gateway_api_key(&self) -> Option<&str> {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.api_key.as_deref())
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    pub fn gateway_max_concurrent_upstream_jobs(&self) -> u32 {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.max_concurrent_upstream_jobs)
+            .unwrap_or(1)
+    }
+
+    pub fn gateway_queue_length(&self) -> u32 {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.queue_length)
+            .unwrap_or(32)
+    }
+
+    pub fn gateway_request_timeout_ms(&self) -> u64 {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.request_timeout_ms)
+            .unwrap_or(30_000)
+    }
+
+    pub fn gateway_safe_mode_behavior(&self) -> &str {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.safe_mode_behavior.as_deref())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("reject_execution")
     }
 }
 
@@ -127,7 +208,37 @@ fn upgrade_file_config(mut file: FileConfig) -> FileConfig {
     if file.browser_target_url.is_none() {
         file.browser_target_url = Some("https://chatgpt.com/".to_owned());
     }
+    let gateway = file.gateway.get_or_insert_with(GatewayFileConfig::default);
+    if gateway.host.is_none() {
+        gateway.host = Some("127.0.0.1".to_owned());
+    }
+    if gateway.port.is_none() {
+        gateway.port = Some(3847);
+    }
+    if gateway.api_key.is_none() {
+        gateway.api_key = Some(generate_gateway_api_key());
+    }
+    if gateway.max_concurrent_upstream_jobs.is_none() {
+        gateway.max_concurrent_upstream_jobs = Some(1);
+    }
+    if gateway.queue_length.is_none() {
+        gateway.queue_length = Some(32);
+    }
+    if gateway.request_timeout_ms.is_none() {
+        gateway.request_timeout_ms = Some(30_000);
+    }
+    if gateway.safe_mode_behavior.is_none() {
+        gateway.safe_mode_behavior = Some("reject_execution".to_owned());
+    }
     file
+}
+
+fn generate_gateway_api_key() -> String {
+    format!(
+        "tablinq-local-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_micros()
+    )
 }
 
 pub fn resolve_state_root_from_arg(path: Option<PathBuf>) -> Result<PathBuf> {
@@ -159,6 +270,13 @@ mod tests {
             config.file.browser_target_url.as_deref(),
             Some("https://chatgpt.com/")
         );
+        assert_eq!(config.gateway_host(), "127.0.0.1");
+        assert_eq!(config.gateway_port(), 3847);
+        assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
+        assert_eq!(config.gateway_queue_length(), 32);
+        assert_eq!(config.gateway_request_timeout_ms(), 30_000);
+        assert_eq!(config.gateway_safe_mode_behavior(), "reject_execution");
+        assert!(config.gateway_api_key().is_some());
     }
 
     #[test]
@@ -170,6 +288,24 @@ mod tests {
         assert_eq!(
             parsed.browser_target_url.as_deref(),
             Some("https://chatgpt.com/")
+        );
+        assert_eq!(
+            parsed.gateway.as_ref().and_then(|value| value.port),
+            Some(3847)
+        );
+        assert_eq!(
+            parsed
+                .gateway
+                .as_ref()
+                .and_then(|value| value.max_concurrent_upstream_jobs),
+            Some(1)
+        );
+        assert!(
+            parsed
+                .gateway
+                .as_ref()
+                .and_then(|value| value.api_key.as_deref())
+                .is_some()
         );
     }
 
@@ -185,6 +321,7 @@ mod tests {
                 safe_mode: None,
                 browser_target_url: None,
                 browser_path: None,
+                gateway: None,
             };
             let upgraded = super::upgrade_file_config(file.clone());
 
