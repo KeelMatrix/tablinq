@@ -26,6 +26,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum Command {
     Version(VersionArgs),
+    Status,
     Ask(AskArgs),
     Research(ResearchArgs),
     Capabilities,
@@ -179,6 +180,9 @@ enum CliExecution {
 fn execute(cli: &Cli) -> Result<CliExecution> {
     match &cli.command {
         Command::Version(args) => Ok(CliExecution::Text(build_info::render(args.json))),
+        Command::Status => Ok(CliExecution::Json(operational_report(
+            cli.state_root.as_deref(),
+        )?)),
         Command::Daemon { command } => match command {
             DaemonCommand::Start => {
                 Ok(CliExecution::Text(start_daemon(cli.state_root.as_deref())?))
@@ -192,9 +196,8 @@ fn execute(cli: &Cli) -> Result<CliExecution> {
                 DaemonRequest::Shutdown,
             )?)),
         },
-        Command::Doctor => Ok(CliExecution::Json(send_daemon_request(
+        Command::Doctor => Ok(CliExecution::Json(operational_report(
             cli.state_root.as_deref(),
-            DaemonRequest::Doctor,
         )?)),
         Command::Gateway { command } => match command {
             GatewayCommand::Start => Ok(CliExecution::Json(
@@ -410,6 +413,96 @@ fn config_show(state_root: Option<&Path>) -> Result<Value> {
     serde_json::to_value(config.snapshot()).context("serialize config snapshot")
 }
 
+fn operational_report(state_root: Option<&Path>) -> Result<Value> {
+    let config = gptd::AppConfig::load_or_create(state_root)?;
+    let state_root_path = config.paths.state_root.display().to_string();
+    let ipc_endpoint = config.paths.ipc_endpoint.clone();
+    let logs_dir = config.paths.logs_dir.display().to_string();
+    let daemon_log = config.paths.log_path.display().to_string();
+    let gateway_log = config
+        .paths
+        .logs_dir
+        .join("gateway.log")
+        .display()
+        .to_string();
+    let daemon_running = gptd::daemon_is_responsive(&config.paths.ipc_endpoint);
+    let daemon_doctor = if daemon_running {
+        Some(send_daemon_request(state_root, DaemonRequest::Doctor)?)
+    } else {
+        None
+    };
+    let gateway = tablinq_gateway::gateway_doctor(state_root)?;
+    let health = daemon_doctor
+        .as_ref()
+        .and_then(|value| value.get("health"))
+        .cloned()
+        .or_else(|| {
+            gateway
+                .get("health")
+                .and_then(|value| value.get("health"))
+                .cloned()
+        })
+        .unwrap_or(Value::Null);
+    let browser = daemon_doctor
+        .as_ref()
+        .and_then(|value| value.get("browser"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let extension_connected = health
+        .get("extension_connected")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let authenticated = health
+        .get("authenticated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let browser_connected = health
+        .get("browser_connected")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let queue = gateway.get("scheduler").cloned().unwrap_or(Value::Null);
+
+    Ok(json!({
+        "service": "tablinq",
+        "state_root": state_root_path,
+        "daemon": {
+            "running": daemon_running,
+            "ipc_endpoint": ipc_endpoint,
+            "doctor": daemon_doctor,
+        },
+        "gateway": gateway,
+        "browser": {
+            "connected": browser_connected,
+            "snapshot": browser,
+        },
+        "extension": {
+            "connected": extension_connected,
+        },
+        "auth": {
+            "authenticated": authenticated,
+        },
+        "queue": queue,
+        "logs": {
+            "directory": logs_dir,
+            "daemon": daemon_log,
+            "gateway": gateway_log,
+        },
+        "safe_parallelism": {
+            "max_parallel_requests": 1,
+            "max_parallel_branches": 1,
+            "max_subagents": 0,
+        },
+        "recovery_commands": [
+            "gpt daemon start",
+            "gpt gateway start",
+            "gpt browser open",
+            "gpt browser reset-profile",
+            "gpt gateway stop",
+            "gpt daemon stop",
+        ],
+    }))
+}
+
 fn start_daemon(state_root: Option<&Path>) -> Result<String> {
     let resolved_state_root = resolve_state_root(state_root);
     let paths = build_state_paths(&resolved_state_root);
@@ -585,6 +678,12 @@ mod tests {
     }
 
     #[test]
+    fn status_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "status"]);
+        assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
     fn daemon_status_command_matches_golden_shape() {
         let cli = parse(&["gpt", "--state-root", "tmp/state", "daemon", "status"]);
 
@@ -681,5 +780,23 @@ mod tests {
 
         assert!(output.contains("\"state_root\""));
         assert!(output.contains("\"config_path\""));
+    }
+
+    #[test]
+    fn doctor_command_renders_operational_report_without_running_services() {
+        let dir = tempdir().unwrap();
+        let cli = Cli::parse_from([
+            "gpt",
+            "--state-root",
+            dir.path().to_str().unwrap(),
+            "doctor",
+        ]);
+
+        let output = run(&cli).unwrap();
+
+        assert!(output.contains("\"daemon\""));
+        assert!(output.contains("\"gateway\""));
+        assert!(output.contains("\"logs\""));
+        assert!(output.contains("\"recovery_commands\""));
     }
 }

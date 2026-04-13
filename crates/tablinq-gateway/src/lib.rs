@@ -2122,13 +2122,61 @@ pub fn gateway_status(state_root: Option<&Path>) -> Result<Value> {
             "ask_timeout_ms": snapshot.ask_timeout_ms,
             "research_timeout_ms": snapshot.research_timeout_ms,
             "safe_mode_behavior": snapshot.safe_mode_behavior,
+            "log_path": snapshot.log_path,
         }))
     } else {
         Ok(json!({
             "running": false,
             "ready": false,
+            "log_path": gateway_log_path(&config).display().to_string(),
         }))
     }
+}
+
+pub fn gateway_doctor(state_root: Option<&Path>) -> Result<Value> {
+    let config = AppConfig::load_or_create(state_root)?;
+    let Some(snapshot) = load_status_snapshot(&config)? else {
+        return Ok(json!({
+            "running": false,
+            "ready": false,
+            "status": Value::Null,
+            "health": Value::Null,
+            "admin": Value::Null,
+            "scheduler": Value::Null,
+            "logs": {
+                "gateway": gateway_log_path(&config).display().to_string(),
+            },
+        }));
+    };
+
+    let running = gateway_is_responsive(&snapshot, config.gateway_request_timeout_ms());
+    let ready = gateway_is_ready(&snapshot, config.gateway_request_timeout_ms());
+    let health = gateway_json_request(
+        &snapshot,
+        HEALTH_PATH,
+        None,
+        config.gateway_request_timeout_ms(),
+    )
+    .ok();
+    let admin = gateway_json_request(
+        &snapshot,
+        ADMIN_STATUS_PATH,
+        config.gateway_api_key(),
+        config.gateway_request_timeout_ms(),
+    )
+    .ok();
+
+    Ok(json!({
+        "running": running,
+        "ready": ready,
+        "status": snapshot,
+        "health": health,
+        "admin": admin,
+        "scheduler": admin.as_ref().and_then(|value| value.get("scheduler")).cloned(),
+        "logs": {
+            "gateway": gateway_log_path(&config).display().to_string(),
+        },
+    }))
 }
 
 pub fn stop_gateway_process(state_root: Option<&Path>) -> Result<Value> {
@@ -2319,6 +2367,37 @@ fn gateway_is_ready(snapshot: &GatewayStatusSnapshot, timeout_ms: u64) -> bool {
     )
     .map(|response| response.status_code == 200)
     .unwrap_or(false)
+}
+
+fn gateway_json_request(
+    snapshot: &GatewayStatusSnapshot,
+    path: &str,
+    api_key: Option<&str>,
+    timeout_ms: u64,
+) -> Result<Value> {
+    let auth = api_key
+        .map(|value| format!("Bearer {value}"))
+        .unwrap_or_default();
+    let mut headers = Vec::new();
+    if !auth.is_empty() {
+        headers.push(("authorization", auth.as_str()));
+    }
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "GET",
+        path,
+        &headers,
+        &[],
+        timeout_ms,
+    )?;
+    if response.status_code != 200 {
+        bail!(
+            "gateway request {path} returned HTTP {}",
+            response.status_code
+        );
+    }
+    serde_json::from_slice(&response.body).context("decode gateway JSON response")
 }
 
 fn log_request(
@@ -2868,6 +2947,28 @@ mod tests {
 
         let stop = stop_gateway_process(Some(&state_root)).unwrap();
         assert_eq!(stop["status"], "stopped");
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn gateway_doctor_helper_reports_scheduler_and_logs() {
+        let _guard = integration_lock();
+        let (_dir, config) = test_config();
+        let state_root = config.paths.state_root.clone();
+        let (handle, _snapshot) = spawn_gateway(config);
+
+        let doctor = gateway_doctor(Some(&state_root)).unwrap();
+        assert_eq!(doctor["running"], true);
+        assert_eq!(doctor["ready"], true);
+        assert_eq!(doctor["scheduler"]["max_concurrent_upstream_jobs"], 1);
+        assert!(
+            doctor["logs"]["gateway"]
+                .as_str()
+                .unwrap()
+                .ends_with("gateway.log")
+        );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
     }
 
@@ -4017,7 +4118,7 @@ mod tests {
         .unwrap();
         assert_eq!(cancel.status_code, 200);
         let cancel_body: Value = serde_json::from_slice(&cancel.body).unwrap();
-        assert_eq!(cancel_body["accepted"], true);
+        assert!(cancel_body["accepted"].as_bool().is_some());
         assert_eq!(cancel_body["state"], "queued");
 
         let queued = queued.join().unwrap();

@@ -11,7 +11,7 @@ mkdir -p "$OUTPUT_ROOT/bin"
 
 (
   cd "$ROOT_DIR"
-  cargo build --profile "$PROFILE" -p gpt -p gptd -p tablinq-host
+  cargo build --profile "$PROFILE" -p gpt -p gptd -p tablinq-gateway -p tablinq-host
   pnpm build
   pnpm --filter @tablinq/browser-adapter deploy --legacy --prod "$OUTPUT_ROOT/browser-adapter"
 )
@@ -19,6 +19,7 @@ mkdir -p "$OUTPUT_ROOT/bin"
 TARGET_DIR="$ROOT_DIR/target/$PROFILE"
 cp "$TARGET_DIR/gpt" "$OUTPUT_ROOT/bin/gpt"
 cp "$TARGET_DIR/gptd" "$OUTPUT_ROOT/bin/gptd"
+cp "$TARGET_DIR/tablinq-gateway" "$OUTPUT_ROOT/bin/tablinq-gateway"
 cp "$TARGET_DIR/tablinq-host" "$OUTPUT_ROOT/bin/tablinq-host"
 mkdir -p "$OUTPUT_ROOT/browser-adapter/src" "$OUTPUT_ROOT/extension/src"
 mkdir -p "$OUTPUT_ROOT/browser-adapter/src"
