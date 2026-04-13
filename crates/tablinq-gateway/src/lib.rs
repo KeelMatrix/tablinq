@@ -60,6 +60,10 @@ pub struct LockGuard {
     path: PathBuf,
 }
 
+struct GatewayRuntimeGuard {
+    status_path: PathBuf,
+}
+
 #[derive(Debug)]
 struct RequestContext {
     request_id: String,
@@ -452,7 +456,7 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
     let logger = Arc::new(JsonLogger::new(&log_path)?);
     let core = Arc::new(CoreService::new(config.clone())?);
     let capability_cache = Arc::new(CapabilityCatalogCache::load(&config)?);
-    let lock = acquire_gateway_lock(&config)?;
+    let _lock = acquire_gateway_lock(&config)?;
 
     let listener =
         TcpListener::bind((config.gateway_host(), config.gateway_port())).with_context(|| {
@@ -499,6 +503,9 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
         log_path: log_path.display().to_string(),
     });
     write_status_snapshot(&config, &snapshot)?;
+    let _runtime_guard = GatewayRuntimeGuard {
+        status_path: gateway_status_path(&config),
+    };
 
     logger.info(
         "gateway ready",
@@ -557,9 +564,6 @@ pub fn run_gateway(config: AppConfig) -> Result<()> {
             Err(err) => return Err(err).context("accept gateway connection"),
         }
     }
-
-    remove_status_snapshot(&config)?;
-    drop(lock);
     Ok(())
 }
 
@@ -1525,6 +1529,12 @@ impl Drop for LockGuard {
     }
 }
 
+impl Drop for GatewayRuntimeGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.status_path);
+    }
+}
+
 fn resolve_gateway_binary() -> PathBuf {
     if let Ok(value) = std::env::var("TABLINQ_GATEWAY_BIN") {
         let trimmed = value.trim();
@@ -1841,7 +1851,39 @@ mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn spawn_fake_chatgpt() -> (Child, String) {
+    struct TestChild {
+        child: Child,
+    }
+
+    impl TestChild {
+        fn spawn(mut command: Command) -> Self {
+            let child = command.spawn().expect("spawn test child");
+            Self { child }
+        }
+    }
+
+    impl std::ops::Deref for TestChild {
+        type Target = Child;
+
+        fn deref(&self) -> &Self::Target {
+            &self.child
+        }
+    }
+
+    impl std::ops::DerefMut for TestChild {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.child
+        }
+    }
+
+    impl Drop for TestChild {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn spawn_fake_chatgpt() -> (TestChild, String) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("allocate tcp port");
         let port = listener.local_addr().expect("resolve local address").port();
         drop(listener);
@@ -1852,14 +1894,14 @@ mod tests {
             .join("packages")
             .join("fake-chatgpt")
             .join("server.mjs");
-        let child = Command::new("node")
+        let mut command = Command::new("node");
+        command
             .arg(server_path)
             .env("PORT", port.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn fake-chatgpt");
+            .stderr(Stdio::null());
+        let child = TestChild::spawn(command);
 
         let url = format!("http://127.0.0.1:{port}");
         let deadline = Instant::now() + Duration::from_secs(10);
