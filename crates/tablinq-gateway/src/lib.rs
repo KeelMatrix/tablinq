@@ -1111,6 +1111,23 @@ fn handle_provider_request(snapshot: &GatewayStatusSnapshot, request_id: &str) -
                     "streaming": true,
                     "max_parallel_requests": 1,
                     "subagents": "disabled_by_default",
+                },
+                "paperclip": {
+                    "transport": "openai_compatible_http",
+                    "recommended_models": [
+                        "tablinq-instant",
+                        "tablinq-search",
+                        "tablinq-research",
+                    ],
+                    "streaming": true,
+                    "max_parallel_requests": 1,
+                    "artifacts": true,
+                    "files": true,
+                    "usage_accounting": "unknown_or_estimated",
+                    "budget_guidance": {
+                        "rate_limit_hint": "keep provider concurrency at 1",
+                        "retry_backoff_hint": "respect queue_timeout and retry_after_ms on 429 responses",
+                    }
                 }
             }
         }),
@@ -2534,6 +2551,23 @@ mod tests {
         .unwrap()
     }
 
+    fn paperclip_request_body(
+        model: &str,
+        prompt: &str,
+        stream: bool,
+        file_ids: &[&str],
+    ) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "model": model,
+            "stream": stream,
+            "tablinq_file_ids": file_ids,
+            "messages": [
+                { "role": "user", "content": prompt }
+            ]
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn upload_store_cleans_up_expired_staged_files() {
         let dir = tempdir().unwrap();
@@ -2689,6 +2723,42 @@ mod tests {
         assert_eq!(
             body["presets"]["openclaude"]["subagents"],
             "disabled_by_default"
+        );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn provider_endpoint_exposes_paperclip_preset_metadata() {
+        let _guard = integration_lock();
+        let (_dir, config) = test_config();
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_PROVIDER_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 200);
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(
+            body["presets"]["paperclip"]["transport"],
+            "openai_compatible_http"
+        );
+        assert_eq!(body["presets"]["paperclip"]["max_parallel_requests"], 1);
+        assert_eq!(body["presets"]["paperclip"]["files"], true);
+        assert_eq!(body["presets"]["paperclip"]["artifacts"], true);
+        assert_eq!(
+            body["presets"]["paperclip"]["usage_accounting"],
+            "unknown_or_estimated"
         );
 
         stop_gateway_process(Some(&state_root)).unwrap();
@@ -3174,6 +3244,208 @@ mod tests {
                 .unwrap()
                 .contains("brief.txt")
         );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn paperclip_like_http_flow_supports_files_and_artifacts() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let upload = upload_file(
+            &snapshot,
+            &auth,
+            "paperclip-source.txt",
+            "text/plain",
+            b"paperclip source text",
+        );
+        assert_eq!(upload.status_code, 201);
+        let upload_body: Value = serde_json::from_slice(&upload.body).unwrap();
+        let file_id = upload_body["data"]["id"].as_str().unwrap().to_owned();
+
+        let body = paperclip_request_body(
+            "tablinq-research",
+            "produce a summary report from the staged file",
+            false,
+            &[file_id.as_str()],
+        );
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-client-id", "paperclip"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 200);
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        let job_id = body["tablinq_job_id"].as_str().unwrap().to_owned();
+        assert!(
+            body["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str()
+                    == Some("usage is unavailable for the browser-backed provider"))
+        );
+
+        let artifacts = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_ARTIFACTS_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(artifacts.status_code, 200);
+        let artifacts_body: Value = serde_json::from_slice(&artifacts.body).unwrap();
+        let artifact = artifacts_body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| {
+                item["linked_job_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|value| value == &Value::String(job_id.clone()))
+            })
+            .unwrap();
+        let content = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            artifact["content_url"].as_str().unwrap(),
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(content.status_code, 200);
+        assert!(
+            String::from_utf8(content.body)
+                .unwrap()
+                .contains("paperclip-source.txt")
+        );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn paperclip_like_requests_report_missing_staged_file_errors_cleanly() {
+        let _guard = integration_lock();
+        let (_dir, config) = test_config();
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body = paperclip_request_body(
+            "tablinq-instant",
+            "read the staged file",
+            false,
+            &["file-missing"],
+        );
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-client-id", "paperclip"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 400);
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["error"]["code"], "file_not_found");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn paperclip_like_queue_pressure_returns_retry_metadata() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.research_timeout_ms = Some(5_000);
+            gateway.queue_timeout_ms = Some(250);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first_body = paperclip_request_body("tablinq-research", "hold the session", false, &[]);
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let first = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-client-id", "paperclip"),
+                ],
+                &first_body,
+                20_000,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(150));
+
+        let second_body =
+            paperclip_request_body("tablinq-instant", "time out while queued", false, &[]);
+        let second = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-client-id", "paperclip"),
+            ],
+            &second_body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(second.status_code, 429);
+        let body: Value = serde_json::from_slice(&second.body).unwrap();
+        assert_eq!(body["error"]["code"], "queue_timeout");
+        assert_eq!(body["retry_after_ms"], 250);
+
+        let first = first.join().unwrap().unwrap();
+        assert_eq!(first.status_code, 200);
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
