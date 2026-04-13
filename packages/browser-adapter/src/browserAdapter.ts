@@ -92,6 +92,17 @@ interface ProbeDocumentOptions {
 }
 
 let probeSource: string | undefined;
+let pageAdapterSource: string | undefined;
+
+const NAVIGATION_TIMEOUT_MS = 20_000;
+const ASK_TIMEOUT_MS = 25_000;
+const RESEARCH_TIMEOUT_MS = 60_000;
+const PROBE_TIMEOUT_MS = 5_000;
+const INTERACTION_TIMEOUT_MS = 7_500;
+const UPLOAD_ACK_TIMEOUT_MS = 10_000;
+const DOWNLOAD_TIMEOUT_MS = 10_000;
+const SNAPSHOT_POLL_INTERVAL_MS = 75;
+const STABLE_DONE_POLLS = 3;
 
 function loadProbeSource(): string {
   if (!probeSource) {
@@ -105,6 +116,23 @@ function loadProbeSource(): string {
   }
 
   return probeSource;
+}
+
+function loadPageAdapterSource(): string {
+  if (!pageAdapterSource) {
+    pageAdapterSource = readFileSync(
+      resolveTablinqAssetPath(
+        ["browser-adapter", "src", "pageAdapter.runtime.js"],
+        ["packages", "browser-adapter", "src", "pageAdapter.runtime.js"],
+      ),
+      "utf8",
+    ).replace(
+      /^export\s+function\s+createTablinqPageAdapterRuntime/m,
+      "function createTablinqPageAdapterRuntime",
+    );
+  }
+
+  return pageAdapterSource;
 }
 
 export interface BrowserOpenCommand {
@@ -531,22 +559,21 @@ export class BrowserAdapter {
     await fillComposer(page, command.prompt);
     await clickSubmit(page);
 
-    const timeoutAt = Date.now() + (command.timeoutMs ?? 15000);
+    const timeoutAt = Date.now() + (command.timeoutMs ?? ASK_TIMEOUT_MS);
     let emittedText = "";
     let nextSeq = 0;
+    let doneStreak = 0;
 
     while (Date.now() < timeoutAt) {
       let snapshot;
       try {
         snapshot = await readAskSnapshot(page);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (
-          message.includes("Execution context was destroyed") ||
-          message.includes("Cannot find context")
-        ) {
-          await page.waitForLoadState("domcontentloaded");
-          await sleep(50);
+        if (isTransientPageError(error)) {
+          await page.waitForLoadState("domcontentloaded", {
+            timeout: PROBE_TIMEOUT_MS,
+          });
+          await sleep(SNAPSHOT_POLL_INTERVAL_MS);
           continue;
         }
         throw error;
@@ -569,11 +596,20 @@ export class BrowserAdapter {
       }
 
       if (snapshot.state === "done") {
+        doneStreak += 1;
+      } else {
+        doneStreak = 0;
+      }
+
+      if (snapshot.state === "done" && doneStreak >= STABLE_DONE_POLLS) {
         const artifacts = await collectArtifacts(
           page,
           this.downloadsDir,
           snapshot.conversationId,
           snapshot.messageId,
+        );
+        await this.ensureManagedPage(
+          this.resolveConversationTarget(snapshot.conversationId),
         );
         await onChunk({
           job_id: command.jobId,
@@ -595,7 +631,7 @@ export class BrowserAdapter {
         };
       }
 
-      await sleep(50);
+      await sleep(SNAPSHOT_POLL_INTERVAL_MS);
     }
 
     throw new Error("ask timed out waiting for streamed response");
@@ -633,7 +669,8 @@ export class BrowserAdapter {
     let emittedText = "";
     let lastStatus = "starting";
     let lastMessage = "starting research";
-    const timeoutAt = Date.now() + (command.timeoutMs ?? 30_000);
+    const timeoutAt = Date.now() + (command.timeoutMs ?? RESEARCH_TIMEOUT_MS);
+    let doneStreak = 0;
 
     await onUpdate({
       status: "starting",
@@ -689,11 +726,20 @@ export class BrowserAdapter {
       }
 
       if (snapshot.status === "done") {
+        doneStreak += 1;
+      } else {
+        doneStreak = 0;
+      }
+
+      if (snapshot.status === "done" && doneStreak >= STABLE_DONE_POLLS) {
         const artifacts = await collectArtifacts(
           page,
           this.downloadsDir,
           snapshot.conversationId,
           snapshot.messageId,
+        );
+        await this.ensureManagedPage(
+          this.resolveConversationTarget(snapshot.conversationId),
         );
         return {
           job_id: command.jobId,
@@ -708,7 +754,7 @@ export class BrowserAdapter {
         };
       }
 
-      await sleep(75);
+      await sleep(SNAPSHOT_POLL_INTERVAL_MS);
     }
 
     throw new Error("research job failed: timed out waiting for completion");
@@ -724,10 +770,30 @@ export class BrowserAdapter {
       this.managedPage = page;
     }
 
-    if (page.url() !== targetUrl) {
-      await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
-    } else {
-      await page.waitForLoadState("domcontentloaded");
+    try {
+      if (page.url() !== targetUrl) {
+        await page.goto(targetUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: NAVIGATION_TIMEOUT_MS,
+        });
+      } else {
+        await page.waitForLoadState("domcontentloaded", {
+          timeout: NAVIGATION_TIMEOUT_MS,
+        });
+      }
+    } catch (error) {
+      if (!isTransientPageError(error)) {
+        throw error;
+      }
+
+      const replacement = await this.context!.newPage();
+      this.attachPage(replacement);
+      this.managedPage = replacement;
+      page = replacement;
+      await page.goto(targetUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT_MS,
+      });
     }
 
     return page;
@@ -801,7 +867,10 @@ export class BrowserAdapter {
       const page = await this.context.newPage();
       this.attachPage(page);
       this.managedPage = page;
-      await page.goto(this.currentTargetUrl, { waitUntil: "domcontentloaded" });
+      await page.goto(this.currentTargetUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: NAVIGATION_TIMEOUT_MS,
+      });
     }
   }
 
@@ -852,46 +921,58 @@ export class BrowserAdapter {
           ?.preferred_strategies ?? {});
     const selectorPack = this.ensureSelectorPackLoaded();
 
-    try {
-      const message = await page.evaluate(
-        ({
-          source,
-          options,
-        }: {
-          source: string;
-          options: ProbeDocumentOptions;
-        }): CapabilityBridgeMessage => {
-          const probeDocument = new Function(
-            `${source}\nreturn probeDocument;`,
-          )() as (options?: ProbeDocumentOptions) => CapabilityBridgeMessage;
-          return probeDocument(options);
-        },
-        {
-          source: loadProbeSource(),
-          options: {
-            selectorPackId: selectorPack?.pack_id ?? "chatgpt-default",
-            selectorPackVersion: selectorPack
-              ? `v${selectorPack.format_version}`
-              : "v1",
-            preferredStrategies,
-            selectorPack: selectorPack ?? undefined,
-          } satisfies ProbeDocumentOptions,
-        },
-      );
-      this.extensionConnected = true;
-      this.lastCapabilityReport = message.report;
-      this.lastUiSignature = message.runtime.ui_signature;
-      this.lastDomNeighborhoods = message.runtime.dom_neighborhoods;
-      this.strategyTelemetry.set(
-        message.runtime.ui_signature,
-        message.runtime.strategy_matches,
-      );
-      this.recordStrategyStats(message.runtime.strategy_matches);
-      this.persistCapabilitySnapshot(page.url(), message);
-    } catch {
-      this.extensionConnected = false;
-      this.lastCapabilityReport = null;
-      this.lastDomNeighborhoods = [];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await page.waitForLoadState("domcontentloaded", {
+          timeout: PROBE_TIMEOUT_MS,
+        });
+        const message = await page.evaluate(
+          ({
+            source,
+            options,
+          }: {
+            source: string;
+            options: ProbeDocumentOptions;
+          }): CapabilityBridgeMessage => {
+            const probeDocument = new Function(
+              `${source}\nreturn probeDocument;`,
+            )() as (options?: ProbeDocumentOptions) => CapabilityBridgeMessage;
+            return probeDocument(options);
+          },
+          {
+            source: loadProbeSource(),
+            options: {
+              selectorPackId: selectorPack?.pack_id ?? "chatgpt-default",
+              selectorPackVersion: selectorPack
+                ? `v${selectorPack.format_version}`
+                : "v1",
+              preferredStrategies,
+              selectorPack: selectorPack ?? undefined,
+            } satisfies ProbeDocumentOptions,
+          },
+        );
+        this.extensionConnected = true;
+        this.lastCapabilityReport = message.report;
+        this.lastUiSignature = message.runtime.ui_signature;
+        this.lastDomNeighborhoods = message.runtime.dom_neighborhoods;
+        this.strategyTelemetry.set(
+          message.runtime.ui_signature,
+          message.runtime.strategy_matches,
+        );
+        this.recordStrategyStats(message.runtime.strategy_matches);
+        this.persistCapabilitySnapshot(page.url(), message);
+        return;
+      } catch (error) {
+        if (attempt < 2 && isTransientPageError(error)) {
+          await sleep(150 * (attempt + 1));
+          continue;
+        }
+        this.extensionConnected = false;
+        this.lastCapabilityReport = null;
+        this.lastDomNeighborhoods = [];
+        this.lastUiSignature = null;
+        return;
+      }
     }
   }
 
@@ -1299,30 +1380,115 @@ async function safeTitle(page: Page): Promise<string | null> {
   }
 }
 
+interface AskSnapshot {
+  text: string;
+  state: string;
+  conversationId: string | null;
+  messageId: string | null;
+  currentUrl: string;
+}
+
+interface ResearchSnapshot {
+  status: "waiting_for_sources" | "running" | "done" | "failed";
+  statusMessage: string | null;
+  reportText: string;
+  conversationId: string | null;
+  messageId: string | null;
+  currentUrl: string;
+}
+
+async function callPageAdapter<T>(
+  page: Page,
+  methodName:
+    | "composerReady"
+    | "fillComposer"
+    | "clickSubmit"
+    | "applyAskConfiguration"
+    | "uploadAcknowledged"
+    | "readAskSnapshot"
+    | "readResearchSnapshot",
+  payload?: unknown,
+): Promise<T> {
+  return page.evaluate(
+    ({
+      source,
+      methodName,
+      payload,
+    }: {
+      source: string;
+      methodName: string;
+      payload?: unknown;
+    }) => {
+      const runtime = new Function(
+        `${source}\nreturn createTablinqPageAdapterRuntime();`,
+      )() as Record<string, (value?: unknown) => unknown>;
+      const method = runtime[methodName];
+      if (typeof method !== "function") {
+        throw new Error(`page adapter method not found: ${methodName}`);
+      }
+      return method(payload);
+    },
+    {
+      source: loadPageAdapterSource(),
+      methodName,
+      payload,
+    },
+  ) as Promise<T>;
+}
+
+async function waitForPageAdapterCondition(
+  page: Page,
+  methodName: "composerReady" | "uploadAcknowledged",
+  payload: unknown,
+  timeoutMs: number,
+): Promise<void> {
+  await page.waitForFunction(
+    ({
+      source,
+      methodName,
+      payload,
+    }: {
+      source: string;
+      methodName: string;
+      payload?: unknown;
+    }) => {
+      const runtime = new Function(
+        `${source}\nreturn createTablinqPageAdapterRuntime();`,
+      )() as Record<string, (value?: unknown) => unknown>;
+      const method = runtime[methodName];
+      return typeof method === "function" ? Boolean(method(payload)) : false;
+    },
+    {
+      source: loadPageAdapterSource(),
+      methodName,
+      payload,
+    },
+    {
+      timeout: timeoutMs,
+    },
+  );
+}
+
+async function waitForInteractionSurface(page: Page): Promise<void> {
+  await page.waitForLoadState("domcontentloaded", {
+    timeout: NAVIGATION_TIMEOUT_MS,
+  });
+  await page
+    .waitForLoadState("networkidle", {
+      timeout: 2_000,
+    })
+    .catch(() => undefined);
+  await waitForPageAdapterCondition(
+    page,
+    "composerReady",
+    undefined,
+    INTERACTION_TIMEOUT_MS,
+  );
+}
+
 async function fillComposer(page: Page, prompt: string): Promise<void> {
-  await page.evaluate((value: string) => {
-    const composer = document.querySelector(
-      "[data-slot='composer'], textarea, [role='textbox'], [contenteditable='true']",
-    );
-    if (!(composer instanceof HTMLElement)) {
-      throw new Error("composer not found");
-    }
-
-    composer.focus();
-    if (
-      composer instanceof HTMLTextAreaElement ||
-      composer instanceof HTMLInputElement
-    ) {
-      composer.value = value;
-      composer.dispatchEvent(new Event("input", { bubbles: true }));
-      return;
-    }
-
-    composer.textContent = value;
-    composer.dispatchEvent(
-      new InputEvent("input", { bubbles: true, data: value }),
-    );
-  }, prompt);
+  await waitForInteractionSurface(page);
+  await callPageAdapter(page, "fillComposer", { prompt });
 }
 
 async function applyAskConfiguration(
@@ -1344,42 +1510,15 @@ async function applyAskConfiguration(
     );
   }
 
-  await page.evaluate(
-    ({
-      source,
-      report,
-      request,
-    }: {
-      source: string;
-      report: CapabilityReportPayload;
-      request: {
-        mode: "normal" | "search" | "research";
-        modelClass?: "instant" | "thinking";
-        effort?: "none" | "standard" | "extended";
-      };
-    }) => {
-      const applyInPage = new Function(
-        `${source}\nreturn applyAskConfigurationInPage;`,
-      )() as (
-        report: CapabilityReportPayload,
-        request: {
-          mode: "normal" | "search" | "research";
-          modelClass?: "instant" | "thinking";
-          effort?: "none" | "standard" | "extended";
-        },
-      ) => void;
-      applyInPage(report, request);
+  await waitForInteractionSurface(page);
+  await callPageAdapter(page, "applyAskConfiguration", {
+    report,
+    request: {
+      modelClass: command.modelClass ?? undefined,
+      effort: command.effort ?? undefined,
+      mode: command.mode ?? "normal",
     },
-    {
-      source: applyAskConfigurationSource,
-      report,
-      request: {
-        modelClass: command.modelClass ?? undefined,
-        effort: command.effort ?? undefined,
-        mode: command.mode ?? "normal",
-      },
-    },
-  );
+  });
 }
 
 async function uploadAttachments(
@@ -1413,12 +1552,22 @@ async function uploadAttachments(
     await fileInput.setInputFiles(resolvedFiles);
   } else {
     const uploadEntry = page
-      .locator("[data-slot='upload-entry'], label[for], [aria-label*='file']")
+      .locator(
+        [
+          "[data-slot='upload-entry']",
+          "[data-testid='upload-button']",
+          "label[for]",
+          "button[aria-label*='file']",
+          "button[aria-label*='photo']",
+        ].join(", "),
+      )
       .first();
     if ((await uploadEntry.count()) === 0) {
       throw new Error("upload failed: upload entry point could not be found");
     }
-    const chooserPromise = page.waitForEvent("filechooser", { timeout: 2_000 });
+    const chooserPromise = page.waitForEvent("filechooser", {
+      timeout: INTERACTION_TIMEOUT_MS,
+    });
     await uploadEntry.click();
     const chooser = await chooserPromise.catch(() => null);
     if (!chooser) {
@@ -1428,123 +1577,52 @@ async function uploadAttachments(
   }
 
   const expectedNames = resolvedFiles.map((filePath) => basename(filePath));
-  await page
-    .waitForFunction(
-      (names: string[]) => {
-        const uploaded = new Set(
-          Array.from(
-            document.querySelectorAll(
-              "[data-slot='uploaded-file'], [data-slot='upload-entry-name']",
-            ),
-          )
-            .map((element) => element.textContent?.trim() ?? "")
-            .filter((value) => value.length > 0),
-        );
-        if (uploaded.size === 0) {
-          const fromDataset = document.body.dataset.uploadedFiles
-            ?.split("|")
-            .map((value) => value.trim())
-            .filter(Boolean);
-          if (fromDataset?.length) {
-            return names.every((name) => fromDataset.includes(name));
-          }
-        }
-        return names.every((name) => uploaded.has(name));
-      },
-      expectedNames,
-      { timeout: 5_000 },
-    )
-    .catch(() => {
-      throw new Error(
-        `upload failed: the page did not acknowledge uploaded files: ${expectedNames.join(", ")}`,
-      );
-    });
+  await waitForPageAdapterCondition(
+    page,
+    "uploadAcknowledged",
+    {
+      names: expectedNames,
+    },
+    UPLOAD_ACK_TIMEOUT_MS,
+  ).catch(() => {
+    throw new Error(
+      `upload failed: the page did not acknowledge uploaded files: ${expectedNames.join(", ")}`,
+    );
+  });
 }
 
 async function clickSubmit(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const submit = document.querySelector(
-      "[data-action='submit'], [aria-label='Submit prompt'], button[type='submit']",
-    );
-    if (!(submit instanceof HTMLElement)) {
-      throw new Error("submit action not found");
-    }
-    submit.click();
-  });
+  await waitForInteractionSurface(page);
+  const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
+  if (clicked) {
+    return;
+  }
+
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await page.keyboard.press(`${modifier}+Enter`).catch(() => undefined);
 }
 
-async function readAskSnapshot(page: Page): Promise<{
-  text: string;
-  state: string;
-  conversationId: string | null;
-  messageId: string | null;
-  currentUrl: string;
-}> {
-  return page.evaluate(() => {
-    const article = document.querySelector(
-      "[data-slot='assistant-message'], .message",
-    );
-    const textNode =
-      document.querySelector("[data-slot='assistant-message'] p") ??
-      document.querySelector(".message p");
-    const text = textNode?.textContent?.trim() ?? "";
-    const state =
-      article?.getAttribute("data-stream-state") ??
-      document.body.dataset.streamState ??
-      "idle";
-    const conversationId =
-      document.body.dataset.conversationId ??
-      new URL(window.location.href).searchParams.get("conversation");
-    const messageId =
-      article?.getAttribute("data-message-id") ??
-      document.body.dataset.lastMessageId ??
-      null;
-
-    return {
-      text,
-      state,
-      conversationId,
-      messageId,
-      currentUrl: window.location.href,
-    };
-  });
+async function readAskSnapshot(page: Page): Promise<AskSnapshot> {
+  return callPageAdapter<AskSnapshot>(page, "readAskSnapshot");
 }
 
-async function readResearchSnapshot(page: Page): Promise<{
-  status: "waiting_for_sources" | "running" | "done" | "failed";
-  statusMessage: string | null;
-  reportText: string;
-  conversationId: string | null;
-  messageId: string | null;
-  currentUrl: string;
-}> {
-  return page.evaluate(() => {
-    const reportNode =
-      document.querySelector("[data-slot='research-report'] p") ??
-      document.querySelector("[data-slot='assistant-message'] p") ??
-      document.querySelector(".message p");
-    const status =
-      (document.body.dataset.researchState as
-        | "waiting_for_sources"
-        | "running"
-        | "done"
-        | "failed"
-        | undefined) ?? "running";
-    return {
-      status,
-      statusMessage: document.body.dataset.researchStatusMessage ?? null,
-      reportText: reportNode?.textContent?.trim() ?? "",
-      conversationId:
-        document.body.dataset.conversationId ??
-        new URL(window.location.href).searchParams.get("conversation"),
-      messageId: document.body.dataset.lastMessageId ?? null,
-      currentUrl: window.location.href,
-    };
-  });
+async function readResearchSnapshot(page: Page): Promise<ResearchSnapshot> {
+  return callPageAdapter<ResearchSnapshot>(page, "readResearchSnapshot");
 }
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientPageError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Execution context was destroyed") ||
+    message.includes("Cannot find context") ||
+    message.includes("Target page, context or browser has been closed") ||
+    message.includes("Frame has been detached") ||
+    message.includes("navigation")
+  );
 }
 
 async function collectArtifacts(
@@ -1554,7 +1632,19 @@ async function collectArtifacts(
   messageId: string | null,
 ): Promise<ArtifactMetadataSnapshot[]> {
   const handles = await page
-    .locator("[data-slot='artifact-link'], a[download]")
+    .locator(
+      [
+        "[data-slot='artifact-link']",
+        "[data-testid='artifact-download']",
+        "a[download]",
+        "a[aria-label*='Download']",
+        "button[aria-label*='Download']",
+        "a:has-text('Download')",
+        "button:has-text('Download')",
+        "a:has-text('Export')",
+        "button:has-text('Export')",
+      ].join(", "),
+    )
     .all();
   const artifacts: ArtifactMetadataSnapshot[] = [];
 
@@ -1564,9 +1654,21 @@ async function collectArtifacts(
       if (!(element instanceof HTMLElement)) {
         return false;
       }
-      return (
-        element.dataset.artifactReady === "true" ||
-        element.getAttribute("data-artifact-ready") === "true"
+      const explicit =
+        element.dataset.artifactReady ??
+        element.getAttribute("data-artifact-ready");
+      if (explicit === "false") {
+        return false;
+      }
+      if (explicit === "true") {
+        return true;
+      }
+      if (element instanceof HTMLAnchorElement) {
+        return Boolean(element.hasAttribute("download") || element.href);
+      }
+      return !(
+        element.getAttribute("aria-disabled") === "true" ||
+        element.hasAttribute("disabled")
       );
     });
     if (!artifactReady) {
@@ -1598,8 +1700,10 @@ async function clickAndCaptureDownload(
   page: Page,
   handle: Locator,
 ): Promise<Download> {
-  const downloadPromise = page.waitForEvent("download", { timeout: 5_000 });
-  await handle.click({ noWaitAfter: true });
+  const downloadPromise = page.waitForEvent("download", {
+    timeout: DOWNLOAD_TIMEOUT_MS,
+  });
+  await handle.click({ noWaitAfter: true, force: true });
   return downloadPromise;
 }
 
@@ -1704,258 +1808,6 @@ function workspaceKeyFromUrl(rawUrl: string): string {
     return rawUrl;
   }
 }
-
-const applyAskConfigurationSource = String.raw`
-function applyAskConfigurationInPage(report, request) {
-  const normalizeText = (value) =>
-    (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-
-  const hasToken = (value, tokens) =>
-    tokens.some((token) =>
-      new RegExp(
-        '(^|[^a-z0-9])' +
-          token.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&') +
-          '([^a-z0-9]|$)',
-      ).test(value),
-    );
-
-  const isVisible = (element) => {
-    if (!(element instanceof HTMLElement)) {
-      return false;
-    }
-    if (element.hidden || element.getAttribute("aria-hidden") === "true") {
-      return false;
-    }
-    const computed = window.getComputedStyle(element);
-    return (
-      computed.display !== "none" &&
-      computed.visibility !== "hidden" &&
-      computed.opacity !== "0"
-    );
-  };
-
-  const accessibleName = (element) => {
-    if (!(element instanceof HTMLElement)) {
-      return "";
-    }
-    const ariaLabel = element.getAttribute("aria-label");
-    if (ariaLabel) {
-      return normalizeText(ariaLabel);
-    }
-    if (
-      element instanceof HTMLInputElement ||
-      element instanceof HTMLTextAreaElement
-    ) {
-      if (element.labels?.length) {
-        return normalizeText(
-          Array.from(element.labels)
-            .map((label) => label.textContent ?? "")
-            .join(" "),
-        );
-      }
-      if (element.placeholder) {
-        return normalizeText(element.placeholder);
-      }
-    }
-    return normalizeText(element.textContent);
-  };
-
-  const actionableElements = () =>
-    Array.from(
-      document.querySelectorAll(
-        [
-          "button",
-          "[role='button']",
-          "[role='tab']",
-          "[role='switch']",
-          "[role='option']",
-          "[aria-haspopup]",
-          "label[for]",
-        ].join(", "),
-      ),
-    ).filter(isVisible);
-
-  const isSelected = (element) =>
-    element.getAttribute("aria-pressed") === "true" ||
-    element.getAttribute("aria-checked") === "true" ||
-    element.getAttribute("aria-selected") === "true" ||
-    element.dataset.selected === "true" ||
-    element.dataset.active === "true";
-
-  const controlStateDetail = (aliases, requested) => {
-    const entries = Object.entries(aliases ?? {})
-      .map(([key, labels]) => key + "=[" + labels.join(", ") + "]")
-      .join("; ");
-    if (!entries) {
-      return "requested=" + requested + "; discovered=none";
-    }
-    return "requested=" + requested + "; discovered=" + entries;
-  };
-
-  const throwCapabilityMissing = (capability, requested, aliases) => {
-    throw new Error(
-      "capability missing: " +
-        capability +
-        "; " +
-        controlStateDetail(aliases, requested),
-    );
-  };
-
-  const throwUiDrift = (detail) => {
-    throw new Error("ui drift: " + detail);
-  };
-
-  const clickControl = (element) => {
-    if (element.tagName.toLowerCase() === "label") {
-      const inputId = element.getAttribute("for");
-      if (inputId) {
-        const input = document.getElementById(inputId);
-        if (input instanceof HTMLElement) {
-          input.click();
-          return;
-        }
-      }
-    }
-    element.click();
-  };
-
-  const findBySelector = (selector) => {
-    for (const element of Array.from(document.querySelectorAll(selector))) {
-      if (isVisible(element)) {
-        return element;
-      }
-    }
-    return null;
-  };
-
-  const findByAliases = (aliases, fallbackTokens) => {
-    const normalizedAliases = aliases.map((alias) => normalizeText(alias));
-    for (const element of actionableElements()) {
-      const name = accessibleName(element);
-      if (!name) {
-        continue;
-      }
-      if (
-        normalizedAliases.some(
-          (alias) =>
-            name === alias || name.includes(alias) || alias.includes(name),
-        )
-      ) {
-        return element;
-      }
-    }
-    for (const element of actionableElements()) {
-      const name = accessibleName(element);
-      if (hasToken(name, fallbackTokens)) {
-        return element;
-      }
-    }
-    return null;
-  };
-
-  const ensureMode = (mode) => {
-    if (mode === "normal") {
-      return;
-    }
-    const capabilityVisible =
-      mode === "search"
-        ? report.matrix.search_mode_visible
-        : report.matrix.research_mode_visible;
-    if (!capabilityVisible) {
-      throwCapabilityMissing(mode + " mode", mode, report.aliases.modes);
-    }
-
-    const fallbackSelector =
-      mode === "search" ? "[data-mode='search']" : "[data-mode='research']";
-    const fallbackTokens =
-      mode === "search" ? ["search", "browse", "web"] : ["research", "deep"];
-    const control =
-      findBySelector(fallbackSelector) ??
-      findByAliases(report.aliases.modes[mode] ?? [], fallbackTokens);
-    if (!control) {
-      throwUiDrift("could not find " + mode + " mode control after probing it");
-    }
-    if (!isSelected(control)) {
-      clickControl(control);
-    }
-  };
-
-  const ensureModelClass = (modelClass) => {
-    if (!report.matrix.model_picker_visible) {
-      throwCapabilityMissing(
-        "model picker",
-        modelClass,
-        report.aliases.model_classes,
-      );
-    }
-    const aliases = report.aliases.model_classes[modelClass] ?? [];
-    if (aliases.length === 0) {
-      throwCapabilityMissing(
-        "model class",
-        modelClass,
-        report.aliases.model_classes,
-      );
-    }
-    const control =
-      findBySelector("[data-model='" + modelClass + "']") ??
-      findByAliases(aliases, [modelClass]);
-    if (!control) {
-      throwUiDrift(
-        "could not find a control for model=" +
-          modelClass +
-          " after alias discovery",
-      );
-    }
-    if (!isSelected(control)) {
-      clickControl(control);
-    }
-  };
-
-  const ensureEffort = (effort) => {
-    if (effort === "none") {
-      return;
-    }
-    if (!report.matrix.thinking_effort_visible) {
-      throwCapabilityMissing(
-        "thinking effort",
-        effort,
-        report.aliases.efforts,
-      );
-    }
-    const aliases = report.aliases.efforts[effort] ?? [];
-    if (aliases.length === 0) {
-      throwCapabilityMissing(
-        "thinking effort",
-        effort,
-        report.aliases.efforts,
-      );
-    }
-    const control =
-      findBySelector("[data-effort='" + effort + "']") ??
-      findByAliases(aliases, [effort, "reasoning", "effort"]);
-    if (!control) {
-      throwUiDrift(
-        "could not find a control for effort=" +
-          effort +
-          " after alias discovery",
-      );
-    }
-    if (!isSelected(control)) {
-      clickControl(control);
-    }
-  };
-
-  if (request.modelClass) {
-    ensureModelClass(request.modelClass);
-  }
-  if (request.effort) {
-    ensureEffort(request.effort);
-  }
-  if (request.mode) {
-    ensureMode(request.mode);
-  }
-}
-`;
 
 function resolveTablinqAssetPath(
   installedRelativeSegments: string[],

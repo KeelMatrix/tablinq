@@ -128,7 +128,7 @@ describe("extension capability probe", () => {
       "aria-textbox",
     );
     expect(message.runtime.strategy_matches.search_mode_visible).toBe(
-      "aria-search-toggle",
+      "chatgpt-search-toggle",
     );
     expect(message.report.aliases.model_classes.instant).toContain(
       "instant answers",
@@ -136,6 +136,69 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.modes.search).toContain("browse the web");
     expect(message.runtime.ui_signature).toContain("aria");
     expect(validateCapabilityReport(message.report)).toBe(true);
+  });
+
+  it("detects a live-like ChatGPT surface and maps current labels", () => {
+    document.body.dataset.uiVariant = "live";
+    document.body.innerHTML = `
+      <main aria-label="chatgpt workspace">
+        <section>
+          <div role="group" aria-label="Choose a model">
+            <button type="button" data-model="instant" aria-pressed="false">GPT-5.3 Instant</button>
+            <button type="button" data-model="thinking" aria-pressed="true">GPT-5.4 Thinking</button>
+          </div>
+          <button type="button" data-mode="search" aria-label="Search">Search</button>
+          <button type="button" data-mode="research" aria-label="Deep research">Deep research</button>
+          <div role="group" aria-label="Reasoning effort">
+            <button type="button" data-effort="standard" aria-label="Standard reasoning" aria-pressed="true">Standard</button>
+            <button type="button" data-effort="extended" aria-label="Extended reasoning" aria-pressed="false">Extended</button>
+          </div>
+          <button type="button" data-testid="upload-button" aria-label="Add photos and files">Add files</button>
+          <input id="live-upload-input" type="file" hidden />
+        </section>
+        <form data-testid="composer-root">
+          <textarea id="prompt-textarea" aria-label="Message ChatGPT" placeholder="Message ChatGPT"></textarea>
+          <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+        </form>
+        <article data-message-author-role="assistant">
+          <div class="markdown">
+            <p>Live-like answer text</p>
+          </div>
+          <a href="/artifact.txt" download data-testid="artifact-download" aria-label="Download report">Download report</a>
+        </article>
+      </main>
+    `;
+
+    const message = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(message.report.matrix).toEqual({
+      composer_ready: true,
+      submit_available: true,
+      model_picker_visible: true,
+      thinking_effort_visible: true,
+      search_mode_visible: true,
+      research_mode_visible: true,
+      upload_control_visible: true,
+      downloadable_artifacts_observable: true,
+    });
+    expect(message.runtime.strategy_matches.composer_ready).toBe(
+      "chatgpt-prompt-textarea",
+    );
+    expect(message.runtime.strategy_matches.submit_available).toBe(
+      "chatgpt-send-button",
+    );
+    expect(message.report.aliases.model_classes.instant).toContain(
+      "gpt-5.3 instant",
+    );
+    expect(message.report.aliases.model_classes.thinking).toContain(
+      "gpt-5.4 thinking",
+    );
+    expect(message.report.aliases.modes.research).toContain("deep research");
+    expect(message.report.aliases.efforts.extended).toContain(
+      "extended reasoning",
+    );
   });
 
   it("reports missing controls without inventing aliases", () => {

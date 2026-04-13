@@ -41,17 +41,19 @@
 ## Current testing strategy
 
 - Rust tests cover protocol serialization, daemon boot, IPC connectivity, config bootstrap, SQLite migrations, job persistence across restart, stale-lock recovery, browser health messaging, streamed ask execution, timeout diagnostics, failure-bundle persistence, capability snapshots, configured ask requests, capability-missing failures, upload/download artifact persistence, research success/failure/cancellation, and CLI parsing.
-- TypeScript tests validate the JSON schemas, probe the extension against synthetic DOM fixtures, and exercise the browser adapter against both `fake-chatgpt` UI variants plus selector-pack loading, diagnostics capture, streaming/reload, renamed-control, missing-control, upload, managed-download, and research-progress scenarios with real Playwright flows.
+- TypeScript tests validate the JSON schemas, probe the extension against synthetic DOM fixtures, and exercise the browser adapter against the classic, ARIA-first, and live-like `fake-chatgpt` variants plus selector-pack loading, diagnostics capture, streaming/reload, renamed-control, missing-control, upload, managed-download, recovery-after-download, and research-progress scenarios with real Playwright flows.
 - `packages/fake-chatgpt` is the CI-safe target for browser and extension fallback tests.
+- Optional real-site verification is documented in [docs/live-smoke-checklist.md](/C:/Users/user/Desktop/gpt-cli/docs/live-smoke-checklist.md) and stays outside CI.
 
 ## Current execution paths
 
-Part 9 hardens the execution paths around drift and failure recovery:
+Part 11 finishes the hardening and live-adaptation pass:
 
 - `packages/extension/src/probe.ts`: ARIA-aware capability modules, strategy scoring, alias discovery, and DOM neighborhood snapshots.
 - `packages/extension/src/content-script.ts`: debounced capability publishing on DOM changes.
 - `packages/extension/src/service-worker.ts`: native-messaging and development WebSocket forwarding.
-- `packages/browser-adapter/src/browserAdapter.ts`: selector-pack loading, capability-cache persistence, strategy telemetry, runtime model/mode/effort selection, Playwright-backed uploads, managed downloads, prompt insertion, submit, streamed DOM observation, timeout handling, diagnostics capture, and reload recovery.
+- `packages/browser-adapter/src/browserAdapter.ts`: selector-pack loading, capability-cache persistence, strategy telemetry, runtime model/mode/effort selection, Playwright-backed uploads, managed downloads, prompt insertion, submit, streamed DOM observation, explicit timeout handling, diagnostics capture, reload recovery, and post-download page restoration.
+- `packages/browser-adapter/src/pageAdapter.runtime.js`: isolated live-site DOM helpers for composer readiness, prompt filling, submit, ask/research snapshot reads, configuration controls, and upload acknowledgement.
 - `gpt ask`: streamed terminal output backed by daemon job persistence, last-conversation resume, and returned artifact metadata.
 - `gpt research`: streamed report output backed by a dedicated durable job record, partial-output persistence, and optional local report writing.
 - `gpt capabilities`: daemon-facing inspection of the last real capability matrix and alias set from the managed page.
@@ -62,12 +64,16 @@ Part 9 hardens the execution paths around drift and failure recovery:
 - Upload, download, research, timeout, auth-required, profile-lock, launch, and drift failures are surfaced as typed daemon errors and bundled local diagnostics.
 - `config.toml` now supports `safe_mode = true` for probe-only local debugging.
 
-## Next implementation boundary
+## Implementation status
 
-Part 10 is now implemented:
+Part 11 is now implemented:
 
 - package builds now emit runnable JavaScript assets for `packages/browser-adapter` and `packages/extension`
 - `gptd` prefers the packaged `service.js` adapter entry and falls back to the repo `service.ts` entry for developer checkouts
 - a dedicated `tablinq-host` binary is packaged and registered as the Windows user-level native messaging host
 - `gpt version` and `gptd version` expose build metadata for packaged installs
 - end-user docs now cover install, login, troubleshooting, selector-pack updates, and profile reset
+- current ChatGPT-style selectors and alias heuristics live in selector packs, probe modules, and the isolated page runtime instead of the core Playwright loop
+- ask and research now use explicit timeout/retry policies for navigation, probing, upload acknowledgement, DOM streaming, and download capture
+- managed downloads now recover the page when a browser download invalidates the active frame, leaving the session usable for follow-up commands
+- the repo includes a manual live smoke checklist for final local verification without adding live-site dependencies to CI

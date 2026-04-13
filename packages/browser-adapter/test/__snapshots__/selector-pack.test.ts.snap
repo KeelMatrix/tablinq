@@ -14,6 +14,18 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
         },
         {
           "kind": "css",
+          "score": 0.97,
+          "selector": "[data-testid='composer-root'] textarea",
+          "strategy_id": "chatgpt-composer-root",
+        },
+        {
+          "kind": "css",
+          "score": 0.99,
+          "selector": "#prompt-textarea",
+          "strategy_id": "chatgpt-prompt-textarea",
+        },
+        {
+          "kind": "css",
           "score": 1,
           "selector": "[data-slot='composer']",
           "strategy_id": "data-slot-composer",
@@ -34,6 +46,12 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
           "score": 0.72,
           "selector": "Download",
           "strategy_id": "aria-download-link",
+        },
+        {
+          "kind": "text",
+          "score": 0.94,
+          "selector": "Download report",
+          "strategy_id": "chatgpt-download-link",
         },
         {
           "kind": "css",
@@ -59,6 +77,12 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
           "strategy_id": "aria-model-trigger",
         },
         {
+          "kind": "text",
+          "score": 0.96,
+          "selector": "GPT-5.4 Thinking",
+          "strategy_id": "chatgpt-model-controls",
+        },
+        {
           "kind": "css",
           "score": 1,
           "selector": "[data-slot='model-picker']",
@@ -74,6 +98,12 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
           "score": 0.88,
           "selector": "Research",
           "strategy_id": "aria-research-toggle",
+        },
+        {
+          "kind": "text",
+          "score": 0.92,
+          "selector": "Deep research",
+          "strategy_id": "chatgpt-research-toggle",
         },
         {
           "kind": "css",
@@ -93,6 +123,12 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
           "strategy_id": "aria-search-toggle",
         },
         {
+          "kind": "text",
+          "score": 0.92,
+          "selector": "Search",
+          "strategy_id": "chatgpt-search-toggle",
+        },
+        {
           "kind": "css",
           "score": 1,
           "selector": "[data-mode='search']",
@@ -108,6 +144,12 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
           "score": 0.92,
           "selector": "Send",
           "strategy_id": "button-send",
+        },
+        {
+          "kind": "css",
+          "score": 0.97,
+          "selector": "[data-testid='send-button']",
+          "strategy_id": "chatgpt-send-button",
         },
         {
           "kind": "dom_neighborhood",
@@ -133,6 +175,12 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
           "strategy_id": "aria-effort-toggle",
         },
         {
+          "kind": "text",
+          "score": 0.93,
+          "selector": "Standard reasoning",
+          "strategy_id": "chatgpt-effort-toggle",
+        },
+        {
           "kind": "css",
           "score": 1,
           "selector": "[data-slot='effort-toggle']",
@@ -143,6 +191,12 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
     {
       "capability": "upload_control_visible",
       "strategies": [
+        {
+          "kind": "text",
+          "score": 0.94,
+          "selector": "Add photos and files",
+          "strategy_id": "chatgpt-upload-entry",
+        },
         {
           "kind": "css",
           "score": 1,
@@ -158,7 +212,7 @@ exports[`selector pack parsing > parses the default selector pack 1`] = `
       ],
     },
   ],
-  "description": "Baseline selectors and semantic fallbacks for fake-chatgpt and early live-site development.",
+  "description": "Baseline selectors and semantic fallbacks for fake-chatgpt plus live-like ChatGPT surfaces.",
   "format_version": 1,
   "pack_id": "chatgpt-default",
   "updated_at": "2026-04-12T00:00:00Z",
