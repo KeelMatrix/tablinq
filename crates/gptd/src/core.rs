@@ -2,7 +2,7 @@ use crate::browser::{BrowserDiagnosticsSnapshot, BrowserManager, ResearchUpdate}
 use crate::config::AppConfig;
 use crate::db::Database;
 use anyhow::{Context, Result, anyhow};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use shared_protocol::{
     AckEvent, ArtifactList, ArtifactPullResult, AskCommand, AskResult, BrowserDoctor,
     BrowserOpenRequest, BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot,
@@ -22,6 +22,20 @@ pub struct CoreService {
     started_at: chrono::DateTime<Utc>,
     browser: Arc<Mutex<BrowserManager>>,
     cancel_registry: Arc<Mutex<HashSet<String>>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedAskJob {
+    pub job_id: String,
+    pub command: AskCommand,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedResearchJob {
+    pub job_id: String,
+    pub command: ResearchCommand,
+    pub created_at: DateTime<Utc>,
 }
 
 impl CoreService {
@@ -56,6 +70,35 @@ impl CoreService {
     where
         F: FnMut(EventPayload) -> Result<()>,
     {
+        let prepared = self.prepare_ask(command)?;
+        on_event(EventPayload::JobState(JobState {
+            job_id: prepared.job_id.clone(),
+            status: JobStatus::Queued,
+            message: Some("queued ask job".to_owned()),
+            conversation_id: prepared.command.conversation_id.clone(),
+            updated_at: prepared.created_at,
+            artifacts: vec![],
+        }))?;
+        self.execute_prepared_ask(&prepared, on_event)
+    }
+
+    pub fn research<F>(&self, command: ResearchCommand, mut on_event: F) -> Result<ResearchResult>
+    where
+        F: FnMut(EventPayload) -> Result<()>,
+    {
+        let prepared = self.prepare_research(command)?;
+        on_event(EventPayload::JobState(JobState {
+            job_id: prepared.job_id.clone(),
+            status: JobStatus::Queued,
+            message: Some("queued research job".to_owned()),
+            conversation_id: None,
+            updated_at: prepared.created_at,
+            artifacts: vec![],
+        }))?;
+        self.execute_prepared_research(&prepared, on_event)
+    }
+
+    pub fn prepare_ask(&self, command: AskCommand) -> Result<PreparedAskJob> {
         if self.config.safe_mode() {
             anyhow::bail!(
                 "safe mode enabled: prompt execution is disabled; run doctor or capabilities only"
@@ -63,8 +106,8 @@ impl CoreService {
         }
 
         let db = self.open_db()?;
-        let now = Utc::now();
-        let job_id = format!("job-{}", now.timestamp_millis());
+        let created_at = Utc::now();
+        let job_id = format!("job-{}", created_at.timestamp_millis());
         let conversation_id = match command.conversation_id.clone() {
             Some(value) => Some(value),
             None => db.latest_conversation_id()?,
@@ -74,53 +117,108 @@ impl CoreService {
 
         db.insert_job(
             &job_id,
-            JobStatus::Starting,
-            Some("starting ask"),
+            JobStatus::Queued,
+            Some("queued ask job"),
             effective.conversation_id.as_deref(),
-            now,
-            now,
+            created_at,
+            created_at,
         )?;
         db.upsert_job_detail(&job_id, JobKind::Ask, Some(&effective.prompt), None)?;
+
+        Ok(PreparedAskJob {
+            job_id,
+            command: effective,
+            created_at,
+        })
+    }
+
+    pub fn execute_prepared_ask<F>(
+        &self,
+        prepared: &PreparedAskJob,
+        mut on_event: F,
+    ) -> Result<AskResult>
+    where
+        F: FnMut(EventPayload) -> Result<()>,
+    {
+        let db = self.open_db()?;
+        if db.job_cancel_requested(&prepared.job_id)? {
+            let message = "ask cancelled before execution";
+            self.fail_job(&prepared.job_id, message)?;
+            on_event(EventPayload::JobState(JobState {
+                job_id: prepared.job_id.clone(),
+                status: JobStatus::Failed,
+                message: Some(message.to_owned()),
+                conversation_id: prepared.command.conversation_id.clone(),
+                updated_at: Utc::now(),
+                artifacts: vec![],
+            }))?;
+            anyhow::bail!(message);
+        }
+
+        db.insert_job(
+            &prepared.job_id,
+            JobStatus::Starting,
+            Some("starting ask"),
+            prepared.command.conversation_id.as_deref(),
+            prepared.created_at,
+            Utc::now(),
+        )?;
         on_event(EventPayload::JobState(JobState {
-            job_id: job_id.clone(),
+            job_id: prepared.job_id.clone(),
             status: JobStatus::Starting,
             message: Some("starting ask".to_owned()),
-            conversation_id: effective.conversation_id.clone(),
-            updated_at: now,
+            conversation_id: prepared.command.conversation_id.clone(),
+            updated_at: Utc::now(),
             artifacts: vec![],
         }))?;
 
         db.insert_job(
-            &job_id,
+            &prepared.job_id,
             JobStatus::Running,
             Some("streaming response"),
-            effective.conversation_id.as_deref(),
-            now,
-            now,
+            prepared.command.conversation_id.as_deref(),
+            prepared.created_at,
+            Utc::now(),
         )?;
         on_event(EventPayload::JobState(JobState {
-            job_id: job_id.clone(),
+            job_id: prepared.job_id.clone(),
             status: JobStatus::Running,
             message: Some("streaming response".to_owned()),
-            conversation_id: effective.conversation_id.clone(),
-            updated_at: now,
+            conversation_id: prepared.command.conversation_id.clone(),
+            updated_at: Utc::now(),
             artifacts: vec![],
         }))?;
 
-        match lock_browser(&self.browser)?.ask(&job_id, &effective, |event| on_event(event)) {
+        let outcome = lock_browser(&self.browser)?.ask(
+            &prepared.job_id,
+            &prepared.command,
+            |event| on_event(event),
+            || {
+                lock_cancel_registry(&self.cancel_registry)
+                    .map(|set| set.contains(&prepared.job_id))
+                    .unwrap_or(false)
+            },
+        );
+
+        let _ = lock_cancel_registry(&self.cancel_registry).map(|mut set| {
+            set.remove(&prepared.job_id);
+        });
+        let _ = db.set_job_cancel_requested(&prepared.job_id, false);
+
+        match outcome {
             Ok(result) => {
                 let completed_at = result.completed_at;
                 for artifact in &result.artifacts {
                     db.insert_artifact(artifact, completed_at)?;
-                    db.link_job_artifact(&job_id, &artifact.artifact_id)?;
+                    db.link_job_artifact(&prepared.job_id, &artifact.artifact_id)?;
                     on_event(EventPayload::ArtifactReady(artifact.clone()))?;
                 }
                 db.insert_job(
-                    &job_id,
+                    &prepared.job_id,
                     JobStatus::Completed,
                     Some("ask completed"),
                     Some(&result.conversation_id),
-                    now,
+                    prepared.created_at,
                     completed_at,
                 )?;
                 db.upsert_session(
@@ -134,18 +232,18 @@ impl CoreService {
                     "browser-primary",
                     "Managed conversation",
                     Some(&result.current_url),
-                    Some(&effective.prompt),
+                    Some(&prepared.command.prompt),
                     Some(&result.output_text),
                     completed_at,
                 )?;
                 db.update_job_output(
-                    &job_id,
+                    &prepared.job_id,
                     Some(&result.output_text),
                     Some(&result.current_url),
                     None,
                 )?;
                 on_event(EventPayload::JobState(JobState {
-                    job_id: job_id.clone(),
+                    job_id: prepared.job_id.clone(),
                     status: JobStatus::Completed,
                     message: Some("ask completed".to_owned()),
                     conversation_id: Some(result.conversation_id.clone()),
@@ -158,19 +256,19 @@ impl CoreService {
                 let failed_at = Utc::now();
                 let message = format!("{err:#}");
                 db.insert_job(
-                    &job_id,
+                    &prepared.job_id,
                     JobStatus::Failed,
                     Some(&message),
-                    effective.conversation_id.as_deref(),
-                    now,
+                    prepared.command.conversation_id.as_deref(),
+                    prepared.created_at,
                     failed_at,
                 )?;
-                db.update_job_output(&job_id, None, None, None)?;
+                db.update_job_output(&prepared.job_id, None, None, None)?;
                 on_event(EventPayload::JobState(JobState {
-                    job_id,
+                    job_id: prepared.job_id.clone(),
                     status: JobStatus::Failed,
                     message: Some(message),
-                    conversation_id: effective.conversation_id,
+                    conversation_id: prepared.command.conversation_id.clone(),
                     updated_at: failed_at,
                     artifacts: vec![],
                 }))?;
@@ -179,10 +277,7 @@ impl CoreService {
         }
     }
 
-    pub fn research<F>(&self, command: ResearchCommand, mut on_event: F) -> Result<ResearchResult>
-    where
-        F: FnMut(EventPayload) -> Result<()>,
-    {
+    pub fn prepare_research(&self, command: ResearchCommand) -> Result<PreparedResearchJob> {
         if self.config.safe_mode() {
             anyhow::bail!(
                 "safe mode enabled: prompt execution is disabled; run doctor or capabilities only"
@@ -192,7 +287,6 @@ impl CoreService {
         let db = self.open_db()?;
         let created_at = Utc::now();
         let job_id = format!("job-{}", created_at.timestamp_millis());
-
         db.insert_job(
             &job_id,
             JobStatus::Queued,
@@ -202,14 +296,36 @@ impl CoreService {
             created_at,
         )?;
         db.upsert_job_detail(&job_id, JobKind::Research, Some(&command.query), None)?;
-        on_event(EventPayload::JobState(JobState {
-            job_id: job_id.clone(),
-            status: JobStatus::Queued,
-            message: Some("queued research job".to_owned()),
-            conversation_id: None,
-            updated_at: created_at,
-            artifacts: vec![],
-        }))?;
+
+        Ok(PreparedResearchJob {
+            job_id,
+            command,
+            created_at,
+        })
+    }
+
+    pub fn execute_prepared_research<F>(
+        &self,
+        prepared: &PreparedResearchJob,
+        mut on_event: F,
+    ) -> Result<ResearchResult>
+    where
+        F: FnMut(EventPayload) -> Result<()>,
+    {
+        let db = self.open_db()?;
+        if db.job_cancel_requested(&prepared.job_id)? {
+            let message = "research cancelled before execution";
+            self.fail_job(&prepared.job_id, message)?;
+            on_event(EventPayload::JobState(JobState {
+                job_id: prepared.job_id.clone(),
+                status: JobStatus::Failed,
+                message: Some(message.to_owned()),
+                conversation_id: None,
+                updated_at: Utc::now(),
+                artifacts: vec![],
+            }))?;
+            anyhow::bail!(message);
+        }
 
         let mut conversation_id = None;
         let mut current_url = None;
@@ -217,13 +333,13 @@ impl CoreService {
         let mut next_seq = 0u64;
 
         let outcome = lock_browser(&self.browser)?.research(
-            &job_id,
-            &command,
+            &prepared.job_id,
+            &prepared.command,
             |update| {
                 apply_research_update(
                     &db,
-                    &job_id,
-                    created_at,
+                    &prepared.job_id,
+                    prepared.created_at,
                     &mut conversation_id,
                     &mut current_url,
                     &mut report_text,
@@ -234,37 +350,40 @@ impl CoreService {
             },
             || {
                 lock_cancel_registry(&self.cancel_registry)
-                    .map(|set| set.contains(&job_id))
+                    .map(|set| set.contains(&prepared.job_id))
                     .unwrap_or(false)
             },
         );
 
         let _ = lock_cancel_registry(&self.cancel_registry).map(|mut set| {
-            set.remove(&job_id);
+            set.remove(&prepared.job_id);
         });
-        let _ = db.set_job_cancel_requested(&job_id, false);
+        let _ = db.set_job_cancel_requested(&prepared.job_id, false);
 
         match outcome {
             Ok(mut result) => {
-                let output_path =
-                    maybe_write_research_output(&command, &job_id, &result.report_text)?;
+                let output_path = maybe_write_research_output(
+                    &prepared.command,
+                    &prepared.job_id,
+                    &result.report_text,
+                )?;
                 result.output_path = output_path.clone();
                 let completed_at = result.completed_at;
                 for artifact in &result.artifacts {
                     db.insert_artifact(artifact, completed_at)?;
-                    db.link_job_artifact(&job_id, &artifact.artifact_id)?;
+                    db.link_job_artifact(&prepared.job_id, &artifact.artifact_id)?;
                     on_event(EventPayload::ArtifactReady(artifact.clone()))?;
                 }
                 db.insert_job(
-                    &job_id,
+                    &prepared.job_id,
                     JobStatus::Completed,
                     Some("research completed"),
                     Some(&result.conversation_id),
-                    created_at,
+                    prepared.created_at,
                     completed_at,
                 )?;
                 db.update_job_output(
-                    &job_id,
+                    &prepared.job_id,
                     Some(&result.report_text),
                     Some(&result.current_url),
                     output_path.as_deref(),
@@ -280,12 +399,12 @@ impl CoreService {
                     "browser-primary",
                     "Managed conversation",
                     Some(&result.current_url),
-                    Some(&command.query),
+                    Some(&prepared.command.query),
                     Some(&result.report_text),
                     completed_at,
                 )?;
                 on_event(EventPayload::JobState(JobState {
-                    job_id: job_id.clone(),
+                    job_id: prepared.job_id.clone(),
                     status: JobStatus::Completed,
                     message: Some("research completed".to_owned()),
                     conversation_id: Some(result.conversation_id.clone()),
@@ -303,15 +422,15 @@ impl CoreService {
                     "research failed"
                 };
                 db.insert_job(
-                    &job_id,
+                    &prepared.job_id,
                     JobStatus::Failed,
                     Some(&message),
                     conversation_id.as_deref(),
-                    created_at,
+                    prepared.created_at,
                     failed_at,
                 )?;
                 db.update_job_output(
-                    &job_id,
+                    &prepared.job_id,
                     if report_text.is_empty() {
                         None
                     } else {
@@ -321,7 +440,7 @@ impl CoreService {
                     None,
                 )?;
                 on_event(EventPayload::JobState(JobState {
-                    job_id,
+                    job_id: prepared.job_id.clone(),
                     status: JobStatus::Failed,
                     message: Some(status_message.to_owned()),
                     conversation_id,
@@ -435,6 +554,27 @@ impl CoreService {
                 message: format!("cancellation requested for {}", command.job_id),
             })
         }
+    }
+
+    pub fn job_cancel_requested(&self, job_id: &str) -> Result<bool> {
+        self.open_db()?.job_cancel_requested(job_id)
+    }
+
+    pub fn fail_job(&self, job_id: &str, message: &str) -> Result<()> {
+        let db = self.open_db()?;
+        let detail = db
+            .job_detail(job_id)?
+            .with_context(|| format!("job {job_id} was not found"))?;
+        db.insert_job(
+            job_id,
+            JobStatus::Failed,
+            Some(message),
+            detail.conversation_id.as_deref(),
+            detail.created_at,
+            Utc::now(),
+        )?;
+        db.set_job_cancel_requested(job_id, false)?;
+        Ok(())
     }
 
     pub fn list_artifacts(&self) -> Result<ArtifactList> {

@@ -15,7 +15,11 @@ pub struct GatewayFileConfig {
     pub api_key: Option<String>,
     pub max_concurrent_upstream_jobs: Option<u32>,
     pub queue_length: Option<u32>,
+    pub queue_timeout_ms: Option<u64>,
+    pub per_client_limit: Option<u32>,
     pub request_timeout_ms: Option<u64>,
+    pub ask_timeout_ms: Option<u64>,
+    pub research_timeout_ms: Option<u64>,
     pub safe_mode_behavior: Option<String>,
 }
 
@@ -71,7 +75,11 @@ impl AppConfig {
                 api_key_present: self.gateway_api_key().is_some(),
                 max_concurrent_upstream_jobs: self.gateway_max_concurrent_upstream_jobs(),
                 queue_length: self.gateway_queue_length(),
+                queue_timeout_ms: self.gateway_queue_timeout_ms(),
+                per_client_limit: self.gateway_per_client_limit(),
                 request_timeout_ms: self.gateway_request_timeout_ms(),
+                ask_timeout_ms: self.ask_timeout_ms(),
+                research_timeout_ms: self.research_timeout_ms(),
                 safe_mode_behavior: self.gateway_safe_mode_behavior().to_owned(),
             },
         }
@@ -141,11 +149,43 @@ impl AppConfig {
             .unwrap_or(32)
     }
 
+    pub fn gateway_queue_timeout_ms(&self) -> u64 {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.queue_timeout_ms)
+            .unwrap_or(30_000)
+    }
+
+    pub fn gateway_per_client_limit(&self) -> u32 {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.per_client_limit)
+            .unwrap_or(8)
+    }
+
     pub fn gateway_request_timeout_ms(&self) -> u64 {
         self.file
             .gateway
             .as_ref()
             .and_then(|value| value.request_timeout_ms)
+            .unwrap_or(30_000)
+    }
+
+    pub fn ask_timeout_ms(&self) -> u64 {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.ask_timeout_ms)
+            .unwrap_or(15_000)
+    }
+
+    pub fn research_timeout_ms(&self) -> u64 {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.research_timeout_ms)
             .unwrap_or(30_000)
     }
 
@@ -224,8 +264,20 @@ fn upgrade_file_config(mut file: FileConfig) -> FileConfig {
     if gateway.queue_length.is_none() {
         gateway.queue_length = Some(32);
     }
+    if gateway.queue_timeout_ms.is_none() {
+        gateway.queue_timeout_ms = Some(30_000);
+    }
+    if gateway.per_client_limit.is_none() {
+        gateway.per_client_limit = Some(8);
+    }
     if gateway.request_timeout_ms.is_none() {
         gateway.request_timeout_ms = Some(30_000);
+    }
+    if gateway.ask_timeout_ms.is_none() {
+        gateway.ask_timeout_ms = Some(15_000);
+    }
+    if gateway.research_timeout_ms.is_none() {
+        gateway.research_timeout_ms = Some(30_000);
     }
     if gateway.safe_mode_behavior.is_none() {
         gateway.safe_mode_behavior = Some("reject_execution".to_owned());
@@ -274,7 +326,11 @@ mod tests {
         assert_eq!(config.gateway_port(), 3847);
         assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
         assert_eq!(config.gateway_queue_length(), 32);
+        assert_eq!(config.gateway_queue_timeout_ms(), 30_000);
+        assert_eq!(config.gateway_per_client_limit(), 8);
         assert_eq!(config.gateway_request_timeout_ms(), 30_000);
+        assert_eq!(config.ask_timeout_ms(), 15_000);
+        assert_eq!(config.research_timeout_ms(), 30_000);
         assert_eq!(config.gateway_safe_mode_behavior(), "reject_execution");
         assert!(config.gateway_api_key().is_some());
     }
@@ -299,6 +355,20 @@ mod tests {
                 .as_ref()
                 .and_then(|value| value.max_concurrent_upstream_jobs),
             Some(1)
+        );
+        assert_eq!(
+            parsed
+                .gateway
+                .as_ref()
+                .and_then(|value| value.queue_timeout_ms),
+            Some(30_000)
+        );
+        assert_eq!(
+            parsed
+                .gateway
+                .as_ref()
+                .and_then(|value| value.per_client_limit),
+            Some(8)
         );
         assert!(
             parsed

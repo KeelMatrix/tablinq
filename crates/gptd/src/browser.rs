@@ -126,6 +126,7 @@ impl BrowserManager {
         job_id: &str,
         command: &AskCommand,
         mut on_event: F,
+        mut should_cancel: impl FnMut() -> bool,
     ) -> Result<AskResult>
     where
         F: FnMut(EventPayload) -> Result<()>,
@@ -136,8 +137,13 @@ impl BrowserManager {
             .process
             .as_mut()
             .expect("browser adapter process missing")
-            .ask(job_id, command, &mut on_event)
-        {
+            .ask(
+                job_id,
+                command,
+                self.config.ask_timeout_ms(),
+                &mut on_event,
+                &mut should_cancel,
+            ) {
             Ok((snapshot, result)) => {
                 self.last_snapshot = snapshot;
                 Ok(result)
@@ -149,9 +155,23 @@ impl BrowserManager {
                         .process
                         .as_mut()
                         .expect("browser adapter process missing")
-                        .ask(job_id, command, &mut on_event)?;
+                        .ask(
+                            job_id,
+                            command,
+                            self.config.ask_timeout_ms(),
+                            &mut on_event,
+                            &mut should_cancel,
+                        )?;
                     self.last_snapshot = snapshot;
                     return Ok(result);
+                }
+                if should_reset_after_failure(&err.to_string()) {
+                    self.teardown_process();
+                    self.last_snapshot = idle_snapshot(
+                        &self.config,
+                        Some(self.current_target()),
+                        self.last_snapshot.browser_path.clone(),
+                    );
                 }
                 let _ = self.health();
                 Err(err)
@@ -176,8 +196,13 @@ impl BrowserManager {
             .process
             .as_mut()
             .expect("browser adapter process missing")
-            .research(job_id, command, &mut on_update, &mut should_cancel)
-        {
+            .research(
+                job_id,
+                command,
+                self.config.research_timeout_ms(),
+                &mut on_update,
+                &mut should_cancel,
+            ) {
             Ok((snapshot, result)) => {
                 self.last_snapshot = snapshot;
                 Ok(result)
@@ -189,9 +214,23 @@ impl BrowserManager {
                         .process
                         .as_mut()
                         .expect("browser adapter process missing")
-                        .research(job_id, command, &mut on_update, &mut should_cancel)?;
+                        .research(
+                            job_id,
+                            command,
+                            self.config.research_timeout_ms(),
+                            &mut on_update,
+                            &mut should_cancel,
+                        )?;
                     self.last_snapshot = snapshot;
                     return Ok(result);
+                }
+                if should_reset_after_failure(&err.to_string()) {
+                    self.teardown_process();
+                    self.last_snapshot = idle_snapshot(
+                        &self.config,
+                        Some(self.current_target()),
+                        self.last_snapshot.browser_path.clone(),
+                    );
                 }
                 let _ = self.health();
                 Err(err)
@@ -430,7 +469,9 @@ impl AdapterProcess {
         &mut self,
         job_id: &str,
         command: &AskCommand,
+        timeout_ms: u64,
         on_event: &mut F,
+        should_cancel: &mut impl FnMut() -> bool,
     ) -> Result<(BrowserStatusSnapshot, AskResult)>
     where
         F: FnMut(EventPayload) -> Result<()>,
@@ -439,7 +480,7 @@ impl AdapterProcess {
             job_id: job_id.to_owned(),
             prompt: command.prompt.clone(),
             conversation_id: command.conversation_id.clone(),
-            timeout_ms: Some(15_000),
+            timeout_ms: Some(timeout_ms),
             mode: Some(command.mode),
             model_class: command.model_class,
             effort: command.effort,
@@ -455,6 +496,11 @@ impl AdapterProcess {
         self.stdin.flush().context("flush adapter ask request")?;
 
         loop {
+            if should_cancel() {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                bail!("ask cancelled");
+            }
             let mut line = String::new();
             self.stdout
                 .read_line(&mut line)
@@ -479,6 +525,11 @@ impl AdapterProcess {
                         },
                         text: chunk.text,
                     }))?;
+                    if should_cancel() {
+                        let _ = self.child.kill();
+                        let _ = self.child.wait();
+                        bail!("ask cancelled");
+                    }
                 }
                 AdapterFrame::AskResult {
                     ok,
@@ -525,6 +576,7 @@ impl AdapterProcess {
         &mut self,
         job_id: &str,
         command: &ResearchCommand,
+        timeout_ms: u64,
         on_update: &mut F,
         should_cancel: &mut G,
     ) -> Result<(BrowserStatusSnapshot, ResearchResult)>
@@ -537,7 +589,7 @@ impl AdapterProcess {
             query: command.query.clone(),
             files: command.files.clone(),
             output_dir: command.output_dir.clone(),
-            timeout_ms: Some(30_000),
+            timeout_ms: Some(timeout_ms),
         };
         let raw = serde_json::to_string(&request).context("encode adapter research request")?;
         self.stdin
@@ -716,6 +768,10 @@ fn is_recoverable_adapter_error(message: &str) -> bool {
         || message.contains("managed page is not open")
         || message.contains("Target page, context or browser has been closed")
         || message.contains("browser adapter closed without")
+}
+
+fn should_reset_after_failure(message: &str) -> bool {
+    message.contains("timed out") || message.contains("cancelled")
 }
 
 fn idle_snapshot(
