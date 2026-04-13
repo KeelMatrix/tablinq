@@ -628,6 +628,17 @@ impl CoreService {
         lock_browser(&self.browser)?.close()
     }
 
+    pub fn browser_logout(&self) -> Result<BrowserStatusSnapshot> {
+        let snapshot = lock_browser(&self.browser)?.logout()?;
+        self.open_db()?.upsert_session(
+            "browser-primary",
+            "Managed browser",
+            snapshot.current_url.as_deref(),
+            Utc::now(),
+        )?;
+        Ok(snapshot)
+    }
+
     pub fn browser_reset_profile(&self) -> Result<BrowserStatusSnapshot> {
         lock_browser(&self.browser)?.reset_profile()
     }
