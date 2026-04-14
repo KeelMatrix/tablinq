@@ -3,7 +3,8 @@ param(
   [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "Tablinq\\install"),
   [string]$StateRoot = (Join-Path $env:LOCALAPPDATA "Tablinq"),
   [switch]$AutoStartDaemon,
-  [switch]$AutoStartGateway
+  [switch]$AutoStartGateway,
+  [switch]$SkipRegistry
 )
 
 $ErrorActionPreference = "Stop"
@@ -119,10 +120,12 @@ if (Test-Path $InstallRoot) {
 New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
 Copy-Item -Path (Join-Path $PackageRoot "*") -Destination $InstallRoot -Recurse -Force
 
-$gptBin = Join-Path $InstallRoot "bin\\gpt.exe"
-$gatewayBin = Join-Path $InstallRoot "bin\\tablinq-gateway.exe"
-$hostBin = Join-Path $InstallRoot "bin\\tablinq-host.exe"
-$extensionManifestPath = Join-Path $InstallRoot "extension\\manifest.json"
+$binDir = Join-Path $InstallRoot "bin"
+$extensionDir = Join-Path $InstallRoot "extension"
+$gptBin = Join-Path $binDir "gpt.exe"
+$gatewayBin = Join-Path $binDir "tablinq-gateway.exe"
+$hostBin = Join-Path $binDir "tablinq-host.exe"
+$extensionManifestPath = Join-Path $extensionDir "manifest.json"
 $extensionId = Get-ExtensionIdFromKey -ManifestPath $extensionManifestPath
 $browserPath = Resolve-BrowserExecutable
 
@@ -133,10 +136,12 @@ $edgeManifestPath = Join-Path $nativeHostDir "com.tablinq.bridge.edge.json"
 Write-NativeHostManifest -ManifestPath $chromeManifestPath -HostExecutable $hostBin -ExtensionId $extensionId
 Write-NativeHostManifest -ManifestPath $edgeManifestPath -HostExecutable $hostBin -ExtensionId $extensionId
 
-$chromeRegistryKey = "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.tablinq.bridge"
-$edgeRegistryKey = "HKCU:\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.tablinq.bridge"
-New-Item -Path $chromeRegistryKey -Force -Value $chromeManifestPath | Out-Null
-New-Item -Path $edgeRegistryKey -Force -Value $edgeManifestPath | Out-Null
+if (-not $SkipRegistry) {
+  $chromeRegistryKey = "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.tablinq.bridge"
+  $edgeRegistryKey = "HKCU:\\Software\\Microsoft\\Edge\\NativeMessagingHosts\\com.tablinq.bridge"
+  New-Item -Path $chromeRegistryKey -Force -Value $chromeManifestPath | Out-Null
+  New-Item -Path $edgeRegistryKey -Force -Value $edgeManifestPath | Out-Null
+}
 
 & $gptBin --state-root $StateRoot config show | Out-Null
 
@@ -158,9 +163,12 @@ if ($AutoStartGateway) {
 Write-Host "Installed Tablinq to $InstallRoot"
 Write-Host "State root: $StateRoot"
 Write-Host "Detected browser: $(if ($browserPath) { $browserPath } else { 'not found' })"
-Write-Host "Extension path: $(Join-Path $InstallRoot 'extension')"
+Write-Host "Extension path: $extensionDir"
 Write-Host "Extension ID: $extensionId"
 Write-Host "Gateway binary: $gatewayBin"
+if ($SkipRegistry) {
+  Write-Host "Native host registry registration: skipped"
+}
 Write-Host "Startup helper scripts:"
 Write-Host "  daemon: $daemonStartupHelper"
 Write-Host "  gateway: $gatewayStartupHelper"
@@ -168,7 +176,7 @@ if ($AutoStartDaemon -or $AutoStartGateway) {
   Write-Host "Startup folder: $(Get-StartupFolder)"
 }
 Write-Host "First run:"
-Write-Host "  1. Load the unpacked extension from $(Join-Path $InstallRoot 'extension') in Edge or Chrome."
+Write-Host "  1. Load the unpacked extension from $extensionDir in Edge or Chrome."
 Write-Host "  2. Run: $gptBin daemon start"
 Write-Host "  3. Run: $gptBin gateway start"
 Write-Host "  4. Run: $gptBin browser open"

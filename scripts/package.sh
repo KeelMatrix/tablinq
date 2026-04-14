@@ -4,6 +4,14 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE="${1:-release}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/dist/package/tablinq}"
+TARGET_ROOT="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
+
+resolve_target_profile_dir() {
+  case "$1" in
+    dev) printf '%s\n' "debug" ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
 
 mkdir -p "$OUTPUT_ROOT/bin"
 rm -rf "$OUTPUT_ROOT"
@@ -11,12 +19,16 @@ mkdir -p "$OUTPUT_ROOT/bin"
 
 (
   cd "$ROOT_DIR"
-  cargo build --profile "$PROFILE" -p gpt -p gptd -p tablinq-gateway -p tablinq-host
+  cargo_args=(build --profile "$PROFILE" -p gpt -p gptd -p tablinq-gateway -p tablinq-host)
+  if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+    cargo_args+=(--target-dir "$TARGET_ROOT")
+  fi
+  cargo "${cargo_args[@]}"
   pnpm build
   pnpm --filter @tablinq/browser-adapter deploy --legacy --prod "$OUTPUT_ROOT/browser-adapter"
 )
 
-TARGET_DIR="$ROOT_DIR/target/$PROFILE"
+TARGET_DIR="$TARGET_ROOT/$(resolve_target_profile_dir "$PROFILE")"
 cp "$TARGET_DIR/gpt" "$OUTPUT_ROOT/bin/gpt"
 cp "$TARGET_DIR/gptd" "$OUTPUT_ROOT/bin/gptd"
 cp "$TARGET_DIR/tablinq-gateway" "$OUTPUT_ROOT/bin/tablinq-gateway"

@@ -30,6 +30,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const STARTUP_PROBE_TIMEOUT_MS: u64 = 1_000;
 const HEALTH_PATH: &str = "/health";
 const READY_PATH: &str = "/ready";
 const ADMIN_STATUS_PATH: &str = "/admin/status";
@@ -2033,6 +2034,7 @@ fn write_stream_delta(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_chat_completion_response(
     request_id: &str,
     job_id: &str,
@@ -2199,15 +2201,18 @@ fn cancellation_response(request_id: &str, job_id: &str, message: &str) -> HttpR
 }
 
 fn ensure_browser_session(core: &CoreService) -> Result<()> {
-    let snapshot = core.browser_profile_info()?;
-    if snapshot.running {
-        return Ok(());
+    let mut snapshot = core.browser_profile_info()?;
+    if !snapshot.running {
+        core.browser_open(BrowserOpenRequest {
+            target_url: None,
+            browser_path: None,
+            headless: Some(true),
+        })?;
+        snapshot = core.browser_profile_info()?;
     }
-    core.browser_open(BrowserOpenRequest {
-        target_url: None,
-        browser_path: None,
-        headless: Some(true),
-    })?;
+    if !snapshot.authenticated {
+        anyhow::bail!("auth required: managed browser session is not authenticated");
+    }
     Ok(())
 }
 
@@ -2429,9 +2434,12 @@ fn start_gateway_process_with_binary(
         .with_context(|| format!("spawn gateway binary {}", gateway_bin.display()))?;
 
     let deadline = Instant::now() + STARTUP_TIMEOUT;
+    let startup_probe_timeout_ms = config
+        .gateway_request_timeout_ms()
+        .min(STARTUP_PROBE_TIMEOUT_MS);
     loop {
         if let Some(snapshot) = load_status_snapshot(&config)?
-            && gateway_is_ready(&snapshot, config.gateway_request_timeout_ms())
+            && gateway_is_ready(&snapshot, startup_probe_timeout_ms)
         {
             return Ok(json!({
                 "status": "started",
@@ -3001,6 +3009,7 @@ fn http_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gptd::Database;
     use std::net::TcpListener;
     use std::path::Path;
     use std::process::{Child, Stdio};
@@ -4621,6 +4630,173 @@ mod tests {
     }
 
     #[test]
+    fn provider_smoke_covers_chat_files_artifacts_and_cancel_flow() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let chat = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &serde_json::to_vec(&json!({
+                "model": "tablinq-instant",
+                "messages": [{ "role": "user", "content": "provider smoke ask" }]
+            }))
+            .unwrap(),
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(chat.status_code, 200);
+
+        let upload = upload_file(
+            &snapshot,
+            &auth,
+            "smoke.txt",
+            "text/plain",
+            b"provider smoke file",
+        );
+        assert_eq!(upload.status_code, 201);
+        let upload_body: Value = serde_json::from_slice(&upload.body).unwrap();
+        let file_id = upload_body["data"]["id"].as_str().unwrap().to_owned();
+
+        let artifact_response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &paperclip_request_body(
+                "tablinq-research",
+                "create a smoke artifact",
+                false,
+                &[&file_id],
+            ),
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(artifact_response.status_code, 200);
+        let artifact_response_body: Value =
+            serde_json::from_slice(&artifact_response.body).unwrap();
+        let request_id = artifact_response_body["request_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let artifacts = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_ARTIFACTS_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(artifacts.status_code, 200);
+        let artifacts_body: Value = serde_json::from_slice(&artifacts.body).unwrap();
+        let artifact_id = artifacts_body["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| {
+                item["linked_request_ids"].as_array().is_some_and(|linked| {
+                    linked
+                        .iter()
+                        .any(|value| value == &Value::String(request_id.clone()))
+                })
+            })
+            .and_then(|item| item["id"].as_str())
+            .unwrap()
+            .to_owned();
+
+        let artifact_detail = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            &format!("{V1_ARTIFACTS_PATH}/{artifact_id}"),
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(artifact_detail.status_code, 200);
+
+        let artifact_content = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            &format!("{V1_ARTIFACTS_PATH}/{artifact_id}/content"),
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(artifact_content.status_code, 200);
+        assert!(
+            String::from_utf8(artifact_content.body)
+                .unwrap()
+                .contains("smoke.txt")
+        );
+
+        let cancel_body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [{ "role": "user", "content": "cancel this smoke request" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let auth_for_thread = auth.clone();
+        let running = thread::spawn(move || {
+            http_request(
+                &host,
+                snapshot.port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-provider-smoke-cancel"),
+                ],
+                &cancel_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(500));
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-provider-smoke-cancel/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+        let running = running.join().unwrap();
+        assert_eq!(running.status_code, 409);
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
     fn paperclip_like_requests_report_missing_staged_file_errors_cleanly() {
         let _guard = integration_lock();
         let (_dir, config) = test_config();
@@ -5453,6 +5629,465 @@ mod tests {
 
         let first = first.join().unwrap().unwrap();
         assert_eq!(first.status_code, 200);
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn gateway_rejects_missing_and_wrong_bearer_tokens_for_openai_routes() {
+        let _guard = integration_lock();
+        let (_dir, config) = test_config();
+        let state_root = config.paths.state_root.clone();
+        let (handle, snapshot) = spawn_gateway(config);
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "reject unauthorized OpenAI-shaped requests" }]
+        }))
+        .unwrap();
+
+        let missing = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[("content-type", "application/json")],
+            &body,
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(missing.status_code, 401);
+        let missing_body: Value = serde_json::from_slice(&missing.body).unwrap();
+        assert_eq!(missing_body["error"]["code"], "invalid_api_key");
+
+        let wrong = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", "Bearer not-the-real-token"),
+                ("content-type", "application/json"),
+            ],
+            &body,
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(wrong.status_code, 401);
+        let wrong_body: Value = serde_json::from_slice(&wrong.body).unwrap();
+        assert_eq!(wrong_body["error"]["code"], "invalid_api_key");
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn chat_completions_return_auth_required_when_browser_session_is_signed_out() {
+        let response = map_openai_error(
+            "req-auth-expired",
+            &anyhow::anyhow!("auth required: managed browser session is not authenticated"),
+            Some("bundle-auth-1"),
+        );
+        assert_eq!(response.status_code, 503);
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["error"]["code"], "auth_required");
+        assert_eq!(body["tablinq_refusal_reason"], "auth_required");
+        assert_eq!(body["tablinq_failure_bundle_id"], "bundle-auth-1");
+    }
+
+    #[test]
+    fn queue_reports_a_single_running_upstream_job_and_serializes_follow_up_work() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.max_concurrent_upstream_jobs = Some(1);
+            gateway.queue_length = Some(4);
+            gateway.queue_timeout_ms = Some(10_000);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first_body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [{ "role": "user", "content": "occupy the only upstream slot" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let first = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-single-slot-1"),
+                ],
+                &first_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(150));
+
+        let second_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "wait behind the single slot" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let auth_for_thread = auth.clone();
+        let second = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-single-slot-2"),
+                ],
+                &second_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = http_request(
+                &snapshot.host,
+                snapshot.port,
+                "GET",
+                ADMIN_STATUS_PATH,
+                &[("authorization", auth.as_str())],
+                &[],
+                5_000,
+            )
+            .unwrap();
+            let status_body: Value = serde_json::from_slice(&status.body).unwrap();
+            if status_body["scheduler"]["running"] == 1 && status_body["scheduler"]["queued"] == 1 {
+                assert_eq!(status_body["scheduler"]["max_concurrent_upstream_jobs"], 1);
+                break;
+            }
+            assert!(Instant::now() < deadline, "expected running=1 and queued=1");
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-single-slot-1/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+
+        let first = first.join().unwrap();
+        assert_eq!(first.status_code, 409);
+        let second = second.join().unwrap();
+        assert_eq!(second.status_code, 200);
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn queue_rejects_requests_when_per_client_limit_is_reached() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.per_client_limit = Some(1);
+            gateway.queue_length = Some(4);
+            gateway.queue_timeout_ms = Some(10_000);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first_body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [{ "role": "user", "content": "occupy the per-client slot" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let first = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-client-id", "shared-client"),
+                    ("x-request-id", "req-client-limit-1"),
+                ],
+                &first_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(150));
+
+        let second_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "reject this second same-client request" }]
+        }))
+        .unwrap();
+        let second = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-client-id", "shared-client"),
+            ],
+            &second_body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(second.status_code, 429);
+        let second_body: Value = serde_json::from_slice(&second.body).unwrap();
+        assert_eq!(second_body["error"]["code"], "client_limit_exceeded");
+        assert!(second_body["retry_after_ms"].as_u64().is_some());
+
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-client-limit-1/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+
+        let first = first.join().unwrap();
+        assert_eq!(first.status_code, 409);
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn queue_rejects_requests_when_the_queue_is_full() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.queue_length = Some(1);
+            gateway.queue_timeout_ms = Some(10_000);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let first_body = serde_json::to_vec(&json!({
+            "model": "tablinq-research",
+            "messages": [{ "role": "user", "content": "occupy the slot" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let port = snapshot.port;
+        let auth_for_thread = auth.clone();
+        let first = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-queue-full-1"),
+                ],
+                &first_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        thread::sleep(Duration::from_millis(150));
+
+        let second_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "sit in the only queue slot" }]
+        }))
+        .unwrap();
+        let host = snapshot.host.clone();
+        let auth_for_thread = auth.clone();
+        let second = thread::spawn(move || {
+            http_request(
+                &host,
+                port,
+                "POST",
+                V1_CHAT_COMPLETIONS_PATH,
+                &[
+                    ("authorization", auth_for_thread.as_str()),
+                    ("content-type", "application/json"),
+                    ("x-request-id", "req-queue-full-2"),
+                ],
+                &second_body,
+                20_000,
+            )
+            .unwrap()
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let status = http_request(
+                &snapshot.host,
+                snapshot.port,
+                "GET",
+                ADMIN_STATUS_PATH,
+                &[("authorization", auth.as_str())],
+                &[],
+                5_000,
+            )
+            .unwrap();
+            let status_body: Value = serde_json::from_slice(&status.body).unwrap();
+            if status_body["scheduler"]["queued"] == 1 {
+                break;
+            }
+            assert!(Instant::now() < deadline, "expected a queued request");
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        let third_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "overflow the queue" }]
+        }))
+        .unwrap();
+        let third = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-client-id", "other-client"),
+            ],
+            &third_body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(third.status_code, 429);
+        let third_body: Value = serde_json::from_slice(&third.body).unwrap();
+        assert_eq!(third_body["error"]["code"], "queue_full");
+        assert!(third_body["retry_after_ms"].as_u64().is_some());
+
+        let cancel = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/requests/req-queue-full-1/cancel",
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(cancel.status_code, 200);
+
+        let first = first.join().unwrap();
+        assert_eq!(first.status_code, 409);
+        let second = second.join().unwrap();
+        assert_eq!(second.status_code, 200);
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn request_role_fields_flow_into_failure_bundles_and_request_summaries() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=timeout"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.ask_timeout_ms = Some(1_000);
+        }
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body = openclaude_request_body(
+            "tablinq-instant",
+            "fail and persist branch request role metadata",
+            "branch",
+            false,
+            Some("req-parent-1"),
+        );
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "req-role-timeout"),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 504);
+
+        let summary = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            "/v1/requests/req-role-timeout",
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(summary.status_code, 200);
+        let summary_body: Value = serde_json::from_slice(&summary.body).unwrap();
+        assert_eq!(summary_body["data"]["request_role"], "branch");
+        assert_eq!(summary_body["data"]["parent_request_id"], "req-parent-1");
+
+        let config = AppConfig::load_or_create(Some(&state_root)).unwrap();
+        let db = Database::open(&config.paths.db_path).unwrap();
+        let bundle = db.latest_failure_bundle().unwrap().expect("failure bundle");
+        let gateway_request = bundle.gateway_request.expect("gateway request context");
+        assert_eq!(gateway_request.request_id, "req-role-timeout");
+        assert_eq!(gateway_request.request_role.as_deref(), Some("branch"));
+        assert_eq!(
+            gateway_request.parent_request_id.as_deref(),
+            Some("req-parent-1")
+        );
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
