@@ -1,6 +1,7 @@
 param(
   [string]$Profile = "release",
-  [string]$OutputDir = (Join-Path $PSScriptRoot "..\\dist\\package")
+  [string]$OutputDir = (Join-Path $PSScriptRoot "..\\dist\\package"),
+  [string]$TargetDir = $env:CARGO_TARGET_DIR
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +17,15 @@ function Invoke-Step {
   & $FilePath @ArgumentList
   if ($LASTEXITCODE -ne 0) {
     throw "Command failed: $FilePath $($ArgumentList -join ' ')"
+  }
+}
+
+function Resolve-TargetProfileDir {
+  param([string]$Profile)
+
+  switch ($Profile) {
+    "dev" { return "debug" }
+    default { return $Profile }
   }
 }
 
@@ -61,6 +71,11 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $outputRoot = (Resolve-Path (New-Item -ItemType Directory -Force -Path $OutputDir)).Path
 $packageRoot = Join-Path $outputRoot "tablinq"
 $binRoot = Join-Path $packageRoot "bin"
+$cargoTargetRoot = if ($TargetDir) {
+  (Resolve-Path (New-Item -ItemType Directory -Force -Path $TargetDir)).Path
+} else {
+  Join-Path $repoRoot "target"
+}
 
 if (Test-Path $packageRoot) {
   Remove-Item -Recurse -Force $packageRoot
@@ -70,13 +85,18 @@ New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
 
 Push-Location $repoRoot
 try {
-  Invoke-Step cargo @("build", "--profile", $Profile, "-p", "gpt", "-p", "gptd", "-p", "tablinq-gateway", "-p", "tablinq-host") $repoRoot
+  $cargoArgs = @("build", "--profile", $Profile, "-p", "gpt", "-p", "gptd", "-p", "tablinq-gateway", "-p", "tablinq-host")
+  if ($TargetDir) {
+    $cargoArgs += @("--target-dir", $cargoTargetRoot)
+  }
+  Invoke-Step cargo $cargoArgs $repoRoot
   Invoke-Step pnpm @("build") $repoRoot
   Invoke-Step pnpm @("--filter", "@tablinq/browser-adapter", "deploy", "--legacy", "--prod", (Join-Path $packageRoot "browser-adapter")) $repoRoot
 
-  $targetDir = Join-Path $repoRoot "target\\$Profile"
+  $targetProfileDir = Resolve-TargetProfileDir -Profile $Profile
+  $profileTargetDir = Join-Path $cargoTargetRoot $targetProfileDir
   foreach ($binary in @("gpt.exe", "gptd.exe", "tablinq-gateway.exe", "tablinq-host.exe")) {
-    Copy-Item -Path (Join-Path $targetDir $binary) -Destination (Join-Path $binRoot $binary) -Force
+    Copy-Item -Path (Join-Path $profileTargetDir $binary) -Destination (Join-Path $binRoot $binary) -Force
   }
 
   Copy-DirectoryContents (Join-Path $repoRoot "packages\\browser-adapter\\dist\\src") (Join-Path $packageRoot "browser-adapter\\src")
