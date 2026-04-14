@@ -210,6 +210,8 @@
             "queued",
             "starting",
             "running",
+            "interrupted",
+            "recovered",
             "waiting_for_sources",
             "completed",
             "failed",

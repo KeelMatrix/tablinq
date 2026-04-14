@@ -1081,6 +1081,12 @@ fn handle_connection(
                         RequestOutcome {
                             kind: RequestOutcomeKind::Cancelled,
                             conversation_id: prepared.conversation_id_hint().map(str::to_owned),
+                            interrupted_at: None,
+                            interruption_reason: None,
+                            recovered_at: None,
+                            recovery_reason: None,
+                            failed_at: None,
+                            failure_reason: None,
                         },
                     ));
                     log_response(logger, &context.request_id, response.status_code)?;
@@ -1736,6 +1742,7 @@ impl PreparedChatRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RequestOutcomeKind {
     Completed,
+    Recovered,
     Failed,
     Cancelled,
 }
@@ -1744,6 +1751,12 @@ enum RequestOutcomeKind {
 struct RequestOutcome {
     kind: RequestOutcomeKind,
     conversation_id: Option<String>,
+    interrupted_at: Option<DateTime<Utc>>,
+    interruption_reason: Option<String>,
+    recovered_at: Option<DateTime<Utc>>,
+    recovery_reason: Option<String>,
+    failed_at: Option<DateTime<Utc>>,
+    failure_reason: Option<String>,
 }
 
 fn prepare_chat_completions_request(
@@ -1809,54 +1822,152 @@ fn execute_chat_completions_request(
 
     if prepared.request.stream {
         let stream_id = format!("chatcmpl-{}", Utc::now().timestamp_millis());
-        write_sse_headers(stream, &context.request_id)?;
-        write_sse_event(
-            stream,
-            &json!({
-                "id": stream_id,
-                "object": "chat.completion.chunk",
-                "created": Utc::now().timestamp(),
-                "model": prepared.model_id,
-                "request_id": context.request_id,
-                "tablinq_job_id": prepared.job_id(),
-                "tablinq_request_role": request_role_name(prepared.request_role),
-                "tablinq_parent_request_id": prepared.parent_request_id.as_deref(),
-                "choices": [{
-                    "index": 0,
-                    "delta": { "role": "assistant" },
-                    "finish_reason": Value::Null,
-                }],
-            }),
-        )?;
+        let mut downstream_interrupted: Option<(DateTime<Utc>, String)> = None;
+        if let Err(err) = write_sse_headers(stream, &context.request_id) {
+            if is_client_disconnect_error(&err) {
+                let interrupted_at = Utc::now();
+                let message =
+                    format!("gateway client disconnected before streaming completed: {err:#}");
+                let _ = core.mark_job_interrupted(
+                    prepared.job_id(),
+                    prepared.conversation_id_hint(),
+                    &message,
+                );
+                downstream_interrupted = Some((interrupted_at, message));
+            } else {
+                return Err(err);
+            }
+        }
+        if downstream_interrupted.is_none()
+            && let Err(err) = write_sse_event(
+                stream,
+                &json!({
+                    "id": stream_id,
+                    "object": "chat.completion.chunk",
+                    "created": Utc::now().timestamp(),
+                    "model": prepared.model_id,
+                    "request_id": context.request_id,
+                    "tablinq_job_id": prepared.job_id(),
+                    "tablinq_request_role": request_role_name(prepared.request_role),
+                    "tablinq_parent_request_id": prepared.parent_request_id.as_deref(),
+                    "choices": [{
+                        "index": 0,
+                        "delta": { "role": "assistant" },
+                        "finish_reason": Value::Null,
+                    }],
+                }),
+            )
+        {
+            if is_client_disconnect_error(&err) {
+                let interrupted_at = Utc::now();
+                let message =
+                    format!("gateway client disconnected before streaming completed: {err:#}");
+                let _ = core.mark_job_interrupted(
+                    prepared.job_id(),
+                    prepared.conversation_id_hint(),
+                    &message,
+                );
+                downstream_interrupted = Some((interrupted_at, message));
+            } else {
+                return Err(err);
+            }
+        }
 
         let result = match &prepared.job {
             PreparedChatJob::Research(job) => core
                 .execute_prepared_research(job, |event| {
-                    write_stream_delta(
+                    if downstream_interrupted.is_some() {
+                        return Ok(());
+                    }
+                    if let Err(err) = write_stream_delta(
                         stream,
                         &stream_id,
                         prepared.model_id,
                         &context.request_id,
-                        event,
-                    )
+                        event.clone(),
+                    ) {
+                        if is_client_disconnect_error(&err) {
+                            let interrupted_at = Utc::now();
+                            let message = format!(
+                                "gateway client disconnected before streaming completed: {err:#}"
+                            );
+                            let _ = core.mark_job_interrupted(
+                                prepared.job_id(),
+                                event_conversation_id(&event).as_deref(),
+                                &message,
+                            );
+                            downstream_interrupted = Some((interrupted_at, message));
+                            return Ok(());
+                        }
+                        return Err(err);
+                    }
+                    Ok(())
                 })
                 .map(|result| result.conversation_id),
             PreparedChatJob::Ask(job) => core
                 .execute_prepared_ask(job, |event| {
-                    write_stream_delta(
+                    if downstream_interrupted.is_some() {
+                        return Ok(());
+                    }
+                    if let Err(err) = write_stream_delta(
                         stream,
                         &stream_id,
                         prepared.model_id,
                         &context.request_id,
-                        event,
-                    )
+                        event.clone(),
+                    ) {
+                        if is_client_disconnect_error(&err) {
+                            let interrupted_at = Utc::now();
+                            let message = format!(
+                                "gateway client disconnected before streaming completed: {err:#}"
+                            );
+                            let _ = core.mark_job_interrupted(
+                                prepared.job_id(),
+                                event_conversation_id(&event).as_deref(),
+                                &message,
+                            );
+                            downstream_interrupted = Some((interrupted_at, message));
+                            return Ok(());
+                        }
+                        return Err(err);
+                    }
+                    Ok(())
                 })
                 .map(|result| result.conversation_id),
         };
 
         match result {
             Ok(conversation_id) => {
-                write_sse_event(
+                if let Some((interrupted_at, interruption_reason)) = downstream_interrupted.take() {
+                    let recovered_at = Utc::now();
+                    let recovery_reason =
+                        "gateway client disconnected, but the upstream request completed"
+                            .to_owned();
+                    let _ = core.mark_job_recovered(
+                        prepared.job_id(),
+                        Some(&conversation_id),
+                        &recovery_reason,
+                    );
+                    logger.info(
+                        "gateway recovered interrupted client stream",
+                        json!({
+                            "request_id": context.request_id,
+                            "job_id": prepared.job_id(),
+                        }),
+                    )?;
+                    return Ok(RequestOutcome {
+                        kind: RequestOutcomeKind::Recovered,
+                        conversation_id: Some(conversation_id),
+                        interrupted_at: Some(interrupted_at),
+                        interruption_reason: Some(interruption_reason),
+                        recovered_at: Some(recovered_at),
+                        recovery_reason: Some(recovery_reason),
+                        failed_at: None,
+                        failure_reason: None,
+                    });
+                }
+
+                if let Err(err) = write_sse_event(
                     stream,
                     &json!({
                         "id": stream_id,
@@ -1873,8 +1984,72 @@ fn execute_chat_completions_request(
                             "finish_reason": "stop",
                         }],
                     }),
-                )?;
-                write_sse_done(stream)?;
+                ) {
+                    if is_client_disconnect_error(&err) {
+                        let interrupted_at = Utc::now();
+                        let interruption_reason = format!(
+                            "gateway client disconnected before streaming completed: {err:#}"
+                        );
+                        let recovered_at = Utc::now();
+                        let recovery_reason =
+                            "gateway client disconnected, but the upstream request completed"
+                                .to_owned();
+                        let _ = core.mark_job_interrupted(
+                            prepared.job_id(),
+                            Some(&conversation_id),
+                            &interruption_reason,
+                        );
+                        let _ = core.mark_job_recovered(
+                            prepared.job_id(),
+                            Some(&conversation_id),
+                            &recovery_reason,
+                        );
+                        return Ok(RequestOutcome {
+                            kind: RequestOutcomeKind::Recovered,
+                            conversation_id: Some(conversation_id),
+                            interrupted_at: Some(interrupted_at),
+                            interruption_reason: Some(interruption_reason),
+                            recovered_at: Some(recovered_at),
+                            recovery_reason: Some(recovery_reason),
+                            failed_at: None,
+                            failure_reason: None,
+                        });
+                    }
+                    return Err(err);
+                }
+                if let Err(err) = write_sse_done(stream) {
+                    if is_client_disconnect_error(&err) {
+                        let interrupted_at = Utc::now();
+                        let interruption_reason = format!(
+                            "gateway client disconnected before streaming completed: {err:#}"
+                        );
+                        let recovered_at = Utc::now();
+                        let recovery_reason =
+                            "gateway client disconnected, but the upstream request completed"
+                                .to_owned();
+                        let _ = core.mark_job_interrupted(
+                            prepared.job_id(),
+                            Some(&conversation_id),
+                            &interruption_reason,
+                        );
+                        let _ = core.mark_job_recovered(
+                            prepared.job_id(),
+                            Some(&conversation_id),
+                            &recovery_reason,
+                        );
+                        return Ok(RequestOutcome {
+                            kind: RequestOutcomeKind::Recovered,
+                            conversation_id: Some(conversation_id),
+                            interrupted_at: Some(interrupted_at),
+                            interruption_reason: Some(interruption_reason),
+                            recovered_at: Some(recovered_at),
+                            recovery_reason: Some(recovery_reason),
+                            failed_at: None,
+                            failure_reason: None,
+                        });
+                    }
+                    return Err(err);
+                }
                 logger.info(
                     "gateway streamed chat completion",
                     json!({
@@ -1886,21 +2061,34 @@ fn execute_chat_completions_request(
                 Ok(RequestOutcome {
                     kind: RequestOutcomeKind::Completed,
                     conversation_id: Some(conversation_id),
+                    interrupted_at: None,
+                    interruption_reason: None,
+                    recovered_at: None,
+                    recovery_reason: None,
+                    failed_at: None,
+                    failure_reason: None,
                 })
             }
             Err(err) => {
                 let failure_bundle_id =
                     capture_gateway_failure_bundle(core, context, prepared, client_id, &err);
-                write_sse_event(
-                    stream,
-                    &map_openai_error_value(
-                        &context.request_id,
-                        &err,
-                        failure_bundle_id.as_deref(),
-                    ),
-                )?;
-                write_sse_done(stream)?;
-                Ok(outcome_from_error(&err))
+                if downstream_interrupted.is_none() {
+                    write_sse_event(
+                        stream,
+                        &map_openai_error_value(
+                            &context.request_id,
+                            &err,
+                            failure_bundle_id.as_deref(),
+                        ),
+                    )?;
+                    write_sse_done(stream)?;
+                }
+                let mut outcome = outcome_from_error(&err);
+                if let Some((interrupted_at, interruption_reason)) = downstream_interrupted {
+                    outcome.interrupted_at = Some(interrupted_at);
+                    outcome.interruption_reason = Some(interruption_reason);
+                }
+                Ok(outcome)
             }
         }
     } else {
@@ -1943,10 +2131,47 @@ fn execute_chat_completions_request(
             }
         };
         log_response(logger, &context.request_id, response.status_code)?;
-        write_http_response(stream, &context.request_id, response)?;
+        if let Err(err) = write_http_response(stream, &context.request_id, response) {
+            if is_client_disconnect_error(&err) {
+                let interrupted_at = Utc::now();
+                let interruption_reason = format!(
+                    "gateway client disconnected before the final response was written: {err:#}"
+                );
+                let recovered_at = Utc::now();
+                let recovery_reason =
+                    "gateway client disconnected, but the upstream request completed".to_owned();
+                let _ = core.mark_job_interrupted(
+                    prepared.job_id(),
+                    conversation_id.as_deref(),
+                    &interruption_reason,
+                );
+                let _ = core.mark_job_recovered(
+                    prepared.job_id(),
+                    conversation_id.as_deref(),
+                    &recovery_reason,
+                );
+                return Ok(RequestOutcome {
+                    kind: RequestOutcomeKind::Recovered,
+                    conversation_id,
+                    interrupted_at: Some(interrupted_at),
+                    interruption_reason: Some(interruption_reason),
+                    recovered_at: Some(recovered_at),
+                    recovery_reason: Some(recovery_reason),
+                    failed_at: None,
+                    failure_reason: None,
+                });
+            }
+            return Err(err);
+        }
         Ok(RequestOutcome {
             kind: RequestOutcomeKind::Completed,
             conversation_id,
+            interrupted_at: None,
+            interruption_reason: None,
+            recovered_at: None,
+            recovery_reason: None,
+            failed_at: None,
+            failure_reason: None,
         })
     }
 }
@@ -1971,6 +2196,7 @@ fn build_request_summary(
         },
         status: match outcome.kind {
             RequestOutcomeKind::Completed => JobStatus::Completed,
+            RequestOutcomeKind::Recovered => JobStatus::Recovered,
             RequestOutcomeKind::Failed => JobStatus::Failed,
             RequestOutcomeKind::Cancelled => JobStatus::Cancelled,
         },
@@ -1979,6 +2205,12 @@ fn build_request_summary(
         end_time: Some(end_time),
         duration_ms: Some((end_time - start_time).num_milliseconds().max(0) as u64),
         queue_wait_ms,
+        interrupted_at: outcome.interrupted_at,
+        interruption_reason: outcome.interruption_reason,
+        recovered_at: outcome.recovered_at,
+        recovery_reason: outcome.recovery_reason,
+        failed_at: outcome.failed_at,
+        failure_reason: outcome.failure_reason,
         usage: RequestUsage {
             status: "unknown".to_owned(),
             prompt_tokens: None,
@@ -2000,6 +2232,37 @@ fn outcome_from_error(err: &anyhow::Error) -> RequestOutcome {
             RequestOutcomeKind::Failed
         },
         conversation_id: None,
+        interrupted_at: None,
+        interruption_reason: None,
+        recovered_at: None,
+        recovery_reason: None,
+        failed_at: if message.contains("cancelled") {
+            None
+        } else {
+            Some(Utc::now())
+        },
+        failure_reason: if message.contains("cancelled") {
+            None
+        } else {
+            Some(message)
+        },
+    }
+}
+
+fn is_client_disconnect_error(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}").to_ascii_lowercase();
+    message.contains("broken pipe")
+        || message.contains("connection reset")
+        || message.contains("forcibly closed")
+        || message.contains("connection aborted")
+}
+
+fn event_conversation_id(event: &EventPayload) -> Option<String> {
+    match event {
+        EventPayload::StreamChunk(chunk) => chunk.conversation_id.clone(),
+        EventPayload::JobState(state) => state.conversation_id.clone(),
+        EventPayload::ArtifactReady(artifact) => artifact.conversation_id.clone(),
+        _ => None,
     }
 }
 
@@ -4228,6 +4491,85 @@ mod tests {
                 .iter()
                 .any(|value| value["request_id"] == "req-metrics-success")
         );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
+    fn request_summary_records_recovered_status_when_the_gateway_client_disconnects() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(fake_url);
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "stream": true,
+            "messages": [{ "role": "user", "content": "recover after the gateway client disconnects" }]
+        }))
+        .unwrap();
+        let mut stream = TcpStream::connect((&snapshot.host[..], snapshot.port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        write!(
+            stream,
+            "POST {} HTTP/1.1\r\nHost: {}:{}\r\nAuthorization: {}\r\nContent-Type: application/json\r\nX-Request-Id: req-client-drop\r\nContent-Length: {}\r\n\r\n",
+            V1_CHAT_COMPLETIONS_PATH,
+            snapshot.host,
+            snapshot.port,
+            auth,
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(&body).unwrap();
+        stream.flush().unwrap();
+        let mut buffer = [0u8; 512];
+        let _ = stream.read(&mut buffer).unwrap_or(0);
+        drop(stream);
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let summary = http_request(
+                &snapshot.host,
+                snapshot.port,
+                "GET",
+                "/v1/requests/req-client-drop",
+                &[("authorization", auth.as_str())],
+                &[],
+                10_000,
+            )
+            .unwrap();
+            if summary.status_code == 200 {
+                let summary_body: Value = serde_json::from_slice(&summary.body).unwrap();
+                assert_eq!(summary_body["data"]["status"], "recovered");
+                assert!(summary_body["data"]["interrupted_at"].as_str().is_some());
+                assert!(summary_body["data"]["recovered_at"].as_str().is_some());
+                assert!(
+                    summary_body["data"]["interruption_reason"]
+                        .as_str()
+                        .unwrap()
+                        .contains("client disconnected")
+                );
+                let config = AppConfig::load_or_create(Some(&state_root)).unwrap();
+                let db = Database::open(&config.paths.db_path).unwrap();
+                let request = db.request_summary("req-client-drop").unwrap().unwrap();
+                assert_eq!(request.status, JobStatus::Recovered);
+                assert!(request.recovered_at.is_some());
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected a recovered request summary after the client disconnected"
+            );
+            thread::sleep(Duration::from_millis(50));
+        }
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();

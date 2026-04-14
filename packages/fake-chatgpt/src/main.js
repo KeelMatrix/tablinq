@@ -22,6 +22,8 @@ document.body.dataset.selectedMode = "normal";
 document.body.dataset.uploadedFiles = "";
 document.body.dataset.researchState = "idle";
 document.body.dataset.researchStatusMessage = "";
+document.body.dataset.conversationId = params.get("conversation") || "";
+document.body.dataset.lastMessageId = "";
 
 note.textContent =
   variant === "aria"
@@ -316,12 +318,16 @@ const artifactLink = document.querySelector(
 );
 let activeTimer = null;
 
+function uniqueId(prefix) {
+  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+}
+
 function currentConversationId() {
   const url = new URL(window.location.href);
   return (
     document.body.dataset.conversationId ||
     url.searchParams.get("conversation") ||
-    `conv-${Date.now()}`
+    uniqueId("conv")
   );
 }
 
@@ -473,25 +479,25 @@ function renderChunk(state) {
 }
 
 function persistState(state) {
-  sessionStorage.setItem(
+  localStorage.setItem(
     streamStorageKey(state.conversationId),
     JSON.stringify(state),
   );
 }
 
 function clearState(conversationId) {
-  sessionStorage.removeItem(streamStorageKey(conversationId));
+  localStorage.removeItem(streamStorageKey(conversationId));
 }
 
 function persistResearchState(state) {
-  sessionStorage.setItem(
+  localStorage.setItem(
     researchStorageKey(state.conversationId),
     JSON.stringify(state),
   );
 }
 
 function clearResearchState(conversationId) {
-  sessionStorage.removeItem(researchStorageKey(conversationId));
+  localStorage.removeItem(researchStorageKey(conversationId));
 }
 
 function stopTimer() {
@@ -577,7 +583,7 @@ function startResearch(promptText) {
   }
 
   const conversationId = currentConversationId();
-  const messageId = `msg-${Date.now()}`;
+  const messageId = uniqueId("msg");
   const state = {
     conversationId,
     messageId,
@@ -618,6 +624,13 @@ function tickStream(state) {
     return;
   }
 
+  if (scenario === "stall-recover" && !state.didStall && state.index >= 18) {
+    state.didStall = true;
+    persistState(state);
+    activeTimer = setTimeout(() => tickStream(state), 2400);
+    return;
+  }
+
   if (state.index >= state.responseText.length) {
     finishStream(state);
     return;
@@ -633,7 +646,7 @@ function startStream(promptText) {
   }
 
   const conversationId = currentConversationId();
-  const messageId = `msg-${Date.now()}`;
+  const messageId = uniqueId("msg");
   const state = {
     conversationId,
     messageId,
@@ -656,13 +669,26 @@ function startStream(promptText) {
 
 function resumeStreamIfNeeded() {
   const conversationId = currentConversationId();
-  const raw = sessionStorage.getItem(streamStorageKey(conversationId));
+  const raw = localStorage.getItem(streamStorageKey(conversationId));
   if (!raw) {
     return;
   }
 
   const state = JSON.parse(raw);
   writeConversationState(state.conversationId, state.messageId);
+  if (scenario === "recover-complete") {
+    finishStream(state);
+    return;
+  }
+  if (scenario === "recover-mismatch") {
+    state.responseText = "Unexpected response after interruption";
+    state.index = state.responseText.length;
+    renderChunk(state);
+    setStreamState("done");
+    setStreamingControls(false);
+    persistState(state);
+    return;
+  }
   setStreamState("running");
   renderChunk(state);
 
@@ -677,7 +703,7 @@ function resumeStreamIfNeeded() {
 
 function resumeResearchIfNeeded() {
   const conversationId = currentConversationId();
-  const raw = sessionStorage.getItem(researchStorageKey(conversationId));
+  const raw = localStorage.getItem(researchStorageKey(conversationId));
   if (!raw) {
     return;
   }

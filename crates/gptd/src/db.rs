@@ -133,6 +133,24 @@ const MIGRATIONS: &[(&str, &str)] = &[
             ON request_history(start_time DESC);
         "#,
     ),
+    (
+        "0007_request_recovery",
+        r#"
+        ALTER TABLE request_history ADD COLUMN interrupted_at TEXT;
+        ALTER TABLE request_history ADD COLUMN interruption_reason TEXT;
+        ALTER TABLE request_history ADD COLUMN recovered_at TEXT;
+        ALTER TABLE request_history ADD COLUMN recovery_reason TEXT;
+        ALTER TABLE request_history ADD COLUMN failed_at TEXT;
+        ALTER TABLE request_history ADD COLUMN failure_reason TEXT;
+
+        ALTER TABLE job_details ADD COLUMN interrupted_at TEXT;
+        ALTER TABLE job_details ADD COLUMN interruption_reason TEXT;
+        ALTER TABLE job_details ADD COLUMN recovered_at TEXT;
+        ALTER TABLE job_details ADD COLUMN recovery_reason TEXT;
+        ALTER TABLE job_details ADD COLUMN failed_at TEXT;
+        ALTER TABLE job_details ADD COLUMN failure_reason TEXT;
+        "#,
+    ),
 ];
 
 const REQUEST_HISTORY_LIMIT: usize = 200;
@@ -234,9 +252,14 @@ impl Database {
             INSERT INTO request_history (
                 request_id, job_id, model_id, request_role, parent_request_id, execution_kind,
                 status, cancelled, start_time, end_time, duration_ms, queue_wait_ms,
-                usage_status, prompt_tokens, completion_tokens, total_tokens, warnings_json
+                interrupted_at, interruption_reason, recovered_at, recovery_reason, failed_at,
+                failure_reason, usage_status, prompt_tokens, completion_tokens, total_tokens,
+                warnings_json
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+            VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+                ?19, ?20, ?21, ?22, ?23
+            )
             ON CONFLICT(request_id) DO UPDATE SET
                 job_id = excluded.job_id,
                 model_id = excluded.model_id,
@@ -249,6 +272,12 @@ impl Database {
                 end_time = excluded.end_time,
                 duration_ms = excluded.duration_ms,
                 queue_wait_ms = excluded.queue_wait_ms,
+                interrupted_at = excluded.interrupted_at,
+                interruption_reason = excluded.interruption_reason,
+                recovered_at = excluded.recovered_at,
+                recovery_reason = excluded.recovery_reason,
+                failed_at = excluded.failed_at,
+                failure_reason = excluded.failure_reason,
                 usage_status = excluded.usage_status,
                 prompt_tokens = excluded.prompt_tokens,
                 completion_tokens = excluded.completion_tokens,
@@ -268,6 +297,12 @@ impl Database {
                 summary.end_time.map(|value| value.to_rfc3339()),
                 summary.duration_ms,
                 summary.queue_wait_ms,
+                summary.interrupted_at.map(|value| value.to_rfc3339()),
+                summary.interruption_reason,
+                summary.recovered_at.map(|value| value.to_rfc3339()),
+                summary.recovery_reason,
+                summary.failed_at.map(|value| value.to_rfc3339()),
+                summary.failure_reason,
                 summary.usage.status,
                 summary.usage.prompt_tokens,
                 summary.usage.completion_tokens,
@@ -295,6 +330,12 @@ impl Database {
                        end_time,
                        duration_ms,
                        queue_wait_ms,
+                       interrupted_at,
+                       interruption_reason,
+                       recovered_at,
+                       recovery_reason,
+                       failed_at,
+                       failure_reason,
                        usage_status,
                        prompt_tokens,
                        completion_tokens,
@@ -325,6 +366,12 @@ impl Database {
                    end_time,
                    duration_ms,
                    queue_wait_ms,
+                   interrupted_at,
+                   interruption_reason,
+                   recovered_at,
+                   recovery_reason,
+                   failed_at,
+                   failure_reason,
                    usage_status,
                    prompt_tokens,
                    completion_tokens,
@@ -454,6 +501,91 @@ impl Database {
             .optional()?
             .unwrap_or(0);
         Ok(requested != 0)
+    }
+
+    pub fn record_job_interruption(
+        &self,
+        job_id: &str,
+        interrupted_at: DateTime<Utc>,
+        interruption_reason: &str,
+        current_url: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO job_details (
+                job_id, job_kind, input_text, output_text, current_url, output_path,
+                cancel_requested, interrupted_at, interruption_reason, recovered_at,
+                recovery_reason, failed_at, failure_reason
+            )
+            VALUES (?1, 'ask', NULL, NULL, ?2, NULL, 0, ?3, ?4, NULL, NULL, NULL, NULL)
+            ON CONFLICT(job_id) DO UPDATE SET
+                current_url = COALESCE(excluded.current_url, job_details.current_url),
+                interrupted_at = excluded.interrupted_at,
+                interruption_reason = excluded.interruption_reason
+            "#,
+            params![
+                job_id,
+                current_url,
+                interrupted_at.to_rfc3339(),
+                interruption_reason
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_job_recovery(
+        &self,
+        job_id: &str,
+        recovered_at: DateTime<Utc>,
+        recovery_reason: &str,
+        current_url: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO job_details (
+                job_id, job_kind, input_text, output_text, current_url, output_path,
+                cancel_requested, interrupted_at, interruption_reason, recovered_at,
+                recovery_reason, failed_at, failure_reason
+            )
+            VALUES (?1, 'ask', NULL, NULL, ?2, NULL, 0, NULL, NULL, ?3, ?4, NULL, NULL)
+            ON CONFLICT(job_id) DO UPDATE SET
+                current_url = COALESCE(excluded.current_url, job_details.current_url),
+                recovered_at = excluded.recovered_at,
+                recovery_reason = excluded.recovery_reason
+            "#,
+            params![
+                job_id,
+                current_url,
+                recovered_at.to_rfc3339(),
+                recovery_reason
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_job_failure(
+        &self,
+        job_id: &str,
+        failed_at: DateTime<Utc>,
+        failure_reason: &str,
+        current_url: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO job_details (
+                job_id, job_kind, input_text, output_text, current_url, output_path,
+                cancel_requested, interrupted_at, interruption_reason, recovered_at,
+                recovery_reason, failed_at, failure_reason
+            )
+            VALUES (?1, 'ask', NULL, NULL, ?2, NULL, 0, NULL, NULL, NULL, NULL, ?3, ?4)
+            ON CONFLICT(job_id) DO UPDATE SET
+                current_url = COALESCE(excluded.current_url, job_details.current_url),
+                failed_at = excluded.failed_at,
+                failure_reason = excluded.failure_reason
+            "#,
+            params![job_id, current_url, failed_at.to_rfc3339(), failure_reason],
+        )?;
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -691,7 +823,13 @@ impl Database {
                        job_details.output_text,
                        job_details.current_url,
                        job_details.output_path,
-                       job_details.cancel_requested
+                       job_details.cancel_requested,
+                       job_details.interrupted_at,
+                       job_details.interruption_reason,
+                       job_details.recovered_at,
+                       job_details.recovery_reason,
+                       job_details.failed_at,
+                       job_details.failure_reason
                 FROM jobs
                 LEFT JOIN job_details ON job_details.job_id = jobs.job_id
                 WHERE jobs.job_id = ?1
@@ -711,6 +849,12 @@ impl Database {
                         row.get::<_, Option<String>>(9)?,
                         row.get::<_, Option<String>>(10)?,
                         row.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0,
+                        row.get::<_, Option<String>>(12)?,
+                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, Option<String>>(15)?,
+                        row.get::<_, Option<String>>(16)?,
+                        row.get::<_, Option<String>>(17)?,
                     ))
                 },
             )
@@ -729,6 +873,12 @@ impl Database {
             current_url,
             output_path,
             cancel_requested,
+            interrupted_at,
+            interruption_reason,
+            recovered_at,
+            recovery_reason,
+            failed_at,
+            failure_reason,
         )) = row
         else {
             return Ok(None);
@@ -748,6 +898,12 @@ impl Database {
             output_path,
             artifacts: self.job_artifacts(&job_id)?,
             cancel_requested,
+            interrupted_at: interrupted_at.map(parse_timestamp).transpose()?,
+            interruption_reason,
+            recovered_at: recovered_at.map(parse_timestamp).transpose()?,
+            recovery_reason,
+            failed_at: failed_at.map(parse_timestamp).transpose()?,
+            failure_reason,
         }))
     }
 
@@ -758,9 +914,24 @@ impl Database {
             SET status = 'failed',
                 message = ?1,
                 updated_at = ?2
-            WHERE status IN ('starting', 'running', 'waiting_for_sources', 'artifact_ready')
+            WHERE status IN (
+                'starting', 'running', 'interrupted', 'waiting_for_sources', 'artifact_ready'
+            )
             "#,
             params![message, updated_at.to_rfc3339()],
+        )?;
+        self.conn.execute(
+            r#"
+            UPDATE job_details
+            SET failed_at = ?1,
+                failure_reason = ?2
+            WHERE job_id IN (
+                SELECT job_id
+                FROM jobs
+                WHERE status = 'failed' AND updated_at = ?1
+            )
+            "#,
+            params![updated_at.to_rfc3339(), message],
         )?;
         Ok(())
     }
@@ -908,9 +1079,9 @@ fn map_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactSummary
 }
 
 fn map_request_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestSummary> {
-    let warnings_json = row.get::<_, String>(16)?;
+    let warnings_json = row.get::<_, String>(22)?;
     let warnings = serde_json::from_str(&warnings_json).map_err(|err| {
-        rusqlite::Error::FromSqlConversionFailure(16, rusqlite::types::Type::Text, Box::new(err))
+        rusqlite::Error::FromSqlConversionFailure(22, rusqlite::types::Type::Text, Box::new(err))
     })?;
     Ok(RequestSummary {
         request_id: row.get(0)?,
@@ -928,11 +1099,26 @@ fn map_request_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestS
             .transpose()?,
         duration_ms: row.get(10)?,
         queue_wait_ms: row.get::<_, i64>(11)?.max(0) as u64,
+        interrupted_at: row
+            .get::<_, Option<String>>(12)?
+            .map(parse_timestamp)
+            .transpose()?,
+        interruption_reason: row.get(13)?,
+        recovered_at: row
+            .get::<_, Option<String>>(14)?
+            .map(parse_timestamp)
+            .transpose()?,
+        recovery_reason: row.get(15)?,
+        failed_at: row
+            .get::<_, Option<String>>(16)?
+            .map(parse_timestamp)
+            .transpose()?,
+        failure_reason: row.get(17)?,
         usage: RequestUsage {
-            status: row.get(12)?,
-            prompt_tokens: row.get(13)?,
-            completion_tokens: row.get(14)?,
-            total_tokens: row.get(15)?,
+            status: row.get(18)?,
+            prompt_tokens: row.get(19)?,
+            completion_tokens: row.get(20)?,
+            total_tokens: row.get(21)?,
         },
         warnings,
     })
@@ -943,6 +1129,8 @@ fn parse_job_status(value: &str) -> JobStatus {
         "queued" => JobStatus::Queued,
         "starting" => JobStatus::Starting,
         "running" => JobStatus::Running,
+        "interrupted" => JobStatus::Interrupted,
+        "recovered" => JobStatus::Recovered,
         "waiting_for_sources" => JobStatus::WaitingForSources,
         "completed" => JobStatus::Completed,
         "cancelled" => JobStatus::Cancelled,
@@ -970,6 +1158,8 @@ fn job_status_as_str(value: JobStatus) -> &'static str {
         JobStatus::Queued => "queued",
         JobStatus::Starting => "starting",
         JobStatus::Running => "running",
+        JobStatus::Interrupted => "interrupted",
+        JobStatus::Recovered => "recovered",
         JobStatus::WaitingForSources => "waiting_for_sources",
         JobStatus::Completed => "completed",
         JobStatus::Cancelled => "cancelled",
@@ -1026,6 +1216,12 @@ mod tests {
                 end_time: Some(timestamp),
                 duration_ms: Some(1),
                 queue_wait_ms: 0,
+                interrupted_at: None,
+                interruption_reason: None,
+                recovered_at: None,
+                recovery_reason: None,
+                failed_at: None,
+                failure_reason: None,
                 usage: RequestUsage {
                     status: "unknown".to_owned(),
                     prompt_tokens: None,

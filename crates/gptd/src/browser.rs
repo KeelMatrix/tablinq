@@ -6,6 +6,7 @@ use shared_protocol::{
     EventPayload, JobStatus, Mode, ModelClass, ResearchCommand, ResearchResult,
     SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry, StreamChunk, StreamChunkKind,
 };
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,16 @@ pub struct ResearchUpdate {
     pub current_url: Option<String>,
     pub chunk_kind: Option<StreamChunkKind>,
     pub chunk_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RequestLifecycleUpdate {
+    pub status: JobStatus,
+    pub message: String,
+    pub conversation_id: Option<String>,
+    pub message_id: Option<String>,
+    pub current_url: Option<String>,
+    pub streaming_safe: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -140,12 +151,25 @@ impl BrowserManager {
         job_id: &str,
         command: &AskCommand,
         mut on_event: F,
+        mut on_state: impl FnMut(RequestLifecycleUpdate) -> Result<()>,
         mut should_cancel: impl FnMut() -> bool,
     ) -> Result<AskResult>
     where
         F: FnMut(EventPayload) -> Result<()>,
     {
         self.ensure_process()?;
+        let emitted_text = RefCell::new(String::new());
+        let next_seq = Cell::new(0u64);
+        let mut forwarding = |event: EventPayload| {
+            if let EventPayload::StreamChunk(chunk) = &event
+                && chunk.kind == StreamChunkKind::Delta
+                && !chunk.text.is_empty()
+            {
+                emitted_text.borrow_mut().push_str(&chunk.text);
+                next_seq.set(chunk.seq + 1);
+            }
+            on_event(event)
+        };
 
         match self
             .process
@@ -155,7 +179,8 @@ impl BrowserManager {
                 job_id,
                 command,
                 self.config.ask_timeout_ms(),
-                &mut on_event,
+                &mut forwarding,
+                &mut on_state,
                 &mut should_cancel,
             ) {
             Ok((snapshot, result)) => {
@@ -164,16 +189,27 @@ impl BrowserManager {
             }
             Err(err) => {
                 if is_recoverable_adapter_error(&err.to_string()) {
+                    on_state(RequestLifecycleUpdate {
+                        status: JobStatus::Interrupted,
+                        message: format!("ask interrupted: {err:#}"),
+                        conversation_id: command.conversation_id.clone(),
+                        message_id: None,
+                        current_url: self.last_snapshot.current_url.clone(),
+                        streaming_safe: false,
+                    })?;
                     self.relaunch_for_recovery()?;
                     let (snapshot, result) = self
                         .process
                         .as_mut()
                         .expect("browser adapter process missing")
-                        .ask(
+                        .recover_ask(
                             job_id,
                             command,
                             self.config.ask_timeout_ms(),
-                            &mut on_event,
+                            emitted_text.borrow().as_str(),
+                            next_seq.get(),
+                            &mut forwarding,
+                            &mut on_state,
                             &mut should_cancel,
                         )?;
                     self.last_snapshot = snapshot;
@@ -198,6 +234,7 @@ impl BrowserManager {
         job_id: &str,
         command: &ResearchCommand,
         mut on_update: F,
+        mut on_state: impl FnMut(RequestLifecycleUpdate) -> Result<()>,
         mut should_cancel: G,
     ) -> Result<ResearchResult>
     where
@@ -205,6 +242,18 @@ impl BrowserManager {
         G: FnMut() -> bool,
     {
         self.ensure_process()?;
+        let emitted_text = RefCell::new(String::new());
+        let next_seq = Cell::new(0u64);
+        let mut forwarding = |update: ResearchUpdate| {
+            if let Some(chunk_text) = &update.chunk_text
+                && update.chunk_kind.unwrap_or(StreamChunkKind::Delta) == StreamChunkKind::Delta
+                && !chunk_text.is_empty()
+            {
+                emitted_text.borrow_mut().push_str(chunk_text);
+                next_seq.set(next_seq.get() + 1);
+            }
+            on_update(update)
+        };
 
         match self
             .process
@@ -214,7 +263,8 @@ impl BrowserManager {
                 job_id,
                 command,
                 self.config.research_timeout_ms(),
-                &mut on_update,
+                &mut forwarding,
+                &mut on_state,
                 &mut should_cancel,
             ) {
             Ok((snapshot, result)) => {
@@ -223,16 +273,27 @@ impl BrowserManager {
             }
             Err(err) => {
                 if is_recoverable_adapter_error(&err.to_string()) {
+                    on_state(RequestLifecycleUpdate {
+                        status: JobStatus::Interrupted,
+                        message: format!("research interrupted: {err:#}"),
+                        conversation_id: command.conversation_id.clone(),
+                        message_id: None,
+                        current_url: self.last_snapshot.current_url.clone(),
+                        streaming_safe: false,
+                    })?;
                     self.relaunch_for_recovery()?;
                     let (snapshot, result) = self
                         .process
                         .as_mut()
                         .expect("browser adapter process missing")
-                        .research(
+                        .recover_research(
                             job_id,
                             command,
                             self.config.research_timeout_ms(),
-                            &mut on_update,
+                            emitted_text.borrow().as_str(),
+                            next_seq.get(),
+                            &mut forwarding,
+                            &mut on_state,
                             &mut should_cancel,
                         )?;
                     self.last_snapshot = snapshot;
@@ -312,20 +373,8 @@ impl BrowserManager {
     }
 
     fn relaunch_for_recovery(&mut self) -> Result<()> {
-        let target_url = self.last_snapshot.target_url.clone();
-        let browser_path = self.last_snapshot.browser_path.clone();
         self.teardown_process();
         self.ensure_process()?;
-        let snapshot = self
-            .process
-            .as_mut()
-            .expect("browser adapter process missing")
-            .request(AdapterRequest::Open {
-                target_url,
-                browser_path,
-                headless: true,
-            })?;
-        self.last_snapshot = snapshot;
         Ok(())
     }
 
@@ -470,21 +519,77 @@ impl AdapterProcess {
         command: &AskCommand,
         timeout_ms: u64,
         on_event: &mut F,
+        on_state: &mut impl FnMut(RequestLifecycleUpdate) -> Result<()>,
         should_cancel: &mut impl FnMut() -> bool,
     ) -> Result<(BrowserStatusSnapshot, AskResult)>
     where
         F: FnMut(EventPayload) -> Result<()>,
     {
-        let request = AdapterRequest::Ask {
-            job_id: job_id.to_owned(),
-            prompt: command.prompt.clone(),
-            conversation_id: command.conversation_id.clone(),
-            timeout_ms: Some(timeout_ms),
-            mode: Some(command.mode),
-            model_class: command.model_class,
-            effort: command.effort,
-            files: command.files.clone(),
-        };
+        self.ask_impl(
+            AdapterRequest::Ask {
+                job_id: job_id.to_owned(),
+                prompt: command.prompt.clone(),
+                conversation_id: command.conversation_id.clone(),
+                timeout_ms: Some(timeout_ms),
+                mode: Some(command.mode),
+                model_class: command.model_class,
+                effort: command.effort,
+                files: command.files.clone(),
+                emitted_text: None,
+                next_seq: None,
+            },
+            "ask",
+            on_event,
+            on_state,
+            should_cancel,
+        )
+    }
+
+    fn recover_ask<F>(
+        &mut self,
+        job_id: &str,
+        command: &AskCommand,
+        timeout_ms: u64,
+        emitted_text: &str,
+        next_seq: u64,
+        on_event: &mut F,
+        on_state: &mut impl FnMut(RequestLifecycleUpdate) -> Result<()>,
+        should_cancel: &mut impl FnMut() -> bool,
+    ) -> Result<(BrowserStatusSnapshot, AskResult)>
+    where
+        F: FnMut(EventPayload) -> Result<()>,
+    {
+        self.ask_impl(
+            AdapterRequest::RecoverAsk {
+                job_id: job_id.to_owned(),
+                prompt: command.prompt.clone(),
+                conversation_id: command.conversation_id.clone(),
+                timeout_ms: Some(timeout_ms),
+                mode: Some(command.mode),
+                model_class: command.model_class,
+                effort: command.effort,
+                files: command.files.clone(),
+                emitted_text: Some(emitted_text.to_owned()),
+                next_seq: Some(next_seq),
+            },
+            "ask recovery",
+            on_event,
+            on_state,
+            should_cancel,
+        )
+    }
+
+    fn ask_impl<F>(
+        &mut self,
+        request: AdapterRequest,
+        context: &str,
+        on_event: &mut F,
+        on_state: &mut impl FnMut(RequestLifecycleUpdate) -> Result<()>,
+        should_cancel: &mut impl FnMut() -> bool,
+    ) -> Result<(BrowserStatusSnapshot, AskResult)>
+    where
+        F: FnMut(EventPayload) -> Result<()>,
+    {
         let raw = serde_json::to_string(&request).context("encode adapter ask request")?;
         self.stdin
             .write_all(raw.as_bytes())
@@ -495,7 +600,7 @@ impl AdapterProcess {
         self.stdin.flush().context("flush adapter ask request")?;
 
         loop {
-            let frame = self.next_frame_interruptible("ask", should_cancel)?;
+            let frame = self.next_frame_interruptible(context, should_cancel)?;
             match frame {
                 AdapterFrame::StreamChunk { chunk } => {
                     on_event(EventPayload::StreamChunk(StreamChunk {
@@ -510,6 +615,9 @@ impl AdapterProcess {
                         },
                         text: chunk.text,
                     }))?;
+                }
+                AdapterFrame::RequestState { update } => {
+                    on_state(map_request_state_update(update))?;
                 }
                 AdapterFrame::AskResult {
                     ok,
@@ -558,20 +666,76 @@ impl AdapterProcess {
         command: &ResearchCommand,
         timeout_ms: u64,
         on_update: &mut F,
+        on_state: &mut impl FnMut(RequestLifecycleUpdate) -> Result<()>,
         should_cancel: &mut G,
     ) -> Result<(BrowserStatusSnapshot, ResearchResult)>
     where
         F: FnMut(ResearchUpdate) -> Result<()>,
         G: FnMut() -> bool,
     {
-        let request = AdapterRequest::Research {
-            job_id: job_id.to_owned(),
-            query: command.query.clone(),
-            conversation_id: command.conversation_id.clone(),
-            files: command.files.clone(),
-            output_dir: command.output_dir.clone(),
-            timeout_ms: Some(timeout_ms),
-        };
+        self.research_impl(
+            AdapterRequest::Research {
+                job_id: job_id.to_owned(),
+                query: command.query.clone(),
+                conversation_id: command.conversation_id.clone(),
+                files: command.files.clone(),
+                output_dir: command.output_dir.clone(),
+                timeout_ms: Some(timeout_ms),
+                emitted_text: None,
+                next_seq: None,
+            },
+            "research",
+            on_update,
+            on_state,
+            should_cancel,
+        )
+    }
+
+    fn recover_research<F, G>(
+        &mut self,
+        job_id: &str,
+        command: &ResearchCommand,
+        timeout_ms: u64,
+        emitted_text: &str,
+        next_seq: u64,
+        on_update: &mut F,
+        on_state: &mut impl FnMut(RequestLifecycleUpdate) -> Result<()>,
+        should_cancel: &mut G,
+    ) -> Result<(BrowserStatusSnapshot, ResearchResult)>
+    where
+        F: FnMut(ResearchUpdate) -> Result<()>,
+        G: FnMut() -> bool,
+    {
+        self.research_impl(
+            AdapterRequest::RecoverResearch {
+                job_id: job_id.to_owned(),
+                query: command.query.clone(),
+                conversation_id: command.conversation_id.clone(),
+                files: command.files.clone(),
+                output_dir: command.output_dir.clone(),
+                timeout_ms: Some(timeout_ms),
+                emitted_text: Some(emitted_text.to_owned()),
+                next_seq: Some(next_seq),
+            },
+            "research recovery",
+            on_update,
+            on_state,
+            should_cancel,
+        )
+    }
+
+    fn research_impl<F, G>(
+        &mut self,
+        request: AdapterRequest,
+        context: &str,
+        on_update: &mut F,
+        on_state: &mut impl FnMut(RequestLifecycleUpdate) -> Result<()>,
+        should_cancel: &mut G,
+    ) -> Result<(BrowserStatusSnapshot, ResearchResult)>
+    where
+        F: FnMut(ResearchUpdate) -> Result<()>,
+        G: FnMut() -> bool,
+    {
         let raw = serde_json::to_string(&request).context("encode adapter research request")?;
         self.stdin
             .write_all(raw.as_bytes())
@@ -584,7 +748,7 @@ impl AdapterProcess {
             .context("flush adapter research request")?;
 
         loop {
-            let frame = self.next_frame_interruptible("research", should_cancel)?;
+            let frame = self.next_frame_interruptible(context, should_cancel)?;
             match frame {
                 AdapterFrame::ResearchUpdate { update } => {
                     on_update(ResearchUpdate {
@@ -596,6 +760,9 @@ impl AdapterProcess {
                         chunk_kind: update.chunk_kind,
                         chunk_text: update.chunk_text,
                     })?;
+                }
+                AdapterFrame::RequestState { update } => {
+                    on_state(map_request_state_update(update))?;
                 }
                 AdapterFrame::ResearchResult {
                     ok,
@@ -692,6 +859,20 @@ enum AdapterRequest {
         model_class: Option<ModelClass>,
         effort: Option<Effort>,
         files: Vec<String>,
+        emitted_text: Option<String>,
+        next_seq: Option<u64>,
+    },
+    RecoverAsk {
+        job_id: String,
+        prompt: String,
+        conversation_id: Option<String>,
+        timeout_ms: Option<u64>,
+        mode: Option<Mode>,
+        model_class: Option<ModelClass>,
+        effort: Option<Effort>,
+        files: Vec<String>,
+        emitted_text: Option<String>,
+        next_seq: Option<u64>,
     },
     Research {
         job_id: String,
@@ -700,6 +881,18 @@ enum AdapterRequest {
         files: Vec<String>,
         output_dir: Option<String>,
         timeout_ms: Option<u64>,
+        emitted_text: Option<String>,
+        next_seq: Option<u64>,
+    },
+    RecoverResearch {
+        job_id: String,
+        query: String,
+        conversation_id: Option<String>,
+        files: Vec<String>,
+        output_dir: Option<String>,
+        timeout_ms: Option<u64>,
+        emitted_text: Option<String>,
+        next_seq: Option<u64>,
     },
     Diagnostics {
         bundle_dir: Option<String>,
@@ -718,6 +911,9 @@ enum AdapterFrame {
     },
     StreamChunk {
         chunk: AdapterStreamChunk,
+    },
+    RequestState {
+        update: AdapterRequestStateUpdate,
     },
     AskResult {
         ok: bool,
@@ -763,6 +959,37 @@ struct AdapterResearchUpdate {
     current_url: Option<String>,
     chunk_kind: Option<StreamChunkKind>,
     chunk_text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdapterRequestStateUpdate {
+    state: String,
+    reason: String,
+    at: String,
+    conversation_id: Option<String>,
+    message_id: Option<String>,
+    current_url: Option<String>,
+    streaming_safe: bool,
+}
+
+fn map_request_state_update(update: AdapterRequestStateUpdate) -> RequestLifecycleUpdate {
+    let status = match update.state.as_str() {
+        "recovered" => JobStatus::Recovered,
+        _ => JobStatus::Interrupted,
+    };
+    RequestLifecycleUpdate {
+        status,
+        message: if update.at.is_empty() {
+            update.reason
+        } else {
+            format!("{} ({})", update.reason, update.at)
+        },
+        conversation_id: update.conversation_id,
+        message_id: update.message_id,
+        current_url: update.current_url,
+        streaming_safe: update.streaming_safe,
+    }
 }
 
 fn is_recoverable_adapter_error(message: &str) -> bool {
