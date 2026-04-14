@@ -22,6 +22,7 @@ env:
 jobs:
   windows-package:
     name: Windows package smoke
+    if: github.event_name != 'pull_request' || github.actor != 'dependabot[bot]'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
