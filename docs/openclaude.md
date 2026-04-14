@@ -1,17 +1,19 @@
 # OpenClaude
 
-Use Tablinq's local gateway as an OpenAI-compatible provider.
+Use Tablinq's local gateway as an OpenAI-compatible provider for OpenClaude.
 
-## Preset values
+## Good default posture
 
-- Base URL: `http://127.0.0.1:3847/v1`
+- base URL: `http://127.0.0.1:3847/v1`
 - API key: `gateway.api_key` from `config.toml`
-- Streaming: `true`
-- Max parallel requests: `1`
-- Subagents: disabled by default
-- Branches: at most `1`
-- Ask/search timeout: start at `180s`
-- Research timeout: start at `900s`
+- streaming: `true`
+- max parallel requests: `1`
+- max parallel branches: `1`
+- subagents: disabled by default
+- ask/search timeout: start around `180s`
+- research timeout: start around `900s`
+
+OpenClaude works best when you treat Tablinq as a high-context, browser-backed provider with one true upstream slot.
 
 ## Recommended models
 
@@ -20,12 +22,7 @@ Use Tablinq's local gateway as an OpenAI-compatible provider.
 - `tablinq-thinking-extended`
 - `tablinq-search`
 
-## Request annotations
-
-- `tablinq_request_role = "primary"` for the main user request
-- `tablinq_request_role = "branch"` for serialized branch work
-- `tablinq_request_role = "subagent"` for delegated work that should be rejected by default
-- `tablinq_parent_request_id = "<request-id>"` when a branch or subagent belongs to a primary request
+Use `tablinq-research` only when you explicitly want the longer-running research path.
 
 ## Safe default policy
 
@@ -50,17 +47,27 @@ Use Tablinq's local gateway as an OpenAI-compatible provider.
 }
 ```
 
-## Session guidance
+## Request annotations
 
-- For isolated tasks, send `tablinq_new_conversation = true`.
-- For follow-up work, reuse the returned `tablinq_conversation_id`.
-- Keep `tablinq_request_role = "primary"` unless the client is intentionally creating serialized branch work.
+- `tablinq_request_role = "primary"` for the main user request
+- `tablinq_request_role = "branch"` for serialized follow-up work
+- `tablinq_request_role = "subagent"` for delegated work that should be rejected by default
+- `tablinq_parent_request_id = "<request-id>"` when branch work belongs to a primary request
 
-## Cancellation guidance
+## Conversation guidance
 
-- Keep streaming on for interactive runs.
-- Store the returned `request_id`.
-- Cancel with `POST /v1/requests/{request_id}/cancel`.
+- send `tablinq_new_conversation = true` for isolated work
+- reuse the returned `tablinq_conversation_id` only for intentional follow-ups
+- keep `tablinq_request_role = "primary"` unless the client deliberately creates serialized branch work
+
+## Cancellation and recovery guidance
+
+- keep streaming enabled for interactive sessions
+- persist the returned `request_id`
+- cancel with `POST /v1/requests/{request_id}/cancel`
+- if the client disconnects, inspect `GET /v1/requests/{request_id}` before assuming the work is lost
+
+Because Tablinq is browser-backed, a local disconnect may become a later `recovered` result instead of a simple failure.
 
 ## Example request
 
@@ -76,4 +83,4 @@ Use Tablinq's local gateway as an OpenAI-compatible provider.
 }
 ```
 
-See [Provider mode](provider-mode.md) for bring-up, health checks, files, artifacts, and recovery commands.
+See [provider-mode.md](provider-mode.md) for bring-up, health checks, files, artifacts, and recovery commands.

@@ -1,60 +1,88 @@
 # Tablinq
 
-Tablinq is a local-first CLI, daemon, and HTTP gateway that drive a dedicated ChatGPT browser session. The browser is the execution engine. Rust owns the control plane, persistence, and gateway. TypeScript owns the browser adapter, extension bridge, and fake harness used for CI-safe browser tests.
+**The browser is the provider.**
 
-## What it does
+Tablinq turns a real ChatGPT browser session into a local CLI and an OpenAI-compatible gateway. It keeps the browser-driven architecture on purpose: your managed browser session remains the execution engine, while Rust and TypeScript provide the control plane, persistence, packaging, and safe integrations around it.
 
-- runs a managed browser profile for ChatGPT
-- exposes local CLI commands for ask, research, jobs, artifacts, browser lifecycle, and diagnostics
-- exposes an OpenAI-compatible local HTTP gateway for tools such as OpenClaude and Paperclip
-- persists jobs, conversations, artifacts, and failure bundles locally
-- uses a fake ChatGPT harness in CI instead of relying on the live site
+If you want local tools, scripts, or agent frameworks to work through a dedicated ChatGPT session without exporting cookies, replaying bearer tokens, or pretending the website is a raw API, Tablinq is built for that.
 
-## Architecture
+## Why people care
+
+- **Real browser session, not a fake provider.** Tablinq drives a managed ChatGPT tab through Playwright and an extension bridge.
+- **Local-first control plane.** Jobs, conversations, artifacts, failure bundles, and request history stay on your machine.
+- **OpenAI-compatible gateway.** Tools such as OpenClaude and Paperclip can talk to Tablinq through familiar `/v1/*` routes.
+- **Safe by default.** One warm browser session, one active upstream request, conservative queueing, and no blind auto-replay of interrupted requests.
+- **Production-minded recovery.** Interrupted requests can be detected, reconciled against the live conversation, and marked as recovered when the upstream result already exists.
+- **CI-safe browser coverage.** A fake ChatGPT harness exercises browser behavior in tests without depending on the live site.
+
+## What Tablinq does
+
+- runs a dedicated managed browser profile for ChatGPT
+- exposes local CLI commands for ask, research, jobs, sessions, artifacts, browser lifecycle, and diagnostics
+- exposes an OpenAI-compatible local HTTP gateway for browser-backed provider mode
+- persists jobs, conversations, artifacts, request summaries, and failure bundles locally
+- handles browser disconnects, reloads, stalls, and client disconnects without hanging forever
+- keeps selector packs and protocol schemas versioned outside the compiled runtime
+
+## Why this architecture is unusual
+
+Most AI tooling assumes direct API access. Tablinq starts from the opposite assumption:
+
+1. the browser is the source of truth
+2. the browser session may be fragile, stateful, and UI-driven
+3. local tooling still needs a stable CLI and provider interface
+
+That leads to a different stack:
 
 ```mermaid
 flowchart LR
     CLI["`gpt` CLI"] --> IPC["local IPC"]
     IPC --> Daemon["`gptd` daemon"]
-    Daemon --> DB["SQLite + file state"]
+    Daemon --> DB["SQLite + state root"]
     Daemon --> Adapter["browser adapter (TS + Playwright)"]
     Adapter --> Browser["managed Edge / Chromium profile"]
     Browser --> Extension["MV3 extension"]
-    Extension --> Page["ChatGPT page or fake-chatgpt"]
-    Gateway["HTTP gateway"] --> Daemon
-    Daemon --> Schemas["schemas + selector packs"]
+    Extension --> Page["ChatGPT page or fake harness"]
+    Gateway["OpenAI-compatible HTTP gateway"] --> Daemon
 ```
 
-## Workspace layout
+## Quick demo
 
-- `crates/gpt`: CLI entry point and local control commands
-- `crates/gptd`: daemon service, state/config bootstrap, SQLite, browser orchestration
-- `crates/shared-protocol`: stable Rust protocol types and state-path helpers
-- `crates/tablinq-gateway`: local OpenAI-compatible HTTP gateway
-- `crates/tablinq-host`: native messaging host for the browser extension
-- `packages/browser-adapter`: Playwright-backed browser runtime
-- `packages/extension`: MV3 extension bridge and capability probes
-- `packages/fake-chatgpt`: fake UI harness for tests
-- `schemas/v1`: frozen protocol contracts
-- `selector-packs/v1`: selector data kept outside compiled code
-- `docs`: install, development, provider, troubleshooting, and architecture notes
+```bash
+gpt daemon start
+gpt gateway start
+gpt browser open
+gpt ask "Summarize the value of Tablinq in one paragraph."
+gpt research "Investigate launch blockers for a desktop AI tool."
+gpt status
+```
 
-## Quickstart
+## Three-minute setup
 
 1. Install Rust, Node.js 20+, and `pnpm`.
 2. Run `pnpm install`.
-3. Run `cargo test`.
-4. Run `pnpm test`.
-5. Build a local package with `scripts/package.ps1` on Windows or `./scripts/package.sh` on Unix-like systems.
-6. Install it with `scripts/install.ps1` on Windows or `./scripts/install.sh` on Unix-like systems.
-7. Load the unpacked extension from the installed `extension` directory.
-8. Start the daemon: `gpt daemon start`
-9. Start the gateway: `gpt gateway start`
-10. Open the managed browser: `gpt browser open`
-11. Sign in once in the managed profile.
-12. Confirm health with `gpt status` or `gpt doctor`.
+3. Validate the workspace:
+   - `cargo test`
+   - `pnpm test`
+4. Build and install Tablinq:
+   - Windows: `scripts/package.ps1` then `scripts/install.ps1`
+   - Unix-like: `./scripts/package.sh` then `./scripts/install.sh`
+5. Load the unpacked extension from the installed `extension` directory.
+6. Start the control plane:
+   - `gpt daemon start`
+   - `gpt gateway start`
+7. Open the managed browser: `gpt browser open`
+8. Sign in once in the managed profile.
+9. Confirm health:
+   - `gpt status`
+   - `gpt doctor`
+   - `gpt capabilities`
 
-## Common commands
+For the full install flow, see [docs/install.md](docs/install.md).
+
+## CLI surface
+
+Common commands:
 
 - `gpt version`
 - `gpt status`
@@ -71,6 +99,7 @@ flowchart LR
 - `gpt jobs list`
 - `gpt jobs show job-123`
 - `gpt jobs cancel job-123`
+- `gpt sessions list`
 - `gpt artifacts list`
 - `gpt artifacts pull last`
 - `gpt browser open`
@@ -79,25 +108,73 @@ flowchart LR
 - `gpt browser switch-account`
 - `gpt browser reset-profile`
 - `gpt browser profile-info`
-- `gpt sessions list`
 
-## Managed account switching
+## Provider mode
 
-Use either of these commands when you want to sign into a different ChatGPT account in the managed profile:
+Tablinq can also run as a local provider for browser-backed automation.
 
-- `gpt browser logout`
-- `gpt browser switch-account`
+- base URL: `http://127.0.0.1:3847/v1`
+- auth: local gateway API key from `config.toml`
+- model families:
+  - `tablinq-instant`
+  - `tablinq-thinking-standard`
+  - `tablinq-thinking-extended`
+  - `tablinq-search`
+  - `tablinq-research`
+- recommended concurrency:
+  - `max_parallel_requests = 1`
+  - `max_parallel_branches = 1`
+  - subagents disabled by default
 
-Both commands clear the managed browser profile and reopen the managed ChatGPT tab so you can sign in again cleanly.
+Start with [docs/provider-mode.md](docs/provider-mode.md), then see:
+
+- [docs/openclaude.md](docs/openclaude.md)
+- [docs/paperclip.md](docs/paperclip.md)
+
+## Recovery and safety model
+
+Tablinq does **not** rely on hidden network interception, exported cookies, or bearer-token replay.
+
+It stays browser-first and handles failures conservatively:
+
+- explicit request states include `running`, `interrupted`, `recovered`, and `failed`
+- local/browser/network interruption is detected with bounded timeouts
+- interrupted work is reconciled against the live conversation when possible
+- streaming resumes only when the observed page state makes that safe
+- prompts are not blindly resubmitted by default
+
+This matters when a browser restarts, a tab reloads, a stream stalls, or a client disconnects while upstream work may still be running.
+
+## Workspace map
+
+- `crates/gpt`: CLI entry point and user-facing command presentation
+- `crates/gptd`: daemon service, state/config bootstrap, SQLite, browser orchestration
+- `crates/shared-protocol`: stable protocol types and state-path helpers
+- `crates/tablinq-gateway`: local OpenAI-compatible HTTP gateway
+- `crates/tablinq-host`: native messaging host for the extension
+- `packages/browser-adapter`: Playwright-backed browser runtime
+- `packages/extension`: MV3 extension bridge and capability probes
+- `packages/fake-chatgpt`: fake browser harness for tests
+- `schemas/v1`: versioned protocol contracts
+- `selector-packs/v1`: selector data kept outside compiled code
+- `docs`: install, development, architecture, provider, and troubleshooting docs
 
 ## Testing and CI
 
-- Rust validation: `cargo test`
-- TypeScript validation: `pnpm lint`, `pnpm build`, `pnpm test`
-- Formatting: `cargo fmt --all --check`, `pnpm format`
-- GitHub Actions:
-  - `.github/workflows/ci.yml` runs Rust and TypeScript checks on pull requests and `main`
-  - `.github/workflows/package-smoke.yml` builds the Windows package layout on `main` and manual runs
+Local validation:
+
+- Rust: `cargo test`
+- TypeScript: `pnpm lint`, `pnpm build`, `pnpm test`
+- formatting: `cargo fmt --all --check`, `pnpm format`
+
+GitHub Actions:
+
+- `.github/workflows/ci.yml`
+  - Rust formatting, clippy, and workspace tests
+  - TypeScript formatting, type-check, build, and tests
+- `.github/workflows/package-smoke.yml`
+  - Windows packaged install smoke coverage
+  - package artifact upload on non-PR runs
 
 ## Documentation
 
@@ -109,3 +186,14 @@ Both commands clear the managed browser profile and reopen the managed ChatGPT t
 - [Paperclip](docs/paperclip.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [Live smoke checklist](docs/live-smoke-checklist.md)
+
+## Contributing
+
+Before opening a PR, match the project’s normal validation surface:
+
+- `cargo test`
+- `pnpm lint`
+- `pnpm build`
+- `pnpm test`
+
+If your change affects packaging or installed behavior on Windows, also exercise the package smoke path.
