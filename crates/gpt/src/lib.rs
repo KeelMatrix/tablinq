@@ -11,8 +11,11 @@ use shared_protocol::{
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
+
+const IPC_TIMEOUT_BUFFER: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "gpt", version, about = "Tablinq local CLI")]
@@ -315,34 +318,63 @@ fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> R
 }
 
 fn send_daemon_request(state_root: Option<&Path>, request: DaemonRequest) -> Result<Value> {
+    let config = gptd::AppConfig::load_or_create(state_root)?;
     let paths = build_state_paths(resolve_state_root(state_root));
-    let response = gptd::send_request(&paths.ipc_endpoint, &request)
-        .with_context(|| format!("connect to daemon at {}", paths.ipc_endpoint))?;
+    let timeout = Duration::from_millis(config.gateway_request_timeout_ms());
+    let endpoint = paths.ipc_endpoint.clone();
+    let response = run_with_timeout(
+        timeout,
+        format!("daemon request timed out after {} ms", timeout.as_millis()),
+        move || {
+            gptd::send_request(&endpoint, &request)
+                .with_context(|| format!("connect to daemon at {endpoint}"))
+        },
+    )?;
     serde_json::to_value(response).context("serialize daemon response")
 }
 
 fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskArgs) -> Result<()> {
+    let config = gptd::AppConfig::load_or_create(state_root)?;
     let paths = build_state_paths(resolve_state_root(state_root));
     let command = build_ask_command(args);
+    let timeout = Duration::from_millis(config.ask_timeout_ms()) + IPC_TIMEOUT_BUFFER;
+    let endpoint = paths.ipc_endpoint.clone();
+    let (tx, rx) = mpsc::channel();
 
     let mut stdout = io::stdout();
     let mut printed_any = false;
-    let response =
-        gptd::send_request_stream(&paths.ipc_endpoint, &DaemonRequest::Ask(command), |event| {
-            if let EventPayload::StreamChunk(chunk) = event {
-                if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
-                    write!(stdout, "{}", chunk.text)?;
-                    stdout.flush()?;
-                    printed_any = true;
-                }
-                if chunk.kind == StreamChunkKind::Done && printed_any {
-                    writeln!(stdout)?;
-                    stdout.flush()?;
-                }
-            }
+    thread::spawn(move || {
+        let request = DaemonRequest::Ask(command);
+        let result = gptd::send_request_stream(&endpoint, &request, |event| {
+            tx.send(CliStreamMessage::Event(event))
+                .map_err(|_| anyhow::anyhow!("CLI stream receiver closed"))?;
             Ok(())
         })
-        .with_context(|| format!("connect to daemon at {}", paths.ipc_endpoint))?;
+        .with_context(|| format!("connect to daemon at {endpoint}"));
+        let _ = tx.send(CliStreamMessage::Done(result));
+    });
+
+    let response = loop {
+        match rx.recv_timeout(timeout) {
+            Ok(CliStreamMessage::Event(event)) => {
+                if let EventPayload::StreamChunk(chunk) = event {
+                    if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
+                        write!(stdout, "{}", chunk.text)?;
+                        stdout.flush()?;
+                        printed_any = true;
+                    }
+                    if chunk.kind == StreamChunkKind::Done && printed_any {
+                        writeln!(stdout)?;
+                        stdout.flush()?;
+                    }
+                }
+            }
+            Ok(CliStreamMessage::Done(result)) => break result?,
+            Err(_) => {
+                anyhow::bail!("ask request timed out after {} ms", timeout.as_millis());
+            }
+        }
+    };
 
     match response {
         DaemonResponse::Ask(result) => {
@@ -360,18 +392,31 @@ fn execute_research_with_terminal_presentation(
     state_root: Option<&Path>,
     args: &ResearchArgs,
 ) -> Result<()> {
+    let config = gptd::AppConfig::load_or_create(state_root)?;
     let paths = build_state_paths(resolve_state_root(state_root));
     let command = build_research_command(args);
+    let timeout = Duration::from_millis(config.research_timeout_ms()) + IPC_TIMEOUT_BUFFER;
+    let endpoint = paths.ipc_endpoint.clone();
+    let (tx, rx) = mpsc::channel();
 
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     let mut printed_any = false;
     let mut last_status: Option<JobStatusLine> = None;
-    let response = gptd::send_request_stream(
-        &paths.ipc_endpoint,
-        &DaemonRequest::Research(command),
-        |event| {
-            match event {
+    thread::spawn(move || {
+        let request = DaemonRequest::Research(command);
+        let result = gptd::send_request_stream(&endpoint, &request, |event| {
+            tx.send(CliStreamMessage::Event(event))
+                .map_err(|_| anyhow::anyhow!("CLI stream receiver closed"))?;
+            Ok(())
+        })
+        .with_context(|| format!("connect to daemon at {endpoint}"));
+        let _ = tx.send(CliStreamMessage::Done(result));
+    });
+
+    let response = loop {
+        match rx.recv_timeout(timeout) {
+            Ok(CliStreamMessage::Event(event)) => match event {
                 EventPayload::StreamChunk(chunk) => match chunk.kind {
                     StreamChunkKind::Delta if !chunk.text.is_empty() => {
                         write!(stdout, "{}", chunk.text)?;
@@ -396,11 +441,13 @@ fn execute_research_with_terminal_presentation(
                     }
                 }
                 _ => {}
+            },
+            Ok(CliStreamMessage::Done(result)) => break result?,
+            Err(_) => {
+                anyhow::bail!("research request timed out after {} ms", timeout.as_millis());
             }
-            Ok(())
-        },
-    )
-    .with_context(|| format!("connect to daemon at {}", paths.ipc_endpoint))?;
+        }
+    };
 
     match response {
         DaemonResponse::Research(result) => {
@@ -586,6 +633,24 @@ fn resolve_gptd_binary() -> PathBuf {
 struct JobStatusLine {
     status: String,
     message: String,
+}
+
+enum CliStreamMessage {
+    Event(EventPayload),
+    Done(Result<DaemonResponse>),
+}
+
+fn run_with_timeout<T, F>(timeout: Duration, timeout_message: String, work: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+    rx.recv_timeout(timeout)
+        .map_err(|_| anyhow::anyhow!(timeout_message))?
 }
 
 fn build_ask_command(args: &AskArgs) -> AskCommand {
@@ -829,5 +894,26 @@ mod tests {
         assert!(output.contains("\"gateway\""));
         assert!(output.contains("\"logs\""));
         assert!(output.contains("\"recovery_commands\""));
+    }
+
+    #[test]
+    fn run_with_timeout_returns_completed_work() {
+        let value = run_with_timeout(Duration::from_millis(100), "timed out".to_owned(), || {
+            Ok::<_, anyhow::Error>(42)
+        })
+        .unwrap();
+
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn run_with_timeout_fails_for_stalled_work() {
+        let err = run_with_timeout(Duration::from_millis(50), "timed out".to_owned(), || {
+            std::thread::sleep(Duration::from_millis(200));
+            Ok::<_, anyhow::Error>(())
+        })
+        .unwrap_err();
+
+        assert!(format!("{err:#}").contains("timed out"));
     }
 }

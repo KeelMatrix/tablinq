@@ -15,6 +15,8 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+const ADAPTER_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct BrowserManager {
     config: AppConfig,
     process: Option<AdapterProcess>,
@@ -806,8 +808,15 @@ impl AdapterProcess {
     }
 
     fn next_frame_blocking(&mut self, context: &str) -> Result<AdapterFrame> {
-        match self.frames.recv() {
+        match self.frames.recv_timeout(ADAPTER_CONTROL_TIMEOUT) {
             Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => {
+                self.terminate();
+                bail!(
+                    "browser adapter timed out after {} ms while waiting for {context}",
+                    ADAPTER_CONTROL_TIMEOUT.as_millis()
+                );
+            }
             Err(_) => bail!("browser adapter closed without a {context}"),
         }
     }
