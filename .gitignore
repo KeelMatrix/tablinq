@@ -7,7 +7,6 @@ AGENTS.md
 
 # === Rust ===
 target/
-Cargo.lock
 **/*.rs.bk
 
 # === Node / JS / TS ===
