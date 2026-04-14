@@ -83,8 +83,39 @@ fn spawn_fake_chatgpt() -> (TestChild, String) {
     panic!("fake-chatgpt did not become ready on port {port}");
 }
 
+fn browser_integration_prereqs_available() -> bool {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let adapter_entry = repo_root
+        .join("packages")
+        .join("browser-adapter")
+        .join("dist")
+        .join("src")
+        .join("service.js");
+    let playwright_core = repo_root
+        .join("node_modules")
+        .join("playwright-core")
+        .join("package.json");
+
+    let node_available = Command::new("node")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+
+    node_available && adapter_entry.exists() && playwright_core.exists()
+}
+
 #[test]
 fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed core_service test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -170,6 +201,12 @@ fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
 
 #[test]
 fn core_service_runs_research_jobs_without_cli() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed core_service test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();

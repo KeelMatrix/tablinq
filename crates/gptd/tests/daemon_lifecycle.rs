@@ -115,6 +115,31 @@ fn spawn_fake_chatgpt() -> (TestChild, String) {
     panic!("fake-chatgpt did not become ready on port {port}");
 }
 
+fn browser_integration_prereqs_available() -> bool {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let adapter_entry = repo_root
+        .join("packages")
+        .join("browser-adapter")
+        .join("dist")
+        .join("src")
+        .join("service.js");
+    let playwright_core = repo_root
+        .join("node_modules")
+        .join("playwright-core")
+        .join("package.json");
+
+    let node_available = Command::new("node")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+
+    node_available && adapter_entry.exists() && playwright_core.exists()
+}
+
 fn wait_for_job_id(state_root: &Path) -> String {
     let deadline = Instant::now() + StdDuration::from_secs(10);
     while Instant::now() < deadline {
@@ -218,6 +243,12 @@ fn jobs_persist_across_restarts() {
 
 #[test]
 fn daemon_reports_browser_health_from_adapter() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -307,6 +338,12 @@ fn daemon_reports_browser_health_from_adapter() {
 
 #[test]
 fn daemon_streams_ask_responses_and_persists_conversations() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -383,6 +420,12 @@ fn daemon_streams_ask_responses_and_persists_conversations() {
 
 #[test]
 fn daemon_reports_timeout_errors_for_stalled_asks() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -452,6 +495,12 @@ fn daemon_reports_timeout_errors_for_stalled_asks() {
 
 #[test]
 fn daemon_handles_configured_asks_on_renamed_controls() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -498,6 +547,12 @@ fn daemon_handles_configured_asks_on_renamed_controls() {
 
 #[test]
 fn daemon_reports_capability_missing_errors_for_unavailable_modes() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -545,6 +600,12 @@ fn daemon_reports_capability_missing_errors_for_unavailable_modes() {
 
 #[test]
 fn daemon_persists_uploaded_artifacts_and_pulls_them_locally() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -627,6 +688,12 @@ fn daemon_persists_uploaded_artifacts_and_pulls_them_locally() {
 
 #[test]
 fn daemon_reports_upload_errors_when_attachment_controls_are_missing() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -677,6 +744,12 @@ fn daemon_reports_upload_errors_when_attachment_controls_are_missing() {
 
 #[test]
 fn daemon_runs_research_jobs_and_persists_details_across_restart() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -776,6 +849,12 @@ fn daemon_runs_research_jobs_and_persists_details_across_restart() {
 
 #[test]
 fn daemon_cancels_running_research_jobs() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
@@ -847,6 +926,12 @@ fn daemon_cancels_running_research_jobs() {
 
 #[test]
 fn daemon_reports_research_failures_with_research_error_code() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
