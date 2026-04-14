@@ -5,6 +5,7 @@ import {
   type AskResultSnapshot,
   type BrowserDiagnosticsSnapshot,
   type BrowserStatusSnapshot,
+  type RequestStateSnapshot,
   type ResearchExecutionCommand,
   type ResearchProgressSnapshot,
   type ResearchResultSnapshot,
@@ -35,6 +36,21 @@ type AdapterRequest =
       model_class?: "instant" | "thinking" | null;
       effort?: "none" | "standard" | "extended" | null;
       files?: string[];
+      emitted_text?: string | null;
+      next_seq?: number | null;
+    }
+  | {
+      type: "recover_ask";
+      job_id: string;
+      prompt: string;
+      conversation_id?: string | null;
+      timeout_ms?: number;
+      mode?: "normal" | "search" | "research";
+      model_class?: "instant" | "thinking" | null;
+      effort?: "none" | "standard" | "extended" | null;
+      files?: string[];
+      emitted_text?: string | null;
+      next_seq?: number | null;
     }
   | {
       type: "research";
@@ -44,6 +60,19 @@ type AdapterRequest =
       files?: string[];
       output_dir?: string | null;
       timeout_ms?: number;
+      emitted_text?: string | null;
+      next_seq?: number | null;
+    }
+  | {
+      type: "recover_research";
+      job_id: string;
+      query: string;
+      conversation_id?: string | null;
+      files?: string[];
+      output_dir?: string | null;
+      timeout_ms?: number;
+      emitted_text?: string | null;
+      next_seq?: number | null;
     }
   | { type: "diagnostics"; bundle_dir?: string | null }
   | { type: "health" }
@@ -58,6 +87,7 @@ type AdapterFrame =
       error?: string;
     }
   | { type: "stream_chunk"; chunk: StreamChunkSnapshot }
+  | { type: "request_state"; update: RequestStateSnapshot }
   | { type: "research_update"; update: ResearchProgressSnapshot }
   | {
       type: "ask_result";
@@ -104,48 +134,113 @@ async function main() {
     let response;
     try {
       const request = JSON.parse(trimmed) as AdapterRequest;
-      if (request.type === "ask") {
-        const result = await adapter.ask(
-          {
-            jobId: request.job_id,
-            prompt: request.prompt,
-            conversationId: request.conversation_id,
-            timeoutMs: request.timeout_ms,
-            mode: request.mode,
-            modelClass: request.model_class,
-            effort: request.effort,
-            files: request.files ?? [],
-          } satisfies AskExecutionCommand,
-          (chunk) => {
-            writeFrame({
-              type: "stream_chunk",
-              chunk,
-            });
-          },
-        );
+      if (request.type === "ask" || request.type === "recover_ask") {
+        const askCommand = {
+          jobId: request.job_id,
+          prompt: request.prompt,
+          conversationId: request.conversation_id,
+          timeoutMs: request.timeout_ms,
+          mode: request.mode,
+          modelClass: request.model_class,
+          effort: request.effort,
+          files: request.files ?? [],
+        } satisfies AskExecutionCommand;
+        const finalResult =
+          request.type === "recover_ask"
+            ? await adapter.recoverAsk(
+                askCommand,
+                {
+                  emittedText: request.emitted_text ?? "",
+                  nextSeq: request.next_seq ?? 0,
+                },
+                (chunk) => {
+                  writeFrame({
+                    type: "stream_chunk",
+                    chunk,
+                  });
+                },
+                (update) => {
+                  writeFrame({
+                    type: "request_state",
+                    update,
+                  });
+                },
+              )
+            : await adapter.ask(
+                askCommand,
+                (chunk) => {
+                  writeFrame({
+                    type: "stream_chunk",
+                    chunk,
+                  });
+                },
+                (update) => {
+                  writeFrame({
+                    type: "request_state",
+                    update,
+                  });
+                },
+              );
         writeFrame({
           type: "ask_result",
           ok: true,
           state: await adapter.snapshot(),
-          result,
+          result: finalResult,
         });
-      } else if (request.type === "research") {
-        const result = await adapter.research(
-          {
-            jobId: request.job_id,
-            query: request.query,
-            conversationId: request.conversation_id,
-            files: request.files ?? [],
-            outputDir: request.output_dir,
-            timeoutMs: request.timeout_ms,
-          } satisfies ResearchExecutionCommand,
-          (update) => {
-            writeFrame({
-              type: "research_update",
-              update,
-            });
-          },
-        );
+      } else if (
+        request.type === "research" ||
+        request.type === "recover_research"
+      ) {
+        const result =
+          request.type === "recover_research"
+            ? await adapter.recoverResearch(
+                {
+                  jobId: request.job_id,
+                  query: request.query,
+                  conversationId: request.conversation_id,
+                  files: request.files ?? [],
+                  outputDir: request.output_dir,
+                  timeoutMs: request.timeout_ms,
+                } satisfies ResearchExecutionCommand,
+                {
+                  emittedText: request.emitted_text ?? "",
+                  nextSeq: request.next_seq ?? 0,
+                },
+                (update) => {
+                  writeFrame({
+                    type: "research_update",
+                    update,
+                  });
+                },
+                (update) => {
+                  writeFrame({
+                    type: "request_state",
+                    update,
+                  });
+                },
+              )
+            : await adapter.research(
+                {
+                  jobId: request.job_id,
+                  query: request.query,
+                  conversationId: request.conversation_id,
+                  files: request.files ?? [],
+                  outputDir: request.output_dir,
+                  timeoutMs: request.timeout_ms,
+                } satisfies ResearchExecutionCommand,
+                (update) => {
+                  writeFrame({
+                    type: "research_update",
+                    update,
+                  });
+                },
+                (update) => {
+                  writeFrame({
+                    type: "request_state",
+                    update,
+                  });
+                },
+              );
         writeFrame({
           type: "research_result",
           ok: true,
@@ -202,9 +297,13 @@ async function handleRequest(
   adapter: BrowserAdapter,
   request: Exclude<
     AdapterRequest,
-    { type: "ask" } | { type: "research" } | { type: "diagnostics" }
+    | { type: "ask" }
+    | { type: "recover_ask" }
+    | { type: "research" }
+    | { type: "recover_research" }
+    | { type: "diagnostics" }
   >,
-) {
+): Promise<BrowserStatusSnapshot> {
   switch (request.type) {
     case "open":
       return adapter.open({

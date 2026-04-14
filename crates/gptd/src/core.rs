@@ -1,4 +1,6 @@
-use crate::browser::{BrowserDiagnosticsSnapshot, BrowserManager, ResearchUpdate};
+use crate::browser::{
+    BrowserDiagnosticsSnapshot, BrowserManager, RequestLifecycleUpdate, ResearchUpdate,
+};
 use crate::config::AppConfig;
 use crate::db::Database;
 use anyhow::{Context, Result, anyhow};
@@ -11,12 +13,19 @@ use shared_protocol::{
     JobStatus, PullArtifactCommand, RequestHistory, RequestSummary, ResearchCommand,
     ResearchResult, SelectorPackSummary, SessionList, StreamChunk, StreamChunkKind,
 };
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 const ARTIFACT_RETENTION_LIMIT: usize = 100;
+
+#[derive(Debug, Default)]
+struct ExecutionRecoveryState {
+    interrupted: bool,
+    recovered: bool,
+}
 
 #[derive(Clone)]
 pub struct CoreService {
@@ -202,10 +211,26 @@ impl CoreService {
             artifacts: vec![],
         }))?;
 
+        let recovery_state = RefCell::new(ExecutionRecoveryState::default());
+        let event_sink = RefCell::new(&mut on_event);
         let outcome = lock_browser(&self.browser)?.ask(
             &prepared.job_id,
             &prepared.command,
-            &mut on_event,
+            |event| {
+                let mut sink = event_sink.borrow_mut();
+                (*sink)(event)
+            },
+            |update| {
+                self.apply_request_lifecycle_update(
+                    &db,
+                    &prepared.job_id,
+                    prepared.created_at,
+                    prepared.command.conversation_id.as_deref(),
+                    update,
+                    &recovery_state,
+                    &event_sink,
+                )
+            },
             || {
                 lock_cancel_registry(&self.cancel_registry)
                     .map(|set| set.contains(&prepared.job_id))
@@ -220,6 +245,7 @@ impl CoreService {
 
         match outcome {
             Ok(result) => {
+                let recovery_state = recovery_state.into_inner();
                 let completed_at = result.completed_at;
                 for artifact in &result.artifacts {
                     db.insert_artifact(artifact, completed_at)?;
@@ -227,14 +253,32 @@ impl CoreService {
                     on_event(EventPayload::ArtifactReady(artifact.clone()))?;
                 }
                 db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
+                let final_status = if recovery_state.recovered {
+                    JobStatus::Recovered
+                } else {
+                    JobStatus::Completed
+                };
+                let final_message = if recovery_state.recovered {
+                    "ask recovered"
+                } else {
+                    "ask completed"
+                };
                 db.insert_job(
                     &prepared.job_id,
-                    JobStatus::Completed,
-                    Some("ask completed"),
+                    final_status,
+                    Some(final_message),
                     Some(&result.conversation_id),
                     prepared.created_at,
                     completed_at,
                 )?;
+                if recovery_state.recovered {
+                    db.record_job_recovery(
+                        &prepared.job_id,
+                        completed_at,
+                        "reconciled the interrupted ask against the live conversation",
+                        Some(&result.current_url),
+                    )?;
+                }
                 db.upsert_session(
                     "browser-primary",
                     "Managed browser",
@@ -258,8 +302,8 @@ impl CoreService {
                 )?;
                 on_event(EventPayload::JobState(JobState {
                     job_id: prepared.job_id.clone(),
-                    status: JobStatus::Completed,
-                    message: Some("ask completed".to_owned()),
+                    status: final_status,
+                    message: Some(final_message.to_owned()),
                     conversation_id: Some(result.conversation_id.clone()),
                     updated_at: completed_at,
                     artifacts: result.artifacts.clone(),
@@ -282,6 +326,7 @@ impl CoreService {
                     prepared.created_at,
                     failed_at,
                 )?;
+                db.record_job_failure(&prepared.job_id, failed_at, &message, None)?;
                 db.update_job_output(&prepared.job_id, None, None, None)?;
                 on_event(EventPayload::JobState(JobState {
                     job_id: prepared.job_id.clone(),
@@ -363,25 +408,50 @@ impl CoreService {
             anyhow::bail!(message);
         }
 
-        let mut conversation_id = None;
-        let mut current_url = None;
-        let mut report_text = String::new();
-        let mut next_seq = 0u64;
+        let conversation_id = RefCell::new(None);
+        let current_url = RefCell::new(None);
+        let report_text = RefCell::new(String::new());
+        let next_seq = Cell::new(0u64);
+        let recovery_state = RefCell::new(ExecutionRecoveryState::default());
+        let event_sink = RefCell::new(&mut on_event);
 
         let outcome = lock_browser(&self.browser)?.research(
             &prepared.job_id,
             &prepared.command,
             |update| {
+                let mut conversation_id_ref = conversation_id.borrow_mut();
+                let mut current_url_ref = current_url.borrow_mut();
+                let mut report_text_ref = report_text.borrow_mut();
+                let mut next_seq_value = next_seq.get();
                 apply_research_update(
                     &db,
                     &prepared.job_id,
                     prepared.created_at,
-                    &mut conversation_id,
-                    &mut current_url,
-                    &mut report_text,
-                    &mut next_seq,
+                    &mut conversation_id_ref,
+                    &mut current_url_ref,
+                    &mut report_text_ref,
+                    &mut next_seq_value,
                     update,
-                    &mut on_event,
+                    &mut |event| {
+                        let mut sink = event_sink.borrow_mut();
+                        (*sink)(event)
+                    },
+                )?;
+                next_seq.set(next_seq_value);
+                Ok(())
+            },
+            |update| {
+                self.apply_request_lifecycle_update(
+                    &db,
+                    &prepared.job_id,
+                    prepared.created_at,
+                    conversation_id
+                        .borrow()
+                        .as_deref()
+                        .or(prepared.command.conversation_id.as_deref()),
+                    update,
+                    &recovery_state,
+                    &event_sink,
                 )
             },
             || {
@@ -398,6 +468,7 @@ impl CoreService {
 
         match outcome {
             Ok(mut result) => {
+                let recovery_state = recovery_state.into_inner();
                 let output_path = maybe_write_research_output(
                     &prepared.command,
                     &prepared.job_id,
@@ -411,14 +482,32 @@ impl CoreService {
                     on_event(EventPayload::ArtifactReady(artifact.clone()))?;
                 }
                 db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
+                let final_status = if recovery_state.recovered {
+                    JobStatus::Recovered
+                } else {
+                    JobStatus::Completed
+                };
+                let final_message = if recovery_state.recovered {
+                    "research recovered"
+                } else {
+                    "research completed"
+                };
                 db.insert_job(
                     &prepared.job_id,
-                    JobStatus::Completed,
-                    Some("research completed"),
+                    final_status,
+                    Some(final_message),
                     Some(&result.conversation_id),
                     prepared.created_at,
                     completed_at,
                 )?;
+                if recovery_state.recovered {
+                    db.record_job_recovery(
+                        &prepared.job_id,
+                        completed_at,
+                        "reconciled the interrupted research job against the live conversation",
+                        Some(&result.current_url),
+                    )?;
+                }
                 db.update_job_output(
                     &prepared.job_id,
                     Some(&result.report_text),
@@ -442,8 +531,8 @@ impl CoreService {
                 )?;
                 on_event(EventPayload::JobState(JobState {
                     job_id: prepared.job_id.clone(),
-                    status: JobStatus::Completed,
-                    message: Some("research completed".to_owned()),
+                    status: final_status,
+                    message: Some(final_message.to_owned()),
                     conversation_id: Some(result.conversation_id.clone()),
                     updated_at: completed_at,
                     artifacts: result.artifacts.clone(),
@@ -451,6 +540,9 @@ impl CoreService {
                 Ok(result)
             }
             Err(err) => {
+                let conversation_id = conversation_id.into_inner();
+                let current_url = current_url.into_inner();
+                let report_text = report_text.into_inner();
                 let failed_at = Utc::now();
                 let message = format!("{err:#}");
                 let status = if is_cancelled_message(&message) {
@@ -470,6 +562,12 @@ impl CoreService {
                     conversation_id.as_deref(),
                     prepared.created_at,
                     failed_at,
+                )?;
+                db.record_job_failure(
+                    &prepared.job_id,
+                    failed_at,
+                    &message,
+                    current_url.as_deref(),
                 )?;
                 db.update_job_output(
                     &prepared.job_id,
@@ -644,6 +742,57 @@ impl CoreService {
         self.cancel_job_with_detail(job_id, None, message)
     }
 
+    pub fn mark_job_interrupted(
+        &self,
+        job_id: &str,
+        conversation_id: Option<&str>,
+        message: &str,
+    ) -> Result<()> {
+        let db = self.open_db()?;
+        let detail = db
+            .job_detail(job_id)?
+            .with_context(|| format!("job {job_id} was not found"))?;
+        let interrupted_at = Utc::now();
+        db.insert_job(
+            job_id,
+            JobStatus::Interrupted,
+            Some(message),
+            conversation_id.or(detail.conversation_id.as_deref()),
+            detail.created_at,
+            interrupted_at,
+        )?;
+        db.record_job_interruption(
+            job_id,
+            interrupted_at,
+            message,
+            detail.current_url.as_deref(),
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_job_recovered(
+        &self,
+        job_id: &str,
+        conversation_id: Option<&str>,
+        message: &str,
+    ) -> Result<()> {
+        let db = self.open_db()?;
+        let detail = db
+            .job_detail(job_id)?
+            .with_context(|| format!("job {job_id} was not found"))?;
+        let recovered_at = Utc::now();
+        db.insert_job(
+            job_id,
+            JobStatus::Recovered,
+            Some(message),
+            conversation_id.or(detail.conversation_id.as_deref()),
+            detail.created_at,
+            recovered_at,
+        )?;
+        db.record_job_recovery(job_id, recovered_at, message, detail.current_url.as_deref())?;
+        Ok(())
+    }
+
     fn cancel_job_with_detail(
         &self,
         job_id: &str,
@@ -810,6 +959,69 @@ impl CoreService {
 
     fn open_db(&self) -> Result<Database> {
         Database::open(&self.config.paths.db_path)
+    }
+
+    fn apply_request_lifecycle_update<F>(
+        &self,
+        db: &Database,
+        job_id: &str,
+        created_at: DateTime<Utc>,
+        conversation_id: Option<&str>,
+        update: RequestLifecycleUpdate,
+        recovery_state: &RefCell<ExecutionRecoveryState>,
+        on_event: &RefCell<&mut F>,
+    ) -> Result<()>
+    where
+        F: FnMut(EventPayload) -> Result<()>,
+    {
+        let updated_at = Utc::now();
+        match update.status {
+            JobStatus::Interrupted => {
+                recovery_state.borrow_mut().interrupted = true;
+                db.insert_job(
+                    job_id,
+                    JobStatus::Interrupted,
+                    Some(&update.message),
+                    update.conversation_id.as_deref().or(conversation_id),
+                    created_at,
+                    updated_at,
+                )?;
+                db.record_job_interruption(
+                    job_id,
+                    updated_at,
+                    &update.message,
+                    update.current_url.as_deref(),
+                )?;
+            }
+            JobStatus::Recovered => {
+                recovery_state.borrow_mut().recovered = true;
+                db.insert_job(
+                    job_id,
+                    JobStatus::Recovered,
+                    Some(&update.message),
+                    update.conversation_id.as_deref().or(conversation_id),
+                    created_at,
+                    updated_at,
+                )?;
+                db.record_job_recovery(
+                    job_id,
+                    updated_at,
+                    &update.message,
+                    update.current_url.as_deref(),
+                )?;
+            }
+            _ => return Ok(()),
+        }
+
+        let mut sink = on_event.borrow_mut();
+        (*sink)(EventPayload::JobState(JobState {
+            job_id: job_id.to_owned(),
+            status: update.status,
+            message: Some(update.message),
+            conversation_id: update.conversation_id,
+            updated_at,
+            artifacts: vec![],
+        }))
     }
 }
 

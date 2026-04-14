@@ -66,6 +66,8 @@ pub enum JobStatus {
     Queued,
     Starting,
     Running,
+    Interrupted,
+    Recovered,
     WaitingForSources,
     Completed,
     Cancelled,
@@ -826,6 +828,12 @@ pub struct RequestSummary {
     pub end_time: Option<DateTime<Utc>>,
     pub duration_ms: Option<u64>,
     pub queue_wait_ms: u64,
+    pub interrupted_at: Option<DateTime<Utc>>,
+    pub interruption_reason: Option<String>,
+    pub recovered_at: Option<DateTime<Utc>>,
+    pub recovery_reason: Option<String>,
+    pub failed_at: Option<DateTime<Utc>>,
+    pub failure_reason: Option<String>,
     pub usage: RequestUsage,
     pub warnings: Vec<String>,
 }
@@ -852,6 +860,12 @@ pub struct JobDetail {
     pub output_path: Option<String>,
     pub artifacts: Vec<ArtifactSummary>,
     pub cancel_requested: bool,
+    pub interrupted_at: Option<DateTime<Utc>>,
+    pub interruption_reason: Option<String>,
+    pub recovered_at: Option<DateTime<Utc>>,
+    pub recovery_reason: Option<String>,
+    pub failed_at: Option<DateTime<Utc>>,
+    pub failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

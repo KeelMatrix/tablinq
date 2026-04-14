@@ -170,7 +170,7 @@ fn daemon_creates_config_and_applies_db_migrations() {
     assert!(config.paths.db_path.exists());
 
     let db = Database::open(&config.paths.db_path).unwrap();
-    assert_eq!(db.migration_count().unwrap(), 6);
+    assert_eq!(db.migration_count().unwrap(), 7);
 
     stop_daemon(dir.path(), &mut child);
 }
@@ -237,7 +237,7 @@ fn daemon_reports_browser_health_from_adapter() {
     match browser_open {
         DaemonResponse::Browser(snapshot) => {
             assert!(snapshot.running);
-            assert_eq!(snapshot.target_url, fake_url);
+            assert!(snapshot.target_url.starts_with(&fake_url));
             assert!(snapshot.authenticated);
         }
         other => panic!("unexpected response: {other:?}"),

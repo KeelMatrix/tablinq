@@ -103,6 +103,9 @@ const UPLOAD_ACK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 10_000;
 const SNAPSHOT_POLL_INTERVAL_MS = 75;
 const STABLE_DONE_POLLS = 3;
+const STALL_DETECTION_MIN_MS = 500;
+const STALL_DETECTION_MAX_MS = 2_000;
+const MAX_RECOVERY_ATTEMPTS = 3;
 
 function loadProbeSource(): string {
   if (!probeSource) {
@@ -212,6 +215,16 @@ export interface StreamChunkSnapshot {
   text: string;
 }
 
+export interface RequestStateSnapshot {
+  state: "interrupted" | "recovered";
+  reason: string;
+  at: string;
+  conversation_id: string | null;
+  message_id: string | null;
+  current_url: string | null;
+  streaming_safe: boolean;
+}
+
 export interface BrowserAdapterOptions {
   profileDir: string;
   downloadsDir: string;
@@ -312,6 +325,7 @@ export class BrowserAdapter {
   private readonly defaultBrowserPath: string | null;
   private currentTargetUrl: string;
   private currentBrowserPath: string | null;
+  private currentHeadless = false;
   private reloadCount = 0;
   private lastScreenshotPath: string | null = null;
   private readonly observedPages = new WeakSet<Page>();
@@ -540,96 +554,189 @@ export class BrowserAdapter {
   async ask(
     command: AskExecutionCommand,
     onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
+      undefined,
   ): Promise<AskResultSnapshot> {
-    await this.ensureContext(false, this.currentBrowserPath ?? undefined);
-    const page = await this.ensureManagedPage(
+    return this.runAsk(command, onChunk, onState, {
+      submitPrompt: true,
+      emittedText: "",
+      nextSeq: 0,
+      recoveryReason: null,
+    });
+  }
+
+  async research(
+    command: ResearchExecutionCommand,
+    onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
+      undefined,
+  ): Promise<ResearchResultSnapshot> {
+    return this.runResearch(command, onUpdate, onState, {
+      submitPrompt: true,
+      emittedText: "",
+      nextSeq: 0,
+      recoveryReason: null,
+    });
+  }
+
+  async recoverAsk(
+    command: AskExecutionCommand,
+    state: { emittedText: string; nextSeq: number },
+    onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
+      undefined,
+  ): Promise<AskResultSnapshot> {
+    return this.runAsk(command, onChunk, onState, {
+      submitPrompt: false,
+      emittedText: state.emittedText,
+      nextSeq: state.nextSeq,
+      recoveryReason: "re-attached to the managed browser session",
+    });
+  }
+
+  async recoverResearch(
+    command: ResearchExecutionCommand,
+    state: { emittedText: string; nextSeq: number },
+    onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
+      undefined,
+  ): Promise<ResearchResultSnapshot> {
+    return this.runResearch(command, onUpdate, onState, {
+      submitPrompt: false,
+      emittedText: state.emittedText,
+      nextSeq: state.nextSeq,
+      recoveryReason: "re-attached to the managed browser session",
+    });
+  }
+
+  private async runAsk(
+    command: AskExecutionCommand,
+    onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void,
+    options: {
+      submitPrompt: boolean;
+      emittedText: string;
+      nextSeq: number;
+      recoveryReason: string | null;
+    },
+  ): Promise<AskResultSnapshot> {
+    const timeoutAt = Date.now() + (command.timeoutMs ?? ASK_TIMEOUT_MS);
+    const stallTimeoutMs = computeStallTimeoutMs(
+      command.timeoutMs,
+      ASK_TIMEOUT_MS,
+    );
+    let page = await this.openExecutionPage(
       this.resolveConversationTarget(command.conversationId),
     );
-    if (!inferAuthenticated(page.url())) {
-      throw new Error(
-        "auth required: managed browser session is not authenticated",
-      );
-    }
-    await this.refreshCapabilities(page);
-    await applyAskConfiguration(page, command, this.lastCapabilityReport);
-    await uploadAttachments(
-      page,
-      command.files ?? [],
-      this.lastCapabilityReport,
-    );
-    await fillComposer(page, command.prompt);
-    await clickSubmit(page);
 
-    const timeoutAt = Date.now() + (command.timeoutMs ?? ASK_TIMEOUT_MS);
-    let emittedText = "";
-    let nextSeq = 0;
-    let doneStreak = 0;
+    if (options.submitPrompt) {
+      if (!command.conversationId) {
+        await resetConversationIdentity(page);
+      }
+      await this.refreshCapabilities(page);
+      await applyAskConfiguration(page, command, this.lastCapabilityReport);
+      await uploadAttachments(
+        page,
+        command.files ?? [],
+        this.lastCapabilityReport,
+      );
+      await fillComposer(page, command.prompt);
+      await clickSubmit(page);
+    }
+
+    const state = {
+      emittedText: options.emittedText,
+      nextSeq: options.nextSeq,
+      doneStreak: 0,
+      knownConversationId: command.conversationId ?? null,
+      knownMessageId: null as string | null,
+      lastProgressAt: Date.now(),
+      recoveryAttempts: 0,
+      lastStatusAt: 0,
+    };
+
+    if (!options.submitPrompt) {
+      const recovered = await this.reconcileAskAfterInterruption(
+        page,
+        command,
+        state,
+        onChunk,
+        onState,
+        options.recoveryReason ?? "recovered the interrupted ask",
+        timeoutAt,
+      );
+      page = recovered.page;
+      if (recovered.result) {
+        return recovered.result;
+      }
+    }
 
     while (Date.now() < timeoutAt) {
-      let snapshot;
+      let snapshot: AskSnapshot;
       try {
         snapshot = await readAskSnapshot(page);
       } catch (error) {
-        if (isTransientPageError(error)) {
-          await page.waitForLoadState("domcontentloaded", {
-            timeout: PROBE_TIMEOUT_MS,
-          });
+        if (
+          isTransientPageError(error) &&
+          state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
+        ) {
+          const recovered = await this.reconcileAskAfterInterruption(
+            page,
+            command,
+            state,
+            onChunk,
+            onState,
+            error instanceof Error ? error.message : String(error),
+            timeoutAt,
+          );
+          page = recovered.page;
+          if (recovered.result) {
+            return recovered.result;
+          }
           await sleep(SNAPSHOT_POLL_INTERVAL_MS);
           continue;
         }
         throw error;
       }
-      if (
-        snapshot.text.length > emittedText.length &&
-        snapshot.text.startsWith(emittedText)
-      ) {
-        const delta = snapshot.text.slice(emittedText.length);
-        emittedText = snapshot.text;
-        await onChunk({
-          job_id: command.jobId,
-          conversation_id: snapshot.conversationId,
-          message_id: snapshot.messageId,
-          seq: nextSeq,
-          kind: "delta",
-          text: delta,
-        });
-        nextSeq += 1;
+
+      this.rememberAskSnapshot(state, snapshot);
+      const progressed = await this.applyAskSnapshot(
+        command,
+        state,
+        snapshot,
+        onChunk,
+      );
+      if (progressed) {
+        state.lastProgressAt = Date.now();
       }
 
       if (snapshot.state === "done") {
-        doneStreak += 1;
+        state.doneStreak += 1;
       } else {
-        doneStreak = 0;
+        state.doneStreak = 0;
       }
 
-      if (snapshot.state === "done" && doneStreak >= STABLE_DONE_POLLS) {
-        const artifacts = await collectArtifacts(
+      if (snapshot.state === "done" && state.doneStreak >= STABLE_DONE_POLLS) {
+        return this.finalizeAsk(command, page, state, snapshot, onChunk);
+      }
+
+      if (
+        Date.now() - state.lastProgressAt >= stallTimeoutMs &&
+        state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
+      ) {
+        const recovered = await this.reconcileAskAfterInterruption(
           page,
-          this.downloadsDir,
-          snapshot.conversationId,
-          snapshot.messageId,
+          command,
+          state,
+          onChunk,
+          onState,
+          "stream stalled while waiting for provider output",
+          timeoutAt,
         );
-        await this.ensureManagedPage(
-          this.resolveConversationTarget(snapshot.conversationId),
-        );
-        await onChunk({
-          job_id: command.jobId,
-          conversation_id: snapshot.conversationId,
-          message_id: snapshot.messageId,
-          seq: nextSeq,
-          kind: "done",
-          text: "",
-        });
-        return {
-          job_id: command.jobId,
-          conversation_id:
-            snapshot.conversationId ?? `${command.jobId}-conversation`,
-          message_id: snapshot.messageId ?? `${command.jobId}-message`,
-          output_text: snapshot.text,
-          artifacts,
-          completed_at: new Date().toISOString(),
-          current_url: snapshot.currentUrl,
-        };
+        page = recovered.page;
+        if (recovered.result) {
+          return recovered.result;
+        }
       }
 
       await sleep(SNAPSHOT_POLL_INTERVAL_MS);
@@ -638,88 +745,126 @@ export class BrowserAdapter {
     throw new Error("ask timed out waiting for streamed response");
   }
 
-  async research(
+  private async runResearch(
     command: ResearchExecutionCommand,
     onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void,
+    options: {
+      submitPrompt: boolean;
+      emittedText: string;
+      nextSeq: number;
+      recoveryReason: string | null;
+    },
   ): Promise<ResearchResultSnapshot> {
-    await this.ensureContext(false, this.currentBrowserPath ?? undefined);
-    const page = await this.ensureManagedPage(
+    const timeoutAt = Date.now() + (command.timeoutMs ?? RESEARCH_TIMEOUT_MS);
+    const stallTimeoutMs = computeStallTimeoutMs(
+      command.timeoutMs,
+      RESEARCH_TIMEOUT_MS,
+    );
+    let page = await this.openExecutionPage(
       this.resolveConversationTarget(command.conversationId),
     );
-    if (!inferAuthenticated(page.url())) {
-      throw new Error(
-        "auth required: managed browser session is not authenticated",
+
+    if (options.submitPrompt) {
+      if (!command.conversationId) {
+        await resetConversationIdentity(page);
+      }
+      await this.refreshCapabilities(page);
+      await applyAskConfiguration(
+        page,
+        {
+          jobId: command.jobId,
+          prompt: command.query,
+          mode: "research",
+        },
+        this.lastCapabilityReport,
       );
+      await uploadAttachments(
+        page,
+        command.files ?? [],
+        this.lastCapabilityReport,
+      );
+      await fillComposer(page, command.query);
+      await clickSubmit(page);
     }
-    await this.refreshCapabilities(page);
-    await applyAskConfiguration(
-      page,
-      {
-        jobId: command.jobId,
-        prompt: command.query,
-        mode: "research",
-      },
-      this.lastCapabilityReport,
-    );
-    await uploadAttachments(
-      page,
-      command.files ?? [],
-      this.lastCapabilityReport,
-    );
-    await fillComposer(page, command.query);
-    await clickSubmit(page);
 
-    let emittedText = "";
-    let lastStatus = "starting";
-    let lastMessage = "starting research";
-    const timeoutAt = Date.now() + (command.timeoutMs ?? RESEARCH_TIMEOUT_MS);
-    let doneStreak = 0;
+    const state = {
+      emittedText: options.emittedText,
+      nextSeq: options.nextSeq,
+      lastStatus: "starting",
+      lastMessage: "starting research",
+      doneStreak: 0,
+      knownConversationId: command.conversationId ?? null,
+      knownMessageId: null as string | null,
+      lastProgressAt: Date.now(),
+      recoveryAttempts: 0,
+      announcedStart: false,
+      lastStatusAt: 0,
+    };
 
-    await onUpdate({
-      status: "starting",
-      message: "starting research",
-      conversation_id: null,
-      message_id: null,
-      current_url: page.url(),
-    });
+    if (options.submitPrompt) {
+      await onUpdate({
+        status: "starting",
+        message: "starting research",
+        conversation_id: null,
+        message_id: null,
+        current_url: page.url(),
+      });
+      state.announcedStart = true;
+    }
+
+    if (!options.submitPrompt) {
+      const recovered = await this.reconcileResearchAfterInterruption(
+        page,
+        command,
+        state,
+        onUpdate,
+        onState,
+        options.recoveryReason ?? "recovered the interrupted research job",
+        timeoutAt,
+      );
+      page = recovered.page;
+      if (recovered.result) {
+        return recovered.result;
+      }
+    }
 
     while (Date.now() < timeoutAt) {
-      const snapshot = await readResearchSnapshot(page);
-      if (
-        snapshot.status !== lastStatus ||
-        snapshot.statusMessage !== lastMessage
-      ) {
-        lastStatus = snapshot.status;
-        lastMessage = snapshot.statusMessage ?? "";
+      let snapshot: ResearchSnapshot;
+      try {
+        snapshot = await readResearchSnapshot(page);
+      } catch (error) {
         if (
-          snapshot.status === "waiting_for_sources" ||
-          snapshot.status === "running"
+          isTransientPageError(error) &&
+          state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
         ) {
-          await onUpdate({
-            status: snapshot.status,
-            message: snapshot.statusMessage ?? undefined,
-            conversation_id: snapshot.conversationId,
-            message_id: snapshot.messageId,
-            current_url: snapshot.currentUrl,
-          });
+          const recovered = await this.reconcileResearchAfterInterruption(
+            page,
+            command,
+            state,
+            onUpdate,
+            onState,
+            error instanceof Error ? error.message : String(error),
+            timeoutAt,
+          );
+          page = recovered.page;
+          if (recovered.result) {
+            return recovered.result;
+          }
+          await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+          continue;
         }
+        throw error;
       }
 
-      if (
-        snapshot.reportText.length > emittedText.length &&
-        snapshot.reportText.startsWith(emittedText)
-      ) {
-        const delta = snapshot.reportText.slice(emittedText.length);
-        emittedText = snapshot.reportText;
-        await onUpdate({
-          status: "running",
-          message: snapshot.statusMessage ?? undefined,
-          conversation_id: snapshot.conversationId,
-          message_id: snapshot.messageId,
-          current_url: snapshot.currentUrl,
-          chunk_kind: "delta",
-          chunk_text: delta,
-        });
+      this.rememberResearchSnapshot(state, snapshot);
+      const progressed = await this.applyResearchSnapshot(
+        state,
+        snapshot,
+        onUpdate,
+      );
+      if (progressed) {
+        state.lastProgressAt = Date.now();
       }
 
       if (snapshot.status === "failed") {
@@ -729,38 +874,440 @@ export class BrowserAdapter {
       }
 
       if (snapshot.status === "done") {
-        doneStreak += 1;
+        state.doneStreak += 1;
       } else {
-        doneStreak = 0;
+        state.doneStreak = 0;
       }
 
-      if (snapshot.status === "done" && doneStreak >= STABLE_DONE_POLLS) {
-        const artifacts = await collectArtifacts(
+      if (snapshot.status === "done" && state.doneStreak >= STABLE_DONE_POLLS) {
+        return this.finalizeResearch(command, page, state, snapshot);
+      }
+
+      if (
+        Date.now() - state.lastProgressAt >= stallTimeoutMs &&
+        state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
+      ) {
+        const recovered = await this.reconcileResearchAfterInterruption(
           page,
-          this.downloadsDir,
-          snapshot.conversationId,
-          snapshot.messageId,
+          command,
+          state,
+          onUpdate,
+          onState,
+          "stream stalled while waiting for provider output",
+          timeoutAt,
         );
-        await this.ensureManagedPage(
-          this.resolveConversationTarget(snapshot.conversationId),
-        );
-        return {
-          job_id: command.jobId,
-          conversation_id:
-            snapshot.conversationId ?? `${command.jobId}-conversation`,
-          message_id: snapshot.messageId ?? `${command.jobId}-message`,
-          report_text: snapshot.reportText,
-          artifacts,
-          completed_at: new Date().toISOString(),
-          current_url: snapshot.currentUrl,
-          output_path: null,
-        };
+        page = recovered.page;
+        if (recovered.result) {
+          return recovered.result;
+        }
       }
 
       await sleep(SNAPSHOT_POLL_INTERVAL_MS);
     }
 
     throw new Error("research job failed: timed out waiting for completion");
+  }
+
+  private async openExecutionPage(targetUrl: string): Promise<Page> {
+    await this.ensureContext(
+      this.currentHeadless,
+      this.currentBrowserPath ?? undefined,
+    );
+    const page = await this.ensureManagedPage(targetUrl);
+    if (!inferAuthenticated(page.url())) {
+      throw new Error(
+        "auth required: managed browser session is not authenticated",
+      );
+    }
+    return page;
+  }
+
+  private rememberAskSnapshot(
+    state: {
+      knownConversationId: string | null;
+      knownMessageId: string | null;
+    },
+    snapshot: AskSnapshot,
+  ): void {
+    if (snapshot.currentUrl) {
+      this.currentTargetUrl = snapshot.currentUrl;
+    }
+    if (snapshot.conversationId) {
+      state.knownConversationId = snapshot.conversationId;
+    }
+    if (snapshot.messageId) {
+      state.knownMessageId = snapshot.messageId;
+    }
+  }
+
+  private rememberResearchSnapshot(
+    state: {
+      knownConversationId: string | null;
+      knownMessageId: string | null;
+    },
+    snapshot: ResearchSnapshot,
+  ): void {
+    if (snapshot.currentUrl) {
+      this.currentTargetUrl = snapshot.currentUrl;
+    }
+    if (snapshot.conversationId) {
+      state.knownConversationId = snapshot.conversationId;
+    }
+    if (snapshot.messageId) {
+      state.knownMessageId = snapshot.messageId;
+    }
+  }
+
+  private async applyAskSnapshot(
+    command: AskExecutionCommand,
+    state: { emittedText: string; nextSeq: number },
+    snapshot: AskSnapshot,
+    onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+  ): Promise<boolean> {
+    if (
+      snapshot.text.length > state.emittedText.length &&
+      snapshot.text.startsWith(state.emittedText)
+    ) {
+      const delta = snapshot.text.slice(state.emittedText.length);
+      state.emittedText = snapshot.text;
+      await onChunk({
+        job_id: command.jobId,
+        conversation_id: snapshot.conversationId,
+        message_id: snapshot.messageId,
+        seq: state.nextSeq,
+        kind: "delta",
+        text: delta,
+      });
+      state.nextSeq += 1;
+      return true;
+    }
+    return false;
+  }
+
+  private async applyResearchSnapshot(
+    state: {
+      emittedText: string;
+      nextSeq: number;
+      lastStatus: string;
+      lastMessage: string;
+      announcedStart: boolean;
+    },
+    snapshot: ResearchSnapshot,
+    onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
+  ): Promise<boolean> {
+    let progressed = false;
+    if (!state.announcedStart) {
+      await onUpdate({
+        status: "starting",
+        message: "starting research",
+        conversation_id: snapshot.conversationId,
+        message_id: snapshot.messageId,
+        current_url: snapshot.currentUrl,
+      });
+      state.announcedStart = true;
+    }
+    if (
+      snapshot.status !== state.lastStatus ||
+      snapshot.statusMessage !== state.lastMessage
+    ) {
+      state.lastStatus = snapshot.status;
+      state.lastMessage = snapshot.statusMessage ?? "";
+      if (
+        snapshot.status === "waiting_for_sources" ||
+        snapshot.status === "running"
+      ) {
+        await onUpdate({
+          status: snapshot.status,
+          message: snapshot.statusMessage ?? undefined,
+          conversation_id: snapshot.conversationId,
+          message_id: snapshot.messageId,
+          current_url: snapshot.currentUrl,
+        });
+      }
+    }
+    if (
+      snapshot.reportText.length > state.emittedText.length &&
+      snapshot.reportText.startsWith(state.emittedText)
+    ) {
+      const delta = snapshot.reportText.slice(state.emittedText.length);
+      state.emittedText = snapshot.reportText;
+      await onUpdate({
+        status: "running",
+        message: snapshot.statusMessage ?? undefined,
+        conversation_id: snapshot.conversationId,
+        message_id: snapshot.messageId,
+        current_url: snapshot.currentUrl,
+        chunk_kind: "delta",
+        chunk_text: delta,
+      });
+      state.nextSeq += 1;
+      progressed = true;
+    }
+    return progressed;
+  }
+
+  private async reconcileAskAfterInterruption(
+    page: Page,
+    command: AskExecutionCommand,
+    state: {
+      emittedText: string;
+      nextSeq: number;
+      doneStreak: number;
+      knownConversationId: string | null;
+      knownMessageId: string | null;
+      recoveryAttempts: number;
+      lastStatusAt: number;
+    },
+    onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void,
+    reason: string,
+    timeoutAt: number,
+  ): Promise<{ page: Page; result?: AskResultSnapshot }> {
+    state.recoveryAttempts += 1;
+    const interruptedAt = new Date().toISOString();
+    if (Date.now() - state.lastStatusAt > 50) {
+      await onState({
+        state: "interrupted",
+        reason,
+        at: interruptedAt,
+        conversation_id: state.knownConversationId,
+        message_id: state.knownMessageId,
+        current_url: safePageUrl(page),
+        streaming_safe: false,
+      });
+      state.lastStatusAt = Date.now();
+    }
+
+    const recoveredPage = await this.openExecutionPage(
+      this.resolveConversationTarget(
+        state.knownConversationId ?? command.conversationId,
+      ),
+    );
+    if (Date.now() >= timeoutAt) {
+      throw new Error(
+        "ask timed out while reconciling the interrupted request",
+      );
+    }
+
+    const snapshot = await readAskSnapshot(recoveredPage);
+    this.rememberAskSnapshot(state, snapshot);
+    const relation = textRelation(state.emittedText, snapshot.text);
+    const hasIdentity =
+      Boolean(snapshot.conversationId || state.knownConversationId) ||
+      snapshot.currentUrl.includes("conversation=");
+    const canContinue =
+      relation !== "mismatch" &&
+      (snapshot.state === "running" || snapshot.state === "done") &&
+      (hasIdentity || state.emittedText.length > 0 || snapshot.text.length > 0);
+    if (!canContinue) {
+      throw new Error(
+        "interrupted ask could not be reconciled against the live conversation",
+      );
+    }
+
+    await onState({
+      state: "recovered",
+      reason:
+        snapshot.state === "done"
+          ? "recovered the final assistant reply from the live conversation"
+          : "recovered the in-flight assistant reply from the live conversation",
+      at: new Date().toISOString(),
+      conversation_id: snapshot.conversationId,
+      message_id: snapshot.messageId,
+      current_url: snapshot.currentUrl,
+      streaming_safe: snapshot.state === "running",
+    });
+
+    const progressed = await this.applyAskSnapshot(
+      command,
+      state,
+      snapshot,
+      onChunk,
+    );
+    if (progressed) {
+      state.doneStreak = 0;
+    }
+    if (snapshot.state === "done") {
+      state.doneStreak = STABLE_DONE_POLLS;
+      return {
+        page: recoveredPage,
+        result: await this.finalizeAsk(
+          command,
+          recoveredPage,
+          state,
+          snapshot,
+          onChunk,
+        ),
+      };
+    }
+    return { page: recoveredPage };
+  }
+
+  private async reconcileResearchAfterInterruption(
+    page: Page,
+    command: ResearchExecutionCommand,
+    state: {
+      emittedText: string;
+      nextSeq: number;
+      lastStatus: string;
+      lastMessage: string;
+      doneStreak: number;
+      knownConversationId: string | null;
+      knownMessageId: string | null;
+      recoveryAttempts: number;
+      announcedStart: boolean;
+      lastStatusAt: number;
+    },
+    onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void,
+    reason: string,
+    timeoutAt: number,
+  ): Promise<{ page: Page; result?: ResearchResultSnapshot }> {
+    state.recoveryAttempts += 1;
+    const interruptedAt = new Date().toISOString();
+    if (Date.now() - state.lastStatusAt > 50) {
+      await onState({
+        state: "interrupted",
+        reason,
+        at: interruptedAt,
+        conversation_id: state.knownConversationId,
+        message_id: state.knownMessageId,
+        current_url: safePageUrl(page),
+        streaming_safe: false,
+      });
+      state.lastStatusAt = Date.now();
+    }
+
+    const recoveredPage = await this.openExecutionPage(
+      this.resolveConversationTarget(
+        state.knownConversationId ?? command.conversationId,
+      ),
+    );
+    if (Date.now() >= timeoutAt) {
+      throw new Error(
+        "research job failed: timed out while reconciling the interrupted request",
+      );
+    }
+
+    const snapshot = await readResearchSnapshot(recoveredPage);
+    this.rememberResearchSnapshot(state, snapshot);
+    const relation = textRelation(state.emittedText, snapshot.reportText);
+    const hasIdentity =
+      Boolean(snapshot.conversationId || state.knownConversationId) ||
+      snapshot.currentUrl.includes("conversation=");
+    const canContinue =
+      relation !== "mismatch" &&
+      (snapshot.status === "waiting_for_sources" ||
+        snapshot.status === "running" ||
+        snapshot.status === "done") &&
+      (hasIdentity ||
+        state.emittedText.length > 0 ||
+        snapshot.reportText.length > 0);
+    if (!canContinue) {
+      throw new Error(
+        "interrupted research job could not be reconciled against the live conversation",
+      );
+    }
+
+    await onState({
+      state: "recovered",
+      reason:
+        snapshot.status === "done"
+          ? "recovered the final research result from the live conversation"
+          : "recovered the in-flight research result from the live conversation",
+      at: new Date().toISOString(),
+      conversation_id: snapshot.conversationId,
+      message_id: snapshot.messageId,
+      current_url: snapshot.currentUrl,
+      streaming_safe:
+        snapshot.status !== "done" && snapshot.status !== "failed",
+    });
+
+    const progressed = await this.applyResearchSnapshot(
+      state,
+      snapshot,
+      onUpdate,
+    );
+    if (progressed) {
+      state.doneStreak = 0;
+    }
+    if (snapshot.status === "done") {
+      state.doneStreak = STABLE_DONE_POLLS;
+      return {
+        page: recoveredPage,
+        result: await this.finalizeResearch(
+          command,
+          recoveredPage,
+          state,
+          snapshot,
+        ),
+      };
+    }
+    return { page: recoveredPage };
+  }
+
+  private async finalizeAsk(
+    command: AskExecutionCommand,
+    page: Page,
+    state: { emittedText: string; nextSeq: number },
+    snapshot: AskSnapshot,
+    onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+  ): Promise<AskResultSnapshot> {
+    const artifacts = await collectArtifacts(
+      page,
+      this.downloadsDir,
+      snapshot.conversationId,
+      snapshot.messageId,
+    );
+    await this.ensureManagedPage(
+      this.resolveConversationTarget(snapshot.conversationId),
+    );
+    await onChunk({
+      job_id: command.jobId,
+      conversation_id: snapshot.conversationId,
+      message_id: snapshot.messageId,
+      seq: state.nextSeq,
+      kind: "done",
+      text: "",
+    });
+    return {
+      job_id: command.jobId,
+      conversation_id:
+        snapshot.conversationId ?? `${command.jobId}-conversation`,
+      message_id: snapshot.messageId ?? `${command.jobId}-message`,
+      output_text: snapshot.text,
+      artifacts,
+      completed_at: new Date().toISOString(),
+      current_url: snapshot.currentUrl,
+    };
+  }
+
+  private async finalizeResearch(
+    command: ResearchExecutionCommand,
+    page: Page,
+    _state: { emittedText: string; nextSeq: number },
+    snapshot: ResearchSnapshot,
+  ): Promise<ResearchResultSnapshot> {
+    const artifacts = await collectArtifacts(
+      page,
+      this.downloadsDir,
+      snapshot.conversationId,
+      snapshot.messageId,
+    );
+    await this.ensureManagedPage(
+      this.resolveConversationTarget(snapshot.conversationId),
+    );
+    return {
+      job_id: command.jobId,
+      conversation_id:
+        snapshot.conversationId ?? `${command.jobId}-conversation`,
+      message_id: snapshot.messageId ?? `${command.jobId}-message`,
+      report_text: snapshot.reportText,
+      artifacts,
+      completed_at: new Date().toISOString(),
+      current_url: snapshot.currentUrl,
+      output_path: null,
+    };
   }
 
   private async ensureManagedPage(targetUrl: string): Promise<Page> {
@@ -810,6 +1357,7 @@ export class BrowserAdapter {
       return;
     }
 
+    this.currentHeadless = headless;
     this.hydrateCapabilityCache();
     await mkdir(this.profileDir, { recursive: true });
     await mkdir(this.downloadsDir, { recursive: true });
@@ -832,6 +1380,14 @@ export class BrowserAdapter {
       }
       throw new Error(`browser launch failed: ${message}`);
     }
+    this.context.on("close", () => {
+      this.context = undefined;
+      this.managedPage = undefined;
+      this.extensionConnected = false;
+      this.lastCapabilityReport = null;
+      this.lastDomNeighborhoods = [];
+      this.lastUiSignature = null;
+    });
     this.context.on("page", (page) => {
       this.attachPage(page);
     });
@@ -841,11 +1397,11 @@ export class BrowserAdapter {
   }
 
   private resolveConversationTarget(conversationId?: string | null): string {
-    if (!conversationId) {
-      return this.currentTargetUrl;
-    }
-
     const target = new URL(this.currentTargetUrl);
+    if (!conversationId) {
+      target.searchParams.delete("conversation");
+      return target.toString();
+    }
     target.searchParams.set("conversation", conversationId);
     return target.toString();
   }
@@ -889,6 +1445,9 @@ export class BrowserAdapter {
     page.on("framenavigated", (frame) => {
       if (frame !== mainFrame) {
         return;
+      }
+      if (!page.isClosed()) {
+        this.currentTargetUrl = page.url();
       }
       if (seenInitialNavigation) {
         this.reloadCount += 1;
@@ -1388,6 +1947,51 @@ async function safeTitle(page: Page): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+async function resetConversationIdentity(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    delete document.body.dataset.conversationId;
+    delete document.body.dataset.lastMessageId;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("conversation");
+    history.replaceState({}, "", url);
+  });
+}
+
+function safePageUrl(page: Page): string | null {
+  try {
+    return page.url();
+  } catch {
+    return null;
+  }
+}
+
+function computeStallTimeoutMs(
+  requestedTimeoutMs: number | undefined,
+  fallbackTimeoutMs: number,
+): number {
+  const total = requestedTimeoutMs ?? fallbackTimeoutMs;
+  return Math.max(
+    STALL_DETECTION_MIN_MS,
+    Math.min(STALL_DETECTION_MAX_MS, Math.floor(total / 4)),
+  );
+}
+
+function textRelation(
+  emittedText: string,
+  observedText: string,
+): "same" | "ahead" | "behind" | "mismatch" {
+  if (observedText === emittedText) {
+    return "same";
+  }
+  if (observedText.startsWith(emittedText)) {
+    return "ahead";
+  }
+  if (emittedText.startsWith(observedText)) {
+    return "behind";
+  }
+  return "mismatch";
 }
 
 interface AskSnapshot {
