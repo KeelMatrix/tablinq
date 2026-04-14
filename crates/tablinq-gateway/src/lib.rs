@@ -3425,6 +3425,103 @@ mod tests {
     }
 
     #[test]
+    fn documented_provider_contract_surfaces_are_present() {
+        let _guard = integration_lock();
+        let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, mut config) = test_config();
+        config.file.browser_target_url = Some(fake_url);
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let (handle, snapshot) = spawn_gateway(config);
+
+        let provider = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_PROVIDER_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(provider.status_code, 200);
+        let provider_body: Value = serde_json::from_slice(&provider.body).unwrap();
+        assert_eq!(
+            provider_body["request_annotations"]["field"],
+            "tablinq_request_role"
+        );
+        assert_eq!(
+            provider_body["request_annotations"]["parent_request_id_field"],
+            "tablinq_parent_request_id"
+        );
+        assert_eq!(
+            provider_body["presets"]["openclaude"]["max_parallel_requests"],
+            1
+        );
+        assert_eq!(
+            provider_body["presets"]["paperclip"]["max_parallel_requests"],
+            1
+        );
+        assert_eq!(
+            provider_body["presets"]["paperclip"]["subagent_recommendation"],
+            "disable"
+        );
+
+        let chat_body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "tablinq_new_conversation": true,
+            "messages": [
+                { "role": "user", "content": "document the provider contract" }
+            ]
+        }))
+        .unwrap();
+        let chat = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            &chat_body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(chat.status_code, 200);
+        let chat_body: Value = serde_json::from_slice(&chat.body).unwrap();
+        assert!(chat_body["request_id"].as_str().is_some());
+        assert!(chat_body["tablinq_conversation_id"].as_str().is_some());
+        assert_eq!(chat_body["tablinq_session_id"], "browser-primary");
+
+        let usage = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_USAGE_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(usage.status_code, 200);
+        let usage_body: Value = serde_json::from_slice(&usage.body).unwrap();
+        assert!(
+            usage_body["warnings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str()
+                    == Some("token usage is unavailable for the browser-backed provider"))
+        );
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        handle.join().unwrap().unwrap();
+        let _ = fake_server.kill();
+        let _ = fake_server.wait();
+    }
+
+    #[test]
     fn openclaude_primary_streaming_requests_keep_sse_shape() {
         let _guard = integration_lock();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
