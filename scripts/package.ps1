@@ -118,7 +118,8 @@ try {
     $cargoArgs += @("--target-dir", $cargoTargetRoot)
   }
   Invoke-Step cargo $cargoArgs $repoRoot
-  Invoke-Step pnpm @("build") $repoRoot
+  Invoke-Step pnpm @("--filter", "@tablinq/browser-adapter", "build") $repoRoot
+  Invoke-Step pnpm @("--filter", "@tablinq/extension", "build") $repoRoot
   if (Test-Path $browserAdapterStagingRoot) {
     Remove-Item -Recurse -Force $browserAdapterStagingRoot
   }

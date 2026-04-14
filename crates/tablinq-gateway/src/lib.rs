@@ -632,9 +632,10 @@ fn gateway_uploads_dir(config: &AppConfig) -> PathBuf {
 }
 
 fn sanitize_upload_file_name(file_name: &str) -> String {
-    let candidate = Path::new(file_name)
-        .file_name()
-        .and_then(|value| value.to_str())
+    let candidate = file_name
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or("upload.bin");
     let mut sanitized = candidate
         .chars()
@@ -3273,6 +3274,7 @@ fn http_request(
 mod tests {
     use super::*;
     use gptd::Database;
+    use gptd::browser::browser_integration_prereqs_available;
     use std::net::TcpListener;
     use std::path::Path;
     use std::process::{Child, Stdio};
@@ -3284,6 +3286,17 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    macro_rules! require_browser_integration_prereqs {
+        () => {
+            if !browser_integration_prereqs_available() {
+                eprintln!(
+                    "skipping browser-backed gateway test: browser adapter prerequisites are unavailable"
+                );
+                return;
+            }
+        };
     }
 
     struct TestChild {
@@ -3598,6 +3611,7 @@ mod tests {
     #[test]
     fn provider_endpoint_exposes_openclaude_preset_metadata() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -3699,6 +3713,7 @@ mod tests {
     #[test]
     fn documented_provider_contract_surfaces_are_present() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -3796,6 +3811,7 @@ mod tests {
     #[test]
     fn openclaude_primary_streaming_requests_keep_sse_shape() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -3871,6 +3887,7 @@ mod tests {
     #[test]
     fn openclaude_branch_requests_are_serialized_behind_primary_work() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -3968,6 +3985,7 @@ mod tests {
     #[test]
     fn models_endpoint_returns_openai_model_catalog() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -4023,6 +4041,7 @@ mod tests {
     #[test]
     fn capabilities_endpoint_reports_alias_remaps_for_stable_models() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?variant=aria"));
@@ -4072,6 +4091,7 @@ mod tests {
     #[test]
     fn capabilities_endpoint_marks_missing_features_unavailable() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url =
@@ -4135,6 +4155,7 @@ mod tests {
     #[test]
     fn chat_completions_non_streaming_returns_openai_shape() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -4187,6 +4208,7 @@ mod tests {
     #[test]
     fn chat_completions_support_fresh_and_existing_conversations() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -4283,6 +4305,7 @@ mod tests {
     #[test]
     fn chat_completions_reject_unknown_conversation_ids() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -4322,6 +4345,7 @@ mod tests {
     #[test]
     fn sessions_endpoint_lists_recent_conversations() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -4415,6 +4439,7 @@ mod tests {
     #[test]
     fn request_summary_endpoint_persists_latency_and_unknown_usage_for_success() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -4501,6 +4526,7 @@ mod tests {
     #[test]
     fn request_summary_records_recovered_status_when_the_gateway_client_disconnects() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -4580,6 +4606,7 @@ mod tests {
     #[test]
     fn request_summary_endpoint_records_failed_requests_with_latency() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-failure"));
@@ -4635,6 +4662,7 @@ mod tests {
     #[test]
     fn chat_completions_streaming_emits_sse_chunks_and_done() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -4681,6 +4709,7 @@ mod tests {
     #[test]
     fn chat_completions_maps_capability_errors_to_openai_shape() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?missing=search"));
@@ -4750,6 +4779,7 @@ mod tests {
     #[test]
     fn files_upload_endpoint_stages_files_and_research_accepts_file_ids() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -4874,6 +4904,7 @@ mod tests {
     #[test]
     fn paperclip_like_http_flow_supports_files_and_artifacts() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -4974,6 +5005,7 @@ mod tests {
     #[test]
     fn provider_smoke_covers_chat_files_artifacts_and_cancel_flow() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -5177,6 +5209,7 @@ mod tests {
     #[test]
     fn paperclip_like_queue_pressure_returns_retry_metadata() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -5243,6 +5276,7 @@ mod tests {
     #[test]
     fn artifacts_endpoints_list_metadata_and_stream_content() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -5410,6 +5444,7 @@ mod tests {
     #[test]
     fn chat_completions_run_queued_requests_in_fifo_order() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -5540,6 +5575,7 @@ mod tests {
     #[test]
     fn chat_completions_cancel_queued_request() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -5673,6 +5709,7 @@ mod tests {
     #[test]
     fn chat_completions_cancel_running_research_request() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -5755,6 +5792,7 @@ mod tests {
     #[test]
     fn chat_completions_cancel_running_streaming_ask_request() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(fake_url);
@@ -5826,6 +5864,7 @@ mod tests {
     #[test]
     fn chat_completions_cancel_during_reload_releases_the_queue_slot() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=reload"));
@@ -5911,6 +5950,7 @@ mod tests {
     #[test]
     fn chat_completions_return_queue_timeout_when_wait_expires() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -6042,6 +6082,7 @@ mod tests {
     #[test]
     fn queue_reports_a_single_running_upstream_job_and_serializes_follow_up_work() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -6152,6 +6193,7 @@ mod tests {
     #[test]
     fn queue_rejects_requests_when_per_client_limit_is_reached() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -6240,6 +6282,7 @@ mod tests {
     #[test]
     fn queue_rejects_requests_when_the_queue_is_full() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
@@ -6372,6 +6415,7 @@ mod tests {
     #[test]
     fn request_role_fields_flow_into_failure_bundles_and_request_summaries() {
         let _guard = integration_lock();
+        require_browser_integration_prereqs!();
         let (mut fake_server, fake_url) = spawn_fake_chatgpt();
         let (_dir, mut config) = test_config();
         config.file.browser_target_url = Some(format!("{fake_url}/?scenario=timeout"));

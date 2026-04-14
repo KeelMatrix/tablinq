@@ -24,7 +24,8 @@ mkdir -p "$OUTPUT_ROOT/bin"
     cargo_args+=(--target-dir "$TARGET_ROOT")
   fi
   cargo "${cargo_args[@]}"
-  pnpm build
+  pnpm --filter @tablinq/browser-adapter build
+  pnpm --filter @tablinq/extension build
   pnpm --filter @tablinq/browser-adapter deploy --legacy --prod "$OUTPUT_ROOT/browser-adapter"
 )
 
