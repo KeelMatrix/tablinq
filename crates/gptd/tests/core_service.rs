@@ -84,28 +84,7 @@ fn spawn_fake_chatgpt() -> (TestChild, String) {
 }
 
 fn browser_integration_prereqs_available() -> bool {
-    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let adapter_entry = repo_root
-        .join("packages")
-        .join("browser-adapter")
-        .join("dist")
-        .join("src")
-        .join("service.js");
-    let playwright_core = repo_root
-        .join("node_modules")
-        .join("playwright-core")
-        .join("package.json");
-
-    let node_available = Command::new("node")
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
-
-    node_available && adapter_entry.exists() && playwright_core.exists()
+    gptd::browser::browser_integration_prereqs_available()
 }
 
 #[test]

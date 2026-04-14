@@ -401,24 +401,22 @@ struct AdapterProcess {
 struct AdapterRuntime {
     entry: PathBuf,
     asset_root: PathBuf,
-    launch_with_node: bool,
+    launcher: AdapterLauncher,
+}
+
+enum AdapterLauncher {
+    Node,
+    Tsx(PathBuf),
 }
 
 impl AdapterProcess {
     fn spawn(config: &AppConfig) -> Result<Self> {
         let runtime = resolve_adapter_runtime()?;
-        let mut command = Command::new(if runtime.launch_with_node {
-            if cfg!(windows) { "node.exe" } else { "node" }
-        } else if cfg!(windows) {
-            "npx.cmd"
-        } else {
-            "npx"
-        });
-        if runtime.launch_with_node {
-            command.arg(&runtime.entry);
-        } else {
-            command.arg("tsx").arg(&runtime.entry);
-        }
+        let mut command = match &runtime.launcher {
+            AdapterLauncher::Node => Command::new(node_command()),
+            AdapterLauncher::Tsx(path) => Command::new(path),
+        };
+        command.arg(&runtime.entry);
         command
             .arg("--profile-dir")
             .arg(&config.paths.browser_profile_dir)
@@ -852,6 +850,18 @@ impl AdapterProcess {
     }
 }
 
+pub fn browser_integration_prereqs_available() -> bool {
+    if !command_available(node_command(), "--version") {
+        return false;
+    }
+
+    let Ok(runtime) = resolve_adapter_runtime() else {
+        return false;
+    };
+
+    has_playwright_core(&runtime.entry)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum AdapterRequest {
@@ -1064,23 +1074,24 @@ fn resolve_adapter_runtime() -> Result<AdapterRuntime> {
                             .unwrap_or_else(|| Path::new("."))
                             .to_path_buf()
                     });
-                return Ok(AdapterRuntime {
-                    launch_with_node: is_js_entry(&entry),
-                    entry,
-                    asset_root,
-                });
+                return build_adapter_runtime(entry, asset_root)
+                    .context("resolve TABLINQ_BROWSER_ADAPTER_ENTRY");
             }
         }
     }
 
+    let mut last_error = None;
     for (entry, asset_root) in adapter_runtime_candidates() {
         if entry.exists() {
-            return Ok(AdapterRuntime {
-                launch_with_node: is_js_entry(&entry),
-                entry,
-                asset_root,
-            });
+            match build_adapter_runtime(entry, asset_root) {
+                Ok(runtime) => return Ok(runtime),
+                Err(err) => last_error = Some(err),
+            }
         }
+    }
+
+    if let Some(err) = last_error {
+        return Err(err).context("browser adapter entry could not be resolved");
     }
 
     bail!("browser adapter entry could not be resolved")
@@ -1141,6 +1152,60 @@ fn infer_asset_root(entry: &Path) -> Option<PathBuf> {
             None
         }
     })
+}
+
+fn build_adapter_runtime(entry: PathBuf, asset_root: PathBuf) -> Result<AdapterRuntime> {
+    let launcher = if is_js_entry(&entry) {
+        AdapterLauncher::Node
+    } else {
+        AdapterLauncher::Tsx(resolve_tsx_runner(&entry).with_context(|| {
+            format!(
+                "TypeScript browser adapter entry {} requires a local tsx runner",
+                entry.display()
+            )
+        })?)
+    };
+
+    Ok(AdapterRuntime {
+        entry,
+        asset_root,
+        launcher,
+    })
+}
+
+fn resolve_tsx_runner(entry: &Path) -> Option<PathBuf> {
+    entry.ancestors().find_map(|ancestor| {
+        let candidate = ancestor
+            .join("node_modules")
+            .join(".bin")
+            .join(if cfg!(windows) { "tsx.cmd" } else { "tsx" });
+        candidate.exists().then_some(candidate)
+    })
+}
+
+fn has_playwright_core(entry: &Path) -> bool {
+    entry.ancestors().any(|ancestor| {
+        ancestor
+            .join("node_modules")
+            .join("playwright-core")
+            .join("package.json")
+            .exists()
+    })
+}
+
+fn command_available(command: &str, version_arg: &str) -> bool {
+    Command::new(command)
+        .arg(version_arg)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn node_command() -> &'static str {
+    if cfg!(windows) { "node.exe" } else { "node" }
 }
 
 fn is_js_entry(path: &Path) -> bool {

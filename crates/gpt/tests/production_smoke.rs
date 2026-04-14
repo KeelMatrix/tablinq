@@ -41,6 +41,10 @@ fn powershell() -> &'static str {
     "powershell"
 }
 
+fn package_root_override() -> Option<PathBuf> {
+    std::env::var_os("TABLINQ_PACKAGE_ROOT").map(PathBuf::from)
+}
+
 fn run_success(mut command: Command) -> String {
     let output = command.output().expect("run command");
     if !output.status.success() {
@@ -99,31 +103,34 @@ fn wait_for_packaged_gateway(
 fn windows_packaging_and_install_smoke_cover_packaged_layout() {
     let _guard = integration_lock();
     let repo_root = repo_root();
-    let package_dir = tempdir().expect("package tempdir");
     let install_dir = tempdir().expect("install tempdir");
     let state_dir = tempdir().expect("state tempdir");
-    let target_dir = tempdir().expect("package target tempdir");
-
-    let package_script = repo_root.join("scripts").join("package.ps1");
     let install_script = repo_root.join("scripts").join("install.ps1");
-    eprintln!("packaging");
-    run_success({
-        let mut command = Command::new(powershell());
-        command
-            .arg("-ExecutionPolicy")
-            .arg("Bypass")
-            .arg("-File")
-            .arg(package_script)
-            .arg("-Profile")
-            .arg("dev")
-            .arg("-OutputDir")
-            .arg(package_dir.path());
-        command.env("CARGO_TARGET_DIR", target_dir.path());
-        command.current_dir(&repo_root);
-        command
-    });
+    let package_dir = tempdir().expect("package tempdir");
+    let package_root = if let Some(package_root) = package_root_override() {
+        package_root
+    } else {
+        let target_dir = tempdir().expect("package target tempdir");
+        let package_script = repo_root.join("scripts").join("package.ps1");
+        eprintln!("packaging");
+        run_success({
+            let mut command = Command::new(powershell());
+            command
+                .arg("-ExecutionPolicy")
+                .arg("Bypass")
+                .arg("-File")
+                .arg(package_script)
+                .arg("-Profile")
+                .arg("dev")
+                .arg("-OutputDir")
+                .arg(package_dir.path());
+            command.env("CARGO_TARGET_DIR", target_dir.path());
+            command.current_dir(&repo_root);
+            command
+        });
+        package_dir.path().join("tablinq")
+    };
 
-    let package_root = package_dir.path().join("tablinq");
     eprintln!("verifying package layout");
     for relative in [
         "bin\\gpt.exe",

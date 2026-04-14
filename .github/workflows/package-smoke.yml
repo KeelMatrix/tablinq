@@ -31,8 +31,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy,rustfmt
 
       - name: Cache Rust build outputs
         uses: Swatinem/rust-cache@v2
@@ -51,12 +49,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run Windows packaging smoke test
-        run: cargo test -p gpt windows_packaging_and_install_smoke_cover_packaged_layout -- --nocapture
-
       - name: Build package layout
         shell: pwsh
         run: ./scripts/package.ps1
+
+      - name: Run Windows packaging smoke test
+        env:
+          TABLINQ_PACKAGE_ROOT: ${{ github.workspace }}\dist\package\tablinq
+        run: cargo test -p gpt windows_packaging_and_install_smoke_cover_packaged_layout -- --nocapture
 
       - name: Upload package artifact
         if: github.event_name != 'pull_request'
