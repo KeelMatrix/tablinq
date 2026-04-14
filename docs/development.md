@@ -1,5 +1,7 @@
 # Development
 
+This guide is for contributors working from the repo checkout.
+
 ## Local setup
 
 1. Install Rust with `cargo` on `PATH`.
@@ -7,14 +9,30 @@
 3. Install `pnpm`.
 4. Run `pnpm install` at the repo root.
 
-## Primary validation commands
+## Fast mental model
+
+- Rust owns the CLI, daemon, gateway, config, persistence, logging, and packaging flow.
+- TypeScript owns the browser adapter, extension bridge, and fake harness.
+- The browser is still the execution engine.
+- `packages/fake-chatgpt` is the CI-safe browser target for most automated browser tests.
+
+For the deeper system view, see [architecture.md](architecture.md).
+
+## Standard validation
+
+Run these before opening a PR:
 
 - `cargo test`
 - `pnpm lint`
 - `pnpm build`
 - `pnpm test`
 
-## Common runtime commands
+Formatting:
+
+- `cargo fmt --all --check`
+- `pnpm format`
+
+## Common local commands
 
 - `cargo run -p gpt -- daemon start`
 - `cargo run -p gpt -- daemon status`
@@ -24,11 +42,12 @@
 - `cargo run -p gpt -- ask --model instant --mode search "latest release notes"`
 - `cargo run -p gpt -- ask --model thinking --effort extended "compare these ideas"`
 - `cargo run -p gpt -- research "investigate launch blockers"`
-- `cargo run -p gpt -- artifacts list`
-- `cargo run -p gpt -- artifacts pull last`
 - `cargo run -p gpt -- jobs list`
 - `cargo run -p gpt -- jobs show job-123`
 - `cargo run -p gpt -- jobs cancel job-123`
+- `cargo run -p gpt -- sessions list`
+- `cargo run -p gpt -- artifacts list`
+- `cargo run -p gpt -- artifacts pull last`
 - `cargo run -p gpt -- doctor`
 - `cargo run -p gpt -- capabilities`
 - `cargo run -p gpt -- config show`
@@ -40,36 +59,68 @@
 
 ## Windows-first helper scripts
 
-- `scripts/bootstrap.ps1`: checks the local toolchain and adds the user Rust install to `PATH` for the current PowerShell session when needed.
-- `scripts/test.ps1`: runs `cargo test` and `pnpm test`.
-- `scripts/package.ps1`: builds release Rust binaries, emits browser adapter and extension JavaScript, and assembles `dist/package/tablinq`.
-- `scripts/install.ps1`: installs the packaged layout to `%LOCALAPPDATA%\Tablinq\install`, initializes `%LOCALAPPDATA%\Tablinq`, registers the native messaging host, and writes startup helper scripts.
+- `scripts/bootstrap.ps1`
+  - verifies the local toolchain and fixes the current PowerShell session `PATH` when needed
+- `scripts/test.ps1`
+  - runs Rust and TypeScript validation together
+- `scripts/package.ps1`
+  - builds release Rust binaries, emits browser adapter and extension JavaScript, and assembles `dist/package/tablinq`
+- `scripts/install.ps1`
+  - installs the package under `%LOCALAPPDATA%\Tablinq\install`, initializes `%LOCALAPPDATA%\Tablinq`, registers the native host, and writes startup helpers
 
-## CI
+## CI expectations
 
-GitHub Actions uses two workflows:
+GitHub Actions currently uses:
 
 - `.github/workflows/ci.yml`
-  - Rust formatting, clippy, and workspace tests
+  - Rust formatting, clippy, and locked workspace tests
   - TypeScript formatting, type-check, build, and tests
 - `.github/workflows/package-smoke.yml`
-  - Windows package smoke build through `scripts/package.ps1`
-  - package artifact upload for inspection
+  - Windows packaged install smoke coverage
+  - package artifact upload on non-PR runs
 
-Match those surfaces before opening a PR.
+Dependabot PRs still run the main Rust and TypeScript checks. The expensive Windows package smoke run is skipped for Dependabot PRs.
 
-## Current testing strategy
+## Testing strategy
 
-- Rust tests cover protocol serialization, daemon startup, IPC connectivity, config bootstrap, SQLite migrations, browser health, CLI parsing, job persistence, artifacts, research, and failure-bundle behavior.
-- TypeScript tests cover JSON schemas, extension probes, selector-pack loading, fake-harness browser flows, streaming, reload recovery, upload/download handling, and research scenarios.
-- `packages/fake-chatgpt` is the CI-safe browser target. Live-site verification is manual and documented separately.
+Rust tests cover:
 
-## Code ownership hotspots
+- protocol serialization
+- CLI parsing and presentation
+- daemon startup and IPC
+- config bootstrap and migrations
+- SQLite persistence
+- browser health and orchestration
+- gateway request handling, queueing, and failure mapping
+- packaging and installed-layout smoke coverage on Windows
 
-- `crates/gpt/src/lib.rs`: CLI command surface and presentation
-- `crates/gptd/src/core.rs`: durable execution logic and state transitions
-- `crates/gptd/src/browser.rs`: browser-adapter supervision
-- `crates/tablinq-gateway/src/lib.rs`: HTTP provider surface
-- `packages/browser-adapter/src/browserAdapter.ts`: Playwright flow
-- `packages/browser-adapter/src/pageAdapter.runtime.js`: page-level DOM helpers
-- `packages/extension/src/probe.ts`: capability probes and alias discovery
+TypeScript tests cover:
+
+- JSON schemas
+- extension probes
+- selector-pack loading
+- fake-harness browser flows
+- streaming, stall handling, interruption recovery, and reload behavior
+- file upload and artifact flows
+- research scenarios
+
+## Code hotspots
+
+- `crates/gpt/src/lib.rs`
+  - CLI command surface and terminal presentation
+- `crates/gptd/src/core.rs`
+  - durable execution logic, state transitions, and persistence boundaries
+- `crates/gptd/src/browser.rs`
+  - browser-adapter supervision and recovery handoff
+- `crates/tablinq-gateway/src/lib.rs`
+  - HTTP provider surface, queueing, and request summaries
+- `packages/browser-adapter/src/browserAdapter.ts`
+  - Playwright control loop and reconciliation behavior
+- `packages/browser-adapter/src/pageAdapter.runtime.js`
+  - page-level DOM helpers and UI-specific logic
+- `packages/extension/src/probe.ts`
+  - capability probes and alias discovery
+
+## When to use the live site
+
+Do not use the live site for routine development validation. Prefer the fake harness first. Use [live-smoke-checklist.md](live-smoke-checklist.md) only when you need an explicit real-site confirmation.

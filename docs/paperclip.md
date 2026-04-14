@@ -2,35 +2,23 @@
 
 Use Tablinq's local gateway as an OpenAI-compatible provider for Paperclip.
 
-## Connection values
+## Good default posture
 
-- Base URL: `http://127.0.0.1:3847/v1`
+- base URL: `http://127.0.0.1:3847/v1`
 - API key: `gateway.api_key` from `config.toml`
-- Streaming: `true`
-- Max parallel requests: `1`
-- Ask/search timeout: start at `180s`
-- Research timeout: start at `900s`
+- streaming: `true`
+- max parallel requests: `1`
+- ask/search timeout: start around `180s`
+- research timeout: start around `900s`
+- subagents: disabled or minimized
+
+Paperclip is a strong fit when you want file-backed browser automation, research-style runs, and artifact retrieval through a familiar provider contract.
 
 ## Recommended models
 
 - `tablinq-instant`
 - `tablinq-search`
 - `tablinq-research`
-
-## File and artifact flow
-
-1. Upload local files to `POST /v1/files`.
-2. Pass returned IDs through `tablinq_file_ids` on `POST /v1/chat/completions`.
-3. Read generated artifact metadata from `GET /v1/artifacts`.
-4. Download artifact content from `GET /v1/artifacts/{id}/content`.
-
-## Usage guidance
-
-- treat usage accounting as provider-specific or estimated
-- keep concurrency at `1`
-- respect `retry_after_ms` on `429` responses
-- prefer one warm browser session instead of parallel browser work
-- disable or minimize subagents
 
 ## Recommended config
 
@@ -47,17 +35,33 @@ Use Tablinq's local gateway as an OpenAI-compatible provider for Paperclip.
 }
 ```
 
-## Session guidance
+## File and artifact flow
 
-- Set `tablinq_new_conversation = true` for isolated report jobs.
-- Reuse `tablinq_conversation_id` only when a later request should keep the same context.
-- Read `tablinq_session_id` and `tablinq_conversation_id` from responses and persist them client-side.
+1. Upload local files to `POST /v1/files`.
+2. Pass returned IDs through `tablinq_file_ids` on `POST /v1/chat/completions`.
+3. Read generated artifact metadata from `GET /v1/artifacts`.
+4. Download artifact content from `GET /v1/artifacts/{id}/content`.
 
-## Cancellation and file reuse guidance
+## Usage guidance
 
-- Store `request_id` and cancel through `POST /v1/requests/{request_id}/cancel`.
-- Reuse prior uploads with `tablinq_file_ids` instead of re-uploading unchanged files.
-- Use `GET /v1/files` and `GET /v1/artifacts` to inspect reusable assets and outputs.
+- keep concurrency at `1`
+- respect `retry_after_ms` on `429` responses
+- prefer one warm browser session over parallel browser work
+- treat usage accounting as provider-specific or estimated
+- reuse prior uploads with `tablinq_file_ids` instead of re-uploading unchanged files
+
+## Conversation guidance
+
+- set `tablinq_new_conversation = true` for isolated report or batch jobs
+- reuse `tablinq_conversation_id` only when later work should inherit that context
+- persist `request_id`, `tablinq_session_id`, and `tablinq_conversation_id` from responses client-side
+
+## Cancellation and recovery guidance
+
+- store `request_id`
+- cancel through `POST /v1/requests/{request_id}/cancel`
+- if the client drops mid-run, inspect request status before retrying
+- do not assume a disconnected research job is lost; it may complete upstream and reconcile as `recovered`
 
 ## Example request
 
@@ -76,4 +80,4 @@ Use Tablinq's local gateway as an OpenAI-compatible provider for Paperclip.
 }
 ```
 
-See [Provider mode](provider-mode.md) for bring-up, health checks, and recovery commands.
+See [provider-mode.md](provider-mode.md) for bring-up, health checks, and recovery commands.
