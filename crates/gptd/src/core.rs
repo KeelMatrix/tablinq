@@ -961,6 +961,7 @@ impl CoreService {
         Database::open(&self.config.paths.db_path)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_request_lifecycle_update<F>(
         &self,
         db: &Database,

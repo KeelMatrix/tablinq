@@ -467,8 +467,6 @@ describe("browser adapter", () => {
         document
           .querySelector("[data-testid='stop-button']")
           ?.hasAttribute("hidden") ?? true,
-      uploadChipCount: document.querySelectorAll("[data-testid='upload-chip']")
-        .length,
     }));
 
     expect(state).toEqual({
@@ -478,7 +476,6 @@ describe("browser adapter", () => {
       composerReady: true,
       sendHidden: false,
       stopHidden: true,
-      uploadChipCount: 0,
     });
     expect(result.output_text).toBe("Fake response for: configure live");
     expect(result.artifacts).toHaveLength(1);

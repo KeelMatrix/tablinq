@@ -346,18 +346,18 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
     thread::spawn(move || {
         let request = DaemonRequest::Ask(command);
         let result = gptd::send_request_stream(&endpoint, &request, |event| {
-            tx.send(CliStreamMessage::Event(event))
+            tx.send(CliStreamMessage::Event(Box::new(event)))
                 .map_err(|_| anyhow::anyhow!("CLI stream receiver closed"))?;
             Ok(())
         })
         .with_context(|| format!("connect to daemon at {endpoint}"));
-        let _ = tx.send(CliStreamMessage::Done(result));
+        let _ = tx.send(CliStreamMessage::Done(Box::new(result)));
     });
 
     let response = loop {
         match rx.recv_timeout(timeout) {
             Ok(CliStreamMessage::Event(event)) => {
-                if let EventPayload::StreamChunk(chunk) = event {
+                if let EventPayload::StreamChunk(chunk) = *event {
                     if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
                         write!(stdout, "{}", chunk.text)?;
                         stdout.flush()?;
@@ -369,7 +369,7 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
                     }
                 }
             }
-            Ok(CliStreamMessage::Done(result)) => break result?,
+            Ok(CliStreamMessage::Done(result)) => break (*result)?,
             Err(_) => {
                 anyhow::bail!("ask request timed out after {} ms", timeout.as_millis());
             }
@@ -406,17 +406,17 @@ fn execute_research_with_terminal_presentation(
     thread::spawn(move || {
         let request = DaemonRequest::Research(command);
         let result = gptd::send_request_stream(&endpoint, &request, |event| {
-            tx.send(CliStreamMessage::Event(event))
+            tx.send(CliStreamMessage::Event(Box::new(event)))
                 .map_err(|_| anyhow::anyhow!("CLI stream receiver closed"))?;
             Ok(())
         })
         .with_context(|| format!("connect to daemon at {endpoint}"));
-        let _ = tx.send(CliStreamMessage::Done(result));
+        let _ = tx.send(CliStreamMessage::Done(Box::new(result)));
     });
 
     let response = loop {
         match rx.recv_timeout(timeout) {
-            Ok(CliStreamMessage::Event(event)) => match event {
+            Ok(CliStreamMessage::Event(event)) => match *event {
                 EventPayload::StreamChunk(chunk) => match chunk.kind {
                     StreamChunkKind::Delta if !chunk.text.is_empty() => {
                         write!(stdout, "{}", chunk.text)?;
@@ -442,9 +442,12 @@ fn execute_research_with_terminal_presentation(
                 }
                 _ => {}
             },
-            Ok(CliStreamMessage::Done(result)) => break result?,
+            Ok(CliStreamMessage::Done(result)) => break (*result)?,
             Err(_) => {
-                anyhow::bail!("research request timed out after {} ms", timeout.as_millis());
+                anyhow::bail!(
+                    "research request timed out after {} ms",
+                    timeout.as_millis()
+                );
             }
         }
     };
@@ -636,8 +639,8 @@ struct JobStatusLine {
 }
 
 enum CliStreamMessage {
-    Event(EventPayload),
-    Done(Result<DaemonResponse>),
+    Event(Box<EventPayload>),
+    Done(Box<Result<DaemonResponse>>),
 }
 
 fn run_with_timeout<T, F>(timeout: Duration, timeout_message: String, work: F) -> Result<T>

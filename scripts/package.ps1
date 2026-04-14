@@ -14,9 +14,19 @@ function Invoke-Step {
   )
 
   Write-Host "> $FilePath $($ArgumentList -join ' ')"
-  & $FilePath @ArgumentList
-  if ($LASTEXITCODE -ne 0) {
-    throw "Command failed: $FilePath $($ArgumentList -join ' ')"
+  if ($WorkingDirectory) {
+    Push-Location $WorkingDirectory
+  }
+  try {
+    & $FilePath @ArgumentList
+    if ($LASTEXITCODE -ne 0) {
+      throw "Command failed: $FilePath $($ArgumentList -join ' ')"
+    }
+  }
+  finally {
+    if ($WorkingDirectory) {
+      Pop-Location
+    }
   }
 }
 
@@ -67,6 +77,21 @@ function Copy-DirectoryContents {
   Copy-Item -Path (Join-Path $Source "*") -Destination $Destination -Recurse -Force
 }
 
+function Get-RelativePath {
+  param(
+    [string]$BasePath,
+    [string]$TargetPath
+  )
+
+  Push-Location $BasePath
+  try {
+    (Resolve-Path -Relative $TargetPath)
+  }
+  finally {
+    Pop-Location
+  }
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $outputRoot = (Resolve-Path (New-Item -ItemType Directory -Force -Path $OutputDir)).Path
 $packageRoot = Join-Path $outputRoot "tablinq"
@@ -82,6 +107,9 @@ if (Test-Path $packageRoot) {
 }
 
 New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
+$packageStagingRoot = Join-Path $repoRoot "dist\\package-staging"
+$browserAdapterStagingRoot = Join-Path $packageStagingRoot "browser-adapter"
+$browserAdapterPackageRoot = Join-Path $packageRoot "browser-adapter"
 
 Push-Location $repoRoot
 try {
@@ -91,7 +119,12 @@ try {
   }
   Invoke-Step cargo $cargoArgs $repoRoot
   Invoke-Step pnpm @("build") $repoRoot
-  Invoke-Step pnpm @("--filter", "@tablinq/browser-adapter", "deploy", "--legacy", "--prod", (Join-Path $packageRoot "browser-adapter")) $repoRoot
+  if (Test-Path $browserAdapterStagingRoot) {
+    Remove-Item -Recurse -Force $browserAdapterStagingRoot
+  }
+  New-Item -ItemType Directory -Force -Path $browserAdapterStagingRoot | Out-Null
+  $browserAdapterDeployTarget = Get-RelativePath $repoRoot $browserAdapterStagingRoot
+  Invoke-Step pnpm @("--filter", "@tablinq/browser-adapter", "deploy", "--legacy", "--prod", $browserAdapterDeployTarget) $repoRoot
 
   $targetProfileDir = Resolve-TargetProfileDir -Profile $Profile
   $profileTargetDir = Join-Path $cargoTargetRoot $targetProfileDir
@@ -99,12 +132,14 @@ try {
     Copy-Item -Path (Join-Path $profileTargetDir $binary) -Destination (Join-Path $binRoot $binary) -Force
   }
 
+  Copy-DirectoryContents $browserAdapterStagingRoot $browserAdapterPackageRoot
   Copy-DirectoryContents (Join-Path $repoRoot "packages\\browser-adapter\\dist\\src") (Join-Path $packageRoot "browser-adapter\\src")
   Copy-DirectoryContents (Join-Path $repoRoot "packages\\extension\\dist\\src") (Join-Path $packageRoot "extension\\src")
   Copy-Item -Path (Join-Path $repoRoot "packages\\extension\\manifest.json") -Destination (Join-Path $packageRoot "extension\\manifest.json") -Force
   Copy-DirectoryContents (Join-Path $repoRoot "selector-packs") (Join-Path $packageRoot "selector-packs")
   Copy-DirectoryContents (Join-Path $repoRoot "schemas") (Join-Path $packageRoot "schemas")
   Copy-DirectoryContents (Join-Path $repoRoot "docs") (Join-Path $packageRoot "docs")
+  Copy-Item -Path (Join-Path $repoRoot "LICENSE") -Destination (Join-Path $packageRoot "LICENSE") -Force
   Copy-Item -Path (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md") -Force
 
   $extensionId = Get-ExtensionIdFromKey -ManifestPath (Join-Path $packageRoot "extension\\manifest.json")
@@ -130,5 +165,8 @@ try {
   Write-Host "Extension ID: $extensionId"
 }
 finally {
+  if (Test-Path $packageStagingRoot) {
+    Remove-Item -Recurse -Force $packageStagingRoot
+  }
   Pop-Location
 }
