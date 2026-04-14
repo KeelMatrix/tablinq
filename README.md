@@ -36,8 +36,8 @@ That leads to a different stack:
 
 ```mermaid
 flowchart LR
-    CLI["`gpt` CLI"] --> IPC["local IPC"]
-    IPC --> Daemon["`gptd` daemon"]
+    CLI["gpt CLI"] --> IPC["local IPC"]
+    IPC --> Daemon["gptd daemon"]
     Daemon --> DB["SQLite + state root"]
     Daemon --> Adapter["browser adapter (TS + Playwright)"]
     Adapter --> Browser["managed Edge / Chromium profile"]

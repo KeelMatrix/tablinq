@@ -547,6 +547,7 @@ impl AdapterProcess {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn recover_ask<F>(
         &mut self,
         job_id: &str,
@@ -693,6 +694,7 @@ impl AdapterProcess {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn recover_research<F, G>(
         &mut self,
         job_id: &str,
