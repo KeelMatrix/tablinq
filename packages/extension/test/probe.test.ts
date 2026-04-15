@@ -293,7 +293,7 @@ describe("service worker bridge", () => {
     await controller.handleMessage(message, {
       tab: {
         id: 17,
-        url: "https://chatgpt.com/?conversation=conv-9",
+        url: "https://chatgpt.com/c/conv-9",
       },
     });
     statusUpdates.push(controller.describe());
@@ -305,50 +305,11 @@ describe("service worker bridge", () => {
       },
       tab: {
         id: 17,
-        url: "https://chatgpt.com/?conversation=conv-9",
+        url: "https://chatgpt.com/c/conv-9",
         workspace_key: "https://chatgpt.com/",
       },
     });
     expect(statusUpdates[0].connected).toBe(true);
     expect(statusUpdates[0].transport).toBe("websocket_dev");
-  });
-
-  it("normalizes /c/<id> tabs to the workspace root", async () => {
-    let sentPayload = "";
-    const controller = createBridgeController({
-      transport: "websocket_dev",
-      webSocketUrl: "ws://127.0.0.1:4319",
-      createWebSocket: () =>
-        ({
-          readyState: WebSocket.OPEN,
-          send(payload: string) {
-            sentPayload = payload;
-          },
-          addEventListener() {},
-        }) as unknown as WebSocket,
-    });
-
-    document.body.innerHTML = `
-      <textarea data-slot="composer" aria-label="Prompt composer"></textarea>
-      <button type="button" data-action="submit">Send</button>
-    `;
-    const message = probeDocument({
-      reportedAt: "2026-04-12T10:00:00Z",
-    });
-
-    await controller.handleMessage(message, {
-      tab: {
-        id: 18,
-        url: "https://chatgpt.com/c/conv-9",
-      },
-    });
-
-    expect(JSON.parse(sentPayload)).toMatchObject({
-      tab: {
-        id: 18,
-        url: "https://chatgpt.com/c/conv-9",
-        workspace_key: "https://chatgpt.com/",
-      },
-    });
   });
 });

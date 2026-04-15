@@ -257,10 +257,6 @@ export function createTablinqPageAdapterRuntime() {
   const parseConversationIdFromUrl = () => {
     try {
       const url = new URL(window.location.href);
-      const fromQuery = url.searchParams.get("conversation");
-      if (fromQuery) {
-        return fromQuery;
-      }
       const match = url.pathname.match(/\/c\/([^/?#]+)/i);
       return match?.[1] ?? null;
     } catch {

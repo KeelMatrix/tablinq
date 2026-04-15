@@ -1320,7 +1320,7 @@ mod tests {
             attach_profile_note: Some(CHROME_ATTACH_PROFILE_NOTE.to_owned()),
             downloads_dir: "C:/tablinq/downloads".to_owned(),
             target_url: "https://chatgpt.com/".to_owned(),
-            current_url: Some("https://chatgpt.com/?conversation=conv-1".to_owned()),
+            current_url: Some("https://chatgpt.com/c/conv-1".to_owned()),
             page_title: Some("ChatGPT".to_owned()),
             page_ready: true,
             authenticated: true,

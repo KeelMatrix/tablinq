@@ -3113,10 +3113,7 @@ export function conversationIdFromUrl(
   }
   try {
     const url = new URL(resolvedUrl);
-    return (
-      normalizeOptionalString(url.searchParams.get("conversation")) ??
-      conversationIdFromPathname(url.pathname)
-    );
+    return conversationIdFromPathname(url.pathname);
   } catch {
     return null;
   }
@@ -3129,7 +3126,6 @@ export function resolveConversationUrl(
   try {
     const url = new URL(rawUrl);
     url.pathname = conversationWorkspacePathname(url.pathname);
-    url.searchParams.delete("conversation");
     const normalizedConversationId = normalizeOptionalString(conversationId);
     if (normalizedConversationId) {
       url.pathname = conversationPathname(
@@ -3147,7 +3143,6 @@ export function workspaceKeyFromUrl(rawUrl: string): string {
   try {
     const url = new URL(rawUrl);
     const params = new URLSearchParams(url.search);
-    params.delete("conversation");
     params.delete("scenario");
     const query = params.toString();
     const pathname = conversationWorkspacePathname(url.pathname);

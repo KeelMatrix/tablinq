@@ -213,7 +213,6 @@ function workspaceKeyFromUrl(rawUrl: string): string {
   try {
     const url = new URL(rawUrl);
     const params = new URLSearchParams(url.search);
-    params.delete("conversation");
     params.delete("scenario");
     const query = params.toString();
     const pathname = conversationWorkspacePathname(url.pathname);

@@ -1496,7 +1496,7 @@ mod tests {
             attach_profile_note: None,
             downloads_dir: "downloads".to_owned(),
             target_url: "https://chatgpt.com/".to_owned(),
-            current_url: Some("https://chatgpt.com/?conversation=conv-1".to_owned()),
+            current_url: Some("https://chatgpt.com/c/conv-1".to_owned()),
             page_title: None,
             page_ready: true,
             authenticated: true,
