@@ -4,9 +4,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 use shared_protocol::{
-    AskCommand, BrowserConnectionMode, BrowserOpenRequest, CancelJobCommand, DaemonRequest,
-    DaemonResponse, Effort, EventPayload, Mode, ModelClass, PullArtifactCommand, ResearchCommand,
-    StreamChunkKind, CHROME_ATTACH_PROFILE_NOTE, build_state_paths, resolve_state_root,
+    AskCommand, BrowserConnectionMode, BrowserOpenRequest, CHROME_ATTACH_PROFILE_NOTE,
+    CancelJobCommand, DaemonRequest, DaemonResponse, Effort, EventPayload, Mode, ModelClass,
+    PullArtifactCommand, ResearchCommand, StreamChunkKind, build_state_paths, resolve_state_root,
 };
 use std::env;
 use std::fs;
@@ -441,16 +441,14 @@ fn build_browser_start_debug_plan(
         .filter(|value| !value.is_empty())
         .unwrap_or(config.browser_target_url())
         .to_owned();
-    let attach_profile_dir = chrome_attach_profile_dir_for_start_debug(config, browser_path, &executable);
+    let attach_profile_dir =
+        chrome_attach_profile_dir_for_start_debug(config, browser_path, &executable);
     let mut launch_args = vec![
         format!("--remote-debugging-port={}", config.browser_debug_port()),
         format!("--remote-debugging-address={}", config.browser_debug_host()),
     ];
     if let Some(attach_profile_dir) = attach_profile_dir.as_ref() {
-        launch_args.push(format!(
-            "--user-data-dir={}",
-            attach_profile_dir.display()
-        ));
+        launch_args.push(format!("--user-data-dir={}", attach_profile_dir.display()));
     }
     launch_args.extend([
         "--no-first-run".to_owned(),
@@ -909,9 +907,11 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
     } else {
         None
     };
-    let gateway = tablinq_gateway::gateway_doctor(state_root)?;
-    let health = daemon_doctor
+    let daemon_doctor_payload = daemon_doctor
         .as_ref()
+        .and_then(|value| daemon_response_payload(value, "doctor"));
+    let gateway = tablinq_gateway::gateway_doctor(state_root)?;
+    let health = daemon_doctor_payload
         .and_then(|value| value.get("health"))
         .cloned()
         .or_else(|| {
@@ -921,8 +921,7 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
                 .cloned()
         })
         .unwrap_or(Value::Null);
-    let browser = daemon_doctor
-        .as_ref()
+    let browser = daemon_doctor_payload
         .and_then(|value| value.get("browser"))
         .cloned()
         .unwrap_or(Value::Null);
@@ -947,7 +946,7 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         authenticated,
     );
     let recovery_guidance =
-        operational_recovery_guidance(&config, browser_state, daemon_doctor.as_ref());
+        operational_recovery_guidance(&config, browser_state, daemon_doctor_payload);
 
     Ok(json!({
         "service": "tablinq",
@@ -956,7 +955,7 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         "daemon": {
             "running": daemon_running,
             "ipc_endpoint": ipc_endpoint,
-            "doctor": daemon_doctor,
+            "doctor": daemon_doctor_payload.cloned(),
         },
         "gateway": gateway,
         "browser": {
@@ -985,6 +984,14 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         "recovery_guidance": recovery_guidance,
         "recovery_commands": browser_recovery_commands(connection_mode),
     }))
+}
+
+fn daemon_response_payload<'a>(value: &'a Value, response_type: &str) -> Option<&'a Value> {
+    if value.get("type").and_then(Value::as_str) == Some(response_type) {
+        value.get("payload")
+    } else {
+        None
+    }
 }
 
 fn browser_runtime_state(
@@ -1579,6 +1586,37 @@ mod tests {
     }
 
     #[test]
+    fn daemon_response_payload_unwraps_attached_doctor_health() {
+        let response = json!({
+            "type": "doctor",
+            "payload": {
+                "health": {
+                    "browser_connected": true,
+                    "extension_connected": true,
+                    "authenticated": true,
+                },
+                "browser": {
+                    "browser_owner": "external",
+                    "target_tab_found": true,
+                }
+            }
+        });
+
+        let payload = daemon_response_payload(&response, "doctor").unwrap();
+        let health = payload.get("health").unwrap();
+        let browser = payload.get("browser").and_then(Value::as_object).unwrap();
+        let browser_state = browser_runtime_state(
+            BrowserConnectionMode::AttachFirst,
+            Some(browser),
+            health["browser_connected"].as_bool().unwrap(),
+            health["extension_connected"].as_bool().unwrap(),
+            health["authenticated"].as_bool().unwrap(),
+        );
+
+        assert_eq!(browser_state, "attached_ready");
+    }
+
+    #[test]
     fn browser_start_debug_serialized_output_includes_chrome_attach_profile_fields() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join("config")).unwrap();
@@ -1649,13 +1687,16 @@ mod tests {
             config.paths.chrome_attach_profile_dir,
             dir.path().join("chrome-attach-profile")
         );
-        assert!(config.paths.chrome_attach_profile_dir.starts_with(dir.path()));
         assert!(
-            plan.launch_args.contains(&format!(
-                "--user-data-dir={}",
-                config.paths.chrome_attach_profile_dir.display()
-            ))
+            config
+                .paths
+                .chrome_attach_profile_dir
+                .starts_with(dir.path())
         );
+        assert!(plan.launch_args.contains(&format!(
+            "--user-data-dir={}",
+            config.paths.chrome_attach_profile_dir.display()
+        )));
         assert_ne!(
             config.paths.chrome_attach_profile_dir,
             config.paths.browser_profile_dir

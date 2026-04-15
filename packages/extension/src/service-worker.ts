@@ -190,6 +190,25 @@ function annotateMessage(
   };
 }
 
+function pathnameSegments(pathname: string): string[] {
+  return pathname.split("/").filter(Boolean);
+}
+
+function pathnameFromSegments(segments: string[]): string {
+  return segments.length > 0 ? `/${segments.join("/")}` : "/";
+}
+
+function conversationWorkspacePathname(pathname: string): string {
+  const segments = pathnameSegments(pathname);
+  if (
+    segments.length >= 2 &&
+    segments[segments.length - 2]?.toLowerCase() === "c"
+  ) {
+    return pathnameFromSegments(segments.slice(0, -2));
+  }
+  return pathnameFromSegments(segments);
+}
+
 function workspaceKeyFromUrl(rawUrl: string): string {
   try {
     const url = new URL(rawUrl);
@@ -197,7 +216,8 @@ function workspaceKeyFromUrl(rawUrl: string): string {
     params.delete("conversation");
     params.delete("scenario");
     const query = params.toString();
-    return `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+    const pathname = conversationWorkspacePathname(url.pathname);
+    return `${url.origin}${pathname}${query ? `?${query}` : ""}`;
   } catch {
     return rawUrl;
   }

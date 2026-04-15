@@ -1580,7 +1580,7 @@ mod tests {
             "https://chatgpt.com/?cf_chl_tk=token"
         )));
         assert!(!current_url_requires_login_or_challenge(Some(
-            "https://chatgpt.com/?conversation=conv-1"
+            "https://chatgpt.com/c/conv-1"
         )));
     }
 }
