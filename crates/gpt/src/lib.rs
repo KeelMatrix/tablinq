@@ -4,9 +4,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 use shared_protocol::{
-    AskCommand, BrowserOpenRequest, CancelJobCommand, DaemonRequest, DaemonResponse, Effort,
-    EventPayload, Mode, ModelClass, PullArtifactCommand, ResearchCommand, StreamChunkKind,
-    build_state_paths, resolve_state_root,
+    AskCommand, BrowserConnectionMode, BrowserOpenRequest, CancelJobCommand, DaemonRequest,
+    DaemonResponse, Effort, EventPayload, Mode, ModelClass, PullArtifactCommand, ResearchCommand,
+    StreamChunkKind, build_state_paths, resolve_state_root,
 };
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -145,11 +145,21 @@ pub enum BrowserCommand {
         #[arg(long, hide = true)]
         headless: bool,
     },
+    Attach {
+        #[arg(long)]
+        target_url: Option<String>,
+        #[arg(long)]
+        browser_path: Option<PathBuf>,
+        #[arg(long, hide = true)]
+        headless: bool,
+    },
     Close,
     Logout,
     #[command(name = "switch-account")]
     SwitchAccount,
     ResetProfile,
+    #[command(name = "connection-info")]
+    ConnectionInfo,
     ProfileInfo,
 }
 
@@ -291,8 +301,14 @@ fn run_artifacts_command(state_root: Option<&Path>, command: &ArtifactsCommand) 
 }
 
 fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> Result<Value> {
+    let config = gptd::AppConfig::load_or_create(state_root)?;
     match command {
         BrowserCommand::Open {
+            target_url,
+            browser_path,
+            headless,
+        }
+        | BrowserCommand::Attach {
             target_url,
             browser_path,
             headless,
@@ -309,12 +325,41 @@ fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> R
             send_daemon_request(state_root, DaemonRequest::BrowserLogout)
         }
         BrowserCommand::ResetProfile => {
+            if !supports_managed_profile_reset(config.browser_connection_mode()) {
+                bail!(
+                    "browser reset-profile is only available in managed_fallback or managed_only; current mode is attach_first"
+                );
+            }
             send_daemon_request(state_root, DaemonRequest::BrowserResetProfile)
         }
+        BrowserCommand::ConnectionInfo => browser_connection_info(state_root, &config),
         BrowserCommand::ProfileInfo => {
             send_daemon_request(state_root, DaemonRequest::BrowserProfileInfo)
         }
     }
+}
+
+fn browser_connection_info(state_root: Option<&Path>, config: &gptd::AppConfig) -> Result<Value> {
+    let browser = if gptd::daemon_is_responsive(&config.paths.ipc_endpoint) {
+        send_daemon_request(state_root, DaemonRequest::BrowserProfileInfo)?
+    } else {
+        Value::Null
+    };
+    let mode = config.browser_connection_mode();
+
+    Ok(json!({
+        "attach_mode": mode,
+        "debug_endpoint": config.browser_debug_endpoint(),
+        "debug_host": config.browser_debug_host(),
+        "debug_port": config.browser_debug_port(),
+        "browser_channel": config.browser_channel(),
+        "browser_path": config.browser_path(),
+        "target_url": config.browser_target_url(),
+        "extension_required": config.browser_extension_required(),
+        "auto_open_target_tab": config.browser_auto_open_target_tab(),
+        "recommended_commands": browser_recovery_commands(mode),
+        "browser": browser,
+    }))
 }
 
 fn send_daemon_request(state_root: Option<&Path>, request: DaemonRequest) -> Result<Value> {
@@ -471,6 +516,7 @@ fn config_show(state_root: Option<&Path>) -> Result<Value> {
 
 fn operational_report(state_root: Option<&Path>) -> Result<Value> {
     let config = gptd::AppConfig::load_or_create(state_root)?;
+    let connection_mode = config.browser_connection_mode();
     let config_snapshot =
         serde_json::to_value(config.snapshot()).context("serialize config snapshot")?;
     let state_root_path = config.paths.state_root.display().to_string();
@@ -519,6 +565,13 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let queue = gateway.get("scheduler").cloned().unwrap_or(Value::Null);
+    let browser_state = browser_runtime_state(
+        connection_mode,
+        browser.as_object(),
+        browser_connected,
+        extension_connected,
+        authenticated,
+    );
 
     Ok(json!({
         "service": "tablinq",
@@ -531,6 +584,7 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         },
         "gateway": gateway,
         "browser": {
+            "state": browser_state,
             "connected": browser_connected,
             "snapshot": browser,
         },
@@ -551,15 +605,80 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
             "max_parallel_branches": 1,
             "max_subagents": 0,
         },
-        "recovery_commands": [
-            "gpt daemon start",
-            "gpt gateway start",
-            "gpt browser open",
-            "gpt browser reset-profile",
-            "gpt gateway stop",
-            "gpt daemon stop",
-        ],
+        "recovery_commands": browser_recovery_commands(connection_mode),
     }))
+}
+
+fn browser_runtime_state(
+    mode: BrowserConnectionMode,
+    browser: Option<&serde_json::Map<String, Value>>,
+    browser_connected: bool,
+    extension_connected: bool,
+    authenticated: bool,
+) -> &'static str {
+    let target_tab_found = browser
+        .and_then(|value| value.get("target_tab_found"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let browser_owner = browser
+        .and_then(|value| value.get("browser_owner"))
+        .and_then(Value::as_str)
+        .unwrap_or(if is_attach_primary(mode) {
+            "external"
+        } else {
+            "managed"
+        });
+
+    if browser_owner == "external" || (is_attach_primary(mode) && !browser_connected) {
+        if !browser_connected {
+            "attach_unavailable"
+        } else if !target_tab_found {
+            "target_tab_missing"
+        } else if !authenticated {
+            "attached_signed_out"
+        } else if !extension_connected {
+            "attached_extension_disconnected"
+        } else {
+            "attached_ready"
+        }
+    } else if !browser_connected {
+        "managed_not_started"
+    } else if !authenticated {
+        "managed_signed_out"
+    } else if !extension_connected {
+        "managed_extension_disconnected"
+    } else {
+        "managed_ready"
+    }
+}
+
+fn browser_recovery_commands(mode: BrowserConnectionMode) -> Vec<&'static str> {
+    let mut commands = vec!["gpt daemon start", "gpt gateway start"];
+    if is_attach_primary(mode) {
+        commands.push("gpt browser attach");
+        commands.push("gpt browser connection-info");
+        commands.push("gpt browser open");
+    } else {
+        commands.push("gpt browser open");
+        commands.push("gpt browser reset-profile");
+    }
+    commands.push("gpt gateway stop");
+    commands.push("gpt daemon stop");
+    commands
+}
+
+fn is_attach_primary(mode: BrowserConnectionMode) -> bool {
+    matches!(
+        mode,
+        BrowserConnectionMode::AttachFirst | BrowserConnectionMode::ManagedFallback
+    )
+}
+
+fn supports_managed_profile_reset(mode: BrowserConnectionMode) -> bool {
+    matches!(
+        mode,
+        BrowserConnectionMode::ManagedFallback | BrowserConnectionMode::ManagedOnly
+    )
 }
 
 fn start_daemon(state_root: Option<&Path>) -> Result<String> {
@@ -838,6 +957,34 @@ mod tests {
     }
 
     #[test]
+    fn browser_attach_command_matches_golden_shape() {
+        let cli = parse(&[
+            "gpt",
+            "browser",
+            "attach",
+            "--target-url",
+            "https://chatgpt.com/",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Command::Browser {
+                command: BrowserCommand::Attach { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn browser_connection_info_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "browser", "connection-info"]);
+        assert!(matches!(
+            cli.command,
+            Command::Browser {
+                command: BrowserCommand::ConnectionInfo
+            }
+        ));
+    }
+
+    #[test]
     fn build_ask_command_maps_cli_flags_into_protocol_command() {
         let args = AskArgs {
             prompt: "hello".to_owned(),
@@ -903,7 +1050,61 @@ mod tests {
         assert!(output.contains("\"gateway\""));
         assert!(output.contains("\"logs\""));
         assert!(output.contains("\"browser_connection_mode\": \"attach_first\""));
+        assert!(output.contains("\"state\": \"attach_unavailable\""));
         assert!(output.contains("\"recovery_commands\""));
+        assert!(output.contains("\"gpt browser attach\""));
+        assert!(output.contains("\"gpt browser connection-info\""));
+        assert!(!output.contains("\"gpt browser reset-profile\""));
+    }
+
+    #[test]
+    fn status_command_renders_attach_first_recovery_commands_without_running_services() {
+        let dir = tempdir().unwrap();
+        let cli = Cli::parse_from([
+            "gpt",
+            "--state-root",
+            dir.path().to_str().unwrap(),
+            "status",
+        ]);
+
+        let output = run(&cli).unwrap();
+
+        assert!(output.contains("\"state\": \"attach_unavailable\""));
+        assert!(output.contains("\"gpt browser attach\""));
+        assert!(output.contains("\"gpt browser connection-info\""));
+    }
+
+    #[test]
+    fn browser_connection_info_reports_attach_first_defaults() {
+        let dir = tempdir().unwrap();
+        let cli = Cli::parse_from([
+            "gpt",
+            "--state-root",
+            dir.path().to_str().unwrap(),
+            "browser",
+            "connection-info",
+        ]);
+
+        let output = run(&cli).unwrap();
+
+        assert!(output.contains("\"attach_mode\": \"attach_first\""));
+        assert!(output.contains("\"debug_endpoint\": \"http://127.0.0.1:9222\""));
+        assert!(output.contains("\"gpt browser attach\""));
+    }
+
+    #[test]
+    fn reset_profile_is_rejected_in_attach_first_mode() {
+        let dir = tempdir().unwrap();
+        let cli = Cli::parse_from([
+            "gpt",
+            "--state-root",
+            dir.path().to_str().unwrap(),
+            "browser",
+            "reset-profile",
+        ]);
+
+        let err = run(&cli).unwrap_err();
+        assert!(format!("{err:#}").contains("managed_fallback or managed_only"));
     }
 
     #[test]
