@@ -664,7 +664,7 @@ fn attach_startup_story(config: &gptd::AppConfig) -> Value {
             "mode": "managed_only",
             "config_toml": "browser_connection_mode = \"managed_only\"",
             "command": "gpt browser open",
-            "when_to_use": "Use managed_only only when your normal browser cannot expose the local debug endpoint."
+            "when_to_use": "Use managed_only only for debugging, CI/local harness isolation, or when your normal browser cannot expose the local debug endpoint."
         },
         "preview": preview,
     })
@@ -1000,18 +1000,18 @@ fn operational_recovery_guidance(
         let guidance = match browser_state {
             "attach_unavailable" => vec![
                 format!(
-                    "check the attach endpoint at {}; fully close Chrome or Edge, run `gpt browser start-debug`, then inspect `gpt browser connection-info`",
+                "check the attach endpoint at {}; fully close Chrome or Edge, run `gpt browser start-debug`, then inspect `gpt browser connection-info`",
                     config.browser_debug_endpoint()
                 ),
                 "confirm the Tablinq extension is installed and enabled in the same normal browser profile".to_owned(),
                 "sign in to ChatGPT in that browser and clear any login or challenge page".to_owned(),
                 "run `gpt browser attach` and then `gpt browser open` to reattach or focus the configured target tab".to_owned(),
-                "only if the local debug endpoint cannot be enabled on this machine, set `browser_connection_mode = \"managed_only\"` in config.toml and use `gpt browser open` as fallback".to_owned(),
+                "only if the local debug endpoint cannot be enabled on this machine, or you need debugging or CI/local harness isolation, set `browser_connection_mode = \"managed_only\"` in config.toml and use `gpt browser open` as fallback".to_owned(),
             ],
             "attached_extension_disconnected" => vec![
                 "confirm the Tablinq extension is installed, enabled, and connected in the attached browser profile".to_owned(),
                 "if multiple ChatGPT tabs are open, keep only the signed-in tab with the working Tablinq extension, then rerun `gpt browser attach`".to_owned(),
-                "only if attach mode cannot be stabilized on this machine, set `browser_connection_mode = \"managed_only\"` in config.toml and use `gpt browser open` as fallback".to_owned(),
+                "only if attach mode cannot be stabilized on this machine, or you need debugging or CI/local harness isolation, set `browser_connection_mode = \"managed_only\"` in config.toml and use `gpt browser open` as fallback".to_owned(),
             ],
             "attached_signed_out" => vec![
                 "sign in to ChatGPT in the attached normal browser tab and clear any login or challenge page".to_owned(),
@@ -1031,8 +1031,9 @@ fn operational_recovery_guidance(
     }
 
     json!([
-        "use `gpt browser open` to start the managed fallback browser tab",
+        "managed mode is fallback/debug-only; use `gpt browser open` to start the managed fallback browser tab",
         "sign in to ChatGPT in the managed fallback tab before running ask or research",
+        "use managed mode for debugging, CI/local harness isolation, or when attach-first cannot expose a local debug endpoint",
         "if the managed browser profile is wedged, run `gpt browser reset-profile`",
     ])
 }

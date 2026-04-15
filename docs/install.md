@@ -116,7 +116,7 @@ If the normal browser is signed into the wrong ChatGPT account, sign out in that
 - `gpt browser attach`
 - `gpt browser open`
 
-If your machine or profile cannot expose a local debug endpoint, switch to explicit managed fallback by setting `browser_connection_mode = "managed_only"` in `config/config.toml`, then use `gpt browser open`.
+If your machine or profile cannot expose a local debug endpoint, or you need debugging or CI/local harness isolation, switch to explicit managed fallback by setting `browser_connection_mode = "managed_only"` in `config/config.toml`, then use `gpt browser open`.
 
 ## Where state lives
 
