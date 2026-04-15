@@ -2,10 +2,10 @@ use crate::config::AppConfig;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
-    AskCommand, AskResult, AuthSource, BrowserOpenRequest, BrowserOwner, BrowserStatusSnapshot,
-    CapabilityReport, Effort, EventPayload, JobStatus, Mode, ModelClass, ResearchCommand,
-    ResearchResult, SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry, StreamChunk,
-    StreamChunkKind,
+    AskCommand, AskResult, AuthSource, BrowserConnectionMode, BrowserOpenRequest, BrowserOwner,
+    BrowserStatusSnapshot, CapabilityReport, Effort, EventPayload, JobStatus, Mode, ModelClass,
+    ResearchCommand, ResearchResult, SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry,
+    StreamChunk, StreamChunkKind,
 };
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -427,6 +427,24 @@ impl AdapterProcess {
             .arg(&config.paths.downloads_dir)
             .arg("--default-target-url")
             .arg(config.browser_target_url())
+            .arg("--connection-mode")
+            .arg(browser_connection_mode_name(
+                config.browser_connection_mode(),
+            ))
+            .arg("--debug-endpoint")
+            .arg(config.browser_debug_endpoint())
+            .arg("--extension-required")
+            .arg(if config.browser_extension_required() {
+                "true"
+            } else {
+                "false"
+            })
+            .arg("--auto-open-target-tab")
+            .arg(if config.browser_auto_open_target_tab() {
+                "true"
+            } else {
+                "false"
+            })
             .env("TABLINQ_ASSET_ROOT", &runtime.asset_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1021,14 +1039,14 @@ fn is_recoverable_adapter_error(message: &str) -> bool {
         || message.contains("Cannot find context")
         || message.contains("Frame has been detached")
         || message.contains("navigation")
-        || message.contains("managed page is not open")
+        || message.contains("target page is not open")
         || message.contains("Target page, context or browser has been closed")
         || message.contains("browser adapter closed without")
 }
 
 fn should_reset_after_failure(message: &str) -> bool {
     message.contains("cancelled")
-        || message.contains("managed page is not open")
+        || message.contains("target page is not open")
         || message.contains("Target page, context or browser has been closed")
         || message.contains("browser adapter closed without")
 }
@@ -1076,17 +1094,32 @@ fn normalize_snapshot(
     mut snapshot: BrowserStatusSnapshot,
 ) -> BrowserStatusSnapshot {
     snapshot.attach_mode = config.browser_connection_mode();
-    snapshot.browser_owner = BrowserOwner::Managed;
-    snapshot.cdp_attached = false;
-    snapshot.target_tab_found = snapshot.running && snapshot.page_ready;
-    snapshot.debug_endpoint = Some(config.browser_debug_endpoint());
-    snapshot.auth_source = if snapshot.authenticated {
-        AuthSource::Page
+    if snapshot.debug_endpoint.is_none() {
+        snapshot.debug_endpoint = Some(config.browser_debug_endpoint());
+    }
+    if snapshot.running {
+        snapshot.target_tab_found = snapshot.target_tab_found || snapshot.page_ready;
     } else {
-        AuthSource::Unknown
-    };
+        snapshot.target_tab_found = false;
+        snapshot.auth_source = AuthSource::Unknown;
+    }
     snapshot.extension_required = config.browser_extension_required();
+    if matches!(
+        snapshot.attach_mode,
+        BrowserConnectionMode::AttachFirst | BrowserConnectionMode::ManagedFallback
+    ) && !snapshot.running
+    {
+        snapshot.browser_owner = BrowserOwner::External;
+    }
     snapshot
+}
+
+fn browser_connection_mode_name(value: BrowserConnectionMode) -> &'static str {
+    match value {
+        BrowserConnectionMode::AttachFirst => "attach_first",
+        BrowserConnectionMode::ManagedFallback => "managed_fallback",
+        BrowserConnectionMode::ManagedOnly => "managed_only",
+    }
 }
 
 fn resolve_adapter_runtime() -> Result<AdapterRuntime> {

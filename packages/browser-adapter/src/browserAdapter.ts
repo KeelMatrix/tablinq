@@ -4,6 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname, extname, resolve } from "node:path";
 import {
+  type Browser,
   chromium,
   type BrowserContext,
   type Download,
@@ -234,6 +235,7 @@ export interface BrowserAdapterOptions {
   connectionMode?: "attach_first" | "managed_fallback" | "managed_only" | null;
   debugEndpoint?: string | null;
   extensionRequired?: boolean;
+  autoOpenTargetTab?: boolean;
 }
 
 export interface BrowserStatusSnapshot {
@@ -329,6 +331,7 @@ interface CapabilityCacheFile {
 }
 
 export class BrowserAdapter {
+  private browser: Browser | undefined;
   private context: BrowserContext | undefined;
   private managedPage: Page | undefined;
   private readonly profileDir: string;
@@ -342,12 +345,18 @@ export class BrowserAdapter {
     | "managed_only";
   private readonly debugEndpoint: string | null;
   private readonly extensionRequired: boolean;
+  private readonly autoOpenTargetTab: boolean;
   private currentTargetUrl: string;
   private currentBrowserPath: string | null;
   private currentHeadless = false;
   private reloadCount = 0;
   private lastScreenshotPath: string | null = null;
+  private targetPageId: string | null = null;
+  private targetPageCreatedByAdapter = false;
+  private browserOwner: "external" | "managed" = "managed";
+  private cdpAttached = false;
   private readonly observedPages = new WeakSet<Page>();
+  private readonly observedContexts = new WeakSet<BrowserContext>();
   private extensionConnected = false;
   private lastCapabilityReport: CapabilityReportPayload | null = null;
   private lastUiSignature: string | null = null;
@@ -376,9 +385,10 @@ export class BrowserAdapter {
     this.defaultTargetUrl = options.defaultTargetUrl;
     this.defaultBrowserPath = options.defaultBrowserPath ?? null;
     this.extensionDir = resolveExtensionDir(options.extensionDir);
-    this.connectionMode = options.connectionMode ?? "attach_first";
+    this.connectionMode = options.connectionMode ?? "managed_only";
     this.debugEndpoint = options.debugEndpoint ?? "http://127.0.0.1:9222";
     this.extensionRequired = options.extensionRequired ?? true;
+    this.autoOpenTargetTab = options.autoOpenTargetTab ?? true;
     this.currentTargetUrl = options.defaultTargetUrl;
     this.currentBrowserPath = options.defaultBrowserPath ?? null;
     this.capabilityCachePath = resolve(
@@ -421,10 +431,7 @@ export class BrowserAdapter {
 
     return {
       running,
-      browser_kind: resolveBrowserLaunchConfig(
-        process.platform,
-        this.currentBrowserPath ?? undefined,
-      ).browserKind,
+      browser_kind: this.statusBrowserKind(),
       profile_dir: this.profileDir,
       downloads_dir: this.downloadsDir,
       target_url: this.currentTargetUrl,
@@ -438,10 +445,10 @@ export class BrowserAdapter {
       extension_connected: this.extensionConnected,
       capability_report: this.lastCapabilityReport,
       attach_mode: this.connectionMode,
-      browser_owner: "managed",
-      cdp_attached: false,
+      browser_owner: this.browserOwner,
+      cdp_attached: this.cdpAttached,
       target_tab_found: running,
-      target_tab_id: null,
+      target_tab_id: running ? this.targetPageId : null,
       debug_endpoint: this.debugEndpoint,
       auth_source:
         running && inferAuthenticated(page!.url()) ? "page" : "unknown",
@@ -455,10 +462,7 @@ export class BrowserAdapter {
 
     return {
       running,
-      browser_kind: resolveBrowserLaunchConfig(
-        process.platform,
-        this.currentBrowserPath ?? undefined,
-      ).browserKind,
+      browser_kind: this.statusBrowserKind(),
       profile_dir: this.profileDir,
       downloads_dir: this.downloadsDir,
       target_url: this.currentTargetUrl,
@@ -472,10 +476,10 @@ export class BrowserAdapter {
       extension_connected: this.extensionConnected,
       capability_report: this.lastCapabilityReport,
       attach_mode: this.connectionMode,
-      browser_owner: "managed",
-      cdp_attached: false,
+      browser_owner: this.browserOwner,
+      cdp_attached: this.cdpAttached,
       target_tab_found: running,
-      target_tab_id: null,
+      target_tab_id: running ? this.targetPageId : null,
       debug_endpoint: this.debugEndpoint,
       auth_source:
         running && inferAuthenticated(page!.url()) ? "page" : "unknown",
@@ -486,7 +490,7 @@ export class BrowserAdapter {
   async screenshot(path: string): Promise<BrowserStatusSnapshot> {
     await this.recoverManagedPage();
     if (!this.managedPage || this.managedPage.isClosed()) {
-      throw new Error("managed page is not open");
+      throw new Error("target page is not open");
     }
 
     const screenshotPath = resolve(path);
@@ -497,11 +501,28 @@ export class BrowserAdapter {
   }
 
   async close(): Promise<BrowserStatusSnapshot> {
-    if (this.context) {
+    if (this.cdpAttached) {
+      if (
+        this.targetPageCreatedByAdapter &&
+        this.managedPage &&
+        !this.managedPage.isClosed()
+      ) {
+        await this.closeAttachedTargetPage(this.managedPage);
+      }
+      if (this.browser) {
+        await this.browser.close().catch(() => undefined);
+      }
+    } else if (this.context) {
       await this.context.close();
     }
+    this.browser = undefined;
     this.context = undefined;
     this.managedPage = undefined;
+    this.targetPageId = null;
+    this.targetPageCreatedByAdapter = false;
+    this.browserOwner =
+      this.connectionMode === "managed_only" ? "managed" : "external";
+    this.cdpAttached = false;
     this.extensionConnected = false;
     this.lastCapabilityReport = null;
     this.lastDomNeighborhoods = [];
@@ -515,6 +536,13 @@ export class BrowserAdapter {
 
   getManagedPageForTest(): Page | undefined {
     return this.managedPage;
+  }
+
+  private statusBrowserKind(): string {
+    if (this.currentBrowserPath) {
+      return inferBrowserKind(this.currentBrowserPath);
+    }
+    return process.platform === "win32" ? "msedge" : "chromium";
   }
 
   getLastDomNeighborhoodsForTest(): DomNeighborhoodSnapshot[] {
@@ -962,7 +990,7 @@ export class BrowserAdapter {
     const page = await this.ensureManagedPage(targetUrl);
     if (!inferAuthenticated(page.url())) {
       throw new Error(
-        "auth required: managed browser session is not authenticated",
+        "auth required: target browser session is not authenticated",
       );
     }
     return page;
@@ -1361,35 +1389,18 @@ export class BrowserAdapter {
     let page = this.managedPage;
 
     if (!page || page.isClosed()) {
-      page = await this.context!.newPage();
-      this.attachPage(page);
-      this.managedPage = page;
+      page = await this.createTargetPage(targetUrl);
     }
 
     try {
-      if (page.url() !== targetUrl) {
-        await page.goto(targetUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: NAVIGATION_TIMEOUT_MS,
-        });
-      } else {
-        await page.waitForLoadState("domcontentloaded", {
-          timeout: NAVIGATION_TIMEOUT_MS,
-        });
-      }
+      await this.navigateTargetPage(page, targetUrl);
     } catch (error) {
       if (!isTransientPageError(error)) {
         throw error;
       }
 
-      const replacement = await this.context!.newPage();
-      this.attachPage(replacement);
-      this.managedPage = replacement;
-      page = replacement;
-      await page.goto(targetUrl, {
-        waitUntil: "domcontentloaded",
-        timeout: NAVIGATION_TIMEOUT_MS,
-      });
+      page = await this.createTargetPage(targetUrl);
+      await this.navigateTargetPage(page, targetUrl);
     }
 
     return page;
@@ -1407,6 +1418,167 @@ export class BrowserAdapter {
     this.hydrateCapabilityCache();
     await mkdir(this.profileDir, { recursive: true });
     await mkdir(this.downloadsDir, { recursive: true });
+    const shouldTryAttach =
+      this.connectionMode === "attach_first" ||
+      this.connectionMode === "managed_fallback";
+    let attachError: Error | null = null;
+
+    if (shouldTryAttach) {
+      try {
+        await this.attachToExistingBrowser();
+        return;
+      } catch (error) {
+        attachError = error instanceof Error ? error : new Error(String(error));
+        if (this.connectionMode === "attach_first") {
+          throw attachError;
+        }
+      }
+    }
+
+    try {
+      await this.launchManagedContext(headless, browserPath);
+    } catch (error) {
+      if (attachError) {
+        throw new Error(
+          `${attachError.message}; managed fallback failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  private resolveConversationTarget(conversationId?: string | null): string {
+    const target = new URL(this.currentTargetUrl);
+    if (!conversationId) {
+      target.searchParams.delete("conversation");
+      return target.toString();
+    }
+    target.searchParams.set("conversation", conversationId);
+    return target.toString();
+  }
+
+  private async recoverManagedPage(): Promise<void> {
+    if (!this.context) {
+      return;
+    }
+
+    if (this.managedPage && !this.managedPage.isClosed()) {
+      return;
+    }
+
+    const existing = this.cdpAttached
+      ? await this.findAttachedTargetPage(this.currentTargetUrl)
+      : this.context.pages().find((page) => !page.isClosed());
+    if (existing) {
+      this.context = existing.context();
+      this.observeContext(this.context);
+      this.attachPage(existing);
+      this.managedPage = existing;
+      this.targetPageCreatedByAdapter = false;
+      return;
+    }
+
+    if (this.currentTargetUrl && this.autoOpenTargetTab) {
+      const page = await this.createTargetPage(this.currentTargetUrl);
+      await this.navigateTargetPage(page, this.currentTargetUrl);
+    }
+  }
+
+  private attachPage(page: Page): void {
+    if (this.observedPages.has(page)) {
+      this.managedPage = page;
+      this.targetPageId = buildTargetPageId(page);
+      return;
+    }
+    this.observedPages.add(page);
+
+    const mainFrame = page.mainFrame();
+    let seenInitialNavigation = false;
+    page.on("framenavigated", (frame) => {
+      if (frame !== mainFrame) {
+        return;
+      }
+      if (!page.isClosed() && this.managedPage === page) {
+        this.currentTargetUrl = page.url();
+        this.targetPageId = buildTargetPageId(page);
+      }
+      if (seenInitialNavigation) {
+        this.reloadCount += 1;
+      } else {
+        seenInitialNavigation = true;
+      }
+    });
+    page.on("close", () => {
+      if (this.managedPage === page) {
+        this.managedPage = undefined;
+        this.targetPageId = null;
+        this.targetPageCreatedByAdapter = false;
+      }
+    });
+    page.on("crash", () => {
+      if (this.managedPage === page) {
+        this.managedPage = undefined;
+        this.targetPageId = null;
+        this.targetPageCreatedByAdapter = false;
+      }
+    });
+    this.managedPage = page;
+    this.targetPageId = buildTargetPageId(page);
+  }
+
+  private async attachToExistingBrowser(): Promise<void> {
+    const endpoint = this.debugEndpoint?.trim();
+    if (!endpoint) {
+      throw new Error(
+        "cdp-unavailable: browser debug endpoint is not configured",
+      );
+    }
+
+    try {
+      this.browser = await chromium.connectOverCDP(endpoint);
+    } catch (error) {
+      throw new Error(
+        `cdp-connect-failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    const context = this.browser.contexts()[0];
+    if (!context) {
+      await this.browser.close().catch(() => undefined);
+      this.browser = undefined;
+      throw new Error(
+        "browser-not-debuggable: attached browser did not expose a debuggable context",
+      );
+    }
+
+    this.browserOwner = "external";
+    this.cdpAttached = true;
+    this.context = context;
+    this.observeContext(context);
+    this.browser.on("disconnected", () => {
+      this.browser = undefined;
+      this.context = undefined;
+      this.managedPage = undefined;
+      this.targetPageId = null;
+      this.targetPageCreatedByAdapter = false;
+      this.cdpAttached = false;
+      this.extensionConnected = false;
+      this.lastCapabilityReport = null;
+      this.lastDomNeighborhoods = [];
+      this.lastUiSignature = null;
+    });
+    for (const existingContext of this.browser.contexts()) {
+      this.observeContext(existingContext);
+      for (const page of existingContext.pages()) {
+        this.attachPage(page);
+      }
+    }
+  }
+
+  private async launchManagedContext(
+    headless: boolean,
+    browserPath?: string,
+  ): Promise<void> {
     const launch = resolveBrowserLaunchConfig(process.platform, browserPath);
     const launchArgs =
       !headless && this.extensionDir
@@ -1436,92 +1608,135 @@ export class BrowserAdapter {
       }
       throw new Error(`browser launch failed: ${message}`);
     }
-    this.context.on("close", () => {
-      this.context = undefined;
-      this.managedPage = undefined;
-      this.extensionConnected = false;
-      this.lastCapabilityReport = null;
-      this.lastDomNeighborhoods = [];
-      this.lastUiSignature = null;
-    });
-    this.context.on("page", (page) => {
-      this.attachPage(page);
-    });
+    this.browser = undefined;
+    this.browserOwner = "managed";
+    this.cdpAttached = false;
+    this.observeContext(this.context);
     for (const page of this.context.pages()) {
       this.attachPage(page);
     }
   }
 
-  private resolveConversationTarget(conversationId?: string | null): string {
-    const target = new URL(this.currentTargetUrl);
-    if (!conversationId) {
-      target.searchParams.delete("conversation");
-      return target.toString();
+  private observeContext(context: BrowserContext): void {
+    if (this.observedContexts.has(context)) {
+      return;
     }
-    target.searchParams.set("conversation", conversationId);
-    return target.toString();
+    this.observedContexts.add(context);
+
+    context.on("close", () => {
+      if (this.context === context) {
+        this.context = undefined;
+        this.managedPage = undefined;
+        this.targetPageId = null;
+        this.targetPageCreatedByAdapter = false;
+        this.extensionConnected = false;
+        this.lastCapabilityReport = null;
+        this.lastDomNeighborhoods = [];
+        this.lastUiSignature = null;
+      }
+    });
+    context.on("page", (page) => {
+      this.attachPage(page);
+    });
   }
 
-  private async recoverManagedPage(): Promise<void> {
+  private async createTargetPage(targetUrl: string): Promise<Page> {
+    if (this.cdpAttached) {
+      const existing = await this.findAttachedTargetPage(targetUrl);
+      if (existing) {
+        this.context = existing.context();
+        this.observeContext(this.context);
+        this.attachPage(existing);
+        this.managedPage = existing;
+        this.targetPageCreatedByAdapter = false;
+        await existing.bringToFront().catch(() => undefined);
+        return existing;
+      }
+      if (!this.autoOpenTargetTab) {
+        throw new Error(
+          "target-tab-missing: no matching target tab was found in the attached browser",
+        );
+      }
+    }
+
     if (!this.context) {
-      return;
+      throw new Error(
+        this.cdpAttached
+          ? "target-tab-missing: attached browser context is unavailable"
+          : "browser launch failed: browser context is unavailable",
+      );
     }
 
-    if (this.managedPage && !this.managedPage.isClosed()) {
-      return;
-    }
+    const page = await this.context.newPage();
+    this.attachPage(page);
+    this.managedPage = page;
+    this.targetPageCreatedByAdapter = true;
+    return page;
+  }
 
-    const existing = this.context.pages().find((page) => !page.isClosed());
-    if (existing) {
-      this.attachPage(existing);
-      this.managedPage = existing;
-      return;
-    }
-
-    if (this.currentTargetUrl) {
-      const page = await this.context.newPage();
-      this.attachPage(page);
-      this.managedPage = page;
-      await page.goto(this.currentTargetUrl, {
+  private async navigateTargetPage(
+    page: Page,
+    targetUrl: string,
+  ): Promise<void> {
+    if (page.url() !== targetUrl) {
+      await page.goto(targetUrl, {
         waitUntil: "domcontentloaded",
         timeout: NAVIGATION_TIMEOUT_MS,
       });
-    }
-  }
-
-  private attachPage(page: Page): void {
-    if (this.observedPages.has(page)) {
-      this.managedPage = page;
       return;
     }
-    this.observedPages.add(page);
 
-    const mainFrame = page.mainFrame();
-    let seenInitialNavigation = false;
-    page.on("framenavigated", (frame) => {
-      if (frame !== mainFrame) {
+    await page.waitForLoadState("domcontentloaded", {
+      timeout: NAVIGATION_TIMEOUT_MS,
+    });
+  }
+
+  private async findAttachedTargetPage(
+    targetUrl: string,
+  ): Promise<Page | undefined> {
+    if (!this.browser) {
+      return undefined;
+    }
+
+    const candidates = this.browser
+      .contexts()
+      .flatMap((context) => context.pages())
+      .filter(
+        (page) =>
+          !page.isClosed() && matchesTargetWorkspace(page.url(), targetUrl),
+      );
+
+    if (
+      this.managedPage &&
+      !this.managedPage.isClosed() &&
+      candidates.includes(this.managedPage)
+    ) {
+      return this.managedPage;
+    }
+
+    for (const page of candidates) {
+      await this.refreshCapabilities(page);
+      if (this.extensionConnected) {
+        return page;
+      }
+    }
+
+    return candidates.at(-1);
+  }
+
+  private async closeAttachedTargetPage(page: Page): Promise<void> {
+    try {
+      const session = await page.context().newCDPSession(page);
+      const info = await session.send("Target.getTargetInfo");
+      const targetId = info?.targetInfo?.targetId;
+      if (targetId) {
+        await session.send("Target.closeTarget", { targetId });
+        await session.detach().catch(() => undefined);
         return;
       }
-      if (!page.isClosed()) {
-        this.currentTargetUrl = page.url();
-      }
-      if (seenInitialNavigation) {
-        this.reloadCount += 1;
-      } else {
-        seenInitialNavigation = true;
-      }
-    });
-    page.on("close", () => {
-      if (this.managedPage === page) {
-        this.managedPage = undefined;
-      }
-    });
-    page.on("crash", () => {
-      if (this.managedPage === page) {
-        this.managedPage = undefined;
-      }
-    });
-    this.managedPage = page;
+    } catch {}
+
+    await page.close().catch(() => undefined);
   }
 
   private async refreshCapabilities(page: Page): Promise<void> {
@@ -2558,6 +2773,28 @@ function workspaceKeyFromUrl(rawUrl: string): string {
   } catch {
     return rawUrl;
   }
+}
+
+function matchesTargetWorkspace(pageUrl: string, targetUrl: string): boolean {
+  try {
+    const page = new URL(pageUrl);
+    const target = new URL(targetUrl);
+    if (page.origin !== target.origin || page.pathname !== target.pathname) {
+      return false;
+    }
+    return workspaceKeyFromUrl(pageUrl) === workspaceKeyFromUrl(targetUrl);
+  } catch {
+    return false;
+  }
+}
+
+function buildTargetPageId(page: Page): string {
+  return createHash("sha1")
+    .update(
+      `${workspaceKeyFromUrl(page.url())}:${page.context().pages().indexOf(page)}`,
+    )
+    .digest("hex")
+    .slice(0, 16);
 }
 
 function resolveTablinqAssetPath(

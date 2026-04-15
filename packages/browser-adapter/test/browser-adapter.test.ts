@@ -1,14 +1,19 @@
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+import { chromium } from "playwright-core";
 import {
   BrowserAdapter,
   chooseUniqueArtifactPath,
   detectBrowserExecutable,
   resolveBrowserLaunchConfig,
 } from "../src/browserAdapter";
-import { startFakeChatGptServer, stopFakeChatGptServer } from "./helpers";
+import {
+  allocatePort,
+  startFakeChatGptServer,
+  stopFakeChatGptServer,
+} from "./helpers";
 
 function withHarnessUrl(
   baseUrl: string,
@@ -53,6 +58,66 @@ async function startTrackedFakeChatGptServer() {
   return server;
 }
 
+async function startTrackedAttachableBrowser(initialUrl: string) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-attach-browser-"));
+  const debugPort = await allocatePort();
+  const launch = resolveBrowserLaunchConfig(process.platform);
+  if (!launch.executablePath) {
+    throw new Error("no supported browser executable found for attach tests");
+  }
+
+  const userDataDir = path.join(root, "profile");
+  await mkdir(userDataDir, { recursive: true });
+  const child = spawn(
+    launch.executablePath,
+    [
+      `--remote-debugging-port=${debugPort}`,
+      `--user-data-dir=${userDataDir}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-background-networking",
+      "--disable-sync",
+      "--disable-gpu",
+      "--headless=new",
+      initialUrl,
+    ],
+    {
+      stdio: "ignore",
+    },
+  );
+
+  trackedServers.push(child);
+  const endpoint = `http://127.0.0.1:${debugPort}`;
+  await waitForDebugEndpoint(endpoint);
+  return { process: child, endpoint, browserPath: launch.executablePath };
+}
+
+async function waitForDebugEndpoint(endpoint: string): Promise<void> {
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${endpoint}/json/version`);
+      if (response.ok) {
+        return;
+      }
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`debug endpoint did not become ready at ${endpoint}`);
+}
+
+async function listAttachedPages(endpoint: string): Promise<string[]> {
+  const browser = await chromium.connectOverCDP(endpoint);
+  try {
+    return browser
+      .contexts()
+      .flatMap((context) => context.pages())
+      .map((page) => page.url());
+  } finally {
+    await browser.close();
+  }
+}
+
 beforeEach(() => {
   trackedAdapters = [];
   trackedServers = [];
@@ -95,11 +160,11 @@ describe("browser adapter", () => {
     expect(snapshot.authenticated).toBe(true);
     expect(snapshot.extension_connected).toBe(true);
     expect(snapshot.capability_report?.matrix.composer_ready).toBe(true);
-    expect(snapshot.attach_mode).toBe("attach_first");
+    expect(snapshot.attach_mode).toBe("managed_only");
     expect(snapshot.browser_owner).toBe("managed");
     expect(snapshot.cdp_attached).toBe(false);
     expect(snapshot.target_tab_found).toBe(true);
-    expect(snapshot.target_tab_id).toBeNull();
+    expect(snapshot.target_tab_id).toBeTruthy();
     expect(snapshot.debug_endpoint).toBe("http://127.0.0.1:9222");
     expect(snapshot.auth_source).toBe("page");
     expect(snapshot.extension_required).toBe(true);
@@ -283,6 +348,199 @@ describe("browser adapter", () => {
     const snapshot = await adapter.health();
 
     expect(snapshot.reload_count).toBeGreaterThan(0);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("attaches to an existing browser session", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const attached = await startTrackedAttachableBrowser(server.url);
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+
+    const snapshot = await adapter.open({
+      targetUrl: server.url,
+      headless: true,
+    });
+
+    expect(snapshot.running).toBe(true);
+    expect(snapshot.browser_owner).toBe("external");
+    expect(snapshot.cdp_attached).toBe(true);
+    expect(snapshot.current_url).toContain(server.url);
+    expect(snapshot.target_tab_found).toBe(true);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("reuses an existing ChatGPT tab in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const attached = await startTrackedAttachableBrowser(server.url);
+    const before = await listAttachedPages(attached.endpoint);
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+
+    await adapter.open({ targetUrl: server.url, headless: true });
+    const after = await listAttachedPages(attached.endpoint);
+
+    expect(after.length).toBe(before.length);
+    expect(after.some((url) => url.includes(server.url))).toBe(true);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("opens a new target tab when none exists in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const attached = await startTrackedAttachableBrowser("about:blank");
+    const before = await listAttachedPages(attached.endpoint);
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+
+    const snapshot = await adapter.open({
+      targetUrl: server.url,
+      headless: true,
+    });
+    const after = await listAttachedPages(attached.endpoint);
+
+    expect(snapshot.browser_owner).toBe("external");
+    expect(snapshot.current_url).toContain(server.url);
+    expect(before.every((url) => !url.includes(server.url))).toBe(true);
+    expect(after.some((url) => url.includes(server.url))).toBe(true);
+
+    await adapter.close();
+    const closed = await listAttachedPages(attached.endpoint);
+    expect(closed.length).toBeGreaterThan(0);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers after the attached target tab is closed", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const attached = await startTrackedAttachableBrowser(server.url);
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+
+    await adapter.open({ targetUrl: server.url, headless: true });
+    await adapter.getManagedPageForTest()!.close();
+
+    const snapshot = await adapter.health();
+    expect(snapshot.running).toBe(true);
+    expect(snapshot.browser_owner).toBe("external");
+    expect(snapshot.current_url).toContain(server.url);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("counts reloads in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const attached = await startTrackedAttachableBrowser(server.url);
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+
+    await adapter.open({ targetUrl: server.url, headless: true });
+    await adapter
+      .getManagedPageForTest()!
+      .reload({ waitUntil: "domcontentloaded" });
+
+    const snapshot = await adapter.health();
+    expect(snapshot.reload_count).toBeGreaterThan(0);
+    expect(snapshot.browser_owner).toBe("external");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("captures diagnostics screenshots in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const attached = await startTrackedAttachableBrowser(server.url);
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+    await adapter.open({ targetUrl: server.url, headless: true });
+
+    const diagnostics = await adapter.diagnostics(path.join(root, "bundle"));
+    const screenshot = await stat(diagnostics.screenshot_path!);
+
+    expect(diagnostics.screenshot_path).toBeTruthy();
+    expect(screenshot.size).toBeGreaterThan(0);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("falls back to managed launch when attach mode is configured as managed_fallback", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "managed_fallback",
+        debugEndpoint: "http://127.0.0.1:9",
+      }),
+    );
+
+    const snapshot = await adapter.open({
+      targetUrl: server.url,
+      headless: true,
+    });
+
+    expect(snapshot.running).toBe(true);
+    expect(snapshot.browser_owner).toBe("managed");
+    expect(snapshot.cdp_attached).toBe(false);
+    expect(snapshot.current_url).toContain(server.url);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
