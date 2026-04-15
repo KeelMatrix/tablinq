@@ -646,7 +646,7 @@ describe("browser adapter", () => {
   it("switches to the matching attached tab that has a working extension report", async () => {
     const server = await startTrackedFakeChatGptServer();
     const attached = await startTrackedAttachableBrowser(server.url);
-    const preferredUrl = `${server.url}?conversation=preferred`;
+    const preferredUrl = new URL("c/preferred", server.url).toString();
     await withAttachedBrowser(attached.endpoint, async (browser) => {
       const context = browser.contexts()[0]!;
       const first = context.pages()[0]!;
@@ -675,29 +675,21 @@ describe("browser adapter", () => {
     });
     const selected = await adapter.getManagedPageForTest()!.url();
 
-    expect(selected).toContain("conversation=preferred");
+    expect(selected).toContain("/c/preferred");
     expect((await adapter.health()).extension_connected).toBe(true);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
   });
 
-  it("normalizes legacy and current conversation urls to the same workspace", () => {
-    const legacy =
-      "https://chatgpt.com/?variant=live&conversation=conv-9";
+  it("uses /c/<id> as the only conversation identity form", () => {
     const current = "https://chatgpt.com/c/conv-9?variant=live";
+    const workspace = "https://chatgpt.com/?variant=live";
 
-    expect(conversationIdFromUrl(legacy)).toBe("conv-9");
+    expect(conversationIdFromUrl(workspace)).toBeNull();
     expect(conversationIdFromUrl(current)).toBe("conv-9");
-    expect(workspaceKeyFromUrl(legacy)).toBe(
-      "https://chatgpt.com/?variant=live",
-    );
-    expect(workspaceKeyFromUrl(current)).toBe(
-      "https://chatgpt.com/?variant=live",
-    );
-    expect(resolveConversationUrl(legacy, "conv-9")).toBe(
-      "https://chatgpt.com/c/conv-9?variant=live",
-    );
+    expect(workspaceKeyFromUrl(current)).toBe(workspace);
+    expect(resolveConversationUrl(workspace, "conv-9")).toBe(current);
   });
 
   it("falls back to managed launch when attach mode is configured as managed_fallback", async () => {

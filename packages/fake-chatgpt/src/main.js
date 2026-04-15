@@ -13,8 +13,6 @@ const missingControls = new Set(
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean),
 );
-const conversationStyle =
-  params.get("conversation_style") === "query" ? "query" : "path";
 
 function pathnameSegments(pathname) {
   return pathname.split("/").filter(Boolean);
@@ -61,7 +59,7 @@ document.body.dataset.uploadedFiles = "";
 document.body.dataset.researchState = "idle";
 document.body.dataset.researchStatusMessage = "";
 document.body.dataset.conversationId =
-  params.get("conversation") || conversationIdFromPathname(window.location.pathname) || "";
+  conversationIdFromPathname(window.location.pathname) || "";
 document.body.dataset.lastMessageId = "";
 
 note.textContent =
@@ -365,7 +363,6 @@ function currentConversationId() {
   const url = new URL(window.location.href);
   return (
     document.body.dataset.conversationId ||
-    url.searchParams.get("conversation") ||
     conversationIdFromPathname(url.pathname) ||
     uniqueId("conv")
   );
@@ -383,13 +380,7 @@ function writeConversationState(conversationId, messageId) {
   document.body.dataset.conversationId = conversationId;
   document.body.dataset.lastMessageId = messageId;
   const url = new URL(window.location.href);
-  url.pathname = conversationWorkspacePathname(url.pathname);
-  url.searchParams.delete("conversation");
-  if (conversationStyle === "query") {
-    url.searchParams.set("conversation", conversationId);
-  } else {
-    url.pathname = conversationPathname(url.pathname, conversationId);
-  }
+  url.pathname = conversationPathname(url.pathname, conversationId);
   history.replaceState({}, "", url);
 }
 
