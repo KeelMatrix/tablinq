@@ -3383,6 +3383,8 @@ mod tests {
     fn test_config() -> (TempDir, AppConfig) {
         let dir = tempdir().unwrap();
         let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+        config.file.browser_connection_mode =
+            Some(shared_protocol::BrowserConnectionMode::ManagedOnly);
         if let Some(gateway) = config.file.gateway.as_mut() {
             gateway.port = Some(0);
             gateway.request_timeout_ms = Some(20_000);

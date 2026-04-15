@@ -1,7 +1,8 @@
 use gptd::{AppConfig, CoreService};
 use shared_protocol::{
-    AskCommand, BrowserOpenRequest, CancelJobCommand, EventPayload, GatewayRequestContext, JobKind,
-    JobStatus, Mode, PullArtifactCommand, ResearchCommand, StreamChunkKind,
+    AskCommand, BrowserConnectionMode, BrowserOpenRequest, CancelJobCommand, EventPayload,
+    GatewayRequestContext, JobKind, JobStatus, Mode, PullArtifactCommand, ResearchCommand,
+    StreamChunkKind,
 };
 use std::fs;
 use std::net::TcpListener;
@@ -101,7 +102,8 @@ fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
     let upload_fixture = dir.path().join("brief.txt");
     fs::write(&upload_fixture, "brief body").unwrap();
 
-    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
     let core = CoreService::new(config).unwrap();
 
     let open = core
@@ -191,7 +193,8 @@ fn core_service_runs_research_jobs_without_cli() {
     let dir = tempdir().unwrap();
     let output_dir = dir.path().join("research-out");
 
-    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
     let core = CoreService::new(config).unwrap();
     core.browser_open(BrowserOpenRequest {
         target_url: Some(format!("{fake_url}/?scenario=research-success")),

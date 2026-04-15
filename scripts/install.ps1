@@ -377,6 +377,7 @@ New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
 Copy-Item -Path (Join-Path $PackageRoot "*") -Destination $stagingRoot -Recurse -Force -Exclude "bin"
 
 $binDir = Join-Path $stagingRoot "bin"
+$publicCliBin = Join-Path $binDir "gpt.exe"
 $internalCliBin = Join-Path $binDir "tablinq-cli.exe"
 $daemonBin = Join-Path $binDir "gptd.exe"
 $gatewayBin = Join-Path $binDir "tablinq-gateway.exe"
@@ -388,6 +389,7 @@ $extensionId = Get-ExtensionIdFromKey -ManifestPath $extensionManifestPath
 $pageAdapterRuntimePath = Join-Path $stagingRoot "browser-adapter\src\pageAdapter.runtime.js"
 
 New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+Copy-Item -Path (Join-Path $PackageRoot "bin\gpt.exe") -Destination $publicCliBin -Force
 Copy-Item -Path (Join-Path $PackageRoot "bin\gpt.exe") -Destination $internalCliBin -Force
 Copy-Item -Path (Join-Path $PackageRoot "bin\gptd.exe") -Destination $daemonBin -Force
 Copy-Item -Path (Join-Path $PackageRoot "bin\tablinq-gateway.exe") -Destination $gatewayBin -Force
