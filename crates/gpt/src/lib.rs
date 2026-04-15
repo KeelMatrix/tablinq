@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use shared_protocol::{
     AskCommand, BrowserConnectionMode, BrowserOpenRequest, CancelJobCommand, DaemonRequest,
     DaemonResponse, Effort, EventPayload, Mode, ModelClass, PullArtifactCommand, ResearchCommand,
-    StreamChunkKind, build_state_paths, resolve_state_root,
+    StreamChunkKind, CHROME_ATTACH_PROFILE_NOTE, build_state_paths, resolve_state_root,
 };
 use std::env;
 use std::fs;
@@ -705,7 +705,7 @@ fn attach_startup_story(config: &gptd::AppConfig) -> Value {
             "browser_path": plan.executable,
             "launch_args": plan.launch_args,
             "attach_profile_dir": plan.attach_profile_dir.as_ref().map(|path| path.display().to_string()),
-            "profile_note": plan.attach_profile_dir.as_ref().map(|_| "Chrome attach-first uses a dedicated persistent real profile under the Tablinq state root. Sign in once in that profile before attaching."),
+            "profile_note": plan.attach_profile_dir.as_ref().map(|_| CHROME_ATTACH_PROFILE_NOTE),
         }),
         Err(error) => json!({
             "browser_path": Value::Null,
@@ -1478,6 +1478,7 @@ mod tests {
         assert!(output.contains("\"config_path\""));
         assert!(output.contains("\"browser_connection_mode\": \"attach_first\""));
         assert!(output.contains("\"browser_debug_port\": 9222"));
+        assert!(output.contains("\"chrome_attach_profile_dir\""));
     }
 
     #[test]
@@ -1552,6 +1553,12 @@ mod tests {
     #[test]
     fn browser_connection_info_reports_attach_first_defaults() {
         let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("config")).unwrap();
+        fs::write(
+            dir.path().join("config").join("config.toml"),
+            "browser_channel = \"chrome\"\n",
+        )
+        .unwrap();
         let cli = Cli::parse_from([
             "gpt",
             "--state-root",
@@ -1567,6 +1574,45 @@ mod tests {
         assert!(output.contains("\"gpt browser start-debug\""));
         assert!(output.contains("\"gpt browser attach\""));
         assert!(output.contains("\"browser_connection_mode = \\\"managed_only\\\"\""));
+        assert!(output.contains("\"attach_profile_dir\""));
+        assert!(output.contains(CHROME_ATTACH_PROFILE_NOTE));
+    }
+
+    #[test]
+    fn browser_start_debug_serialized_output_includes_chrome_attach_profile_fields() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("config")).unwrap();
+        fs::write(
+            dir.path().join("config").join("config.toml"),
+            "browser_channel = \"chrome\"\n",
+        )
+        .unwrap();
+        let config = gptd::AppConfig::load_or_create(Some(dir.path())).unwrap();
+        let browser_path = create_fake_browser_launcher(dir.path(), "chrome");
+
+        let value = browser_start_debug(&config, Some("https://chatgpt.com/"), Some(&browser_path))
+            .unwrap();
+
+        let attach_profile_dir = value
+            .get("attach_profile_dir")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert_eq!(
+            attach_profile_dir,
+            config.paths.chrome_attach_profile_dir.display().to_string()
+        );
+        assert_eq!(
+            value.get("note").and_then(Value::as_str),
+            Some(browser_start_debug_note(true))
+        );
+        assert!(
+            value["launch_args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item.as_str() == Some(&format!("--user-data-dir={attach_profile_dir}")))
+        );
+        assert!(config.paths.chrome_attach_profile_dir.exists());
     }
 
     #[test]
@@ -1636,6 +1682,28 @@ mod tests {
                 .iter()
                 .any(|arg| arg.contains("--user-data-dir"))
         );
+    }
+
+    fn create_fake_browser_launcher(root: &Path, name: &str) -> PathBuf {
+        #[cfg(windows)]
+        let path = root.join(format!("{name}.cmd"));
+        #[cfg(not(windows))]
+        let path = root.join(name);
+
+        #[cfg(windows)]
+        fs::write(&path, "@echo off\r\nexit /b 0\r\n").unwrap();
+
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+            let mut permissions = fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(&path, permissions).unwrap();
+        }
+
+        path
     }
 
     #[test]

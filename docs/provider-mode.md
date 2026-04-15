@@ -7,14 +7,15 @@ This is the right fit when you want tools or agent frameworks to talk to a real 
 ## Bring-up
 
 1. Build and install Tablinq.
-2. Load the unpacked extension from the installed `extension` directory into your normal Chrome or Edge profile.
+2. If you are using Edge attach-first, load the unpacked extension from the installed `extension` directory into the Edge profile you will attach to.
 3. Start the control plane:
    - `gpt daemon start`
    - `gpt gateway start`
 4. Start your normal browser in attachable mode:
    - `gpt browser start-debug`
-5. Sign in manually at `https://chatgpt.com/` in that browser profile.
-6. Attach and verify health:
+5. If you are using Chrome attach-first, load the unpacked extension into the dedicated persistent Chrome attach profile under the Tablinq state root.
+6. Sign in manually at `https://chatgpt.com/` in that browser profile.
+7. Attach and verify health:
    - `gpt browser attach`
    - `gpt status`
    - `gpt doctor`

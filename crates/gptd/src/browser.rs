@@ -5,7 +5,7 @@ use shared_protocol::{
     AskCommand, AskResult, AuthSource, BrowserConnectionMode, BrowserOpenRequest, BrowserOwner,
     BrowserStatusSnapshot, CapabilityReport, Effort, EventPayload, JobStatus, Mode, ModelClass,
     ResearchCommand, ResearchResult, SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry,
-    StreamChunk, StreamChunkKind,
+    StreamChunk, StreamChunkKind, CHROME_ATTACH_PROFILE_NOTE,
 };
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -1066,6 +1066,8 @@ fn idle_snapshot(
                 "chromium".to_owned()
             },
             profile_dir: config.paths.browser_profile_dir.display().to_string(),
+            attach_profile_dir: None,
+            attach_profile_note: None,
             downloads_dir: config.paths.downloads_dir.display().to_string(),
             target_url: target_url.unwrap_or_else(|| config.browser_target_url().to_owned()),
             current_url: None,
@@ -1115,7 +1117,50 @@ fn normalize_snapshot(
     {
         snapshot.browser_owner = BrowserOwner::External;
     }
+    if uses_chrome_attach_profile(config, snapshot.browser_path.as_deref()) {
+        snapshot.attach_profile_dir = Some(config.paths.chrome_attach_profile_dir.display().to_string());
+        snapshot.attach_profile_note = Some(CHROME_ATTACH_PROFILE_NOTE.to_owned());
+    } else {
+        snapshot.attach_profile_dir = None;
+        snapshot.attach_profile_note = None;
+    }
     snapshot
+}
+
+fn uses_chrome_attach_profile(config: &AppConfig, browser_path: Option<&str>) -> bool {
+    if !matches!(
+        config.browser_connection_mode(),
+        BrowserConnectionMode::AttachFirst | BrowserConnectionMode::ManagedFallback
+    ) {
+        return false;
+    }
+    if let Some(browser_path) = browser_path {
+        if executable_looks_like_edge(browser_path) {
+            return false;
+        }
+        if executable_looks_like_chrome(browser_path) {
+            return true;
+        }
+    }
+    if let Some(browser_path) = config.browser_path() {
+        if executable_looks_like_edge(browser_path) {
+            return false;
+        }
+        if executable_looks_like_chrome(browser_path) {
+            return true;
+        }
+    }
+    config.browser_channel().eq_ignore_ascii_case("chrome")
+}
+
+fn executable_looks_like_edge(executable: &str) -> bool {
+    let lower = executable.to_ascii_lowercase();
+    lower.contains("msedge") || lower.contains("microsoft edge")
+}
+
+fn executable_looks_like_chrome(executable: &str) -> bool {
+    let lower = executable.to_ascii_lowercase();
+    lower.contains("google chrome") || lower.contains("chrome.exe") || lower.contains("chrome")
 }
 
 fn browser_connection_mode_name(value: BrowserConnectionMode) -> &'static str {

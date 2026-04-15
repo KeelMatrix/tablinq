@@ -7,7 +7,8 @@ This checklist stays out of CI. Use it when you want to validate the attach-firs
 - install locally with `scripts/install.ps1` on Windows or `./scripts/package.sh && ./scripts/install.sh` on Unix-like systems
 - start the daemon with `gpt daemon start`
 - start the gateway with `gpt gateway start`
-- load the unpacked Tablinq extension into your normal Chrome or Edge profile
+- load the unpacked Tablinq extension into the profile you will attach to
+- when using Chrome attach-first, use the dedicated Chrome attach profile under the Tablinq state root
 - fully close that browser
 - start the attachable browser session with `gpt browser start-debug`
 - sign in manually to `https://chatgpt.com/` in that browser profile

@@ -69,6 +69,7 @@ impl AppConfig {
             db_dir: self.paths.db_dir.display().to_string(),
             db_path: self.paths.db_path.display().to_string(),
             browser_profile_dir: self.paths.browser_profile_dir.display().to_string(),
+            chrome_attach_profile_dir: self.paths.chrome_attach_profile_dir.display().to_string(),
             downloads_dir: self.paths.downloads_dir.display().to_string(),
             crash_bundles_dir: self.paths.crash_bundles_dir.display().to_string(),
             ipc_endpoint: self.paths.ipc_endpoint.clone(),
