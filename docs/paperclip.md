@@ -2,17 +2,18 @@
 
 Use Tablinq's local gateway as an OpenAI-compatible provider for Paperclip.
 
-## Good default posture
+## Recommended operating posture
 
+- bring up Tablinq through the normal attach-first flow
 - base URL: `http://127.0.0.1:3847/v1`
 - API key: `gateway.api_key` from `config.toml`
 - streaming: `true`
 - max parallel requests: `1`
-- ask/search timeout: start around `180s`
+- ask or search timeout: start around `180s`
 - research timeout: start around `900s`
 - subagents: disabled or minimized
 
-Paperclip is a strong fit when you want file-backed browser automation, research-style runs, and artifact retrieval through a familiar provider contract.
+Paperclip is a good fit when you want file-backed browser automation, research-style runs, and artifact retrieval through a familiar provider contract.
 
 ## Recommended models
 
@@ -20,7 +21,7 @@ Paperclip is a strong fit when you want file-backed browser automation, research
 - `tablinq-search`
 - `tablinq-research`
 
-## Recommended config
+## Example config
 
 ```json
 {

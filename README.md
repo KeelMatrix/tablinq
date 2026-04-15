@@ -1,91 +1,98 @@
 # Tablinq
 
-**The browser is the provider.**
+**Use ChatGPT as a real local provider, through your real browser session.**
 
-Tablinq turns a real ChatGPT browser session into a local CLI and an OpenAI-compatible gateway. It keeps the browser-driven architecture on purpose: your normal browser session remains the execution engine, while Rust and TypeScript provide the control plane, persistence, packaging, and safe integrations around it.
+Tablinq turns a signed-in ChatGPT tab into:
 
-If you want local tools, scripts, or agent frameworks to work through a dedicated ChatGPT session without exporting cookies, replaying bearer tokens, or pretending the website is a raw API, Tablinq is built for that.
+- a local CLI for ask, research, jobs, sessions, and artifacts
+- a local daemon with durable state and recovery
+- an OpenAI-compatible `/v1/*` gateway for tools and agents
 
-## Why people care
+Tablinq is built for the case where the browser is the provider. It does not export cookies, replay hidden bearer tokens, or pretend the website is a raw API.
 
-- **Real browser session, not a fake provider.** Tablinq attaches to your normal Chrome or Edge session through a local debug endpoint and an extension bridge.
-- **Local-first control plane.** Jobs, conversations, artifacts, failure bundles, and request history stay on your machine.
-- **OpenAI-compatible gateway.** Tools such as OpenClaude and Paperclip can talk to Tablinq through familiar `/v1/*` routes.
-- **Safe by default.** One warm browser session, one active upstream request, conservative queueing, and no blind auto-replay of interrupted requests.
-- **Production-minded recovery.** Interrupted requests can be detected, reconciled against the live conversation, and marked as recovered when the upstream result already exists.
-- **CI-safe browser coverage.** A fake ChatGPT harness exercises browser behavior in tests without depending on the live site.
+## Why Tablinq exists
 
-## What Tablinq does
+If you want local tools to work through ChatGPT without handing out browser secrets, you need a product that respects the browser as the source of truth.
 
-- attaches to your normal Chrome or Edge profile for ChatGPT by default
-- keeps `managed_only` and `managed_fallback` as explicit fallback modes for debugging, CI/local harness isolation, and machines that cannot expose a local debug endpoint
-- exposes local CLI commands for ask, research, jobs, sessions, artifacts, browser lifecycle, and diagnostics
-- exposes an OpenAI-compatible local HTTP gateway for browser-backed provider mode
-- persists jobs, conversations, artifacts, request summaries, and failure bundles locally
-- handles browser disconnects, reloads, stalls, and client disconnects without hanging forever
-- keeps selector packs and protocol schemas versioned outside the compiled runtime
+That is what Tablinq does:
 
-## Why this architecture is unusual
+- it attaches to your normal Chrome or Edge profile
+- it uses a browser extension as the semantic page bridge
+- it keeps local jobs, conversations, artifacts, logs, and failure bundles on your machine
+- it exposes an OpenAI-compatible local gateway without hiding the browser-backed reality
 
-Most AI tooling assumes direct API access. Tablinq starts from the opposite assumption:
+## Why the old Playwright-owned login flow was dropped
 
-1. the browser is the source of truth
-2. the browser session may be fragile, stateful, and UI-driven
-3. local tooling still needs a stable CLI and provider interface
+Tablinq still uses Playwright internally, but **not** as the default browser owner anymore.
 
-That leads to a different stack:
+The old model launched a managed Playwright-owned browser profile and asked users to sign in there. That path was abandoned as the primary workflow because ChatGPT's `chatgpt.com` anti-bot and Cloudflare protections made automation-owned browser startup and login the wrong default. The result was operationally fragile and pushed users toward a browser lifecycle that the site increasingly treats as suspicious.
 
-```mermaid
-flowchart LR
-    CLI["gpt CLI"] --> IPC["local IPC"]
-    IPC --> Daemon["gptd daemon"]
-    Daemon --> DB["SQLite + state root"]
-    Daemon --> Adapter["browser adapter (TS + Playwright)"]
-    Adapter --> Browser["normal Edge / Chrome profile"]
-    Browser --> Extension["MV3 extension"]
-    Extension --> Page["ChatGPT page or fake harness"]
-    Gateway["OpenAI-compatible HTTP gateway"] --> Daemon
-```
+The current design is the correct default for this product:
 
-## Quick demo
+- you run your normal browser
+- you install the Tablinq extension in that real profile
+- you sign in manually
+- Tablinq attaches to that existing browser session through a local debug endpoint
+
+Playwright remains in the system as an attach-and-assist runtime for:
+
+- browser attach and tab discovery
+- focus or navigation when needed
+- screenshots
+- uploads and downloads
+- reload and disconnect recovery
+
+It is no longer the default owner of your ChatGPT login session.
+
+## What you get
+
+- **Real browser execution.** Tablinq runs against the same ChatGPT session you can inspect yourself.
+- **Local-first control plane.** The CLI, daemon, gateway, SQLite state, logs, uploads, downloads, and failure bundles stay local.
+- **OpenAI-compatible gateway.** Tools can call `http://127.0.0.1:3847/v1` instead of screen-scraping on their own.
+- **Conservative recovery.** Interrupted browser-backed work is tracked explicitly and reconciled only when it is safe.
+- **Fallback when needed.** `managed_only` and `managed_fallback` still exist for debugging, CI, harness isolation, and machines that cannot expose a usable debug endpoint.
+
+## Recommended workflow
+
+This is the normal operating path:
+
+1. Install Tablinq and load the extension into your normal Chrome or Edge profile.
+2. Start the local control plane:
+   - `gpt daemon start`
+   - `gpt gateway start`
+3. Start an attachable browser session:
+   - `gpt browser start-debug`
+4. Sign in manually at `https://chatgpt.com/` in that browser profile.
+5. Attach Tablinq:
+   - `gpt browser attach`
+6. Confirm health:
+   - `gpt status`
+   - `gpt doctor`
+   - `gpt browser connection-info`
+   - `gpt capabilities`
+7. Run work:
+   - `gpt ask "Summarize the value of Tablinq in one paragraph."`
+   - `gpt research "Investigate launch blockers for a desktop AI tool."`
+
+## Quick start
 
 ```bash
+pnpm install
+cargo test
+pnpm test
+
 gpt daemon start
 gpt gateway start
 gpt browser start-debug
 # sign in manually in the opened browser if needed
 gpt browser attach
 gpt ask "Summarize the value of Tablinq in one paragraph."
-gpt research "Investigate launch blockers for a desktop AI tool."
 gpt status
 ```
 
-## Three-minute setup
+For packaged install instructions, see [docs/install.md](docs/install.md).
 
-1. Install Rust, Node.js 20+, and `pnpm`.
-2. Run `pnpm install`.
-3. Validate the workspace:
-   - `cargo test`
-   - `pnpm test`
-4. Build and install Tablinq:
-   - Windows: `scripts/package.ps1` then `scripts/install.ps1`
-   - Unix-like: `./scripts/package.sh` then `./scripts/install.sh`
-5. Load the unpacked extension from the installed `extension` directory into your normal Chrome or Edge profile.
-6. Start the control plane:
-   - `gpt daemon start`
-   - `gpt gateway start`
-7. Fully close Chrome or Edge, then start it in attach mode: `gpt browser start-debug`
-8. Sign in manually at `chatgpt.com` in that normal browser profile.
-9. Confirm health:
-   - `gpt browser attach`
-   - `gpt status`
-   - `gpt doctor`
-   - `gpt browser connection-info`
-   - `gpt capabilities`
-
-For the full install flow, see [docs/install.md](docs/install.md).
-
-## CLI surface
+## Command surface
 
 Common commands:
 
@@ -94,8 +101,12 @@ Common commands:
 - `gpt doctor`
 - `gpt capabilities`
 - `gpt config show`
-- `gpt daemon start|status|stop`
-- `gpt gateway start|status|stop`
+- `gpt daemon start`
+- `gpt daemon status`
+- `gpt daemon stop`
+- `gpt gateway start`
+- `gpt gateway status`
+- `gpt gateway stop`
 - `gpt ask "hello"`
 - `gpt ask --model instant --mode search "latest release notes"`
 - `gpt ask --model thinking --effort extended "compare these options"`
@@ -117,93 +128,103 @@ Common commands:
 - `gpt browser reset-profile`
 - `gpt browser profile-info`
 
-Attach-first is the default operating mode. `gpt browser reset-profile` is only for `managed_only` or `managed_fallback` recovery.
+`attach_first` is the default mode. `gpt browser reset-profile` is for `managed_only` and `managed_fallback` only.
 
 ## Provider mode
 
-Tablinq can also run as a local provider for browser-backed automation.
+Tablinq can expose the same browser-backed session through a local OpenAI-compatible gateway.
 
 - base URL: `http://127.0.0.1:3847/v1`
 - auth: local gateway API key from `config.toml`
-- model families:
-  - `tablinq-instant`
-  - `tablinq-thinking-standard`
-  - `tablinq-thinking-extended`
-  - `tablinq-search`
-  - `tablinq-research`
-- recommended concurrency:
-  - `max_parallel_requests = 1`
-  - `max_parallel_branches = 1`
-  - subagents disabled by default
+- recommended concurrency: `1`
+- recommended branch concurrency: `1`
+- subagents disabled by default
 
-Start with [docs/provider-mode.md](docs/provider-mode.md), then see:
+Recommended model families:
 
+- `tablinq-instant`
+- `tablinq-thinking-standard`
+- `tablinq-thinking-extended`
+- `tablinq-search`
+- `tablinq-research`
+
+See:
+
+- [docs/provider-mode.md](docs/provider-mode.md)
 - [docs/openclaude.md](docs/openclaude.md)
 - [docs/paperclip.md](docs/paperclip.md)
 
-## Recovery and safety model
+## Antivirus warning on Windows
 
-Tablinq does **not** rely on hidden network interception, exported cookies, or bearer-token replay.
+Some Windows antivirus products can block packaging, browser startup, local scripts, `node.exe`, `pwsh.exe`, `chrome.exe`, `cmd.exe`, or toolchain binaries such as `esbuild.exe`. If local install, packaging, or test runs fail with `Access is denied` or a blocked-process notification, add the relevant paths to your antivirus exceptions and restore any already-blocked executables from quarantine or notifications.
 
-It stays browser-first and handles failures conservatively:
+Paths that may require exceptions in a typical Windows dev or install environment:
 
-- explicit request states include `running`, `interrupted`, `recovered`, and `failed`
-- local/browser/network interruption is detected with bounded timeouts
-- interrupted work is reconciled against the live conversation when possible
-- streaming resumes only when the observed page state makes that safe
-- prompts are not blindly resubmitted by default
+- `C:\Users\user\Desktop\gpt-cli`
+- `C:\Users\user\AppData\Local\Tablinq`
+- `C:\Users\user\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`
+- `C:\nvm4w\nodejs`
+- `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+- `C:\nvm4w\nodejs\node.exe`
+- `C:\Users\user\Desktop\gpt-cli\scripts`
+- `C:\Users\user\AppData\Local\nvm`
+- `C:\Program Files\PowerShell\7\pwsh.exe`
+- `C:\Program Files\Google\Chrome\Application\chrome.exe`
+- `C:\Users\user\AppData\Local\nvm\v20.19.3\node.exe`
+- `C:\Windows\System32\cmd.exe`
+- `C:\Users\user\Desktop\gpt-cli\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
+- `C:\Users\user\Desktop\gpt-cli\node_modules`
 
-This matters when a browser restarts, a tab reloads, a stream stalls, or a client disconnects while upstream work may still be running.
+Add equivalent paths for your own machine if the install location, browser, or Node version differs.
 
-## Workspace map
+## Architecture
 
-- `crates/gpt`: CLI entry point and user-facing command presentation
-- `crates/gptd`: daemon service, state/config bootstrap, SQLite, browser orchestration
+```mermaid
+flowchart LR
+    CLI["gpt CLI"] --> IPC["local IPC"]
+    IPC --> Daemon["gptd daemon"]
+    Daemon --> DB["SQLite + state root"]
+    Daemon --> Adapter["browser adapter (TS + Playwright attach runtime)"]
+    Adapter --> Browser["user-owned Chrome / Edge profile"]
+    Browser --> Extension["MV3 extension"]
+    Extension --> Page["ChatGPT tab"]
+    Gateway["OpenAI-compatible HTTP gateway"] --> Daemon
+```
+
+See [docs/architecture.md](docs/architecture.md) for the full model.
+
+## Repository map
+
+- `crates/gpt`: CLI
+- `crates/gptd`: daemon, config, state, browser orchestration, SQLite
 - `crates/shared-protocol`: stable protocol types and state-path helpers
 - `crates/tablinq-gateway`: local OpenAI-compatible HTTP gateway
 - `crates/tablinq-host`: native messaging host for the extension
-- `packages/browser-adapter`: Playwright-backed browser runtime
+- `packages/browser-adapter`: Playwright-backed attach runtime
 - `packages/extension`: MV3 extension bridge and capability probes
-- `packages/fake-chatgpt`: fake browser harness for tests
+- `packages/fake-chatgpt`: fake harness for browser tests
+- `selector-packs/v1`: selector data outside compiled code
 - `schemas/v1`: versioned protocol contracts
-- `selector-packs/v1`: selector data kept outside compiled code
-- `docs`: install, development, architecture, provider, and troubleshooting docs
+- `docs`: install, development, architecture, provider, and troubleshooting guides
 
-## Testing and CI
+## Validation
 
 Local validation:
-
-- Rust: `cargo test`
-- TypeScript: `pnpm lint`, `pnpm build`, `pnpm test`
-- formatting: `cargo fmt --all --check`, `pnpm format`
-
-GitHub Actions:
-
-- `.github/workflows/ci.yml`
-  - Rust formatting, clippy, and workspace tests
-  - TypeScript formatting, type-check, build, and tests
-- `.github/workflows/package-smoke.yml`
-  - Windows packaged install smoke coverage
-  - package artifact upload on non-PR runs
-
-## Documentation
-
-- [Install](docs/install.md)
-- [Development](docs/development.md)
-- [Architecture](docs/architecture.md)
-- [Provider mode](docs/provider-mode.md)
-- [OpenClaude](docs/openclaude.md)
-- [Paperclip](docs/paperclip.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Live smoke checklist](docs/live-smoke-checklist.md)
-
-## Contributing
-
-Before opening a PR, match the project’s normal validation surface:
 
 - `cargo test`
 - `pnpm lint`
 - `pnpm build`
 - `pnpm test`
 
-If your change affects packaging or installed behavior on Windows, also exercise the package smoke path.
+If you touch packaging or installed behavior on Windows, also run the package smoke path.
+
+## Documentation
+
+- [Install](docs/install.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Development](docs/development.md)
+- [Architecture](docs/architecture.md)
+- [Provider mode](docs/provider-mode.md)
+- [OpenClaude](docs/openclaude.md)
+- [Paperclip](docs/paperclip.md)
+- [Live smoke checklist](docs/live-smoke-checklist.md)

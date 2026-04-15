@@ -9,14 +9,21 @@ This guide is for contributors working from the repo checkout.
 3. Install `pnpm`.
 4. Run `pnpm install` at the repo root.
 
-## Fast mental model
+## Current product model
 
-- Rust owns the CLI, daemon, gateway, config, persistence, logging, and packaging flow.
-- TypeScript owns the browser adapter, extension bridge, and fake harness.
-- The browser is still the execution engine.
-- `packages/fake-chatgpt` is the CI-safe browser target for most automated browser tests.
+Tablinq is attach-first.
 
-For the deeper system view, see [architecture.md](architecture.md).
+That means the normal development posture is:
+
+- normal Chrome or Edge profile
+- manual sign-in to ChatGPT
+- Tablinq extension loaded in that profile
+- local debug endpoint enabled
+- Tablinq attaches to the existing browser session
+
+Do not design new work around the old Playwright-owned managed-login flow. That default was intentionally abandoned because Cloudflare and anti-bot protection at `chatgpt.com` made automation-owned startup and login the wrong operational model. Playwright is still part of the codebase, but now as an attach-and-assist runtime.
+
+For the broader system view, see [architecture.md](architecture.md).
 
 ## Standard validation
 
@@ -51,11 +58,29 @@ Formatting:
 - `cargo run -p gpt -- doctor`
 - `cargo run -p gpt -- capabilities`
 - `cargo run -p gpt -- config show`
+- `cargo run -p gpt -- browser start-debug`
+- `cargo run -p gpt -- browser attach`
+- `cargo run -p gpt -- browser connection-info`
 - `cargo run -p gpt -- browser open`
+- `cargo run -p gpt -- browser close`
 - `cargo run -p gpt -- browser logout`
 - `cargo run -p gpt -- browser switch-account`
 - `cargo run -p gpt -- browser reset-profile`
 - `cargo run -p gpt -- browser profile-info`
+
+## Local browser workflow for real-site checks
+
+Use this only when the fake harness is not enough:
+
+1. Start the daemon and gateway.
+2. Load the unpacked extension into your normal browser profile.
+3. Fully close the browser.
+4. Run `cargo run -p gpt -- browser start-debug`.
+5. Sign in manually at `https://chatgpt.com/`.
+6. Run `cargo run -p gpt -- browser attach`.
+7. Use `cargo run -p gpt -- status`, `doctor`, and `capabilities` before testing ask or research flows.
+
+Managed fallback exists only for debugging, CI, harness isolation, and machines that cannot expose a usable local debug endpoint.
 
 ## Windows-first helper scripts
 
@@ -79,8 +104,6 @@ GitHub Actions currently uses:
   - Windows packaged install smoke coverage
   - package artifact upload on non-PR runs
 
-Dependabot PRs still run the main Rust and TypeScript checks. The expensive Windows package smoke run is skipped for Dependabot PRs.
-
 ## Testing strategy
 
 Rust tests cover:
@@ -100,14 +123,17 @@ TypeScript tests cover:
 - extension probes
 - selector-pack loading
 - fake-harness browser flows
+- attach-mode and managed-fallback browser behavior
 - streaming, stall handling, interruption recovery, and reload behavior
 - file upload and artifact flows
 - research scenarios
 
+Prefer the fake harness first. Use [live-smoke-checklist.md](live-smoke-checklist.md) only when you need an explicit real-site confirmation.
+
 ## Code hotspots
 
 - `crates/gpt/src/lib.rs`
-  - CLI command surface and terminal presentation
+  - CLI command surface and user-facing presentation
 - `crates/gptd/src/core.rs`
   - durable execution logic, state transitions, and persistence boundaries
 - `crates/gptd/src/browser.rs`
@@ -115,12 +141,29 @@ TypeScript tests cover:
 - `crates/tablinq-gateway/src/lib.rs`
   - HTTP provider surface, queueing, and request summaries
 - `packages/browser-adapter/src/browserAdapter.ts`
-  - Playwright control loop and reconciliation behavior
+  - Playwright attach runtime, browser ownership boundaries, and reconciliation logic
 - `packages/browser-adapter/src/pageAdapter.runtime.js`
   - page-level DOM helpers and UI-specific logic
 - `packages/extension/src/probe.ts`
   - capability probes and alias discovery
 
-## When to use the live site
+## Antivirus warning on Windows
 
-Do not use the live site for routine development validation. Prefer the fake harness first. Use [live-smoke-checklist.md](live-smoke-checklist.md) only when you need an explicit real-site confirmation.
+If packaging, tests, or browser startup fail with `Access is denied`, check antivirus notifications before debugging the repo. On some Windows machines, local toolchain executables such as `node.exe`, `pwsh.exe`, `chrome.exe`, `cmd.exe`, or `esbuild.exe` may need explicit antivirus exceptions.
+
+Common exception candidates:
+
+- `C:\Users\user\Desktop\gpt-cli`
+- `C:\Users\user\AppData\Local\Tablinq`
+- `C:\Users\user\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`
+- `C:\nvm4w\nodejs`
+- `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+- `C:\nvm4w\nodejs\node.exe`
+- `C:\Users\user\Desktop\gpt-cli\scripts`
+- `C:\Users\user\AppData\Local\nvm`
+- `C:\Program Files\PowerShell\7\pwsh.exe`
+- `C:\Program Files\Google\Chrome\Application\chrome.exe`
+- `C:\Users\user\AppData\Local\nvm\v20.19.3\node.exe`
+- `C:\Windows\System32\cmd.exe`
+- `C:\Users\user\Desktop\gpt-cli\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
+- `C:\Users\user\Desktop\gpt-cli\node_modules`

@@ -1,6 +1,21 @@
 # Install
 
-This guide covers the packaged install path for Tablinq. If you want the contributor workflow instead, see [development.md](development.md).
+This guide covers the packaged install path for Tablinq. For repo-checkout contributor work, see [development.md](development.md).
+
+## The model you are installing
+
+Tablinq is attach-first.
+
+The intended production workflow is:
+
+- install Tablinq
+- load the Tablinq extension into your normal Chrome or Edge profile
+- start the daemon and gateway
+- start your normal browser in local-debug mode with `gpt browser start-debug`
+- sign in manually at `chatgpt.com`
+- let Tablinq attach to that existing browser session with `gpt browser attach`
+
+The old Playwright-owned managed-login flow is not the normal path anymore. It was abandoned as the default because Cloudflare and anti-bot protection at `chatgpt.com` made automation-owned login and startup the wrong operational model. Tablinq still uses Playwright internally for attach, screenshots, uploads, downloads, and recovery, but your actual ChatGPT session is expected to be a user-owned browser session.
 
 ## Prerequisites
 
@@ -14,16 +29,15 @@ Install workspace dependencies first:
 pnpm install
 ```
 
-## What you are installing
+## What gets installed
 
-A normal Tablinq install gives you:
+A normal package install gives you:
 
-- the `gpt`, `gptd`, `tablinq-gateway`, and `tablinq-host` binaries
+- `gpt`, `gptd`, `tablinq-gateway`, and `tablinq-host`
 - the browser adapter runtime
 - the unpacked browser extension
-- a local state root for config, logs, SQLite state, downloads, uploads, and crash bundles
-
-You still sign in through your normal browser profile. Tablinq does not mint a direct API session behind your back.
+- the selector-pack data
+- local config, logs, SQLite state, downloads, uploads, and crash-bundle storage
 
 ## Windows 10-11
 
@@ -41,15 +55,16 @@ Then:
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe daemon start`
 3. Start the gateway:
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe gateway start`
-4. Fully close Edge or Chrome so the debug flags can take effect.
-5. Start your normal browser in attach mode:
+4. Fully close Edge or Chrome so the debug flags can take effect cleanly.
+5. Start your normal browser in attachable mode:
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser start-debug`
-6. Sign in manually at `https://chatgpt.com/` in that browser profile.
-7. Attach and confirm health:
+6. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+7. Attach and verify:
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser connection-info`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe status`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe doctor`
+   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe capabilities`
 
 Optional installer flags:
 
@@ -80,15 +95,16 @@ Then:
    - `~/.local/share/tablinq/install/bin/gpt daemon start`
 3. Start the gateway:
    - `~/.local/share/tablinq/install/bin/gpt gateway start`
-4. Fully close Chrome or Edge so the debug flags can take effect.
-5. Start your normal browser in attach mode:
+4. Fully close Chrome or Edge so the debug flags can take effect cleanly.
+5. Start your normal browser in attachable mode:
    - `~/.local/share/tablinq/install/bin/gpt browser start-debug`
-6. Sign in manually at `https://chatgpt.com/` in that browser profile.
-7. Attach and confirm health:
+6. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+7. Attach and verify:
    - `~/.local/share/tablinq/install/bin/gpt browser attach`
    - `~/.local/share/tablinq/install/bin/gpt browser connection-info`
    - `~/.local/share/tablinq/install/bin/gpt status`
    - `~/.local/share/tablinq/install/bin/gpt doctor`
+   - `~/.local/share/tablinq/install/bin/gpt capabilities`
 
 The Unix installer prepares install and state directories and writes startup helper scripts. Native-host registration remains Windows-first.
 
@@ -98,6 +114,7 @@ After install, run:
 
 - `gpt status`
 - `gpt doctor`
+- `gpt browser connection-info`
 - `gpt capabilities`
 - `gpt ask "hello from tablinq"`
 
@@ -105,20 +122,50 @@ You want to see:
 
 - a running daemon
 - a running gateway
-- a detected attachable browser
-- extension connectivity
-- an authenticated normal-browser session
+- a reachable local debug endpoint
+- a connected extension
+- an authenticated signed-in ChatGPT tab
 
-## Switching accounts
+## Fallback mode
 
-If the normal browser is signed into the wrong ChatGPT account, sign out in that browser tab, sign back in manually, then run:
+Use managed fallback only when attach mode cannot be enabled on this machine or browser profile, or when you need debugging, CI, or harness isolation.
 
-- `gpt browser attach`
+Set this in `config/config.toml`:
+
+```toml
+browser_connection_mode = "managed_only"
+```
+
+Then use:
+
 - `gpt browser open`
 
-If your machine or profile cannot expose a local debug endpoint, or you need debugging or CI/local harness isolation, switch to explicit managed fallback by setting `browser_connection_mode = "managed_only"` in `config/config.toml`, then use `gpt browser open`.
+`gpt browser reset-profile` is only for managed fallback recovery. It is not part of the recommended attach-first flow.
 
-## Where state lives
+## Antivirus warning on Windows
+
+Local packaging, testing, installation, and browser startup can be blocked by antivirus products. If you see `Access is denied`, blocked-process notifications, or quarantined binaries, add the relevant paths to your antivirus exceptions and restore any already-blocked files from notifications or quarantine.
+
+Example Windows paths that may require exceptions in a typical local environment:
+
+- `C:\Users\user\Desktop\gpt-cli`
+- `C:\Users\user\AppData\Local\Tablinq`
+- `C:\Users\user\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`
+- `C:\nvm4w\nodejs`
+- `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+- `C:\nvm4w\nodejs\node.exe`
+- `C:\Users\user\Desktop\gpt-cli\scripts`
+- `C:\Users\user\AppData\Local\nvm`
+- `C:\Program Files\PowerShell\7\pwsh.exe`
+- `C:\Program Files\Google\Chrome\Application\chrome.exe`
+- `C:\Users\user\AppData\Local\nvm\v20.19.3\node.exe`
+- `C:\Windows\System32\cmd.exe`
+- `C:\Users\user\Desktop\gpt-cli\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
+- `C:\Users\user\Desktop\gpt-cli\node_modules`
+
+Adjust those paths for your own install directory, browser, and Node version.
+
+## State layout
 
 The state root contains:
 
@@ -130,4 +177,6 @@ The state root contains:
 - `crash-bundles/`
 - `gateway-uploads/`
 
-If something goes wrong, check [troubleshooting.md](troubleshooting.md).
+`browser-profile/` still exists even though attach-first no longer uses a managed profile as the default ownership model. That directory remains useful for managed fallback and compatibility.
+
+If something goes wrong, see [troubleshooting.md](troubleshooting.md).
