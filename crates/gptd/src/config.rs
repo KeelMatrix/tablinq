@@ -419,8 +419,8 @@ mod tests {
             config.file.browser_target_url.as_deref(),
             Some("https://chatgpt.com/")
         );
-        assert_eq!(config.browser_extension_required(), true);
-        assert_eq!(config.browser_auto_open_target_tab(), true);
+        assert!(config.browser_extension_required());
+        assert!(config.browser_auto_open_target_tab());
         assert_eq!(config.gateway_host(), "127.0.0.1");
         assert_eq!(config.gateway_port(), 3847);
         assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
