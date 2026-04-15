@@ -23,7 +23,7 @@ A normal Tablinq install gives you:
 - the unpacked browser extension
 - a local state root for config, logs, SQLite state, downloads, uploads, and crash bundles
 
-You still sign in through a real managed browser profile. Tablinq does not mint a direct API session behind your back.
+You still sign in through your normal browser profile. Tablinq does not mint a direct API session behind your back.
 
 ## Windows 10-11
 
@@ -36,15 +36,18 @@ scripts/install.ps1
 
 Then:
 
-1. Load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension` in Edge or Chrome.
+1. Load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension` into your normal Edge or Chrome profile.
 2. Start the daemon:
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe daemon start`
 3. Start the gateway:
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe gateway start`
-4. Open the managed browser:
-   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser open`
-5. Sign in once in the managed browser profile.
-6. Confirm health:
+4. Fully close Edge or Chrome so the debug flags can take effect.
+5. Start your normal browser in attach mode:
+   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser start-debug`
+6. Sign in manually at `https://chatgpt.com/` in that browser profile.
+7. Attach and confirm health:
+   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`
+   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser connection-info`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe status`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe doctor`
 
@@ -72,15 +75,18 @@ Build and install:
 
 Then:
 
-1. Load the unpacked extension from `~/.local/share/tablinq/install/extension`.
+1. Load the unpacked extension from `~/.local/share/tablinq/install/extension` into your normal Chrome or Edge profile.
 2. Start the daemon:
    - `~/.local/share/tablinq/install/bin/gpt daemon start`
 3. Start the gateway:
    - `~/.local/share/tablinq/install/bin/gpt gateway start`
-4. Open the managed browser:
-   - `~/.local/share/tablinq/install/bin/gpt browser open`
-5. Sign in once in the managed browser profile.
-6. Confirm health:
+4. Fully close Chrome or Edge so the debug flags can take effect.
+5. Start your normal browser in attach mode:
+   - `~/.local/share/tablinq/install/bin/gpt browser start-debug`
+6. Sign in manually at `https://chatgpt.com/` in that browser profile.
+7. Attach and confirm health:
+   - `~/.local/share/tablinq/install/bin/gpt browser attach`
+   - `~/.local/share/tablinq/install/bin/gpt browser connection-info`
    - `~/.local/share/tablinq/install/bin/gpt status`
    - `~/.local/share/tablinq/install/bin/gpt doctor`
 
@@ -99,18 +105,18 @@ You want to see:
 
 - a running daemon
 - a running gateway
-- a detected browser
+- a detected attachable browser
 - extension connectivity
-- an authenticated managed session
+- an authenticated normal-browser session
 
 ## Switching accounts
 
-If the managed browser is signed into the wrong ChatGPT account, use one of:
+If the normal browser is signed into the wrong ChatGPT account, sign out in that browser tab, sign back in manually, then run:
 
-- `gpt browser logout`
-- `gpt browser switch-account`
+- `gpt browser attach`
+- `gpt browser open`
 
-Both commands clear the managed profile and reopen the managed tab so you can sign in cleanly again.
+If your machine or profile cannot expose a local debug endpoint, switch to explicit managed fallback by setting `browser_connection_mode = "managed_only"` in `config/config.toml`, then use `gpt browser open`.
 
 ## Where state lives
 

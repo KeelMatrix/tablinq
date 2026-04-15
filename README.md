@@ -2,13 +2,13 @@
 
 **The browser is the provider.**
 
-Tablinq turns a real ChatGPT browser session into a local CLI and an OpenAI-compatible gateway. It keeps the browser-driven architecture on purpose: your managed browser session remains the execution engine, while Rust and TypeScript provide the control plane, persistence, packaging, and safe integrations around it.
+Tablinq turns a real ChatGPT browser session into a local CLI and an OpenAI-compatible gateway. It keeps the browser-driven architecture on purpose: your normal browser session remains the execution engine, while Rust and TypeScript provide the control plane, persistence, packaging, and safe integrations around it.
 
 If you want local tools, scripts, or agent frameworks to work through a dedicated ChatGPT session without exporting cookies, replaying bearer tokens, or pretending the website is a raw API, Tablinq is built for that.
 
 ## Why people care
 
-- **Real browser session, not a fake provider.** Tablinq drives a managed ChatGPT tab through Playwright and an extension bridge.
+- **Real browser session, not a fake provider.** Tablinq attaches to your normal Chrome or Edge session through a local debug endpoint and an extension bridge.
 - **Local-first control plane.** Jobs, conversations, artifacts, failure bundles, and request history stay on your machine.
 - **OpenAI-compatible gateway.** Tools such as OpenClaude and Paperclip can talk to Tablinq through familiar `/v1/*` routes.
 - **Safe by default.** One warm browser session, one active upstream request, conservative queueing, and no blind auto-replay of interrupted requests.
@@ -17,7 +17,7 @@ If you want local tools, scripts, or agent frameworks to work through a dedicate
 
 ## What Tablinq does
 
-- runs a dedicated managed browser profile for ChatGPT
+- attaches to your normal Chrome or Edge profile for ChatGPT
 - exposes local CLI commands for ask, research, jobs, sessions, artifacts, browser lifecycle, and diagnostics
 - exposes an OpenAI-compatible local HTTP gateway for browser-backed provider mode
 - persists jobs, conversations, artifacts, request summaries, and failure bundles locally
@@ -40,7 +40,7 @@ flowchart LR
     IPC --> Daemon["gptd daemon"]
     Daemon --> DB["SQLite + state root"]
     Daemon --> Adapter["browser adapter (TS + Playwright)"]
-    Adapter --> Browser["managed Edge / Chromium profile"]
+    Adapter --> Browser["normal Edge / Chrome profile"]
     Browser --> Extension["MV3 extension"]
     Extension --> Page["ChatGPT page or fake harness"]
     Gateway["OpenAI-compatible HTTP gateway"] --> Daemon
@@ -51,7 +51,9 @@ flowchart LR
 ```bash
 gpt daemon start
 gpt gateway start
-gpt browser open
+gpt browser start-debug
+# sign in manually in the opened browser if needed
+gpt browser attach
 gpt ask "Summarize the value of Tablinq in one paragraph."
 gpt research "Investigate launch blockers for a desktop AI tool."
 gpt status
@@ -67,15 +69,17 @@ gpt status
 4. Build and install Tablinq:
    - Windows: `scripts/package.ps1` then `scripts/install.ps1`
    - Unix-like: `./scripts/package.sh` then `./scripts/install.sh`
-5. Load the unpacked extension from the installed `extension` directory.
+5. Load the unpacked extension from the installed `extension` directory into your normal Chrome or Edge profile.
 6. Start the control plane:
    - `gpt daemon start`
    - `gpt gateway start`
-7. Open the managed browser: `gpt browser open`
-8. Sign in once in the managed profile.
+7. Fully close Chrome or Edge, then start it in attach mode: `gpt browser start-debug`
+8. Sign in manually at `chatgpt.com` in that normal browser profile.
 9. Confirm health:
+   - `gpt browser attach`
    - `gpt status`
    - `gpt doctor`
+   - `gpt browser connection-info`
    - `gpt capabilities`
 
 For the full install flow, see [docs/install.md](docs/install.md).
@@ -102,6 +106,9 @@ Common commands:
 - `gpt sessions list`
 - `gpt artifacts list`
 - `gpt artifacts pull last`
+- `gpt browser start-debug`
+- `gpt browser attach`
+- `gpt browser connection-info`
 - `gpt browser open`
 - `gpt browser close`
 - `gpt browser logout`
