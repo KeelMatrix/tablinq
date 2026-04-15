@@ -1082,9 +1082,11 @@ fn idle_snapshot(
             cdp_attached: false,
             target_tab_found: false,
             target_tab_id: None,
+            target_workspace_key: None,
             debug_endpoint: Some(config.browser_debug_endpoint()),
             auth_source: AuthSource::Unknown,
             extension_required: config.browser_extension_required(),
+            last_capability_report_at: None,
         },
     )
 }
@@ -1102,6 +1104,8 @@ fn normalize_snapshot(
     } else {
         snapshot.target_tab_found = false;
         snapshot.auth_source = AuthSource::Unknown;
+        snapshot.target_workspace_key = None;
+        snapshot.last_capability_report_at = None;
     }
     snapshot.extension_required = config.browser_extension_required();
     if matches!(

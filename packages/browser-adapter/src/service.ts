@@ -297,9 +297,11 @@ async function main() {
         cdp_attached: false,
         target_tab_found: false,
         target_tab_id: null,
+        target_workspace_key: null,
         debug_endpoint: args.debugEndpoint ?? "http://127.0.0.1:9222",
         auth_source: "unknown" as const,
         extension_required: args.extensionRequired ?? true,
+        last_capability_report_at: null,
       }));
       response = {
         type: "response",

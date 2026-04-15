@@ -996,11 +996,15 @@ pub struct BrowserStatusSnapshot {
     #[serde(default)]
     pub target_tab_id: Option<String>,
     #[serde(default)]
+    pub target_workspace_key: Option<String>,
+    #[serde(default)]
     pub debug_endpoint: Option<String>,
     #[serde(default)]
     pub auth_source: AuthSource,
     #[serde(default)]
     pub extension_required: bool,
+    #[serde(default)]
+    pub last_capability_report_at: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1318,9 +1322,11 @@ mod tests {
             cdp_attached: false,
             target_tab_found: true,
             target_tab_id: Some("tab-1".to_owned()),
+            target_workspace_key: Some("https://chatgpt.com/".to_owned()),
             debug_endpoint: Some("http://127.0.0.1:9222".to_owned()),
             auth_source: AuthSource::Page,
             extension_required: true,
+            last_capability_report_at: Some("2026-04-12T10:00:00Z".to_owned()),
         };
 
         let json = serde_json::to_string_pretty(&snapshot).unwrap();
@@ -1330,5 +1336,6 @@ mod tests {
         assert!(json.contains("\"attach_mode\": \"attach_first\""));
         assert!(json.contains("\"browser_owner\": \"managed\""));
         assert!(json.contains("\"auth_source\": \"page\""));
+        assert!(json.contains("\"target_workspace_key\": \"https://chatgpt.com/\""));
     }
 }

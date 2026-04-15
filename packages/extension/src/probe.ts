@@ -55,6 +55,11 @@ export interface CapabilityBridgeMessage {
   type: "capability_report";
   report: CapabilityReportPayload;
   runtime: ProbeRuntimeSnapshot;
+  tab?: {
+    id: number | null;
+    url: string | null;
+    workspace_key: string | null;
+  };
 }
 
 export interface SelectorStrategySnapshot {

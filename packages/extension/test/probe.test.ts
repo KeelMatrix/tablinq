@@ -290,13 +290,23 @@ describe("service worker bridge", () => {
       reportedAt: "2026-04-12T10:00:00Z",
     });
 
-    await controller.handleMessage(message);
+    await controller.handleMessage(message, {
+      tab: {
+        id: 17,
+        url: "https://chatgpt.com/?conversation=conv-9",
+      },
+    });
     statusUpdates.push(controller.describe());
 
     expect(JSON.parse(sentPayload)).toMatchObject({
       type: "capability_report",
       report: {
         reported_at: "2026-04-12T10:00:00Z",
+      },
+      tab: {
+        id: 17,
+        url: "https://chatgpt.com/?conversation=conv-9",
+        workspace_key: "https://chatgpt.com/",
       },
     });
     expect(statusUpdates[0].connected).toBe(true);
