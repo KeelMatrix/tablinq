@@ -6,6 +6,18 @@ PROFILE="${1:-release}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/dist/package/tablinq}"
 TARGET_ROOT="${CARGO_TARGET_DIR:-$ROOT_DIR/target}"
 
+abspath() {
+  local path="$1"
+  if [[ "$path" == /* ]]; then
+    printf '%s\n' "$path"
+  else
+    printf '%s\n' "$ROOT_DIR/$path"
+  fi
+}
+
+OUTPUT_ROOT="$(abspath "$OUTPUT_ROOT")"
+TARGET_ROOT="$(abspath "$TARGET_ROOT")"
+
 resolve_target_profile_dir() {
   case "$1" in
     dev) printf '%s\n' "debug" ;;

@@ -354,19 +354,19 @@ fn upgrade_file_config(mut file: FileConfig) -> FileConfig {
         gateway.queue_length = Some(32);
     }
     if gateway.queue_timeout_ms.is_none() {
-        gateway.queue_timeout_ms = Some(30_000);
+        gateway.queue_timeout_ms = Some(300_000);
     }
     if gateway.per_client_limit.is_none() {
         gateway.per_client_limit = Some(8);
     }
     if gateway.request_timeout_ms.is_none() {
-        gateway.request_timeout_ms = Some(30_000);
+        gateway.request_timeout_ms = Some(1_500_000);
     }
     if gateway.ask_timeout_ms.is_none() {
-        gateway.ask_timeout_ms = Some(15_000);
+        gateway.ask_timeout_ms = Some(360_000);
     }
     if gateway.research_timeout_ms.is_none() {
-        gateway.research_timeout_ms = Some(30_000);
+        gateway.research_timeout_ms = Some(1_500_000);
     }
     if gateway.safe_mode_behavior.is_none() {
         gateway.safe_mode_behavior = Some("reject_execution".to_owned());
@@ -427,11 +427,11 @@ mod tests {
         assert_eq!(config.gateway_port(), 3847);
         assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
         assert_eq!(config.gateway_queue_length(), 32);
-        assert_eq!(config.gateway_queue_timeout_ms(), 30_000);
+        assert_eq!(config.gateway_queue_timeout_ms(), 300_000);
         assert_eq!(config.gateway_per_client_limit(), 8);
-        assert_eq!(config.gateway_request_timeout_ms(), 30_000);
-        assert_eq!(config.ask_timeout_ms(), 15_000);
-        assert_eq!(config.research_timeout_ms(), 30_000);
+        assert_eq!(config.gateway_request_timeout_ms(), 1_500_000);
+        assert_eq!(config.ask_timeout_ms(), 360_000);
+        assert_eq!(config.research_timeout_ms(), 1_500_000);
         assert_eq!(config.gateway_safe_mode_behavior(), "reject_execution");
         assert!(config.gateway_api_key().is_some());
     }
@@ -467,7 +467,7 @@ mod tests {
                 .gateway
                 .as_ref()
                 .and_then(|value| value.queue_timeout_ms),
-            Some(30_000)
+            Some(300_000)
         );
         assert_eq!(
             parsed
