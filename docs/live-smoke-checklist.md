@@ -1,19 +1,23 @@
 # Live Smoke Checklist
 
-This checklist stays out of CI. Use it when you want to validate the managed browser flow against the real ChatGPT site with a local profile.
+This checklist stays out of CI. Use it when you want to validate the attach-first normal-browser flow against the real ChatGPT site with a local profile.
 
 ## Preconditions
 
 - install locally with `scripts/install.ps1` or `./scripts/install.sh`
 - start the daemon with `gpt daemon start`
 - start the gateway with `gpt gateway start`
-- open the managed browser with `gpt browser open`
-- sign in through the managed profile if required
+- load the unpacked Tablinq extension into your normal Chrome or Edge profile
+- fully close that browser
+- start the attachable browser session with `gpt browser start-debug`
+- sign in manually to `chatgpt.com` in that normal browser profile if required
+- run `gpt browser attach`
+- run `gpt browser connection-info`
 
 Confirm `gpt doctor` reports:
 
 - a running daemon
-- a detected browser
+- a reachable attach endpoint
 - extension connectivity
 - authentication
 - a non-empty capability summary when the page is ready
@@ -34,7 +38,8 @@ Also confirm:
 6. Run `gpt ask --file path\to\notes.txt "summarize the attached file"` and confirm the page acknowledges the attachment before submit.
 7. After a run that produces an artifact, confirm `gpt artifacts list` shows it and `gpt artifacts pull last` retrieves it.
 8. Run `gpt research "investigate launch blockers"` and confirm progress states advance until completion or typed failure.
-9. After at least one download, confirm the managed tab is still usable by running `gpt capabilities` or another `gpt ask`.
+9. After at least one download, confirm the attached normal-browser tab is still usable by running `gpt capabilities` or another `gpt ask`.
+10. Open two ChatGPT tabs, keep the extension active in only one, rerun `gpt browser attach`, and confirm Tablinq returns to the tab with working extension connectivity.
 
 ## Provider checks
 
@@ -52,8 +57,16 @@ Also confirm:
 
 ## Refusal and auth checks
 
-1. Sign out the managed session and confirm provider requests fail with `auth_required`, guidance text, and a `tablinq_failure_bundle_id`.
+1. Sign out the attached normal-browser session and confirm provider requests fail with `auth_required`, guidance text, and a `tablinq_failure_bundle_id`.
 2. Switch to another account and confirm missing live controls fail as `capability_missing` rather than silently downgrading behavior.
+
+## Managed Fallback Check
+
+Only run this if attach-first cannot be enabled on the machine you are testing.
+
+1. Set `browser_connection_mode = "managed_only"` in `config/config.toml`.
+2. Run `gpt browser open`.
+3. Confirm the fallback path works, but keep attach-first as the default smoke path.
 
 ## Capture on failure
 
