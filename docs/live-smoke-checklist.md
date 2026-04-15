@@ -1,6 +1,6 @@
 # Live Smoke Checklist
 
-This checklist stays out of CI. Use it when you want to validate the attach-first normal-browser flow against the real ChatGPT site with a local profile.
+This checklist stays out of CI. Use it when you want to validate the attach-first normal-browser flow against the real ChatGPT site.
 
 ## Preconditions
 
@@ -10,7 +10,7 @@ This checklist stays out of CI. Use it when you want to validate the attach-firs
 - load the unpacked Tablinq extension into your normal Chrome or Edge profile
 - fully close that browser
 - start the attachable browser session with `gpt browser start-debug`
-- sign in manually to `chatgpt.com` in that normal browser profile if required
+- sign in manually to `https://chatgpt.com/` in that browser profile
 - run `gpt browser attach`
 - run `gpt browser connection-info`
 
@@ -60,7 +60,7 @@ Also confirm:
 1. Sign out the attached normal-browser session and confirm provider requests fail with `auth_required`, guidance text, and a `tablinq_failure_bundle_id`.
 2. Switch to another account and confirm missing live controls fail as `capability_missing` rather than silently downgrading behavior.
 
-## Managed Fallback Check
+## Managed fallback check
 
 Only run this if attach-first cannot be enabled on the machine you are testing.
 

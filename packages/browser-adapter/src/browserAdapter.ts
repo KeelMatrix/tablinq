@@ -467,7 +467,9 @@ export class BrowserAdapter {
       auth_source:
         running && inferAuthenticated(page!.url()) ? "page" : "unknown",
       extension_required: this.extensionRequired,
-      last_capability_report_at: running ? this.activeCapabilityReportedAt() : null,
+      last_capability_report_at: running
+        ? this.activeCapabilityReportedAt()
+        : null,
     };
   }
 
@@ -500,7 +502,9 @@ export class BrowserAdapter {
       auth_source:
         running && inferAuthenticated(page!.url()) ? "page" : "unknown",
       extension_required: this.extensionRequired,
-      last_capability_report_at: running ? this.activeCapabilityReportedAt() : null,
+      last_capability_report_at: running
+        ? this.activeCapabilityReportedAt()
+        : null,
     };
   }
 
@@ -569,7 +573,9 @@ export class BrowserAdapter {
   }
 
   private activePageState(): TargetPageState | undefined {
-    return this.targetPageId ? this.pageStates.get(this.targetPageId) : undefined;
+    return this.targetPageId
+      ? this.pageStates.get(this.targetPageId)
+      : undefined;
   }
 
   getLastDomNeighborhoodsForTest(): DomNeighborhoodSnapshot[] {
@@ -601,7 +607,9 @@ export class BrowserAdapter {
       ui_signature: null,
       dom_neighborhoods: [],
       last_capability_report_at: null,
-      probe_ready_until_ms: this.cdpAttached ? Date.now() + ATTACH_PROBE_GRACE_MS : 0,
+      probe_ready_until_ms: this.cdpAttached
+        ? Date.now() + ATTACH_PROBE_GRACE_MS
+        : 0,
     };
     this.pageStates.set(pageId, state);
     return state;
@@ -656,7 +664,9 @@ export class BrowserAdapter {
     return state;
   }
 
-  private applyPageStateToActiveTarget(state: TargetPageState | undefined): void {
+  private applyPageStateToActiveTarget(
+    state: TargetPageState | undefined,
+  ): void {
     if (!state) {
       this.clearActiveCapabilityState();
       return;
@@ -1590,7 +1600,9 @@ export class BrowserAdapter {
 
     if (this.managedPage && !this.managedPage.isClosed()) {
       if (this.cdpAttached) {
-        const preferred = await this.findAttachedTargetPage(this.currentTargetUrl);
+        const preferred = await this.findAttachedTargetPage(
+          this.currentTargetUrl,
+        );
         if (preferred && preferred !== this.managedPage) {
           this.context = preferred.context();
           this.observeContext(this.context);
@@ -1632,7 +1644,9 @@ export class BrowserAdapter {
     const pageId = pageState.page_id;
 
     const mainFrame = page.mainFrame();
-    let seenInitialNavigation = Boolean(page.url() && page.url() !== "about:blank");
+    let seenInitialNavigation = Boolean(
+      page.url() && page.url() !== "about:blank",
+    );
     page.on("framenavigated", (frame) => {
       if (frame !== mainFrame) {
         return;

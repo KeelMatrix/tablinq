@@ -148,7 +148,9 @@ async function listAttachedPages(endpoint: string): Promise<string[]> {
 
 async function withAttachedBrowser<T>(
   endpoint: string,
-  callback: (browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>) => Promise<T>,
+  callback: (
+    browser: Awaited<ReturnType<typeof chromium.connectOverCDP>>,
+  ) => Promise<T>,
 ): Promise<T> {
   const browser = await chromium.connectOverCDP(endpoint);
   try {
@@ -1347,10 +1349,14 @@ describe("browser adapter", () => {
     );
 
     expect(chunks.join("")).toBe("Fake response for: hello from attach mode");
-    expect(result.output_text).toBe("Fake response for: hello from attach mode");
+    expect(result.output_text).toBe(
+      "Fake response for: hello from attach mode",
+    );
     expect(result.conversation_id).toMatch(/^conv-/);
     expect(result.message_id).toMatch(/^msg-/);
-    expect(result.current_url).toContain(`conversation=${result.conversation_id}`);
+    expect(result.current_url).toContain(
+      `conversation=${result.conversation_id}`,
+    );
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -1360,7 +1366,9 @@ describe("browser adapter", () => {
     const server = await startTrackedFakeChatGptServer();
     const targetUrl = withHarnessUrl(server.url, { variant: "live" });
     const adapter = await createTrackedAdapterForMode("attach", targetUrl);
-    const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixtureRoot = await mkdtemp(
+      path.join(os.tmpdir(), "tablinq-browser-"),
+    );
     const fixture = path.join(fixtureRoot, "brief.txt");
     await writeFile(fixture, "brief body", "utf8");
     await adapter.open({ targetUrl, headless: true });
@@ -1376,12 +1384,17 @@ describe("browser adapter", () => {
       },
       () => {},
     );
-    const artifactBody = await readFile(result.artifacts[0]!.storage_path, "utf8");
+    const artifactBody = await readFile(
+      result.artifacts[0]!.storage_path,
+      "utf8",
+    );
 
     expect(result.output_text).toBe("Fake response for: configure attach live");
     expect(result.artifacts).toHaveLength(1);
     expect(artifactBody).toContain("Uploads: brief.txt");
-    expect(result.current_url).toContain(`conversation=${result.conversation_id}`);
+    expect(result.current_url).toContain(
+      `conversation=${result.conversation_id}`,
+    );
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -1412,7 +1425,9 @@ describe("browser adapter", () => {
     const server = await startTrackedFakeChatGptServer();
     const targetUrl = withHarnessUrl(server.url, { scenario: "timeout" });
     const adapter = await createTrackedAdapterForMode("attach", targetUrl);
-    const bundleRoot = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const bundleRoot = await mkdtemp(
+      path.join(os.tmpdir(), "tablinq-browser-"),
+    );
     await adapter.open({ targetUrl, headless: true });
 
     await expect(
@@ -1426,7 +1441,9 @@ describe("browser adapter", () => {
       ),
     ).rejects.toThrow("timed out");
 
-    const diagnostics = await adapter.diagnostics(path.join(bundleRoot, "bundle"));
+    const diagnostics = await adapter.diagnostics(
+      path.join(bundleRoot, "bundle"),
+    );
     expect(diagnostics.screenshot_path).toContain("failure.png");
     expect(diagnostics.dom_snapshot).toContain("body_excerpt");
 
@@ -1453,7 +1470,9 @@ describe("browser adapter", () => {
       },
     );
 
-    expect(result.output_text).toBe("Fake response for: survive attach reloads");
+    expect(result.output_text).toBe(
+      "Fake response for: survive attach reloads",
+    );
     expect((await adapter.health()).reload_count).toBeGreaterThan(0);
 
     await adapter.shutdown();
@@ -1497,9 +1516,13 @@ describe("browser adapter", () => {
 
   it("runs research jobs with progress updates in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
-    const targetUrl = withHarnessUrl(server.url, { scenario: "research-success" });
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "research-success",
+    });
     const adapter = await createTrackedAdapterForMode("attach", targetUrl);
-    const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixtureRoot = await mkdtemp(
+      path.join(os.tmpdir(), "tablinq-browser-"),
+    );
     const fixture = path.join(fixtureRoot, "brief.txt");
     await writeFile(fixture, "brief body", "utf8");
     await adapter.open({ targetUrl, headless: true });
@@ -1531,7 +1554,9 @@ describe("browser adapter", () => {
 
   it("fails research jobs with a research-specific error in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
-    const targetUrl = withHarnessUrl(server.url, { scenario: "research-failure" });
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "research-failure",
+    });
     const adapter = await createTrackedAdapterForMode("attach", targetUrl);
     await adapter.open({ targetUrl, headless: true });
 

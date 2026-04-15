@@ -1,6 +1,18 @@
 # Architecture
 
-Tablinq is intentionally browser-driven. The browser is not a side effect or fallback. It is the execution engine, and the rest of the system exists to make that execution model durable, inspectable, and integrable.
+Tablinq is browser-driven by design. The browser is the execution engine, not a side effect.
+
+## Core idea
+
+The modern Tablinq stack is attach-first:
+
+- the user owns the browser session
+- the user signs in manually
+- the extension is the semantic bridge
+- Playwright is used as an attach-and-assist runtime
+- Rust owns the durable control plane
+
+The old managed Playwright-owned login path is no longer the primary model. That approach failed as a default because Cloudflare and anti-bot protection at `chatgpt.com` made automation-owned startup and login the wrong boundary for a production workflow.
 
 ## Ownership boundaries
 
@@ -11,11 +23,52 @@ Tablinq is intentionally browser-driven. The browser is not a side effect or fal
 
 ## Runtime topology
 
-1. `gpt` parses local user commands and sends daemon requests over local IPC.
+1. `gpt` parses local commands and sends daemon requests over local IPC.
 2. `gptd` owns durable execution, persistence, request lifecycle state, and one supervised browser adapter process.
 3. `tablinq-gateway` exposes an OpenAI-compatible HTTP surface backed by the same core service.
-4. The browser adapter drives one managed browser profile with Playwright.
-5. The extension probes the page and publishes capability and alias data back to the browser-driven control loop.
+4. The browser adapter attaches to a user-owned Chrome or Edge browser session through a local debug endpoint, or launches managed fallback explicitly when configured.
+5. The extension probes the page and publishes capability and alias data back to the control loop.
+
+## High-level flow
+
+```mermaid
+flowchart LR
+    CLI["gpt CLI"] --> IPC["local IPC"]
+    IPC --> Daemon["gptd daemon"]
+    Daemon --> DB["SQLite + state root"]
+    Daemon --> Adapter["browser adapter"]
+    Adapter --> Browser["user-owned Chrome / Edge profile"]
+    Browser --> Extension["MV3 extension"]
+    Extension --> Page["ChatGPT tab"]
+    Gateway["OpenAI-compatible HTTP gateway"] --> Daemon
+```
+
+## Browser runtime model
+
+- The CLI never talks to the browser directly.
+- The daemon supervises the browser adapter process.
+- The browser adapter is launched from packaged `service.js` output when present and falls back to repo `service.ts` in a developer checkout.
+- In `attach_first`, the adapter connects to a running local debug endpoint, discovers the best ChatGPT tab, or opens a target tab if needed.
+- In `managed_only` or `managed_fallback`, the adapter can still launch an owned managed context for debugging, CI, or machines that cannot expose an attachable browser.
+- In attach mode, Tablinq does not own the whole browser and must detach cleanly instead of killing the user's browser process.
+
+## Extension-first control
+
+The extension is the semantic source of truth for:
+
+- capability matrix
+- alias discovery
+- UI signature
+- preferred selector strategy matches
+
+The browser adapter uses CDP and Playwright transport for:
+
+- attach and detach
+- target-tab discovery
+- focus and navigation assistance
+- screenshots
+- upload and download coordination
+- reload and disconnect detection
 
 ## State layout
 
@@ -31,15 +84,7 @@ The resolved state root contains:
 - `gateway-uploads/`
 - `daemon.lock`
 
-The IPC endpoint is derived from the state root so the CLI and daemon agree on the same local socket name without extra registration.
-
-## Browser runtime
-
-- The daemon owns the managed browser session and dedicated profile.
-- The CLI never talks to the browser directly.
-- The browser adapter is launched from packaged `service.js` output when present and falls back to the repo `service.ts` entry in a developer checkout.
-- The adapter keeps one managed page alive, recreates it after closes or crashes, and reports `BrowserStatusSnapshot` health back to the daemon.
-- Live-site DOM helpers stay isolated in `packages/browser-adapter/src/pageAdapter.runtime.js` so UI-specific heuristics do not leak across the long-lived control loop.
+`browser-profile/` remains in the layout because managed fallback still exists and compatibility with earlier state roots matters.
 
 ## Request lifecycle
 
@@ -52,11 +97,11 @@ Ask and research requests move through explicit states:
 - `recovered`
 - terminal states such as `completed`, `failed`, or `cancelled`
 
-That state is persisted and surfaced through the CLI and gateway so clients can distinguish:
+Those states are persisted and surfaced through the CLI and gateway so clients can distinguish:
 
-- still running work
+- still-running work
 - interrupted work that may still be active upstream
-- recovered work whose final result was reconciled after interruption
+- recovered work reconciled after interruption
 - unrecoverable failures
 
 ## Ask and research flow
@@ -70,23 +115,23 @@ That state is persisted and surfaced through the CLI and gateway so clients can 
 
 - The extension publishes a capability matrix plus runtime alias maps for visible labels.
 - The control plane uses those alias maps instead of hardcoding current UI text for model, mode, and effort selection.
-- Strategy success and failure telemetry are persisted so the managed profile can reuse last-known-good selectors per workspace.
+- Strategy success and failure telemetry are persisted so the control plane can reuse last-known-good selectors per workspace.
 
 ## Interruption and recovery model
 
-Tablinq assumes browser-backed execution can break in ways a normal API caller does not:
+Browser-backed execution can fail in ways a direct API call does not:
 
 - browser disconnect
 - tab reload or navigation
-- client disconnect while upstream work may still continue
+- local client disconnect while upstream work may still continue
 - streaming stalls
 
-Recovery is conservative:
+Recovery stays conservative:
 
 - requests are detected as interrupted with bounded timeouts
-- the adapter reattaches to the managed session when possible
+- the adapter reattaches or reconnects to the live browser state when possible
 - the live conversation is inspected before any continuation
-- a request is marked `recovered` only when the observed assistant result matches the interrupted request safely
+- a request is marked `recovered` only when the observed assistant result matches safely
 - prompts are not blindly resubmitted by default
 
 ## Failure handling
@@ -95,8 +140,8 @@ Typed failures are surfaced for:
 
 - authentication problems
 - capability gaps
-- profile locks
-- browser launch issues
+- browser attach failures
+- managed-fallback launch issues
 - upload and download failures
 - action timeouts
 - research-specific failures

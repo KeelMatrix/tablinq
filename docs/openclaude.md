@@ -2,18 +2,19 @@
 
 Use Tablinq's local gateway as an OpenAI-compatible provider for OpenClaude.
 
-## Good default posture
+## Recommended operating posture
 
+- bring up Tablinq through the normal attach-first flow
 - base URL: `http://127.0.0.1:3847/v1`
 - API key: `gateway.api_key` from `config.toml`
 - streaming: `true`
 - max parallel requests: `1`
 - max parallel branches: `1`
 - subagents: disabled by default
-- ask/search timeout: start around `180s`
+- ask or search timeout: start around `180s`
 - research timeout: start around `900s`
 
-OpenClaude works best when you treat Tablinq as a high-context, browser-backed provider with one true upstream slot.
+OpenClaude works best when you treat Tablinq as a high-context, browser-backed provider with one real upstream slot.
 
 ## Recommended models
 
@@ -30,7 +31,7 @@ Use `tablinq-research` only when you explicitly want the longer-running research
 - branch: serialize
 - subagent: reject with `subagents_disabled`
 
-## Recommended config
+## Example config
 
 ```json
 {
@@ -67,7 +68,7 @@ Use `tablinq-research` only when you explicitly want the longer-running research
 - cancel with `POST /v1/requests/{request_id}/cancel`
 - if the client disconnects, inspect `GET /v1/requests/{request_id}` before assuming the work is lost
 
-Because Tablinq is browser-backed, a local disconnect may become a later `recovered` result instead of a simple failure.
+Because Tablinq is browser-backed, a local disconnect may later show up as `recovered` instead of a simple failure.
 
 ## Example request
 

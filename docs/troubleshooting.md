@@ -1,6 +1,6 @@
 # Troubleshooting
 
-This guide focuses on the common operational failures for a browser-driven local provider.
+This guide follows the current attach-first operating model.
 
 ## Start here
 
@@ -23,11 +23,25 @@ Use this recovery order in attach-first mode:
 4. reattach or open the target tab
 5. only then consider managed fallback
 
-## Attach Endpoint Not Reachable
+## Why attach-first is the right model
+
+Tablinq does not use a Playwright-owned managed login flow as the normal path anymore. That approach proved to be the wrong default because Cloudflare and anti-bot protections at `chatgpt.com` made automation-owned browser startup and login unreliable.
+
+The supported model is:
+
+- normal browser profile
+- manual sign-in
+- local debug endpoint
+- Tablinq attach
+- extension bridge on the real tab
+
+Playwright is still used internally for attach, navigation assistance, screenshots, uploads, downloads, and recovery. It is no longer the default owner of the ChatGPT login session.
+
+## Attach endpoint not reachable
 
 Symptoms:
 
-- `gpt doctor` shows `attach_unavailable`
+- `gpt doctor` shows attach availability problems
 - `gpt browser attach` fails immediately
 - `gpt browser connection-info` points at a debug endpoint that is not live
 
@@ -35,28 +49,26 @@ Actions:
 
 - fully close Chrome or Edge before retrying
 - run `gpt browser start-debug`
-- run `gpt browser connection-info` and confirm:
-  - `debug_endpoint`
-  - `browser_path`
-  - `target_url`
-- if no browser executable is detected, set `browser_path` in `%LOCALAPPDATA%\Tablinq\config\config.toml`
+- run `gpt browser connection-info`
+- confirm the reported `debug_endpoint`, `browser_path`, and target URL match what you expect
+- if no browser executable is detected, set `browser_path` in `config/config.toml`
 
-## Extension Missing Or Disconnected
+## Extension missing or disconnected
 
 Symptoms:
 
 - `gpt doctor` shows extension connectivity is false
-- `gpt status` reports `attached_extension_disconnected`
-- the browser is attached but capabilities stay empty
+- `gpt status` reports that the browser is attached but the extension is disconnected
+- capabilities stay empty even though the tab is visible
 
 Actions:
 
-- confirm the unpacked Tablinq extension is installed in the same normal browser profile Tablinq is attaching to
-- reload the extension or reinstall it from the installed `extension` directory
-- keep only one ChatGPT tab open while reconnecting if you suspect Tablinq attached to the wrong tab
+- confirm the unpacked Tablinq extension is installed in the same browser profile Tablinq is attaching to
+- reload or reinstall the extension from the installed `extension` directory
+- keep only one signed-in ChatGPT tab open while reconnecting if you suspect the wrong tab was selected
 - rerun `gpt browser attach`
 
-## Signed Out Or Blocked On Login Or Challenge
+## Signed out or blocked on login or challenge
 
 Symptoms:
 
@@ -66,42 +78,41 @@ Symptoms:
 
 Actions:
 
-- sign in manually at `chatgpt.com` in your normal browser
+- sign in manually at `https://chatgpt.com/` in the attached normal browser
 - clear any login, challenge, or captcha page before retrying
 - rerun `gpt browser attach`
-- if the browser is attached but Tablinq is still looking at the wrong tab, run `gpt browser open`
+- if Tablinq attached to the wrong tab, run `gpt browser open`
 
-## Target Tab Missing Or Wrong Tab Selected
+## Target tab missing or wrong tab selected
 
 Symptoms:
 
-- `gpt doctor` shows `target_tab_found = false`
-- `gpt status` reports `target_tab_missing`
+- `gpt doctor` shows the target tab is missing
 - multiple ChatGPT tabs are open and Tablinq keeps choosing the wrong one
 
 Actions:
 
-- run `gpt browser open` to create or focus the configured ChatGPT tab
-- leave only the signed-in ChatGPT tab with the working Tablinq extension open while retrying attach
+- run `gpt browser open` to create or focus the configured target tab
+- keep only the signed-in ChatGPT tab with the working Tablinq extension open while retrying attach
 - rerun `gpt browser attach`
 
-## Request interrupted or recovered
+## Interrupted or recovered requests
 
 Symptoms:
 
 - a request reports `interrupted`
-- the client disconnected or the browser reloaded mid-stream
-- a later request shows `recovered`
+- the browser reloaded, disconnected, or the local client dropped mid-stream
+- a later request or status view shows `recovered`
 
-What this means:
+What that means:
 
-- `interrupted` means the local stream broke, not necessarily that the upstream browser work stopped
-- `recovered` means Tablinq reattached, reconciled the live conversation, and found a safe matching result
+- `interrupted` means the local stream broke, not necessarily that upstream browser work stopped
+- `recovered` means Tablinq reattached, reconciled the live browser conversation, and found a safe matching result
 
 Actions:
 
-- inspect the request through `gpt jobs show <job-id>` or `GET /v1/requests/{request_id}`
-- avoid resubmitting the same prompt blindly
+- inspect the request with `gpt jobs show <job-id>` or `GET /v1/requests/{request_id}`
+- do not blindly resubmit the same prompt
 - if needed, rerun `gpt browser attach` and `gpt browser open`
 
 ## Native messaging does not connect
@@ -109,15 +120,15 @@ Actions:
 Symptoms:
 
 - the extension never connects
-- page probing fails even though the browser launches
+- page probing fails even though the browser and daemon are running
 
 Actions:
 
-- re-run `scripts/install.ps1` to refresh registry keys and native-host manifests
-- confirm the unpacked extension path matches `%LOCALAPPDATA%\Tablinq\install\extension`
-- check `%LOCALAPPDATA%\Tablinq\logs\native-host.log` if present
+- rerun the installer so native-host registration is refreshed
+- confirm the unpacked extension path matches the installed `extension` directory
+- inspect the local logs under the Tablinq state root
 
-## Managed Fallback Only For Edge Cases
+## Managed fallback only for edge cases
 
 Use managed fallback only when attach mode cannot be enabled on this machine or browser profile.
 
@@ -125,19 +136,19 @@ Actions:
 
 - set `browser_connection_mode = "managed_only"` in `config/config.toml`
 - run `gpt browser open`
-- use `gpt browser reset-profile` only for managed fallback profile recovery, not as the normal attach-first fix
+- use `gpt browser reset-profile` only for managed fallback profile recovery
 
 ## Browser adapter fails after install
 
 Symptoms:
 
 - the daemon starts but browser operations fail immediately
-- installed behavior differs from repo checkout behavior
+- installed behavior differs from repo-checkout behavior
 
 Actions:
 
-- run `gpt version --json` and confirm the package came from the expected commit
-- verify `%LOCALAPPDATA%\Tablinq\install\browser-adapter\src\service.js` exists
+- run `gpt version --json`
+- verify the packaged browser adapter output exists under the installed package layout
 - remember that the daemon prefers packaged `service.js` output and falls back to repo `service.ts` only in a developer checkout
 
 ## Gateway unhealthy or not ready
@@ -152,33 +163,63 @@ Actions:
 
 - run `gpt gateway status`
 - check `GET /health`, `GET /ready`, and `GET /v1/provider`
-- inspect `%LOCALAPPDATA%\Tablinq\logs\gateway.log`
+- inspect `gateway.log`
 - restart in order:
   - `gpt gateway stop`
   - `gpt daemon stop`
   - `gpt daemon start`
   - `gpt gateway start`
 
+## Antivirus blocking local tools or browser startup
+
+Symptoms:
+
+- packaging, tests, or install steps fail with `Access is denied`
+- the browser does not start when invoked by Tablinq
+- `node.exe`, `pwsh.exe`, `chrome.exe`, `cmd.exe`, or `esbuild.exe` show as blocked or quarantined
+
+Actions:
+
+- restore or allow the blocked executable in your antivirus notifications or quarantine first
+- add the relevant paths to antivirus exceptions
+- if your antivirus has a separate behavioral or advanced threat module, add the same executables there too
+
+Example Windows paths that may need exceptions:
+
+- `C:\Users\user\Desktop\gpt-cli`
+- `C:\Users\user\AppData\Local\Tablinq`
+- `C:\Users\user\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`
+- `C:\nvm4w\nodejs`
+- `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
+- `C:\nvm4w\nodejs\node.exe`
+- `C:\Users\user\Desktop\gpt-cli\scripts`
+- `C:\Users\user\AppData\Local\nvm`
+- `C:\Program Files\PowerShell\7\pwsh.exe`
+- `C:\Program Files\Google\Chrome\Application\chrome.exe`
+- `C:\Users\user\AppData\Local\nvm\v20.19.3\node.exe`
+- `C:\Windows\System32\cmd.exe`
+- `C:\Users\user\Desktop\gpt-cli\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
+- `C:\Users\user\Desktop\gpt-cli\node_modules`
+
+Adjust those paths for your own machine.
+
 ## Clearing local state
 
 Use the smallest reset that matches the problem:
 
-- delete `%LOCALAPPDATA%\Tablinq\downloads`
-  - removes downloaded artifacts
-- delete `%LOCALAPPDATA%\Tablinq\crash-bundles`
-  - clears saved failure bundles
-- delete `%LOCALAPPDATA%\Tablinq\gateway-uploads`
-  - clears staged provider uploads
+- delete `downloads/`
+- delete `crash-bundles/`
+- delete `gateway-uploads/`
 
 `gpt browser reset-profile` is a managed fallback recovery tool only.
 
-Do not delete the full state root unless you really want to discard local history and config.
+Do not delete the full state root unless you want to discard local history and config.
 
 ## Selector-pack changes
 
 If the live site drifts:
 
-- edit `selector-packs/v1/chatgpt-default.json` before packaging, or replace the installed copy under `%LOCALAPPDATA%\Tablinq\install\selector-packs`
-- restart `gptd` after changing selector-pack data so the next probe reloads it
+- edit `selector-packs/v1/chatgpt-default.json` before packaging, or replace the installed selector-pack copy
+- restart `gptd` after changing selector-pack data
 
 For explicit real-site checks, use [live-smoke-checklist.md](live-smoke-checklist.md).
