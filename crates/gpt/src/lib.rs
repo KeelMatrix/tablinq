@@ -8,6 +8,7 @@ use shared_protocol::{
     DaemonResponse, Effort, EventPayload, Mode, ModelClass, PullArtifactCommand, ResearchCommand,
     StreamChunkKind, build_state_paths, resolve_state_root,
 };
+use std::env;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
@@ -158,6 +159,13 @@ pub enum BrowserCommand {
     #[command(name = "switch-account")]
     SwitchAccount,
     ResetProfile,
+    #[command(name = "start-debug")]
+    StartDebug {
+        #[arg(long)]
+        target_url: Option<String>,
+        #[arg(long)]
+        browser_path: Option<PathBuf>,
+    },
     #[command(name = "connection-info")]
     ConnectionInfo,
     ProfileInfo,
@@ -332,6 +340,10 @@ fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> R
             }
             send_daemon_request(state_root, DaemonRequest::BrowserResetProfile)
         }
+        BrowserCommand::StartDebug {
+            target_url,
+            browser_path,
+        } => browser_start_debug(&config, target_url.as_deref(), browser_path.as_deref()),
         BrowserCommand::ConnectionInfo => browser_connection_info(state_root, &config),
         BrowserCommand::ProfileInfo => {
             send_daemon_request(state_root, DaemonRequest::BrowserProfileInfo)
@@ -346,6 +358,7 @@ fn browser_connection_info(state_root: Option<&Path>, config: &gptd::AppConfig) 
         Value::Null
     };
     let mode = config.browser_connection_mode();
+    let startup = attach_startup_story(config);
 
     Ok(json!({
         "attach_mode": mode,
@@ -357,9 +370,304 @@ fn browser_connection_info(state_root: Option<&Path>, config: &gptd::AppConfig) 
         "target_url": config.browser_target_url(),
         "extension_required": config.browser_extension_required(),
         "auto_open_target_tab": config.browser_auto_open_target_tab(),
+        "startup_story": startup,
         "recommended_commands": browser_recovery_commands(mode),
         "browser": browser,
     }))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BrowserStartDebugPlan {
+    executable: String,
+    launch_args: Vec<String>,
+    target_url: String,
+}
+
+fn browser_start_debug(
+    config: &gptd::AppConfig,
+    target_url: Option<&str>,
+    browser_path: Option<&Path>,
+) -> Result<Value> {
+    let plan = build_browser_start_debug_plan(config, target_url, browser_path)?;
+    let mut child = ProcessCommand::new(&plan.executable);
+    child
+        .args(&plan.launch_args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = child.spawn().with_context(|| {
+        format!(
+            "start browser in debug attach mode with executable {}",
+            plan.executable
+        )
+    })?;
+
+    Ok(json!({
+        "status": "started",
+        "browser_path": plan.executable,
+        "target_url": plan.target_url,
+        "debug_endpoint": config.browser_debug_endpoint(),
+        "debug_host": config.browser_debug_host(),
+        "debug_port": config.browser_debug_port(),
+        "pid": child.id(),
+        "launch_args": plan.launch_args,
+        "browser_user_owned": true,
+        "manual_sign_in_required": true,
+        "close_existing_browser_windows_first": true,
+        "next_commands": [
+            "gpt browser attach",
+            "gpt status",
+            "gpt doctor",
+        ],
+        "note": "This starts your normal browser with a local debug endpoint. It does not create a managed automation profile."
+    }))
+}
+
+fn build_browser_start_debug_plan(
+    config: &gptd::AppConfig,
+    target_url: Option<&str>,
+    browser_path: Option<&Path>,
+) -> Result<BrowserStartDebugPlan> {
+    let executable = resolve_browser_executable(config, browser_path)?;
+    let target_url = target_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(config.browser_target_url())
+        .to_owned();
+
+    Ok(BrowserStartDebugPlan {
+        executable,
+        launch_args: vec![
+            format!("--remote-debugging-port={}", config.browser_debug_port()),
+            format!("--remote-debugging-address={}", config.browser_debug_host()),
+            "--no-first-run".to_owned(),
+            "--no-default-browser-check".to_owned(),
+            target_url.clone(),
+        ],
+        target_url,
+    })
+}
+
+fn resolve_browser_executable(
+    config: &gptd::AppConfig,
+    browser_path: Option<&Path>,
+) -> Result<String> {
+    if let Some(browser_path) = browser_path {
+        return Ok(browser_path.display().to_string());
+    }
+    if let Some(browser_path) = config.browser_path() {
+        return Ok(browser_path.to_owned());
+    }
+    if let Ok(browser_path) = env::var("TABLINQ_BROWSER_PATH") {
+        let browser_path = browser_path.trim();
+        if !browser_path.is_empty() {
+            return Ok(browser_path.to_owned());
+        }
+    }
+
+    detect_browser_executable(config.browser_channel()).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no supported browser executable found for channel {}; set browser_path in config or pass --browser-path",
+            config.browser_channel()
+        )
+    })
+}
+
+fn detect_browser_executable(channel: &str) -> Option<String> {
+    if cfg!(windows) {
+        detect_windows_browser_executable(channel)
+    } else if cfg!(target_os = "macos") {
+        let mut candidates = ordered_browser_candidates(
+            channel,
+            &[
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            ],
+        );
+        candidates.retain(|candidate| Path::new(candidate).exists());
+        candidates.into_iter().next().map(str::to_owned)
+    } else {
+        ordered_browser_candidates(
+            channel,
+            &[
+                "google-chrome",
+                "chromium",
+                "chromium-browser",
+                "microsoft-edge",
+            ],
+        )
+        .into_iter()
+        .find_map(resolve_command_in_path)
+    }
+}
+
+fn ordered_browser_candidates<'a>(channel: &str, candidates: &'a [&'a str]) -> Vec<&'a str> {
+    let (preferred, fallback) = if channel.eq_ignore_ascii_case("msedge") {
+        (
+            vec!["microsoft-edge", "msedge.exe"],
+            vec!["google chrome", "chrome.exe"],
+        )
+    } else {
+        (
+            vec!["google chrome", "chrome.exe"],
+            vec!["microsoft-edge", "msedge.exe"],
+        )
+    };
+
+    let mut ordered = Vec::new();
+    for candidate in candidates {
+        let lower = candidate.to_ascii_lowercase();
+        if preferred.iter().any(|value| lower.contains(value)) {
+            ordered.push(*candidate);
+        }
+    }
+    for candidate in candidates {
+        let lower = candidate.to_ascii_lowercase();
+        if fallback.iter().any(|value| lower.contains(value)) && !ordered.contains(candidate) {
+            ordered.push(*candidate);
+        }
+    }
+    for candidate in candidates {
+        if !ordered.contains(candidate) {
+            ordered.push(*candidate);
+        }
+    }
+    ordered
+}
+
+fn resolve_command_in_path(command: &str) -> Option<String> {
+    let tool = if cfg!(windows) { "where" } else { "which" };
+    ProcessCommand::new(tool)
+        .arg(command)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            String::from_utf8(output.stdout).ok().and_then(|value| {
+                value
+                    .lines()
+                    .map(str::trim)
+                    .find(|value| !value.is_empty())
+                    .map(str::to_owned)
+            })
+        })
+}
+
+fn detect_windows_browser_executable(channel: &str) -> Option<String> {
+    let local_app_data = env::var("LOCALAPPDATA")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let program_files = [
+        env::var("ProgramFiles(x86)").ok(),
+        env::var("ProgramFiles").ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|value| !value.trim().is_empty())
+    .collect::<Vec<_>>();
+
+    let chrome_candidates = std::iter::once(local_app_data.as_deref().map(|base| {
+        Path::new(base)
+            .join("Google")
+            .join("Chrome")
+            .join("Application")
+            .join("chrome.exe")
+    }))
+    .flatten()
+    .chain(program_files.iter().map(|base| {
+        Path::new(base)
+            .join("Google")
+            .join("Chrome")
+            .join("Application")
+            .join("chrome.exe")
+    }))
+    .collect::<Vec<_>>();
+    let edge_candidates = std::iter::once(local_app_data.as_deref().map(|base| {
+        Path::new(base)
+            .join("Microsoft")
+            .join("Edge")
+            .join("Application")
+            .join("msedge.exe")
+    }))
+    .flatten()
+    .chain(program_files.iter().map(|base| {
+        Path::new(base)
+            .join("Microsoft")
+            .join("Edge")
+            .join("Application")
+            .join("msedge.exe")
+    }))
+    .collect::<Vec<_>>();
+
+    let ordered_paths = if channel.eq_ignore_ascii_case("msedge") {
+        edge_candidates
+            .into_iter()
+            .chain(chrome_candidates)
+            .collect::<Vec<_>>()
+    } else {
+        chrome_candidates
+            .into_iter()
+            .chain(edge_candidates)
+            .collect::<Vec<_>>()
+    };
+    for candidate in ordered_paths {
+        if candidate.exists() {
+            return Some(candidate.display().to_string());
+        }
+    }
+
+    let ordered_commands = if channel.eq_ignore_ascii_case("msedge") {
+        vec!["msedge.exe", "chrome.exe"]
+    } else {
+        vec!["chrome.exe", "msedge.exe"]
+    };
+    ordered_commands
+        .into_iter()
+        .find_map(resolve_command_in_path)
+}
+
+fn attach_startup_story(config: &gptd::AppConfig) -> Value {
+    if !is_attach_primary(config.browser_connection_mode()) {
+        return json!({
+            "mode": "managed_only",
+            "command": "gpt browser open",
+        });
+    }
+
+    let preview = match build_browser_start_debug_plan(config, None, None) {
+        Ok(plan) => json!({
+            "browser_path": plan.executable,
+            "launch_args": plan.launch_args,
+        }),
+        Err(error) => json!({
+            "browser_path": Value::Null,
+            "launch_error": error.to_string(),
+        }),
+    };
+
+    json!({
+        "mode": "start_debug",
+        "command": "gpt browser start-debug",
+        "browser_user_owned": true,
+        "manual_sign_in_required": true,
+        "close_existing_browser_windows_first": true,
+        "extension_install_required": config.browser_extension_required(),
+        "verify_commands": [
+            "gpt browser attach",
+            "gpt status",
+            "gpt doctor",
+            "gpt browser connection-info",
+        ],
+        "fallback": {
+            "mode": "managed_only",
+            "config_toml": "browser_connection_mode = \"managed_only\"",
+            "command": "gpt browser open",
+            "when_to_use": "Use managed_only only when your normal browser cannot expose the local debug endpoint."
+        },
+        "preview": preview,
+    })
 }
 
 fn send_daemon_request(state_root: Option<&Path>, request: DaemonRequest) -> Result<Value> {
@@ -587,6 +895,7 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
             "state": browser_state,
             "connected": browser_connected,
             "snapshot": browser,
+            "startup_story": attach_startup_story(&config),
         },
         "extension": {
             "connected": extension_connected,
@@ -655,6 +964,7 @@ fn browser_runtime_state(
 fn browser_recovery_commands(mode: BrowserConnectionMode) -> Vec<&'static str> {
     let mut commands = vec!["gpt daemon start", "gpt gateway start"];
     if is_attach_primary(mode) {
+        commands.push("gpt browser start-debug");
         commands.push("gpt browser attach");
         commands.push("gpt browser connection-info");
         commands.push("gpt browser open");
@@ -974,6 +1284,23 @@ mod tests {
     }
 
     #[test]
+    fn browser_start_debug_command_matches_golden_shape() {
+        let cli = parse(&[
+            "gpt",
+            "browser",
+            "start-debug",
+            "--target-url",
+            "https://chatgpt.com/",
+        ]);
+        assert!(matches!(
+            cli.command,
+            Command::Browser {
+                command: BrowserCommand::StartDebug { .. }
+            }
+        ));
+    }
+
+    #[test]
     fn browser_connection_info_command_matches_golden_shape() {
         let cli = parse(&["gpt", "browser", "connection-info"]);
         assert!(matches!(
@@ -1052,8 +1379,10 @@ mod tests {
         assert!(output.contains("\"browser_connection_mode\": \"attach_first\""));
         assert!(output.contains("\"state\": \"attach_unavailable\""));
         assert!(output.contains("\"recovery_commands\""));
+        assert!(output.contains("\"gpt browser start-debug\""));
         assert!(output.contains("\"gpt browser attach\""));
         assert!(output.contains("\"gpt browser connection-info\""));
+        assert!(output.contains("\"browser_connection_mode = \\\"managed_only\\\"\""));
         assert!(!output.contains("\"gpt browser reset-profile\""));
     }
 
@@ -1070,6 +1399,7 @@ mod tests {
         let output = run(&cli).unwrap();
 
         assert!(output.contains("\"state\": \"attach_unavailable\""));
+        assert!(output.contains("\"gpt browser start-debug\""));
         assert!(output.contains("\"gpt browser attach\""));
         assert!(output.contains("\"gpt browser connection-info\""));
     }
@@ -1089,7 +1419,38 @@ mod tests {
 
         assert!(output.contains("\"attach_mode\": \"attach_first\""));
         assert!(output.contains("\"debug_endpoint\": \"http://127.0.0.1:9222\""));
+        assert!(output.contains("\"gpt browser start-debug\""));
         assert!(output.contains("\"gpt browser attach\""));
+        assert!(output.contains("\"browser_connection_mode = \\\"managed_only\\\"\""));
+    }
+
+    #[test]
+    fn start_debug_plan_uses_explicit_browser_path_without_managed_profile_flags() {
+        let dir = tempdir().unwrap();
+        let config = gptd::AppConfig::load_or_create(Some(dir.path())).unwrap();
+
+        let plan = build_browser_start_debug_plan(
+            &config,
+            Some("https://chatgpt.com/"),
+            Some(Path::new("C:\\Browsers\\Edge\\msedge.exe")),
+        )
+        .unwrap();
+
+        assert_eq!(plan.executable, "C:\\Browsers\\Edge\\msedge.exe");
+        assert!(
+            plan.launch_args
+                .contains(&"--remote-debugging-port=9222".to_owned())
+        );
+        assert!(
+            plan.launch_args
+                .contains(&"--remote-debugging-address=127.0.0.1".to_owned())
+        );
+        assert!(
+            !plan
+                .launch_args
+                .iter()
+                .any(|arg| arg.contains("--user-data-dir"))
+        );
     }
 
     #[test]
