@@ -91,7 +91,7 @@ Managed fallback exists only for debugging, CI, harness isolation, and machines 
 - `scripts/package.ps1`
   - builds release Rust binaries, emits browser adapter and extension JavaScript, and assembles `dist/package/tablinq`
 - `scripts/install.ps1`
-  - installs the package under `%LOCALAPPDATA%\Tablinq\install`, initializes `%LOCALAPPDATA%\Tablinq`, registers the native host, and writes startup helpers
+  - the Windows all-in-one entry point: installs dependencies, packages the repo, replaces `%LOCALAPPDATA%\Tablinq\install`, registers the native host, writes startup helpers, and prints the remaining manual browser-extension steps
 
 ## CI expectations
 

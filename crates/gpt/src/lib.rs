@@ -9,6 +9,7 @@ use shared_protocol::{
     StreamChunkKind, build_state_paths, resolve_state_root,
 };
 use std::env;
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
@@ -381,6 +382,7 @@ struct BrowserStartDebugPlan {
     executable: String,
     launch_args: Vec<String>,
     target_url: String,
+    attach_profile_dir: Option<PathBuf>,
 }
 
 fn browser_start_debug(
@@ -389,6 +391,10 @@ fn browser_start_debug(
     browser_path: Option<&Path>,
 ) -> Result<Value> {
     let plan = build_browser_start_debug_plan(config, target_url, browser_path)?;
+    if let Some(attach_profile_dir) = plan.attach_profile_dir.as_ref() {
+        fs::create_dir_all(attach_profile_dir)
+            .with_context(|| format!("create {}", attach_profile_dir.display()))?;
+    }
     let mut child = ProcessCommand::new(&plan.executable);
     child
         .args(&plan.launch_args)
@@ -409,6 +415,7 @@ fn browser_start_debug(
         "debug_endpoint": config.browser_debug_endpoint(),
         "debug_host": config.browser_debug_host(),
         "debug_port": config.browser_debug_port(),
+        "attach_profile_dir": plan.attach_profile_dir.as_ref().map(|path| path.display().to_string()),
         "pid": child.id(),
         "launch_args": plan.launch_args,
         "browser_user_owned": true,
@@ -419,7 +426,7 @@ fn browser_start_debug(
             "gpt status",
             "gpt doctor",
         ],
-        "note": "This starts your normal browser with a local debug endpoint. It does not create a managed automation profile."
+        "note": browser_start_debug_note(plan.attach_profile_dir.is_some()),
     }))
 }
 
@@ -434,18 +441,75 @@ fn build_browser_start_debug_plan(
         .filter(|value| !value.is_empty())
         .unwrap_or(config.browser_target_url())
         .to_owned();
+    let attach_profile_dir = chrome_attach_profile_dir_for_start_debug(config, browser_path, &executable);
+    let mut launch_args = vec![
+        format!("--remote-debugging-port={}", config.browser_debug_port()),
+        format!("--remote-debugging-address={}", config.browser_debug_host()),
+    ];
+    if let Some(attach_profile_dir) = attach_profile_dir.as_ref() {
+        launch_args.push(format!(
+            "--user-data-dir={}",
+            attach_profile_dir.display()
+        ));
+    }
+    launch_args.extend([
+        "--no-first-run".to_owned(),
+        "--no-default-browser-check".to_owned(),
+        target_url.clone(),
+    ]);
 
     Ok(BrowserStartDebugPlan {
         executable,
-        launch_args: vec![
-            format!("--remote-debugging-port={}", config.browser_debug_port()),
-            format!("--remote-debugging-address={}", config.browser_debug_host()),
-            "--no-first-run".to_owned(),
-            "--no-default-browser-check".to_owned(),
-            target_url.clone(),
-        ],
+        launch_args,
         target_url,
+        attach_profile_dir,
     })
+}
+
+fn browser_start_debug_note(uses_chrome_attach_profile: bool) -> &'static str {
+    if uses_chrome_attach_profile {
+        "This starts Chrome in attach-first mode with a dedicated persistent real profile under the Tablinq state root so current Chrome will expose the local debug endpoint. It does not create a managed automation profile."
+    } else {
+        "This starts your normal browser with a local debug endpoint. It does not create a managed automation profile."
+    }
+}
+
+fn chrome_attach_profile_dir_for_start_debug(
+    config: &gptd::AppConfig,
+    browser_path: Option<&Path>,
+    executable: &str,
+) -> Option<PathBuf> {
+    if uses_chrome_attach_profile(config, browser_path, executable) {
+        Some(config.paths.chrome_attach_profile_dir.clone())
+    } else {
+        None
+    }
+}
+
+fn uses_chrome_attach_profile(
+    config: &gptd::AppConfig,
+    browser_path: Option<&Path>,
+    executable: &str,
+) -> bool {
+    if executable_looks_like_edge(executable) {
+        return false;
+    }
+    if executable_looks_like_chrome(executable) {
+        return true;
+    }
+
+    let has_explicit_browser_path = browser_path.is_some() || config.browser_path().is_some();
+    !has_explicit_browser_path && config.browser_channel().eq_ignore_ascii_case("chrome")
+}
+
+fn executable_looks_like_edge(executable: &str) -> bool {
+    let lower = executable.to_ascii_lowercase();
+    lower.contains("msedge") || lower.contains("microsoft edge")
+}
+
+fn executable_looks_like_chrome(executable: &str) -> bool {
+    let lower = executable.to_ascii_lowercase();
+    lower.contains("google chrome") || lower.contains("chrome.exe") || lower.contains("chrome")
 }
 
 fn resolve_browser_executable(
@@ -640,6 +704,8 @@ fn attach_startup_story(config: &gptd::AppConfig) -> Value {
         Ok(plan) => json!({
             "browser_path": plan.executable,
             "launch_args": plan.launch_args,
+            "attach_profile_dir": plan.attach_profile_dir.as_ref().map(|path| path.display().to_string()),
+            "profile_note": plan.attach_profile_dir.as_ref().map(|_| "Chrome attach-first uses a dedicated persistent real profile under the Tablinq state root. Sign in once in that profile before attaching."),
         }),
         Err(error) => json!({
             "browser_path": Value::Null,
@@ -1504,7 +1570,54 @@ mod tests {
     }
 
     #[test]
-    fn start_debug_plan_uses_explicit_browser_path_without_managed_profile_flags() {
+    fn start_debug_plan_uses_dedicated_chrome_attach_profile() {
+        let dir = tempdir().unwrap();
+        let config = gptd::AppConfig::load_or_create(Some(dir.path())).unwrap();
+
+        let plan = build_browser_start_debug_plan(
+            &config,
+            Some("https://chatgpt.com/"),
+            Some(Path::new(
+                "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            )),
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan.executable,
+            "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+        );
+        assert!(
+            plan.launch_args
+                .contains(&"--remote-debugging-port=9222".to_owned())
+        );
+        assert!(
+            plan.launch_args
+                .contains(&"--remote-debugging-address=127.0.0.1".to_owned())
+        );
+        assert_eq!(
+            plan.attach_profile_dir,
+            Some(config.paths.chrome_attach_profile_dir.clone())
+        );
+        assert_eq!(
+            config.paths.chrome_attach_profile_dir,
+            dir.path().join("chrome-attach-profile")
+        );
+        assert!(config.paths.chrome_attach_profile_dir.starts_with(dir.path()));
+        assert!(
+            plan.launch_args.contains(&format!(
+                "--user-data-dir={}",
+                config.paths.chrome_attach_profile_dir.display()
+            ))
+        );
+        assert_ne!(
+            config.paths.chrome_attach_profile_dir,
+            config.paths.browser_profile_dir
+        );
+    }
+
+    #[test]
+    fn start_debug_plan_leaves_edge_without_attach_profile_flag() {
         let dir = tempdir().unwrap();
         let config = gptd::AppConfig::load_or_create(Some(dir.path())).unwrap();
 
@@ -1516,14 +1629,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(plan.executable, "C:\\Browsers\\Edge\\msedge.exe");
-        assert!(
-            plan.launch_args
-                .contains(&"--remote-debugging-port=9222".to_owned())
-        );
-        assert!(
-            plan.launch_args
-                .contains(&"--remote-debugging-address=127.0.0.1".to_owned())
-        );
+        assert_eq!(plan.attach_profile_dir, None);
         assert!(
             !plan
                 .launch_args

@@ -18,7 +18,7 @@ If you want local tools to work through ChatGPT without handing out browser secr
 
 That is what Tablinq does:
 
-- it attaches to your normal Chrome or Edge profile
+- it attaches to a real Chrome or Edge session through a local debug endpoint
 - it uses a browser extension as the semantic page bridge
 - it keeps local jobs, conversations, artifacts, logs, and failure bundles on your machine
 - it exposes an OpenAI-compatible local gateway without hiding the browser-backed reality
@@ -35,6 +35,8 @@ The current design is the correct default for this product:
 - you install the Tablinq extension in that real profile
 - you sign in manually
 - Tablinq attaches to that existing browser session through a local debug endpoint
+
+On current Chrome, `gpt browser start-debug` uses a dedicated persistent real Chrome profile under the Tablinq state root because Chrome requires `--user-data-dir` for remote debugging outside the default profile. This is still attach-first, not managed fallback. Sign in once in that dedicated Chrome attach profile before running `gpt browser attach`.
 
 Playwright remains in the system as an attach-and-assist runtime for:
 
@@ -65,6 +67,7 @@ This is the normal operating path:
 3. Start an attachable browser session:
    - `gpt browser start-debug`
 4. Sign in manually at `https://chatgpt.com/` in that browser profile.
+   Current Chrome uses a dedicated persistent attach profile under the Tablinq state root; Edge keeps the existing flow.
 5. Attach Tablinq:
    - `gpt browser attach`
 6. Confirm health:
@@ -92,7 +95,7 @@ gpt ask "Summarize the value of Tablinq in one paragraph."
 gpt status
 ```
 
-For packaged install instructions, see [docs/install.md](docs/install.md).
+For install instructions, see [docs/install.md](docs/install.md).
 
 ## Command surface
 
@@ -163,12 +166,24 @@ Some Windows antivirus products can block packaging, browser startup, local scri
 Paths that may require exceptions in a typical Windows dev or install environment:
 
 - `<repo-root>`
+- `<repo-root>\scripts`
+- `<repo-root>\scripts\*.ps1`
 - `%LOCALAPPDATA%\Tablinq`
+- `%LOCALAPPDATA%\Tablinq\daemon.lock`
+- `%LOCALAPPDATA%\Tablinq\install\bin`
+- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe`
+- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.cmd`
+- `%LOCALAPPDATA%\Tablinq\install\bin\tablinq-cli.exe`
+- `%LOCALAPPDATA%\Tablinq\install\bin\gptd.exe`
+- `%LOCALAPPDATA%\Tablinq\install\bin\tablinq-gateway.exe`
+- `%LOCALAPPDATA%\Tablinq\install\bin\tablinq-host.exe`
 - `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`
+- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Tablinq Daemon.vbs`
+- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Tablinq Gateway.vbs`
 - `%NVM_SYMLINK%`
 - `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
+- `%SystemRoot%\System32\reg.exe`
 - `%NVM_SYMLINK%\node.exe`
-- `<repo-root>\scripts`
 - `%LOCALAPPDATA%\nvm`
 - `%ProgramFiles%\PowerShell\7\pwsh.exe`
 - `%ProgramFiles%\Google\Chrome\Application\chrome.exe`
