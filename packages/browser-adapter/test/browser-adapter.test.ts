@@ -5,6 +5,7 @@ import type { ChildProcess } from "node:child_process";
 import {
   BrowserAdapter,
   chooseUniqueArtifactPath,
+  detectBrowserExecutable,
   resolveBrowserLaunchConfig,
 } from "../src/browserAdapter";
 import { startFakeChatGptServer, stopFakeChatGptServer } from "./helpers";
@@ -912,18 +913,64 @@ describe("browser launch config", () => {
   it("prefers an explicit browser path", () => {
     const config = resolveBrowserLaunchConfig(
       "win32",
-      "C:\\Browsers\\msedge.exe",
+      "C:\\Browsers\\chrome.exe",
     );
     expect(config).toEqual({
-      browserKind: "custom",
-      executablePath: "C:\\Browsers\\msedge.exe",
+      browserKind: "chrome",
+      executablePath: "C:\\Browsers\\chrome.exe",
     });
   });
 
-  it("defaults to Edge on Windows", () => {
-    const config = resolveBrowserLaunchConfig("win32");
-    expect(config.browserKind).toBe("msedge");
-    expect(config.channel).toBe("msedge");
+  it("prefers Chrome before Edge on Windows", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-detect-"));
+    const localAppData = path.join(root, "LocalAppData");
+    const programFiles = path.join(root, "ProgramFiles");
+    const chromePath = path.join(
+      localAppData,
+      "Google",
+      "Chrome",
+      "Application",
+      "chrome.exe",
+    );
+    const edgePath = path.join(
+      programFiles,
+      "Microsoft",
+      "Edge",
+      "Application",
+      "msedge.exe",
+    );
+
+    await mkdir(path.dirname(chromePath), { recursive: true });
+    await mkdir(path.dirname(edgePath), { recursive: true });
+    await writeFile(chromePath, "", "utf8");
+    await writeFile(edgePath, "", "utf8");
+
+    const previousLocalAppData = process.env.LOCALAPPDATA;
+    const previousProgramFiles = process.env.ProgramFiles;
+    const previousProgramFilesX86 = process.env["ProgramFiles(x86)"];
+    const previousBrowserPath = process.env.TABLINQ_BROWSER_PATH;
+
+    process.env.LOCALAPPDATA = localAppData;
+    process.env.ProgramFiles = programFiles;
+    process.env["ProgramFiles(x86)"] = programFiles;
+    delete process.env.TABLINQ_BROWSER_PATH;
+
+    try {
+      expect(detectBrowserExecutable("win32")).toBe(chromePath);
+      expect(resolveBrowserLaunchConfig("win32")).toEqual({
+        browserKind: "chrome",
+        executablePath: chromePath,
+      });
+    } finally {
+      process.env.LOCALAPPDATA = previousLocalAppData;
+      process.env.ProgramFiles = previousProgramFiles;
+      process.env["ProgramFiles(x86)"] = previousProgramFilesX86;
+      if (previousBrowserPath === undefined) {
+        delete process.env.TABLINQ_BROWSER_PATH;
+      } else {
+        process.env.TABLINQ_BROWSER_PATH = previousBrowserPath;
+      }
+    }
   });
 
   it("allocates unique artifact paths without overwriting existing files", async () => {

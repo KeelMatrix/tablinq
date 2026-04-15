@@ -230,6 +230,7 @@ export interface BrowserAdapterOptions {
   downloadsDir: string;
   defaultTargetUrl: string;
   defaultBrowserPath?: string | null;
+  extensionDir?: string | null;
 }
 
 export interface BrowserStatusSnapshot {
@@ -251,7 +252,7 @@ export interface BrowserStatusSnapshot {
 
 export interface BrowserLaunchConfig {
   browserKind: string;
-  channel?: "msedge";
+  channel?: "msedge" | "chrome";
   executablePath?: string;
 }
 
@@ -323,6 +324,7 @@ export class BrowserAdapter {
   private readonly downloadsDir: string;
   private readonly defaultTargetUrl: string;
   private readonly defaultBrowserPath: string | null;
+  private readonly extensionDir: string | null;
   private currentTargetUrl: string;
   private currentBrowserPath: string | null;
   private currentHeadless = false;
@@ -356,6 +358,7 @@ export class BrowserAdapter {
     this.downloadsDir = resolve(options.downloadsDir);
     this.defaultTargetUrl = options.defaultTargetUrl;
     this.defaultBrowserPath = options.defaultBrowserPath ?? null;
+    this.extensionDir = resolveExtensionDir(options.extensionDir);
     this.currentTargetUrl = options.defaultTargetUrl;
     this.currentBrowserPath = options.defaultBrowserPath ?? null;
     this.capabilityCachePath = resolve(
@@ -720,9 +723,14 @@ export class BrowserAdapter {
         return this.finalizeAsk(command, page, state, snapshot, onChunk);
       }
 
+      const canRecoverFromAskStall =
+        state.emittedText.length > 0 ||
+        state.knownConversationId !== null ||
+        state.knownMessageId !== null;
       if (
         Date.now() - state.lastProgressAt >= stallTimeoutMs &&
-        state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
+        state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS &&
+        canRecoverFromAskStall
       ) {
         const recovered = await this.reconcileAskAfterInterruption(
           page,
@@ -1362,6 +1370,13 @@ export class BrowserAdapter {
     await mkdir(this.profileDir, { recursive: true });
     await mkdir(this.downloadsDir, { recursive: true });
     const launch = resolveBrowserLaunchConfig(process.platform, browserPath);
+    const launchArgs =
+      !headless && this.extensionDir
+        ? [
+            `--disable-extensions-except=${this.extensionDir}`,
+            `--load-extension=${this.extensionDir}`,
+          ]
+        : [];
     try {
       this.context = await chromium.launchPersistentContext(this.profileDir, {
         acceptDownloads: true,
@@ -1369,6 +1384,9 @@ export class BrowserAdapter {
         executablePath: launch.executablePath,
         downloadsPath: this.downloadsDir,
         headless,
+        args: launchArgs,
+        ignoreDefaultArgs:
+          launchArgs.length > 0 ? ["--disable-extensions"] : undefined,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1776,22 +1794,15 @@ export function resolveBrowserLaunchConfig(
 ): BrowserLaunchConfig {
   if (browserPath) {
     return {
-      browserKind: "custom",
+      browserKind: inferBrowserKind(browserPath),
       executablePath: browserPath,
-    };
-  }
-
-  if (platform === "win32") {
-    return {
-      browserKind: "msedge",
-      channel: "msedge",
     };
   }
 
   const detected = detectBrowserExecutable(platform);
   if (detected) {
     return {
-      browserKind: "chromium",
+      browserKind: inferBrowserKind(detected),
       executablePath: detected,
     };
   }
@@ -1807,6 +1818,10 @@ export function detectBrowserExecutable(
   const envPath = process.env.TABLINQ_BROWSER_PATH?.trim();
   if (envPath) {
     return envPath;
+  }
+
+  if (platform === "win32") {
+    return detectWindowsBrowserExecutable();
   }
 
   const candidates =
@@ -1846,14 +1861,90 @@ function detectBrowserAvailability(
   if (browserPath) {
     return { detected: true, path: browserPath };
   }
-  if (platform === "win32") {
-    return { detected: true, path: null };
-  }
   const detected = detectBrowserExecutable(platform);
   return {
     detected: Boolean(detected),
     path: detected,
   };
+}
+
+function resolveExtensionDir(extensionDir?: string | null): string | null {
+  const explicit = extensionDir?.trim();
+  if (explicit) {
+    const resolved = resolve(explicit);
+    return existsSync(resolved) ? resolved : null;
+  }
+
+  const candidate = resolve(resolveTablinqAssetPath(["extension"]));
+  return existsSync(candidate) ? candidate : null;
+}
+
+function detectWindowsBrowserExecutable(): string | null {
+  const localAppData = process.env.LOCALAPPDATA?.trim();
+  const programFiles = [
+    process.env["ProgramFiles(x86)"]?.trim(),
+    process.env.ProgramFiles?.trim(),
+  ].filter((value): value is string => Boolean(value));
+
+  const chromeCandidates = [
+    ...(localAppData
+      ? [resolve(localAppData, "Google", "Chrome", "Application", "chrome.exe")]
+      : []),
+    ...programFiles.map((base) =>
+      resolve(base, "Google", "Chrome", "Application", "chrome.exe"),
+    ),
+  ];
+  for (const candidate of chromeCandidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  const edgeCandidates = [
+    ...(localAppData
+      ? [resolve(localAppData, "Microsoft", "Edge", "Application", "msedge.exe")]
+      : []),
+    ...programFiles.map((base) =>
+      resolve(base, "Microsoft", "Edge", "Application", "msedge.exe"),
+    ),
+  ];
+  for (const candidate of edgeCandidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const commandName of ["chrome.exe", "msedge.exe"]) {
+    try {
+      const resolved = execFileSync("where", [commandName], {
+        encoding: "utf8",
+      })
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .find(Boolean);
+      if (resolved) {
+        return resolved;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+function inferBrowserKind(browserPath: string): string {
+  const fileName = basename(browserPath).toLowerCase();
+  if (fileName === "chrome.exe" || fileName === "google-chrome") {
+    return "chrome";
+  }
+  if (fileName === "msedge.exe" || fileName === "microsoft-edge") {
+    return "msedge";
+  }
+  if (fileName.includes("chromium")) {
+    return "chromium";
+  }
+  return "custom";
 }
 
 function telemetryKey(capability: string, strategyId: string): string {
