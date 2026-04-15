@@ -75,6 +75,49 @@ function Assert-PathExists {
   }
 }
 
+function Assert-DirectoryWritable {
+  param(
+    [string]$Path,
+    [string]$Label
+  )
+
+  if (-not $Path -or -not $Path.Trim()) {
+    throw "Missing required path for $Label."
+  }
+
+  New-Item -ItemType Directory -Force -Path $Path | Out-Null
+  $probePath = Join-Path $Path (".tablinq-write-test-{0}.tmp" -f ([guid]::NewGuid().ToString("N")))
+  try {
+    Set-Content -Path $probePath -Value "ok" -Encoding ascii -ErrorAction Stop
+  }
+  catch {
+    throw "$Label is not writable at $Path. Grant write access or choose a different install location."
+  }
+  finally {
+    Remove-Item -Path $probePath -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Assert-RegistryWritable {
+  param([string]$KeyPath)
+
+  Assert-CommandAvailable -CommandName "reg.exe" -InstallHint "Windows registry tooling is required."
+  $probeName = "tablinq-install-prereq-{0}" -f ([guid]::NewGuid().ToString("N"))
+  $fullKeyPath = "$KeyPath\$probeName"
+  $stdoutPath = [System.IO.Path]::GetTempFileName()
+  $stderrPath = [System.IO.Path]::GetTempFileName()
+  try {
+    $add = Start-Process -FilePath "reg.exe" -ArgumentList @("add", $fullKeyPath, "/f") -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    if ($add.ExitCode -ne 0) {
+      throw "HKCU registry is not writable at $KeyPath. Run with -SkipRegistry or use an account that can write per-user registry keys."
+    }
+  }
+  finally {
+    Start-Process -FilePath "reg.exe" -ArgumentList @("delete", $fullKeyPath, "/f") -Wait -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath | Out-Null
+    Remove-Item -Force $stdoutPath, $stderrPath -ErrorAction SilentlyContinue
+  }
+}
+
 function Get-ExtensionIdFromKey {
   param([string]$ManifestPath)
 
@@ -104,12 +147,12 @@ function Get-ExtensionIdFromKey {
 
 function Resolve-BrowserSelection {
   $candidates = @(
-    [pscustomobject]@{ Name = "Chrome"; Path = Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe" }
-    [pscustomobject]@{ Name = "Chrome"; Path = "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe" }
-    [pscustomobject]@{ Name = "Chrome"; Path = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" }
-    [pscustomobject]@{ Name = "Edge"; Path = Join-Path $env:LOCALAPPDATA "Microsoft\Edge\Application\msedge.exe" }
-    [pscustomobject]@{ Name = "Edge"; Path = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe" }
-    [pscustomobject]@{ Name = "Edge"; Path = "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe" }
+    [pscustomobject]@{ Name = "Chrome"; ConfigChannel = "chrome"; Path = Join-Path $env:LOCALAPPDATA "Google\Chrome\Application\chrome.exe" }
+    [pscustomobject]@{ Name = "Chrome"; ConfigChannel = "chrome"; Path = "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe" }
+    [pscustomobject]@{ Name = "Chrome"; ConfigChannel = "chrome"; Path = "$env:ProgramFiles\Google\Chrome\Application\chrome.exe" }
+    [pscustomobject]@{ Name = "Edge"; ConfigChannel = "msedge"; Path = Join-Path $env:LOCALAPPDATA "Microsoft\Edge\Application\msedge.exe" }
+    [pscustomobject]@{ Name = "Edge"; ConfigChannel = "msedge"; Path = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe" }
+    [pscustomobject]@{ Name = "Edge"; ConfigChannel = "msedge"; Path = "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe" }
   ) | Where-Object { $_.Path -and $_.Path.Trim() }
 
   foreach ($candidate in $candidates) {
@@ -123,6 +166,7 @@ function Resolve-BrowserSelection {
     if ($LASTEXITCODE -eq 0 -and $resolved) {
       return [pscustomobject]@{
         Name = if ($commandName -eq "chrome.exe") { "Chrome" } else { "Edge" }
+        ConfigChannel = if ($commandName -eq "chrome.exe") { "chrome" } else { "msedge" }
         Path = $resolved.Trim()
       }
     }
@@ -158,8 +202,10 @@ function Ensure-StateLayout {
     (Join-Path $StateRoot "logs"),
     (Join-Path $StateRoot "db"),
     (Join-Path $StateRoot "browser-profile"),
+    (Join-Path $StateRoot "chrome-attach-profile"),
     (Join-Path $StateRoot "downloads"),
-    (Join-Path $StateRoot "crash-bundles")
+    (Join-Path $StateRoot "crash-bundles"),
+    (Join-Path $StateRoot "gateway-uploads")
   )) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
   }
@@ -224,6 +270,27 @@ function Set-TomlStringValue {
   }
 
   Set-Content -Path $Path -Value $content -Encoding utf8
+}
+
+function Get-TomlStringValue {
+  param(
+    [string]$Path,
+    [string]$Key,
+    [string]$DefaultValue = ""
+  )
+
+  if (-not (Test-Path $Path)) {
+    return $DefaultValue
+  }
+
+  $content = Get-Content -Path $Path -Raw
+  $pattern = '(?m)^{0}\s*=\s*([''"])(?<value>.*?)\1\s*$' -f [regex]::Escape($Key)
+  $match = [regex]::Match($content, $pattern)
+  if ($match.Success) {
+    return $match.Groups["value"].Value
+  }
+
+  return $DefaultValue
 }
 
 function Ensure-ConfigFile {
@@ -445,40 +512,84 @@ function Write-ManualSteps {
   param(
     [string]$InstallRoot,
     [string]$StateRoot,
+    [string]$BrowserName,
+    [string]$ConnectionMode,
+    [string]$TargetUrl,
     [bool]$DaemonRunning,
     [bool]$GatewayRunning
   )
 
   $extensionPath = Join-Path $InstallRoot "extension"
   $gptPath = Join-Path $InstallRoot "bin\gpt.exe"
+  $chromeAttachProfilePath = Join-Path $StateRoot "chrome-attach-profile"
+  $steps = [System.Collections.Generic.List[string]]::new()
+
+  if (-not $DaemonRunning) {
+    $steps.Add("Start the daemon: $gptPath daemon start") | Out-Null
+  }
+
+  if (-not $GatewayRunning) {
+    $steps.Add("Start the gateway: $gptPath gateway start") | Out-Null
+  }
+
+  switch ($ConnectionMode) {
+    "managed_only" {
+      $steps.Add("Run: $gptPath browser open") | Out-Null
+      $steps.Add("Sign in manually at $TargetUrl in the managed browser window if prompted.") | Out-Null
+    }
+    "managed_fallback" {
+      $steps.Add("Run: $gptPath browser open") | Out-Null
+      $steps.Add("Sign in manually at $TargetUrl in the managed browser window if prompted.") | Out-Null
+    }
+    default {
+      switch ($BrowserName) {
+        "Chrome" {
+          $steps.Add("Fully close Chrome.") | Out-Null
+          $steps.Add("Run: $gptPath browser start-debug") | Out-Null
+          $steps.Add("In the Chrome window opened by that command, open chrome://extensions/, enable Developer mode, remove any previously loaded Tablinq extension in that attach profile, and load the unpacked extension from: $extensionPath") | Out-Null
+          $steps.Add("Sign in manually at $TargetUrl in that same dedicated Chrome attach profile.") | Out-Null
+        }
+        default {
+          $steps.Add("Open edge://extensions/ in the Edge profile you will attach to, enable Developer mode, remove any previously loaded Tablinq extension, and load the unpacked extension from: $extensionPath") | Out-Null
+          $steps.Add("Fully close Edge.") | Out-Null
+          $steps.Add("Run: $gptPath browser start-debug") | Out-Null
+          $steps.Add("Sign in manually at $TargetUrl in that same Edge profile.") | Out-Null
+        }
+      }
+
+      $steps.Add("Run: $gptPath browser attach") | Out-Null
+    }
+  }
+
+  $steps.Add("Verify browser session: $gptPath browser connection-info") | Out-Null
+  $steps.Add("Verify overall status: $gptPath status") | Out-Null
+  $steps.Add("Verify diagnostics: $gptPath doctor") | Out-Null
+  $steps.Add("Inspect capabilities: $gptPath capabilities") | Out-Null
+  $steps.Add("Try a smoke prompt: $gptPath ask `"hello`"") | Out-Null
 
   Write-Host ""
   Write-Host "Tablinq install is ready."
   Write-Host "Install root: $InstallRoot"
   Write-Host "State root: $StateRoot"
+  Write-Host "Browser: $BrowserName"
+  Write-Host "Connection mode: $ConnectionMode"
   Write-Host "Daemon running: $DaemonRunning"
   Write-Host "Gateway running: $GatewayRunning"
+
+  if ($ConnectionMode -eq "attach_first" -and $BrowserName -eq "Chrome") {
+    Write-Host "Chrome attach profile: $chromeAttachProfilePath"
+  }
+
   Write-Host ""
   Write-Host "Manual steps:"
-  Write-Host "1. Open Chrome or Edge extension management."
-  Write-Host "2. Enable Developer mode."
-  Write-Host "3. Remove any previously loaded Tablinq extension if it is still present."
-  Write-Host "4. If you use Edge attach-first, load the unpacked extension from: $extensionPath"
-  Write-Host "5. Fully close Chrome or Edge."
-  Write-Host "6. Run: $gptPath browser start-debug"
-  Write-Host "7. If you use Chrome attach-first, load the extension and sign in inside the dedicated Chrome attach profile under $StateRoot\\chrome-attach-profile."
-  Write-Host "8. Run: $gptPath browser attach"
-  Write-Host "9. Verify: $gptPath doctor"
-  Write-Host "10. Try: $gptPath ask ""hello"""
-  if (-not $DaemonRunning) {
-    Write-Host ""
-    Write-Host "Daemon was not running after install. Start it with:"
-    Write-Host "$gptPath daemon start"
+
+  for ($index = 0; $index -lt $steps.Count; $index += 1) {
+    Write-Host (("{0}. {1}" -f ($index + 1), $steps[$index]))
   }
-  if (-not $GatewayRunning) {
+
+  if ($ConnectionMode -eq "managed_only" -or $ConnectionMode -eq "managed_fallback") {
     Write-Host ""
-    Write-Host "Gateway was not running after install. Start it with:"
-    Write-Host "$gptPath gateway start"
+    Write-Host "Managed browser mode is a fallback path. Use attach-first unless your machine or browser profile cannot expose the local debug endpoint."
   }
 }
 
@@ -486,6 +597,34 @@ Write-Host "Preparing Tablinq Windows install from repo checkout..."
 Assert-CommandAvailable -CommandName "cargo" -InstallHint "Install Rust and make sure cargo is on PATH."
 Assert-CommandAvailable -CommandName "node" -InstallHint "Install Node.js 20 or newer and make sure node is on PATH."
 Assert-CommandAvailable -CommandName "pnpm" -InstallHint "Install pnpm and make sure it is on PATH."
+Assert-CommandAvailable -CommandName "powershell" -InstallHint "Windows PowerShell is required and must be on PATH."
+
+$browserSelection = Resolve-BrowserSelection
+if (-not $browserSelection) {
+  throw "Missing required browser. Install Google Chrome or Microsoft Edge and make sure the browser executable is discoverable on this PC."
+}
+
+$localAppDataRoot = [Environment]::GetFolderPath("LocalApplicationData")
+if (-not $localAppDataRoot) {
+  throw "LOCALAPPDATA is unavailable for the current user. A per-user install location is required."
+}
+
+$appDataRoot = [Environment]::GetFolderPath("ApplicationData")
+if (-not $appDataRoot) {
+  throw "APPDATA is unavailable for the current user. A per-user profile is required."
+}
+
+Assert-DirectoryWritable -Path $localAppDataRoot -Label "Local application data folder"
+Assert-DirectoryWritable -Path $InstallRoot -Label "Install root"
+Assert-DirectoryWritable -Path $StateRoot -Label "State root"
+
+if (-not $SkipAutoStartSetup) {
+  Assert-DirectoryWritable -Path (Join-Path $appDataRoot "Microsoft\Windows\Start Menu\Programs\Startup") -Label "Windows Startup folder"
+}
+
+if (-not $SkipRegistry) {
+  Assert-RegistryWritable -KeyPath "HKCU\Software"
+}
 
 if (-not $SkipDependencyInstall) {
   Write-Host "Installing workspace dependencies with pnpm..."
@@ -506,11 +645,6 @@ if (-not $SkipPackageBuild) {
 
 if (-not (Test-Path $PackageRoot)) {
   throw "Missing package root after packaging: $PackageRoot"
-}
-
-$browserSelection = Resolve-BrowserSelection
-if (-not $browserSelection) {
-  throw "Chrome or Edge not found"
 }
 
 $existingBinDir = Join-Path $InstallRoot "bin"
@@ -577,7 +711,11 @@ if (-not $SkipRegistry) {
 }
 
 Set-TomlStringValue -Path $configPath -Key "browser_path" -Value $browserSelection.Path
+Set-TomlStringValue -Path $configPath -Key "browser_channel" -Value $browserSelection.ConfigChannel
 Ensure-ManagedBrowserState -StateRoot $StateRoot
+
+$connectionMode = Get-TomlStringValue -Path $configPath -Key "browser_connection_mode" -DefaultValue "attach_first"
+$targetUrl = Get-TomlStringValue -Path $configPath -Key "browser_target_url" -DefaultValue "https://chatgpt.com/"
 
 if (-not $SkipPathUpdate) {
   Add-UserPathEntry -Entry (Join-Path $InstallRoot "bin")
@@ -616,4 +754,4 @@ $gatewayRunning = Test-ManagedBinaryRunning -ExecutablePath (Join-Path $InstallR
 
 Write-Host "Auto-start: enabled ($autoStartMode)"
 Write-Host "Browser: $($browserSelection.Name)"
-Write-ManualSteps -InstallRoot $InstallRoot -StateRoot $StateRoot -DaemonRunning $daemonRunning -GatewayRunning $gatewayRunning
+Write-ManualSteps -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserName $browserSelection.Name -ConnectionMode $connectionMode -TargetUrl $targetUrl -DaemonRunning $daemonRunning -GatewayRunning $gatewayRunning

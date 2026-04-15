@@ -1,0 +1,320 @@
+# Scripts Guide
+
+This folder contains the repo's operational helper scripts.
+
+The scripts are intentionally split by responsibility:
+
+- **bootstrap** checks whether a machine is ready to work on the repo.
+- **test** validates the repo.
+- **package** builds a distributable layout.
+- **install** installs that packaged layout onto a machine.
+- **soak_gateway** stress-checks the local OpenAI-compatible gateway.
+
+That separation matters. Packaging and installation are not the same step, and validation is kept separate from both so contributors can run the cheapest command that answers their immediate question.
+
+## Which script should I use?
+
+| Goal | Use |
+| --- | --- |
+| Confirm your Windows shell can see Node, pnpm, and cargo | `bootstrap.ps1` |
+| Run the full repo validation suite | `test.ps1` or `test.sh` |
+| Build a distributable package without installing it | `package.ps1` or `package.sh` |
+| Install Tablinq locally from the repo/package output | `install.ps1` or `install.sh` |
+| Repeatedly hit the local gateway to check stability/latency | `soak_gateway.ps1` |
+
+## Principles behind these scripts
+
+- **Fail fast.** Most scripts enable strict error handling immediately.
+- **One main job per script.** Each file exists for a distinct stage in the developer or operator workflow.
+- **Cross-platform where practical.** Packaging, install, and validation have both PowerShell and shell variants where the repo supports them.
+- **Human-readable output.** Scripts print the next useful action rather than hiding state.
+- **Operational safety.** Install scripts validate paths, required commands, and expected outputs before treating a run as successful.
+
+## Script reference
+
+### `bootstrap.ps1`
+
+**What it does**
+
+- Adds the local Cargo bin directory to the current PowerShell session `PATH` when present.
+- Prints the detected `node`, `pnpm`, and `cargo` versions.
+- Points the user at the main next-step scripts for install and packaging.
+
+**Why it exists**
+
+This is the cheapest Windows preflight check in the repo. It lets a contributor verify the toolchain before they spend time on dependency install, packaging, or debugging a missing command.
+
+**Use it when**
+
+- A Windows machine is being set up for the first time.
+- PowerShell cannot find Rust tooling.
+- You want a quick environment sanity check before running heavier scripts.
+
+**Do not use it for**
+
+- Building, testing, or installing the product.
+
+---
+
+### `test.ps1`
+
+**What it does**
+
+Runs the Windows validation stack in this order:
+
+1. `cargo fmt --check`
+2. `cargo clippy --all-targets -- -D warnings`
+3. `cargo test`
+4. `pnpm lint`
+5. `pnpm build`
+6. `pnpm test`
+
+It also prepends Cargo's bin directory to the current PowerShell session `PATH` when available.
+
+**Why it exists**
+
+It gives Windows contributors and CI-like local runs a single command that covers both Rust and TypeScript quality gates. The ordering is deliberate: cheap static checks run before more expensive build and test work.
+
+**Use it when**
+
+- You want the closest local equivalent to the repo's main validation path.
+- You are preparing a commit or pull request from Windows.
+- You changed code across Rust and TypeScript boundaries.
+
+**Do not use it for**
+
+- Producing a distributable package.
+- Installing the app onto a machine.
+
+---
+
+### `test.sh`
+
+**What it does**
+
+Runs the Unix equivalent of the validation stack:
+
+1. `cargo fmt --check`
+2. `cargo clippy --all-targets -- -D warnings`
+3. `cargo test`
+4. `pnpm lint`
+5. `pnpm build`
+6. `pnpm test`
+
+**Why it exists**
+
+This is the Unix/Linux counterpart to `test.ps1`, giving non-Windows environments the same one-command validation path.
+
+**Use it when**
+
+- You are validating the repo on Linux or another Unix-like environment.
+- You want consistent local checks across the Rust and TypeScript parts of the workspace.
+
+**Do not use it for**
+
+- Packaging or installation.
+
+---
+
+### `package.ps1`
+
+**What it does**
+
+Builds the Windows package layout under `dist/package/tablinq` by:
+
+- compiling the Rust binaries (`gpt`, `gptd`, `tablinq-gateway`, `tablinq-host`),
+- building the browser adapter and extension,
+- deploying browser-adapter assets,
+- copying binaries, extension assets, selector packs, schemas, docs, license, and root README into the package layout,
+- deriving a stable extension ID from the extension manifest key,
+- writing `package-metadata.json` from `gpt version --json` output.
+
+**Why it exists**
+
+Installation should consume a predictable packaged layout rather than raw repo outputs. This script creates that installable boundary and captures package metadata needed by downstream install and operational flows.
+
+**Use it when**
+
+- You need `dist/package/tablinq` for local install or artifact creation.
+- You want to smoke-test the packaged Windows layout.
+- You need a reproducible package directory that mirrors what installation expects.
+
+**Do not use it for**
+
+- Running tests.
+- Installing onto a target machine directly.
+
+**Notes**
+
+- Supports `-Profile` and optional `-TargetDir`.
+- This is the script wired into the repo's `package:windows` npm script.
+
+---
+
+### `package.sh`
+
+**What it does**
+
+Builds the Unix package layout under `dist/package/tablinq` by:
+
+- compiling the same Rust binaries,
+- building browser-adapter and extension assets,
+- deploying the browser-adapter,
+- copying runtime assets and docs into the package directory,
+- deriving the extension ID from the manifest key,
+- generating `package-metadata.json` from `gpt version --json` output.
+
+**Why it exists**
+
+It provides the same package-stage boundary as `package.ps1`, but for Unix environments. Keeping packaging explicit avoids coupling install logic to build logic more than necessary.
+
+**Use it when**
+
+- You need a package layout on Linux/Unix.
+- You want to inspect or distribute the packaged directory before installation.
+
+**Do not use it for**
+
+- Environment bootstrap.
+- Full repo validation.
+
+**Notes**
+
+- Accepts the build profile as the first positional argument.
+- Supports `OUTPUT_ROOT` and `CARGO_TARGET_DIR` overrides through the environment.
+
+---
+
+### `install.ps1`
+
+**What it does**
+
+This is the Windows all-in-one local install path. It can:
+
+- verify required commands and writable locations,
+- optionally install dependencies,
+- optionally invoke `package.ps1`,
+- stage and replace the installed layout under `%LOCALAPPDATA%\Tablinq\install`,
+- validate that expected binaries and extension files exist,
+- update config and startup state,
+- register the native host unless skipped,
+- set up auto-start/task scheduling unless skipped,
+- optionally update PATH,
+- optionally launch managed binaries,
+- print the remaining manual browser/extension steps.
+
+It also contains defensive handling for blocked files, registry access, legacy launcher cleanup, and antivirus-related failure modes.
+
+**Why it exists**
+
+A packaged layout is still not a usable local install. Windows needs extra machine-specific work such as placement, registry/native-host registration, startup setup, launch behavior, and operator guidance. This script centralizes that operational complexity in one place.
+
+**Use it when**
+
+- You want the main Windows install flow from repo checkout to working local install.
+- You are smoke-testing installation behavior, not just packaging.
+- You need the script that matches the root README's Windows-first install path.
+
+**Do not use it for**
+
+- A lightweight preflight check.
+- Pure packaging when no install is needed.
+- Gateway stress testing.
+
+**Notes**
+
+- Supports several `-Skip...` switches so operators can bypass dependency install, package build, registry changes, autostart setup, launch, or PATH updates.
+- Prefer this over calling lower-level steps manually unless you are debugging a specific install stage.
+
+---
+
+### `install.sh`
+
+**What it does**
+
+This is the Unix/Linux install path. It:
+
+- validates required commands and writable directories,
+- resolves a supported browser path/channel,
+- stages and replaces the installed layout,
+- ensures config exists,
+- writes config values such as browser path and channel,
+- writes startup helper scripts,
+- optionally starts the daemon and gateway via the installed `gpt` binary,
+- prints follow-up manual steps for attach-first browser setup.
+
+**Why it exists**
+
+Unix installation has a different operational model than Windows. It still needs more than packaging: install roots, state roots, config creation, browser discovery, process cleanup, and startup helper generation all belong in an installer, not in the package step.
+
+**Use it when**
+
+- You want a local Unix/Linux install from the packaged layout.
+- You need a repeatable install flow that prepares config and startup scripts.
+
+**Do not use it for**
+
+- Validation-only work.
+- Windows-native installation concerns such as registry setup.
+
+**Notes**
+
+- Uses `PACKAGE_ROOT`, `INSTALL_ROOT`, and `STATE_ROOT` environment overrides.
+- Detects Chrome/Chromium/Edge-style browser executables and writes those settings into config.
+
+---
+
+### `soak_gateway.ps1`
+
+**What it does**
+
+Sends repeated POST requests to the local OpenAI-compatible `chat/completions` endpoint with incrementing request IDs, measures elapsed time, and prints success/failure information for each request.
+
+Configurable inputs include:
+
+- `BaseUrl`
+- `ApiKey`
+- `Model`
+- `Count`
+- `Prompt`
+
+**Why it exists**
+
+This is not a developer build or install helper. It is an operational confidence check for the local gateway. It helps answer whether the gateway remains stable over repeated sequential requests and whether latency or reliability regressions are obvious.
+
+**Use it when**
+
+- You want a quick soak/stability check against a running local gateway.
+- You are debugging request handling, auth headers, request IDs, or response timing.
+
+**Do not use it for**
+
+- Functional repo validation.
+- Packaging or installation.
+
+---
+
+## Recommended workflow
+
+### Windows contributor
+
+1. Run `bootstrap.ps1`.
+2. Run `test.ps1` while iterating on code.
+3. Run `package.ps1` when you need an installable layout.
+4. Run `install.ps1` when you need a real local install.
+5. Run `soak_gateway.ps1` only after the local gateway is up and you want runtime confidence.
+
+### Unix/Linux contributor
+
+1. Run `test.sh` while iterating on code.
+2. Run `package.sh` when you need the packaged layout.
+3. Run `install.sh` when you need a machine-local install.
+
+## What not to add here later
+
+To keep this folder understandable, future scripts should follow the same rules:
+
+- Prefer a **single clear job** over multi-purpose "do everything" helpers.
+- Add platform-specific variants only when the operational steps are genuinely different.
+- Keep build/package/install/test/ops concerns separated.
+- Document new scripts here as soon as they are added.

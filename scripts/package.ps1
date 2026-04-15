@@ -109,6 +109,7 @@ if (Test-Path $packageRoot) {
 New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
 $packageStagingRoot = Join-Path $repoRoot "dist\\package-staging"
 $browserAdapterStagingRoot = Join-Path $packageStagingRoot "browser-adapter"
+$browserAdapterLegacyStagingRoot = Join-Path $repoRoot "packages\\browser-adapter\\dist\\package-staging"
 $browserAdapterPackageRoot = Join-Path $packageRoot "browser-adapter"
 
 Push-Location $repoRoot
@@ -123,8 +124,10 @@ try {
   if (Test-Path $browserAdapterStagingRoot) {
     Remove-Item -Recurse -Force $browserAdapterStagingRoot
   }
-  New-Item -ItemType Directory -Force -Path $browserAdapterStagingRoot | Out-Null
-  $browserAdapterDeployTarget = Get-RelativePath $repoRoot $browserAdapterStagingRoot
+  if (Test-Path $browserAdapterLegacyStagingRoot) {
+    Remove-Item -Recurse -Force $browserAdapterLegacyStagingRoot
+  }
+  $browserAdapterDeployTarget = $browserAdapterStagingRoot
   Invoke-Step pnpm @("--filter", "@tablinq/browser-adapter", "deploy", "--legacy", "--prod", $browserAdapterDeployTarget) $repoRoot
 
   $targetProfileDir = Resolve-TargetProfileDir -Profile $Profile
@@ -168,6 +171,9 @@ try {
 finally {
   if (Test-Path $packageStagingRoot) {
     Remove-Item -Recurse -Force $packageStagingRoot
+  }
+  if (Test-Path $browserAdapterLegacyStagingRoot) {
+    Remove-Item -Recurse -Force $browserAdapterLegacyStagingRoot
   }
   Pop-Location
 }
