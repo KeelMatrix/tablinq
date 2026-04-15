@@ -8,6 +8,8 @@ Tablinq turns a signed-in ChatGPT tab into:
 - a local daemon with durable state and recovery
 - an OpenAI-compatible `/v1/*` gateway for tools and agents
 
+It also plugs directly into [OpenClaude](docs/openclaude.md) and [Paperclip](docs/paperclip.md) through that local gateway.
+
 Tablinq is built for the case where the browser is the provider. It does not export cookies, replay hidden bearer tokens, or pretend the website is a raw API.
 
 ## Why Tablinq exists
@@ -21,11 +23,11 @@ That is what Tablinq does:
 - it keeps local jobs, conversations, artifacts, logs, and failure bundles on your machine
 - it exposes an OpenAI-compatible local gateway without hiding the browser-backed reality
 
-## Why the old Playwright-owned login flow was dropped
+## Why Playwright is not the primary login workflow
 
-Tablinq still uses Playwright internally, but **not** as the default browser owner anymore.
+Tablinq still uses Playwright internally, but **not** as the default browser owner.
 
-The old model launched a managed Playwright-owned browser profile and asked users to sign in there. That path was abandoned as the primary workflow because ChatGPT's `chatgpt.com` anti-bot and Cloudflare protections made automation-owned browser startup and login the wrong default. The result was operationally fragile and pushed users toward a browser lifecycle that the site increasingly treats as suspicious.
+Using a Playwright-owned browser profile as the normal sign-in and startup path is the wrong operational model for `chatgpt.com`. Cloudflare and anti-bot protections make automation-owned browser startup and login materially less reliable than a normal user-owned browser session.
 
 The current design is the correct default for this product:
 
@@ -160,20 +162,20 @@ Some Windows antivirus products can block packaging, browser startup, local scri
 
 Paths that may require exceptions in a typical Windows dev or install environment:
 
-- `C:\Users\user\Desktop\gpt-cli`
-- `C:\Users\user\AppData\Local\Tablinq`
-- `C:\Users\user\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`
-- `C:\nvm4w\nodejs`
-- `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
-- `C:\nvm4w\nodejs\node.exe`
-- `C:\Users\user\Desktop\gpt-cli\scripts`
-- `C:\Users\user\AppData\Local\nvm`
-- `C:\Program Files\PowerShell\7\pwsh.exe`
-- `C:\Program Files\Google\Chrome\Application\chrome.exe`
-- `C:\Users\user\AppData\Local\nvm\v20.19.3\node.exe`
-- `C:\Windows\System32\cmd.exe`
-- `C:\Users\user\Desktop\gpt-cli\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
-- `C:\Users\user\Desktop\gpt-cli\node_modules`
+- `<repo-root>`
+- `%LOCALAPPDATA%\Tablinq`
+- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`
+- `%NVM_SYMLINK%`
+- `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
+- `%NVM_SYMLINK%\node.exe`
+- `<repo-root>\scripts`
+- `%LOCALAPPDATA%\nvm`
+- `%ProgramFiles%\PowerShell\7\pwsh.exe`
+- `%ProgramFiles%\Google\Chrome\Application\chrome.exe`
+- `%LOCALAPPDATA%\nvm\v20.19.3\node.exe`
+- `%SystemRoot%\System32\cmd.exe`
+- `<repo-root>\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
+- `<repo-root>\node_modules`
 
 Add equivalent paths for your own machine if the install location, browser, or Node version differs.
 

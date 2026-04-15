@@ -148,20 +148,20 @@ Local packaging, testing, installation, and browser startup can be blocked by an
 
 Example Windows paths that may require exceptions in a typical local environment:
 
-- `C:\Users\user\Desktop\gpt-cli`
-- `C:\Users\user\AppData\Local\Tablinq`
-- `C:\Users\user\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup`
-- `C:\nvm4w\nodejs`
-- `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`
-- `C:\nvm4w\nodejs\node.exe`
-- `C:\Users\user\Desktop\gpt-cli\scripts`
-- `C:\Users\user\AppData\Local\nvm`
-- `C:\Program Files\PowerShell\7\pwsh.exe`
-- `C:\Program Files\Google\Chrome\Application\chrome.exe`
-- `C:\Users\user\AppData\Local\nvm\v20.19.3\node.exe`
-- `C:\Windows\System32\cmd.exe`
-- `C:\Users\user\Desktop\gpt-cli\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
-- `C:\Users\user\Desktop\gpt-cli\node_modules`
+- `<repo-root>`
+- `%LOCALAPPDATA%\Tablinq`
+- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`
+- `%NVM_SYMLINK%`
+- `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
+- `%NVM_SYMLINK%\node.exe`
+- `<repo-root>\scripts`
+- `%LOCALAPPDATA%\nvm`
+- `%ProgramFiles%\PowerShell\7\pwsh.exe`
+- `%ProgramFiles%\Google\Chrome\Application\chrome.exe`
+- `%LOCALAPPDATA%\nvm\v20.19.3\node.exe`
+- `%SystemRoot%\System32\cmd.exe`
+- `<repo-root>\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
+- `<repo-root>\node_modules`
 
 Adjust those paths for your own install directory, browser, and Node version.
 
