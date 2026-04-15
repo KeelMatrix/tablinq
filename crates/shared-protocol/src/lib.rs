@@ -9,6 +9,8 @@ pub const PROTOCOL_VERSION: &str = "tablinq.v1";
 pub const SELECTOR_PACK_FORMAT_VERSION: u32 = 1;
 pub const CONFIG_VERSION: u32 = 2;
 pub const APP_NAME: &str = "Tablinq";
+pub const CHROME_ATTACH_PROFILE_DIR_NAME: &str = "chrome-attach-profile";
+pub const CHROME_ATTACH_PROFILE_NOTE: &str = "Chrome attach-first uses a dedicated persistent real profile under the Tablinq state root. Sign in once in that profile before attaching.";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -723,6 +725,7 @@ pub struct ConfigSnapshot {
     pub db_dir: String,
     pub db_path: String,
     pub browser_profile_dir: String,
+    pub chrome_attach_profile_dir: String,
     pub downloads_dir: String,
     pub crash_bundles_dir: String,
     pub ipc_endpoint: String,
@@ -974,6 +977,10 @@ pub struct BrowserStatusSnapshot {
     pub running: bool,
     pub browser_kind: String,
     pub profile_dir: String,
+    #[serde(default)]
+    pub attach_profile_dir: Option<String>,
+    #[serde(default)]
+    pub attach_profile_note: Option<String>,
     pub downloads_dir: String,
     pub target_url: String,
     pub current_url: Option<String>,
@@ -1089,7 +1096,7 @@ pub fn build_state_paths(state_root: impl AsRef<Path>) -> StatePaths {
     let logs_dir = state_root.join("logs");
     let db_dir = state_root.join("db");
     let browser_profile_dir = state_root.join("browser-profile");
-    let chrome_attach_profile_dir = state_root.join("chrome-attach-profile");
+    let chrome_attach_profile_dir = state_root.join(CHROME_ATTACH_PROFILE_DIR_NAME);
     let downloads_dir = state_root.join("downloads");
     let crash_bundles_dir = state_root.join("crash-bundles");
 
@@ -1309,6 +1316,8 @@ mod tests {
             running: true,
             browser_kind: "msedge".to_owned(),
             profile_dir: "C:/tablinq/browser-profile".to_owned(),
+            attach_profile_dir: Some("C:/tablinq/chrome-attach-profile".to_owned()),
+            attach_profile_note: Some(CHROME_ATTACH_PROFILE_NOTE.to_owned()),
             downloads_dir: "C:/tablinq/downloads".to_owned(),
             target_url: "https://chatgpt.com/".to_owned(),
             current_url: Some("https://chatgpt.com/?conversation=conv-1".to_owned()),
@@ -1337,6 +1346,7 @@ mod tests {
 
         assert_eq!(restored, snapshot);
         assert!(json.contains("\"attach_mode\": \"attach_first\""));
+        assert!(json.contains("\"attach_profile_dir\": \"C:/tablinq/chrome-attach-profile\""));
         assert!(json.contains("\"browser_owner\": \"managed\""));
         assert!(json.contains("\"auth_source\": \"page\""));
         assert!(json.contains("\"target_workspace_key\": \"https://chatgpt.com/\""));

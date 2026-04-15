@@ -73,11 +73,12 @@ Formatting:
 Use this only when the fake harness is not enough:
 
 1. Start the daemon and gateway.
-2. Load the unpacked extension into your normal browser profile.
+2. If you are using Edge attach-first, load the unpacked extension into the Edge profile you will attach to.
 3. Fully close the browser.
 4. Run `cargo run -p gpt -- browser start-debug`.
-5. Sign in manually at `https://chatgpt.com/`.
-6. Run `cargo run -p gpt -- browser attach`.
+5. If you are using Chrome attach-first, load the unpacked extension into the dedicated Chrome attach profile created under the Tablinq state root.
+6. Sign in manually at `https://chatgpt.com/` in that profile.
+7. Run `cargo run -p gpt -- browser attach`.
 7. Use `cargo run -p gpt -- status`, `doctor`, and `capabilities` before testing ask or research flows.
 
 Managed fallback exists only for debugging, CI, harness isolation, and machines that cannot expose a usable local debug endpoint.

@@ -57,13 +57,13 @@ What `scripts/install.ps1` does:
 What still requires you:
 
 1. Remove any previously loaded Tablinq extension from Chrome or Edge if it is still present.
-2. Load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension`.
+2. If you plan to use Edge attach-first, load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension` into the Edge profile you will attach to.
 3. Fully close Edge or Chrome.
 4. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser start-debug`.
-5. Sign in manually at `https://chatgpt.com/` in that same browser profile.
-   On current Chrome this is the dedicated Tablinq Chrome attach profile under `%LOCALAPPDATA%\Tablinq`; Edge keeps the existing flow.
-6. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`.
-7. Verify with:
+5. If you plan to use Chrome attach-first, load the unpacked extension into the dedicated Tablinq Chrome attach profile under `%LOCALAPPDATA%\Tablinq\chrome-attach-profile`.
+6. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+7. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`.
+8. Verify with:
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser connection-info`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe status`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe doctor`
@@ -80,7 +80,7 @@ Build and install:
 
 Then:
 
-1. Load the unpacked extension from `~/.local/share/tablinq/install/extension` into your normal Chrome or Edge profile.
+1. If you plan to use Edge attach-first, load the unpacked extension from `~/.local/share/tablinq/install/extension` into the Edge profile you will attach to.
 2. Start the daemon:
    - `~/.local/share/tablinq/install/bin/gpt daemon start`
 3. Start the gateway:
@@ -88,9 +88,9 @@ Then:
 4. Fully close Chrome or Edge so the debug flags can take effect cleanly.
 5. Start your normal browser in attachable mode:
    - `~/.local/share/tablinq/install/bin/gpt browser start-debug`
-6. Sign in manually at `https://chatgpt.com/` in that same browser profile.
-   On current Chrome this is the dedicated Tablinq Chrome attach profile under the state root; Edge keeps the existing flow.
-7. Attach and verify:
+6. If you plan to use Chrome attach-first, load the unpacked extension into the dedicated Tablinq Chrome attach profile under the state root.
+7. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+8. Attach and verify:
    - `~/.local/share/tablinq/install/bin/gpt browser attach`
    - `~/.local/share/tablinq/install/bin/gpt browser connection-info`
    - `~/.local/share/tablinq/install/bin/gpt status`
@@ -164,10 +164,13 @@ The state root contains:
 - `logs/`
 - `db/`
 - `browser-profile/`
+- `chrome-attach-profile/`
 - `downloads/`
 - `crash-bundles/`
 - `gateway-uploads/`
 
 `browser-profile/` still exists even though attach-first no longer uses a managed profile as the default ownership model. That directory remains useful for managed fallback and compatibility.
+
+`chrome-attach-profile/` is the dedicated persistent real Chrome profile used by `gpt browser start-debug` in attach-first mode on current Chrome. Load the extension and sign in there when you are using Chrome attach-first.
 
 If something goes wrong, see [troubleshooting.md](troubleshooting.md).
