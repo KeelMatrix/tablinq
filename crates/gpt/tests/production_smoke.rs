@@ -2,6 +2,8 @@
 
 use gptd::AppConfig;
 use serde_json::Value;
+use std::fs;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -99,6 +101,23 @@ fn wait_for_packaged_gateway(
     panic!("packaged gateway did not become healthy");
 }
 
+fn reserve_local_port() -> u16 {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral test port");
+    let port = listener
+        .local_addr()
+        .expect("read ephemeral test port")
+        .port();
+    drop(listener);
+    port
+}
+
+fn set_gateway_port(state_root: &Path, port: u16) {
+    let config_path = state_root.join("config").join("config.toml");
+    let raw = fs::read_to_string(&config_path).expect("read config.toml");
+    let updated = raw.replace("port = 3847", &format!("port = {port}"));
+    fs::write(&config_path, updated).expect("write config.toml");
+}
+
 #[test]
 fn windows_packaging_and_install_smoke_cover_packaged_layout() {
     let _guard = integration_lock();
@@ -164,7 +183,10 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
             .arg(install_dir.path())
             .arg("-StateRoot")
             .arg(state_dir.path())
-            .arg("-SkipRegistry");
+            .arg("-SkipRegistry")
+            .arg("-SkipAutoStartSetup")
+            .arg("-SkipLaunch")
+            .arg("-SkipPathUpdate");
         command.current_dir(&repo_root);
         command
     });
@@ -209,6 +231,8 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
             state_dir.path().join(relative).display()
         );
     }
+
+    set_gateway_port(state_dir.path(), reserve_local_port());
 
     let installed_gpt = installed_root.join("bin").join("gpt.exe");
     let installed_gptd = installed_root.join("bin").join("gptd.exe");
