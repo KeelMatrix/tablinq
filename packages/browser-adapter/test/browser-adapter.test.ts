@@ -46,6 +46,7 @@ function withHarnessUrl(
 
 let trackedAdapters: BrowserAdapter[] = [];
 let trackedServers: ChildProcess[] = [];
+type BrowserExecutionMode = "managed" | "attach";
 
 function trackAdapter(adapter: BrowserAdapter): BrowserAdapter {
   trackedAdapters.push(adapter);
@@ -56,6 +57,33 @@ async function startTrackedFakeChatGptServer() {
   const server = await startFakeChatGptServer();
   trackedServers.push(server.process);
   return server;
+}
+
+async function createTrackedAdapterForMode(
+  mode: BrowserExecutionMode,
+  targetUrl: string,
+): Promise<BrowserAdapter> {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+  if (mode === "attach") {
+    const attached = await startTrackedAttachableBrowser(targetUrl);
+    return trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+  }
+
+  return trackAdapter(
+    new BrowserAdapter({
+      profileDir: path.join(root, "profile"),
+      downloadsDir: path.join(root, "downloads"),
+      defaultTargetUrl: targetUrl,
+    }),
+  );
 }
 
 async function startTrackedAttachableBrowser(initialUrl: string) {
@@ -1295,6 +1323,228 @@ describe("browser adapter", () => {
     );
 
     await expect(request).rejects.toThrow(/could not be reconciled/i);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("streams ask responses to completion in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const adapter = await createTrackedAdapterForMode("attach", server.url);
+    await adapter.open({ targetUrl: server.url, headless: true });
+
+    const chunks: string[] = [];
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-success-attach",
+        prompt: "hello from attach mode",
+      },
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+    );
+
+    expect(chunks.join("")).toBe("Fake response for: hello from attach mode");
+    expect(result.output_text).toBe("Fake response for: hello from attach mode");
+    expect(result.conversation_id).toMatch(/^conv-/);
+    expect(result.message_id).toMatch(/^msg-/);
+    expect(result.current_url).toContain(`conversation=${result.conversation_id}`);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("drives the live-like harness through ask and artifact persistence in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = await createTrackedAdapterForMode("attach", targetUrl);
+    const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(fixtureRoot, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    await adapter.open({ targetUrl, headless: true });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-live-attach",
+        prompt: "configure attach live",
+        mode: "research",
+        modelClass: "instant",
+        effort: "extended",
+        files: [fixture],
+      },
+      () => {},
+    );
+    const artifactBody = await readFile(result.artifacts[0]!.storage_path, "utf8");
+
+    expect(result.output_text).toBe("Fake response for: configure attach live");
+    expect(result.artifacts).toHaveLength(1);
+    expect(artifactBody).toContain("Uploads: brief.txt");
+    expect(result.current_url).toContain(`conversation=${result.conversation_id}`);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails with a capability-missing error in attach mode when search mode is unavailable", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, { missing: ["search"] });
+    const adapter = await createTrackedAdapterForMode("attach", targetUrl);
+    await adapter.open({ targetUrl, headless: true });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-missing-search-attach",
+          prompt: "search in attach mode",
+          mode: "search",
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/capability missing: search mode/i);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails cleanly when the harness never completes streaming in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, { scenario: "timeout" });
+    const adapter = await createTrackedAdapterForMode("attach", targetUrl);
+    const bundleRoot = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    await adapter.open({ targetUrl, headless: true });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-timeout-attach",
+          prompt: "never finish in attach mode",
+          timeoutMs: 600,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow("timed out");
+
+    const diagnostics = await adapter.diagnostics(path.join(bundleRoot, "bundle"));
+    expect(diagnostics.screenshot_path).toContain("failure.png");
+    expect(diagnostics.dom_snapshot).toContain("body_excerpt");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("continues ask streaming after a page reload in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, { scenario: "reload" });
+    const adapter = await createTrackedAdapterForMode("attach", targetUrl);
+    await adapter.open({ targetUrl, headless: true });
+
+    const states: string[] = [];
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-reload-attach",
+        prompt: "survive attach reloads",
+        timeoutMs: 5000,
+      },
+      () => {},
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    expect(result.output_text).toBe("Fake response for: survive attach reloads");
+    expect((await adapter.health()).reload_count).toBeGreaterThan(0);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers ask streaming after a browser disconnect in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const adapter = await createTrackedAdapterForMode("attach", server.url);
+    await adapter.open({ targetUrl: server.url, headless: true });
+
+    const states: string[] = [];
+    let closeTriggered = false;
+    const request = adapter.ask(
+      {
+        jobId: "job-ask-browser-disconnect-attach",
+        prompt: "recover after attach disconnect",
+        timeoutMs: 7000,
+      },
+      async (chunk) => {
+        if (!closeTriggered && chunk.kind === "delta") {
+          closeTriggered = true;
+          await adapter.getManagedPageForTest()!.context().browser()!.close();
+        }
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    const result = await request;
+    expect(result.output_text).toBe(
+      "Fake response for: recover after attach disconnect",
+    );
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("runs research jobs with progress updates in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, { scenario: "research-success" });
+    const adapter = await createTrackedAdapterForMode("attach", targetUrl);
+    const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(fixtureRoot, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    await adapter.open({ targetUrl, headless: true });
+
+    const updates: string[] = [];
+    const result = await adapter.research(
+      {
+        jobId: "job-research-success-attach",
+        query: "investigate attach launch risks",
+        files: [fixture],
+        timeoutMs: 5_000,
+      },
+      (update) => {
+        updates.push(update.status);
+      },
+    );
+
+    expect(updates).toContain("starting");
+    expect(updates).toContain("waiting_for_sources");
+    expect(updates).toContain("running");
+    expect(result.report_text).toContain(
+      "Research report for: investigate attach launch risks",
+    );
+    expect(result.artifacts).toHaveLength(1);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails research jobs with a research-specific error in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, { scenario: "research-failure" });
+    const adapter = await createTrackedAdapterForMode("attach", targetUrl);
+    await adapter.open({ targetUrl, headless: true });
+
+    await expect(
+      adapter.research(
+        {
+          jobId: "job-research-failure-attach",
+          query: "investigate attach flaky providers",
+          timeoutMs: 5_000,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/research job failed/i);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

@@ -279,15 +279,17 @@ impl CoreService {
                         Some(&result.current_url),
                     )?;
                 }
+                let browser_snapshot = lock_browser(&self.browser)?.health()?;
+                let (session_id, session_label) = browser_session_identity(&browser_snapshot);
                 db.upsert_session(
-                    "browser-primary",
-                    "Browser session",
+                    &session_id,
+                    &session_label,
                     Some(&result.current_url),
                     completed_at,
                 )?;
                 db.upsert_conversation(
                     &result.conversation_id,
-                    "browser-primary",
+                    &session_id,
                     "Browser conversation",
                     Some(&result.current_url),
                     Some(&prepared.command.prompt),
@@ -514,15 +516,17 @@ impl CoreService {
                     Some(&result.current_url),
                     output_path.as_deref(),
                 )?;
+                let browser_snapshot = lock_browser(&self.browser)?.health()?;
+                let (session_id, session_label) = browser_session_identity(&browser_snapshot);
                 db.upsert_session(
-                    "browser-primary",
-                    "Browser session",
+                    &session_id,
+                    &session_label,
                     Some(&result.current_url),
                     completed_at,
                 )?;
                 db.upsert_conversation(
                     &result.conversation_id,
-                    "browser-primary",
+                    &session_id,
                     "Browser conversation",
                     Some(&result.current_url),
                     Some(&prepared.command.query),
@@ -866,9 +870,10 @@ impl CoreService {
 
     pub fn browser_open(&self, request: BrowserOpenRequest) -> Result<BrowserStatusSnapshot> {
         let snapshot = lock_browser(&self.browser)?.open(request)?;
+        let (session_id, session_label) = browser_session_identity(&snapshot);
         self.open_db()?.upsert_session(
-            "browser-primary",
-            "Browser session",
+            &session_id,
+            &session_label,
             snapshot.current_url.as_deref(),
             Utc::now(),
         )?;
@@ -890,9 +895,10 @@ impl CoreService {
         } else {
             lock_browser(&self.browser)?.logout()?
         };
+        let (session_id, session_label) = browser_session_identity(&snapshot);
         self.open_db()?.upsert_session(
-            "browser-primary",
-            "Browser session",
+            &session_id,
+            &session_label,
             snapshot.current_url.as_deref(),
             Utc::now(),
         )?;
@@ -1270,6 +1276,24 @@ fn supports_managed_profile_reset(mode: BrowserConnectionMode) -> bool {
     )
 }
 
+fn browser_session_identity(snapshot: &BrowserStatusSnapshot) -> (String, String) {
+    if snapshot.cdp_attached {
+        if let Some(tab_id) = snapshot
+            .target_tab_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            let short_id = &tab_id[..tab_id.len().min(8)];
+            return (
+                format!("browser-tab-{tab_id}"),
+                format!("Browser tab {short_id}"),
+            );
+        }
+    }
+
+    ("browser-primary".to_owned(), "Browser session".to_owned())
+}
+
 fn default_selector_pack_summary() -> Option<SelectorPackSummary> {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
@@ -1417,4 +1441,47 @@ fn unique_destination_path(destination_dir: &Path, file_name: &Path) -> PathBuf 
     }
 
     unreachable!("destination path generation should always return");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::browser_session_identity;
+    use shared_protocol::{
+        AuthSource, BrowserConnectionMode, BrowserOwner, BrowserStatusSnapshot,
+    };
+
+    #[test]
+    fn attach_session_identity_uses_target_tab_id() {
+        let snapshot = BrowserStatusSnapshot {
+            running: true,
+            browser_kind: "chrome".to_owned(),
+            profile_dir: "profile".to_owned(),
+            downloads_dir: "downloads".to_owned(),
+            target_url: "https://chatgpt.com/".to_owned(),
+            current_url: Some("https://chatgpt.com/?conversation=conv-1".to_owned()),
+            page_title: None,
+            page_ready: true,
+            authenticated: true,
+            reload_count: 0,
+            screenshot_path: None,
+            browser_path: None,
+            extension_connected: true,
+            capability_report: None,
+            attach_mode: BrowserConnectionMode::AttachFirst,
+            browser_owner: BrowserOwner::External,
+            cdp_attached: true,
+            target_tab_found: true,
+            target_tab_id: Some("abcdef1234567890".to_owned()),
+            target_workspace_key: Some("https://chatgpt.com/".to_owned()),
+            debug_endpoint: Some("http://127.0.0.1:9222".to_owned()),
+            auth_source: AuthSource::Page,
+            extension_required: true,
+            last_capability_report_at: None,
+        };
+
+        let (session_id, label) = browser_session_identity(&snapshot);
+
+        assert_eq!(session_id, "browser-tab-abcdef1234567890");
+        assert_eq!(label, "Browser tab abcdef12");
+    }
 }
