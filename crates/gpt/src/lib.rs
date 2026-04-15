@@ -880,6 +880,8 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         extension_connected,
         authenticated,
     );
+    let recovery_guidance =
+        operational_recovery_guidance(&config, browser_state, daemon_doctor.as_ref());
 
     Ok(json!({
         "service": "tablinq",
@@ -914,6 +916,7 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
             "max_parallel_branches": 1,
             "max_subagents": 0,
         },
+        "recovery_guidance": recovery_guidance,
         "recovery_commands": browser_recovery_commands(connection_mode),
     }))
 }
@@ -965,8 +968,8 @@ fn browser_recovery_commands(mode: BrowserConnectionMode) -> Vec<&'static str> {
     let mut commands = vec!["gpt daemon start", "gpt gateway start"];
     if is_attach_primary(mode) {
         commands.push("gpt browser start-debug");
-        commands.push("gpt browser attach");
         commands.push("gpt browser connection-info");
+        commands.push("gpt browser attach");
         commands.push("gpt browser open");
     } else {
         commands.push("gpt browser open");
@@ -982,6 +985,56 @@ fn is_attach_primary(mode: BrowserConnectionMode) -> bool {
         mode,
         BrowserConnectionMode::AttachFirst | BrowserConnectionMode::ManagedFallback
     )
+}
+
+fn operational_recovery_guidance(
+    config: &gptd::AppConfig,
+    browser_state: &str,
+    daemon_doctor: Option<&Value>,
+) -> Value {
+    if let Some(guidance) = daemon_doctor.and_then(|value| value.get("recovery_guidance")) {
+        return guidance.clone();
+    }
+
+    if is_attach_primary(config.browser_connection_mode()) {
+        let guidance = match browser_state {
+            "attach_unavailable" => vec![
+                format!(
+                    "check the attach endpoint at {}; fully close Chrome or Edge, run `gpt browser start-debug`, then inspect `gpt browser connection-info`",
+                    config.browser_debug_endpoint()
+                ),
+                "confirm the Tablinq extension is installed and enabled in the same normal browser profile".to_owned(),
+                "sign in to ChatGPT in that browser and clear any login or challenge page".to_owned(),
+                "run `gpt browser attach` and then `gpt browser open` to reattach or focus the configured target tab".to_owned(),
+                "only if the local debug endpoint cannot be enabled on this machine, set `browser_connection_mode = \"managed_only\"` in config.toml and use `gpt browser open` as fallback".to_owned(),
+            ],
+            "attached_extension_disconnected" => vec![
+                "confirm the Tablinq extension is installed, enabled, and connected in the attached browser profile".to_owned(),
+                "if multiple ChatGPT tabs are open, keep only the signed-in tab with the working Tablinq extension, then rerun `gpt browser attach`".to_owned(),
+                "only if attach mode cannot be stabilized on this machine, set `browser_connection_mode = \"managed_only\"` in config.toml and use `gpt browser open` as fallback".to_owned(),
+            ],
+            "attached_signed_out" => vec![
+                "sign in to ChatGPT in the attached normal browser tab and clear any login or challenge page".to_owned(),
+                "rerun `gpt browser attach` and `gpt browser open` after the signed-in tab is visible".to_owned(),
+                "if multiple ChatGPT tabs are open, keep only the signed-in tab you want Tablinq to use".to_owned(),
+            ],
+            "target_tab_missing" => vec![
+                "open a signed-in ChatGPT tab in your normal browser or run `gpt browser open` to create or focus one".to_owned(),
+                "rerun `gpt browser attach` after the target tab is visible".to_owned(),
+                "if multiple ChatGPT tabs are open, close extras before retrying attach".to_owned(),
+            ],
+            _ => vec![
+                "attach-first browser session is ready".to_owned(),
+            ],
+        };
+        return json!(guidance);
+    }
+
+    json!([
+        "use `gpt browser open` to start the managed fallback browser tab",
+        "sign in to ChatGPT in the managed fallback tab before running ask or research",
+        "if the managed browser profile is wedged, run `gpt browser reset-profile`",
+    ])
 }
 
 fn supports_managed_profile_reset(mode: BrowserConnectionMode) -> bool {
@@ -1378,12 +1431,26 @@ mod tests {
         assert!(output.contains("\"logs\""));
         assert!(output.contains("\"browser_connection_mode\": \"attach_first\""));
         assert!(output.contains("\"state\": \"attach_unavailable\""));
+        assert!(output.contains("\"recovery_guidance\""));
+        assert!(output.contains("check the attach endpoint"));
+        assert!(output.contains("confirm the Tablinq extension is installed"));
+        assert!(output.contains("sign in to ChatGPT in that browser"));
         assert!(output.contains("\"recovery_commands\""));
         assert!(output.contains("\"gpt browser start-debug\""));
-        assert!(output.contains("\"gpt browser attach\""));
         assert!(output.contains("\"gpt browser connection-info\""));
+        assert!(output.contains("\"gpt browser attach\""));
         assert!(output.contains("\"browser_connection_mode = \\\"managed_only\\\"\""));
         assert!(!output.contains("\"gpt browser reset-profile\""));
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        let commands = parsed
+            .get("recovery_commands")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(
+            commands[3],
+            Value::String("gpt browser connection-info".to_owned())
+        );
+        assert_eq!(commands[4], Value::String("gpt browser attach".to_owned()));
     }
 
     #[test]
@@ -1399,9 +1466,20 @@ mod tests {
         let output = run(&cli).unwrap();
 
         assert!(output.contains("\"state\": \"attach_unavailable\""));
+        assert!(output.contains("\"recovery_guidance\""));
         assert!(output.contains("\"gpt browser start-debug\""));
-        assert!(output.contains("\"gpt browser attach\""));
         assert!(output.contains("\"gpt browser connection-info\""));
+        assert!(output.contains("\"gpt browser attach\""));
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        let commands = parsed
+            .get("recovery_commands")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(
+            commands[3],
+            Value::String("gpt browser connection-info".to_owned())
+        );
+        assert_eq!(commands[4], Value::String("gpt browser attach".to_owned()));
     }
 
     #[test]

@@ -1129,6 +1129,7 @@ fn recovery_guidance(
     diagnostics: Option<&BrowserDiagnosticsSnapshot>,
 ) -> Vec<String> {
     let mut guidance = Vec::new();
+    let mut attach_problem = false;
     let debug_endpoint = browser
         .debug_endpoint
         .clone()
@@ -1141,34 +1142,55 @@ fn recovery_guidance(
     }
     if is_attach_primary_mode(browser.attach_mode) {
         if !browser.running {
+            attach_problem = true;
             guidance.push(format!(
-                "attach-first is not connected; start your normal browser with the debug endpoint at {debug_endpoint}, then run `gpt browser attach`"
+                "attach endpoint is not reachable at {debug_endpoint}; fully close Chrome or Edge, run `gpt browser start-debug`, then rerun `gpt browser attach`"
             ));
             guidance.push(
-                "if attach still fails, run `gpt browser connection-info` and confirm the configured endpoint, target URL, and browser path"
-                    .to_owned(),
-            );
-        } else {
-            guidance.push(
-                "Tablinq is attached to your normal browser session; run `gpt browser open` to focus or open the configured target tab"
-                    .to_owned(),
-            );
-        }
-        if !browser.target_tab_found {
-            guidance.push(
-                "target tab not found; run `gpt browser open` to create or focus the configured ChatGPT tab"
-                    .to_owned(),
-            );
-        }
-        if !browser.authenticated {
-            guidance.push(
-                "the attached browser tab is signed out or blocked; sign in to ChatGPT in your normal browser and rerun `gpt browser attach`"
+                "run `gpt browser connection-info` and confirm the configured debug endpoint, target URL, and browser path before switching modes"
                     .to_owned(),
             );
         }
         if browser.extension_required && !browser.extension_connected {
+            attach_problem = true;
             guidance.push(
-                "the Tablinq extension is missing or disconnected in the attached browser profile; reload or reinstall the extension in that browser"
+                "the Tablinq extension is missing or disconnected in the attached browser profile; confirm it is installed, enabled, and running in the same browser profile Tablinq is attaching to"
+                    .to_owned(),
+            );
+        }
+        if current_url_requires_login_or_challenge(browser.current_url.as_deref()) {
+            attach_problem = true;
+            guidance.push(
+                "the attached ChatGPT tab is blocked on sign-in or a challenge page; complete that page in your normal browser, then rerun `gpt browser attach`"
+                    .to_owned(),
+            );
+        } else if !browser.authenticated {
+            attach_problem = true;
+            guidance.push(
+                "the attached ChatGPT tab is signed out; sign in to ChatGPT in your normal browser, then rerun `gpt browser attach`"
+                    .to_owned(),
+            );
+        }
+        if !browser.target_tab_found {
+            attach_problem = true;
+            guidance.push(
+                "target tab not found; run `gpt browser open` to create or focus the configured ChatGPT tab after the browser is signed in"
+                    .to_owned(),
+            );
+        }
+        if browser.running
+            && (!browser.target_tab_found
+                || !browser.authenticated
+                || (browser.extension_required && !browser.extension_connected))
+        {
+            guidance.push(
+                "if multiple ChatGPT tabs are open, keep only the signed-in tab with the working Tablinq extension, then rerun `gpt browser attach`"
+                    .to_owned(),
+            );
+        }
+        if attach_problem {
+            guidance.push(
+                "only if your machine or browser profile cannot expose the local debug endpoint, set `browser_connection_mode = \"managed_only\"` in config.toml and use `gpt browser open` as explicit fallback"
                     .to_owned(),
             );
         }
@@ -1219,6 +1241,16 @@ fn recovery_guidance(
         }
     }
     guidance
+}
+
+fn current_url_requires_login_or_challenge(current_url: Option<&str>) -> bool {
+    let Some(current_url) = current_url else {
+        return false;
+    };
+    let lowered = current_url.to_ascii_lowercase();
+    ["challenge", "captcha", "login", "signin", "auth", "cf_chl"]
+        .iter()
+        .any(|marker| lowered.contains(marker))
 }
 
 fn browser_health_details(browser: &BrowserStatusSnapshot, config: &AppConfig) -> String {
@@ -1445,10 +1477,11 @@ fn unique_destination_path(destination_dir: &Path, file_name: &Path) -> PathBuf 
 
 #[cfg(test)]
 mod tests {
-    use super::browser_session_identity;
-    use shared_protocol::{
-        AuthSource, BrowserConnectionMode, BrowserOwner, BrowserStatusSnapshot,
+    use super::{
+        browser_session_identity, current_url_requires_login_or_challenge, recovery_guidance,
     };
+    use crate::AppConfig;
+    use shared_protocol::{AuthSource, BrowserConnectionMode, BrowserOwner, BrowserStatusSnapshot};
 
     #[test]
     fn attach_session_identity_uses_target_tab_id() {
@@ -1483,5 +1516,64 @@ mod tests {
 
         assert_eq!(session_id, "browser-tab-abcdef1234567890");
         assert_eq!(label, "Browser tab abcdef12");
+    }
+
+    #[test]
+    fn attach_recovery_guidance_prioritizes_endpoint_extension_auth_tab_and_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+        let browser = BrowserStatusSnapshot {
+            running: false,
+            browser_kind: "chrome".to_owned(),
+            profile_dir: "profile".to_owned(),
+            downloads_dir: "downloads".to_owned(),
+            target_url: "https://chatgpt.com/".to_owned(),
+            current_url: Some("https://chatgpt.com/auth/login".to_owned()),
+            page_title: None,
+            page_ready: false,
+            authenticated: false,
+            reload_count: 0,
+            screenshot_path: None,
+            browser_path: None,
+            extension_connected: false,
+            capability_report: None,
+            attach_mode: BrowserConnectionMode::AttachFirst,
+            browser_owner: BrowserOwner::External,
+            cdp_attached: false,
+            target_tab_found: false,
+            target_tab_id: None,
+            target_workspace_key: None,
+            debug_endpoint: Some("http://127.0.0.1:9222".to_owned()),
+            auth_source: AuthSource::Unknown,
+            extension_required: true,
+            last_capability_report_at: None,
+        };
+
+        let guidance = recovery_guidance(&config, &browser, None);
+
+        assert!(guidance[0].contains("attach endpoint is not reachable"));
+        assert!(guidance[1].contains("gpt browser connection-info"));
+        assert!(guidance[2].contains("Tablinq extension is missing or disconnected"));
+        assert!(guidance[3].contains("sign-in or a challenge page"));
+        assert!(guidance[4].contains("target tab not found"));
+        assert!(
+            guidance
+                .last()
+                .unwrap()
+                .contains("browser_connection_mode = \"managed_only\"")
+        );
+    }
+
+    #[test]
+    fn current_url_requires_login_or_challenge_detects_cloudflare_and_login_pages() {
+        assert!(current_url_requires_login_or_challenge(Some(
+            "https://chatgpt.com/auth/login"
+        )));
+        assert!(current_url_requires_login_or_challenge(Some(
+            "https://chatgpt.com/?cf_chl_tk=token"
+        )));
+        assert!(!current_url_requires_login_or_challenge(Some(
+            "https://chatgpt.com/?conversation=conv-1"
+        )));
     }
 }
