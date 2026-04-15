@@ -785,7 +785,7 @@ export class BrowserAdapter {
       submitPrompt: false,
       emittedText: state.emittedText,
       nextSeq: state.nextSeq,
-      recoveryReason: "re-attached to the managed browser session",
+      recoveryReason: "re-attached to the browser session",
     });
   }
 
@@ -800,7 +800,7 @@ export class BrowserAdapter {
       submitPrompt: false,
       emittedText: state.emittedText,
       nextSeq: state.nextSeq,
-      recoveryReason: "re-attached to the managed browser session",
+      recoveryReason: "re-attached to the browser session",
     });
   }
 
