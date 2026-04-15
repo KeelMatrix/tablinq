@@ -17,6 +17,10 @@ interface ServiceArgs {
   downloadsDir: string;
   defaultTargetUrl: string;
   defaultBrowserPath?: string;
+  connectionMode?: "attach_first" | "managed_fallback" | "managed_only";
+  debugEndpoint?: string;
+  extensionRequired?: boolean;
+  autoOpenTargetTab?: boolean;
 }
 
 type AdapterRequest =
@@ -118,6 +122,10 @@ async function main() {
     downloadsDir: args.downloadsDir,
     defaultTargetUrl: args.defaultTargetUrl,
     defaultBrowserPath: args.defaultBrowserPath,
+    connectionMode: args.connectionMode,
+    debugEndpoint: args.debugEndpoint,
+    extensionRequired: args.extensionRequired,
+    autoOpenTargetTab: args.autoOpenTargetTab,
   });
 
   const rl = readline.createInterface({
@@ -281,14 +289,17 @@ async function main() {
         browser_path: args.defaultBrowserPath ?? null,
         extension_connected: false,
         capability_report: null,
-        attach_mode: "attach_first" as const,
-        browser_owner: "managed" as const,
+        attach_mode: args.connectionMode ?? "managed_only",
+        browser_owner:
+          (args.connectionMode ?? "managed_only") === "managed_only"
+            ? ("managed" as const)
+            : ("external" as const),
         cdp_attached: false,
         target_tab_found: false,
         target_tab_id: null,
-        debug_endpoint: "http://127.0.0.1:9222",
+        debug_endpoint: args.debugEndpoint ?? "http://127.0.0.1:9222",
         auth_source: "unknown" as const,
-        extension_required: true,
+        extension_required: args.extensionRequired ?? true,
       }));
       response = {
         type: "response",
@@ -352,7 +363,23 @@ function parseArgs(argv: string[]): ServiceArgs {
     downloadsDir,
     defaultTargetUrl,
     defaultBrowserPath: args.get("--default-browser-path"),
+    connectionMode:
+      (args.get("--connection-mode") as ServiceArgs["connectionMode"]) ??
+      undefined,
+    debugEndpoint: args.get("--debug-endpoint") ?? undefined,
+    extensionRequired: parseBooleanFlag(args.get("--extension-required"), true),
+    autoOpenTargetTab: parseBooleanFlag(
+      args.get("--auto-open-target-tab"),
+      true,
+    ),
   };
+}
+
+function parseBooleanFlag(raw: string | undefined, fallback: boolean): boolean {
+  if (!raw) {
+    return fallback;
+  }
+  return raw === "1" || raw.toLowerCase() === "true";
 }
 
 void main();
