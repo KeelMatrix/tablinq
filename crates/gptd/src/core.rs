@@ -1190,7 +1190,7 @@ fn recovery_guidance(
         }
         if attach_problem {
             guidance.push(
-                "only if your machine or browser profile cannot expose the local debug endpoint, set `browser_connection_mode = \"managed_only\"` in config.toml and use `gpt browser open` as explicit fallback"
+                "only if your machine or browser profile cannot expose the local debug endpoint, or you need debugging or CI/local harness isolation, set `browser_connection_mode = \"managed_only\"` in config.toml and use `gpt browser open` as explicit fallback"
                     .to_owned(),
             );
         }
@@ -1204,7 +1204,7 @@ fn recovery_guidance(
     } else {
         if !browser.running {
             guidance.push(
-                "managed browser fallback is not running; use `gpt browser open` to start the managed browser tab"
+                "managed browser fallback is fallback/debug-only; use `gpt browser open` to start the managed browser tab"
                     .to_owned(),
             );
         } else {
@@ -1213,6 +1213,10 @@ fn recovery_guidance(
                     .to_owned(),
             );
         }
+        guidance.push(
+            "use managed fallback for debugging, CI/local harness isolation, or when attach-first cannot expose a local debug endpoint"
+                .to_owned(),
+        );
         if !browser.authenticated {
             guidance.push(
                 "managed browser fallback is signed out; open the managed browser and sign in before running ask or research"

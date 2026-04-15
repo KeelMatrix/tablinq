@@ -17,7 +17,8 @@ If you want local tools, scripts, or agent frameworks to work through a dedicate
 
 ## What Tablinq does
 
-- attaches to your normal Chrome or Edge profile for ChatGPT
+- attaches to your normal Chrome or Edge profile for ChatGPT by default
+- keeps `managed_only` and `managed_fallback` as explicit fallback modes for debugging, CI/local harness isolation, and machines that cannot expose a local debug endpoint
 - exposes local CLI commands for ask, research, jobs, sessions, artifacts, browser lifecycle, and diagnostics
 - exposes an OpenAI-compatible local HTTP gateway for browser-backed provider mode
 - persists jobs, conversations, artifacts, request summaries, and failure bundles locally
@@ -115,6 +116,8 @@ Common commands:
 - `gpt browser switch-account`
 - `gpt browser reset-profile`
 - `gpt browser profile-info`
+
+Attach-first is the default operating mode. `gpt browser reset-profile` is only for `managed_only` or `managed_fallback` recovery.
 
 ## Provider mode
 
