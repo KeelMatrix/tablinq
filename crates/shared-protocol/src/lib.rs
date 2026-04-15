@@ -1357,7 +1357,10 @@ mod tests {
         let root = PathBuf::from("state-root");
         let paths = build_state_paths(&root);
 
-        assert_eq!(paths.chrome_attach_profile_dir, root.join("chrome-attach-profile"));
+        assert_eq!(
+            paths.chrome_attach_profile_dir,
+            root.join("chrome-attach-profile")
+        );
         assert!(paths.chrome_attach_profile_dir.starts_with(&root));
         assert_ne!(paths.chrome_attach_profile_dir, paths.browser_profile_dir);
     }

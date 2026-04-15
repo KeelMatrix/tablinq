@@ -1142,8 +1142,11 @@ export class BrowserAdapter {
     if (snapshot.currentUrl) {
       this.currentTargetUrl = snapshot.currentUrl;
     }
-    if (snapshot.conversationId) {
-      state.knownConversationId = snapshot.conversationId;
+    const conversationId =
+      normalizeOptionalString(snapshot.conversationId) ??
+      conversationIdFromUrl(snapshot.currentUrl);
+    if (conversationId) {
+      state.knownConversationId = conversationId;
     }
     if (snapshot.messageId) {
       state.knownMessageId = snapshot.messageId;
@@ -1160,8 +1163,11 @@ export class BrowserAdapter {
     if (snapshot.currentUrl) {
       this.currentTargetUrl = snapshot.currentUrl;
     }
-    if (snapshot.conversationId) {
-      state.knownConversationId = snapshot.conversationId;
+    const conversationId =
+      normalizeOptionalString(snapshot.conversationId) ??
+      conversationIdFromUrl(snapshot.currentUrl);
+    if (conversationId) {
+      state.knownConversationId = conversationId;
     }
     if (snapshot.messageId) {
       state.knownMessageId = snapshot.messageId;
@@ -1299,17 +1305,61 @@ export class BrowserAdapter {
       );
     }
 
-    const snapshot = await readAskSnapshot(recoveredPage);
-    this.rememberAskSnapshot(state, snapshot);
-    const relation = textRelation(state.emittedText, snapshot.text);
-    const hasIdentity =
-      Boolean(snapshot.conversationId || state.knownConversationId) ||
-      snapshot.currentUrl.includes("conversation=");
-    const canContinue =
-      relation !== "mismatch" &&
-      (snapshot.state === "running" || snapshot.state === "done") &&
-      (hasIdentity || state.emittedText.length > 0 || snapshot.text.length > 0);
-    if (!canContinue) {
+    let snapshot: AskSnapshot | null = null;
+    while (Date.now() < timeoutAt) {
+      const candidate = await readAskSnapshot(recoveredPage);
+      this.rememberAskSnapshot(state, candidate);
+      const relation = textRelation(state.emittedText, candidate.text);
+      const commandConversationId = normalizeOptionalString(
+        state.knownConversationId ?? command.conversationId,
+      );
+      const snapshotConversationId =
+        normalizeOptionalString(candidate.conversationId) ??
+        conversationIdFromUrl(candidate.currentUrl);
+      const normalizedConversationId =
+        snapshotConversationId ?? commandConversationId;
+      const conversationMatches =
+        !commandConversationId ||
+        !snapshotConversationId ||
+        commandConversationId === snapshotConversationId;
+      const hasIdentity = Boolean(normalizedConversationId);
+      const canContinue =
+        conversationMatches &&
+        relation !== "mismatch" &&
+        (candidate.state === "running" || candidate.state === "done") &&
+        (hasIdentity ||
+          state.emittedText.length > 0 ||
+          candidate.text.length > 0);
+      const awaitingLiveState =
+        hasIdentity &&
+        candidate.state === "idle" &&
+        candidate.text.length === 0;
+      logRecoveryDecision("ask", {
+        commandConversationId,
+        snapshotConversationId,
+        snapshotCurrentUrl: candidate.currentUrl,
+        normalizedConversationId,
+        relation,
+        conversationMatches,
+        hasIdentity,
+        snapshotState: candidate.state,
+        emittedTextLength: state.emittedText.length,
+        observedTextLength: candidate.text.length,
+        awaitingLiveState,
+        canContinue,
+      });
+      if (canContinue) {
+        snapshot = candidate;
+        break;
+      }
+      if (!conversationMatches || relation === "mismatch" || !awaitingLiveState) {
+        throw new Error(
+          "interrupted ask could not be reconciled against the live conversation",
+        );
+      }
+      await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    }
+    if (!snapshot) {
       throw new Error(
         "interrupted ask could not be reconciled against the live conversation",
       );
@@ -1399,21 +1449,63 @@ export class BrowserAdapter {
       );
     }
 
-    const snapshot = await readResearchSnapshot(recoveredPage);
-    this.rememberResearchSnapshot(state, snapshot);
-    const relation = textRelation(state.emittedText, snapshot.reportText);
-    const hasIdentity =
-      Boolean(snapshot.conversationId || state.knownConversationId) ||
-      snapshot.currentUrl.includes("conversation=");
-    const canContinue =
-      relation !== "mismatch" &&
-      (snapshot.status === "waiting_for_sources" ||
-        snapshot.status === "running" ||
-        snapshot.status === "done") &&
-      (hasIdentity ||
-        state.emittedText.length > 0 ||
-        snapshot.reportText.length > 0);
-    if (!canContinue) {
+    let snapshot: ResearchSnapshot | null = null;
+    while (Date.now() < timeoutAt) {
+      const candidate = await readResearchSnapshot(recoveredPage);
+      this.rememberResearchSnapshot(state, candidate);
+      const relation = textRelation(state.emittedText, candidate.reportText);
+      const commandConversationId = normalizeOptionalString(
+        state.knownConversationId ?? command.conversationId,
+      );
+      const snapshotConversationId =
+        normalizeOptionalString(candidate.conversationId) ??
+        conversationIdFromUrl(candidate.currentUrl);
+      const normalizedConversationId =
+        snapshotConversationId ?? commandConversationId;
+      const conversationMatches =
+        !commandConversationId ||
+        !snapshotConversationId ||
+        commandConversationId === snapshotConversationId;
+      const hasIdentity = Boolean(normalizedConversationId);
+      const canContinue =
+        conversationMatches &&
+        relation !== "mismatch" &&
+        (candidate.status === "waiting_for_sources" ||
+          candidate.status === "running" ||
+          candidate.status === "done") &&
+        (hasIdentity ||
+          state.emittedText.length > 0 ||
+          candidate.reportText.length > 0);
+      const awaitingLiveState =
+        hasIdentity &&
+        candidate.status === "running" &&
+        candidate.reportText.length === 0;
+      logRecoveryDecision("research", {
+        commandConversationId,
+        snapshotConversationId,
+        snapshotCurrentUrl: candidate.currentUrl,
+        normalizedConversationId,
+        relation,
+        conversationMatches,
+        hasIdentity,
+        snapshotState: candidate.status,
+        emittedTextLength: state.emittedText.length,
+        observedTextLength: candidate.reportText.length,
+        awaitingLiveState,
+        canContinue,
+      });
+      if (canContinue) {
+        snapshot = candidate;
+        break;
+      }
+      if (!conversationMatches || relation === "mismatch" || !awaitingLiveState) {
+        throw new Error(
+          "interrupted research job could not be reconciled against the live conversation",
+        );
+      }
+      await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    }
+    if (!snapshot) {
       throw new Error(
         "interrupted research job could not be reconciled against the live conversation",
       );
@@ -1584,13 +1676,7 @@ export class BrowserAdapter {
   }
 
   private resolveConversationTarget(conversationId?: string | null): string {
-    const target = new URL(this.currentTargetUrl);
-    if (!conversationId) {
-      target.searchParams.delete("conversation");
-      return target.toString();
-    }
-    target.searchParams.set("conversation", conversationId);
-    return target.toString();
+    return resolveConversationUrl(this.currentTargetUrl, conversationId);
   }
 
   private async recoverManagedPage(): Promise<void> {
@@ -2471,13 +2557,17 @@ async function safeTitle(page: Page): Promise<string | null> {
 }
 
 async function resetConversationIdentity(page: Page): Promise<void> {
-  await page.evaluate(() => {
+  const currentUrl =
+    safePageUrl(page) ??
+    (await page.evaluate(() => {
+      return window.location.href;
+    }));
+  const resetUrl = resolveConversationUrl(currentUrl, null);
+  await page.evaluate((nextUrl: string) => {
     delete document.body.dataset.conversationId;
     delete document.body.dataset.lastMessageId;
-    const url = new URL(window.location.href);
-    url.searchParams.delete("conversation");
-    history.replaceState({}, "", url);
-  });
+    history.replaceState({}, "", nextUrl);
+  }, resetUrl);
 }
 
 function safePageUrl(page: Page): string | null {
@@ -2738,11 +2828,15 @@ async function clickSubmit(page: Page): Promise<void> {
 }
 
 async function readAskSnapshot(page: Page): Promise<AskSnapshot> {
-  return callPageAdapter<AskSnapshot>(page, "readAskSnapshot");
+  return normalizeAskSnapshot(
+    await callPageAdapter<AskSnapshot>(page, "readAskSnapshot"),
+  );
 }
 
 async function readResearchSnapshot(page: Page): Promise<ResearchSnapshot> {
-  return callPageAdapter<ResearchSnapshot>(page, "readResearchSnapshot");
+  return normalizeResearchSnapshot(
+    await callPageAdapter<ResearchSnapshot>(page, "readResearchSnapshot"),
+  );
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -2931,14 +3025,133 @@ function contentTypeForFile(path: string): string {
   }
 }
 
-function workspaceKeyFromUrl(rawUrl: string): string {
+function normalizeAskSnapshot(snapshot: AskSnapshot): AskSnapshot {
+  return {
+    ...snapshot,
+    conversationId:
+      normalizeOptionalString(snapshot.conversationId) ??
+      conversationIdFromUrl(snapshot.currentUrl),
+    messageId: normalizeOptionalString(snapshot.messageId),
+  };
+}
+
+function normalizeResearchSnapshot(snapshot: ResearchSnapshot): ResearchSnapshot {
+  return {
+    ...snapshot,
+    conversationId:
+      normalizeOptionalString(snapshot.conversationId) ??
+      conversationIdFromUrl(snapshot.currentUrl),
+    messageId: normalizeOptionalString(snapshot.messageId),
+    statusMessage: normalizeOptionalString(snapshot.statusMessage),
+  };
+}
+
+function normalizeOptionalString(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+function pathnameSegments(pathname: string): string[] {
+  return pathname.split("/").filter(Boolean);
+}
+
+function pathnameFromSegments(segments: string[]): string {
+  return segments.length > 0 ? `/${segments.join("/")}` : "/";
+}
+
+function conversationWorkspaceSegments(pathname: string): string[] {
+  const segments = pathnameSegments(pathname);
+  if (
+    segments.length >= 2 &&
+    segments[segments.length - 2]?.toLowerCase() === "c"
+  ) {
+    return segments.slice(0, -2);
+  }
+  return segments;
+}
+
+function conversationWorkspacePathname(pathname: string): string {
+  return pathnameFromSegments(conversationWorkspaceSegments(pathname));
+}
+
+function conversationPathname(
+  workspacePathname: string,
+  conversationId: string,
+): string {
+  const segments = conversationWorkspaceSegments(workspacePathname);
+  segments.push("c", encodeURIComponent(conversationId));
+  return pathnameFromSegments(segments);
+}
+
+function conversationIdFromPathname(pathname: string): string | null {
+  const segments = pathnameSegments(pathname);
+  if (
+    segments.length >= 2 &&
+    segments[segments.length - 2]?.toLowerCase() === "c"
+  ) {
+    return normalizeOptionalString(
+      safeDecodeURIComponent(segments[segments.length - 1] ?? ""),
+    );
+  }
+  return null;
+}
+
+export function conversationIdFromUrl(
+  rawUrl: string | null | undefined,
+): string | null {
+  const resolvedUrl = normalizeOptionalString(rawUrl);
+  if (!resolvedUrl) {
+    return null;
+  }
+  try {
+    const url = new URL(resolvedUrl);
+    return (
+      normalizeOptionalString(url.searchParams.get("conversation")) ??
+      conversationIdFromPathname(url.pathname)
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function resolveConversationUrl(
+  rawUrl: string,
+  conversationId?: string | null,
+): string {
+  try {
+    const url = new URL(rawUrl);
+    url.pathname = conversationWorkspacePathname(url.pathname);
+    url.searchParams.delete("conversation");
+    const normalizedConversationId = normalizeOptionalString(conversationId);
+    if (normalizedConversationId) {
+      url.pathname = conversationPathname(
+        url.pathname,
+        normalizedConversationId,
+      );
+    }
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+export function workspaceKeyFromUrl(rawUrl: string): string {
   try {
     const url = new URL(rawUrl);
     const params = new URLSearchParams(url.search);
     params.delete("conversation");
     params.delete("scenario");
     const query = params.toString();
-    return `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+    const pathname = conversationWorkspacePathname(url.pathname);
+    return `${url.origin}${pathname}${query ? `?${query}` : ""}`;
   } catch {
     return rawUrl;
   }
@@ -2946,14 +3159,22 @@ function workspaceKeyFromUrl(rawUrl: string): string {
 
 function matchesTargetWorkspace(pageUrl: string, targetUrl: string): boolean {
   try {
-    const page = new URL(pageUrl);
-    const target = new URL(targetUrl);
-    if (page.origin !== target.origin || page.pathname !== target.pathname) {
-      return false;
-    }
     return workspaceKeyFromUrl(pageUrl) === workspaceKeyFromUrl(targetUrl);
   } catch {
     return false;
+  }
+}
+
+function logRecoveryDecision(
+  kind: "ask" | "research",
+  details: Record<string, unknown>,
+): void {
+  try {
+    process.stderr.write(
+      `[tablinq-recovery] ${kind} ${JSON.stringify(details)}\n`,
+    );
+  } catch {
+    // Recovery logging is opportunistic and must not affect browser control.
   }
 }
 

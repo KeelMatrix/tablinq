@@ -32,6 +32,11 @@ export function createTablinqPageAdapterRuntime() {
     return output;
   };
 
+  const datasetValue = (value) => {
+    const trimmed = (value ?? "").trim();
+    return trimmed ? trimmed : null;
+  };
+
   const hasToken = (value, tokens) => {
     const normalized = normalizeText(value);
     return tokens.some((token) =>
@@ -714,10 +719,11 @@ export function createTablinqPageAdapterRuntime() {
         text,
         state: inferAskState(text, article),
         conversationId:
-          document.body.dataset.conversationId ?? parseConversationIdFromUrl(),
+          datasetValue(document.body.dataset.conversationId) ??
+          parseConversationIdFromUrl(),
         messageId:
-          article?.getAttribute("data-message-id") ??
-          document.body.dataset.lastMessageId ??
+          datasetValue(article?.getAttribute("data-message-id")) ??
+          datasetValue(document.body.dataset.lastMessageId) ??
           null,
         currentUrl: window.location.href,
       };
@@ -745,10 +751,11 @@ export function createTablinqPageAdapterRuntime() {
           null,
         reportText,
         conversationId:
-          document.body.dataset.conversationId ?? parseConversationIdFromUrl(),
+          datasetValue(document.body.dataset.conversationId) ??
+          parseConversationIdFromUrl(),
         messageId:
-          article?.getAttribute("data-message-id") ??
-          document.body.dataset.lastMessageId ??
+          datasetValue(article?.getAttribute("data-message-id")) ??
+          datasetValue(document.body.dataset.lastMessageId) ??
           null,
         currentUrl: window.location.href,
       };

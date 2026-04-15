@@ -15,7 +15,7 @@ const mimeTypes = {
 createServer((request, response) => {
   const url = new URL(request.url || "/", `http://127.0.0.1:${port}`);
   const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
-  const filePath = join(root, pathname);
+  let filePath = join(root, pathname);
 
   try {
     const body = readFileSync(filePath);
@@ -24,6 +24,16 @@ createServer((request, response) => {
     });
     response.end(body);
   } catch {
+    if (!extname(pathname)) {
+      filePath = join(root, "index.html");
+      const body = readFileSync(filePath);
+      response.writeHead(200, {
+        "content-type": mimeTypes[".html"],
+      });
+      response.end(body);
+      return;
+    }
+
     response.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     response.end("not found");
   }

@@ -13,6 +13,44 @@ const missingControls = new Set(
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean),
 );
+const conversationStyle =
+  params.get("conversation_style") === "query" ? "query" : "path";
+
+function pathnameSegments(pathname) {
+  return pathname.split("/").filter(Boolean);
+}
+
+function pathnameFromSegments(segments) {
+  return segments.length > 0 ? `/${segments.join("/")}` : "/";
+}
+
+function conversationIdFromPathname(pathname) {
+  const segments = pathnameSegments(pathname);
+  if (
+    segments.length >= 2 &&
+    segments[segments.length - 2]?.toLowerCase() === "c"
+  ) {
+    return segments[segments.length - 1] || null;
+  }
+  return null;
+}
+
+function conversationWorkspacePathname(pathname) {
+  const segments = pathnameSegments(pathname);
+  if (
+    segments.length >= 2 &&
+    segments[segments.length - 2]?.toLowerCase() === "c"
+  ) {
+    return pathnameFromSegments(segments.slice(0, -2));
+  }
+  return pathnameFromSegments(segments);
+}
+
+function conversationPathname(pathname, conversationId) {
+  const segments = pathnameSegments(conversationWorkspacePathname(pathname));
+  segments.push("c", conversationId);
+  return pathnameFromSegments(segments);
+}
 
 document.body.dataset.uiVariant = variant;
 document.body.dataset.streamState = "idle";
@@ -22,7 +60,8 @@ document.body.dataset.selectedMode = "normal";
 document.body.dataset.uploadedFiles = "";
 document.body.dataset.researchState = "idle";
 document.body.dataset.researchStatusMessage = "";
-document.body.dataset.conversationId = params.get("conversation") || "";
+document.body.dataset.conversationId =
+  params.get("conversation") || conversationIdFromPathname(window.location.pathname) || "";
 document.body.dataset.lastMessageId = "";
 
 note.textContent =
@@ -327,6 +366,7 @@ function currentConversationId() {
   return (
     document.body.dataset.conversationId ||
     url.searchParams.get("conversation") ||
+    conversationIdFromPathname(url.pathname) ||
     uniqueId("conv")
   );
 }
@@ -343,7 +383,13 @@ function writeConversationState(conversationId, messageId) {
   document.body.dataset.conversationId = conversationId;
   document.body.dataset.lastMessageId = messageId;
   const url = new URL(window.location.href);
-  url.searchParams.set("conversation", conversationId);
+  url.pathname = conversationWorkspacePathname(url.pathname);
+  url.searchParams.delete("conversation");
+  if (conversationStyle === "query") {
+    url.searchParams.set("conversation", conversationId);
+  } else {
+    url.pathname = conversationPathname(url.pathname, conversationId);
+  }
   history.replaceState({}, "", url);
 }
 

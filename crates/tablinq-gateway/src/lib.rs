@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use shared_protocol::{
-    ArtifactSummary, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, ErrorCode,
-    EventPayload, GatewayRequestContext, JobStatus, RequestExecutionKind, RequestSummary,
-    RequestUsage, StreamChunkKind,
+    ArtifactSummary, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, DaemonRequest,
+    DaemonResponse, DoctorReport, ErrorCode, EventPayload, GatewayRequestContext, HealthCheck,
+    JobStatus, RequestExecutionKind, RequestSummary, RequestUsage, StreamChunkKind,
 };
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
@@ -715,6 +715,42 @@ fn catalog_identity(
     )
 }
 
+fn daemon_health_snapshot(config: &AppConfig) -> Option<HealthCheck> {
+    if !gptd::daemon_is_responsive(&config.paths.ipc_endpoint) {
+        return None;
+    }
+    match gptd::send_request(&config.paths.ipc_endpoint, &DaemonRequest::Ping).ok()? {
+        DaemonResponse::Health(health) => Some(health),
+        _ => None,
+    }
+}
+
+fn daemon_doctor_report(config: &AppConfig) -> Option<DoctorReport> {
+    if !gptd::daemon_is_responsive(&config.paths.ipc_endpoint) {
+        return None;
+    }
+    match gptd::send_request(&config.paths.ipc_endpoint, &DaemonRequest::Doctor).ok()? {
+        DaemonResponse::Doctor(report) => Some(report),
+        _ => None,
+    }
+}
+
+fn effective_health_snapshot(config: &AppConfig, core: &CoreService) -> Result<HealthCheck> {
+    if let Some(health) = daemon_health_snapshot(config) {
+        Ok(health)
+    } else {
+        core.health_snapshot()
+    }
+}
+
+fn effective_doctor_report(config: &AppConfig, core: &CoreService) -> Result<DoctorReport> {
+    if let Some(report) = daemon_doctor_report(config) {
+        Ok(report)
+    } else {
+        core.doctor_report()
+    }
+}
+
 pub fn run_gateway(config: AppConfig) -> Result<()> {
     let log_path = gateway_log_path(&config);
     let logger = Arc::new(JsonLogger::new(&log_path)?);
@@ -890,17 +926,20 @@ fn handle_connection(
         context.request.method.as_str(),
         context.request.path.as_str(),
     ) {
-        ("GET", HEALTH_PATH) => json_response(
-            200,
-            json!({
-                "service": "tablinq-gateway",
-                "request_id": context.request_id,
-                "status": core.health_snapshot()?.status,
-                "health": core.health_snapshot()?,
-                "gateway": snapshot,
-                "scheduler": scheduler_status,
-            }),
-        ),
+        ("GET", HEALTH_PATH) => {
+            let health = effective_health_snapshot(config, core)?;
+            json_response(
+                200,
+                json!({
+                    "service": "tablinq-gateway",
+                    "request_id": context.request_id,
+                    "status": health.status,
+                    "health": health,
+                    "gateway": snapshot,
+                    "scheduler": scheduler_status,
+                }),
+            )
+        }
         ("GET", READY_PATH) => json_response(
             200,
             json!({
@@ -912,14 +951,19 @@ fn handle_connection(
             }),
         ),
         ("GET", ADMIN_STATUS_PATH) => match authorize_request(config, &context.request, false) {
-            Ok(()) => json_response(
-                200,
-                json!({
-                    "request_id": context.request_id,
-                    "gateway": snapshot,
-                    "scheduler": scheduler_status,
-                }),
-            ),
+            Ok(()) => {
+                let doctor = effective_doctor_report(config, core)?;
+                json_response(
+                    200,
+                    json!({
+                        "request_id": context.request_id,
+                        "gateway": snapshot,
+                        "scheduler": scheduler_status,
+                        "health": doctor.health,
+                        "browser": doctor.browser,
+                    }),
+                )
+            }
             Err(response) => response,
         },
         ("POST", ADMIN_SHUTDOWN_PATH) => match authorize_request(config, &context.request, false) {
@@ -3380,6 +3424,30 @@ mod tests {
         }
     }
 
+    fn spawn_daemon(config: AppConfig) -> thread::JoinHandle<Result<()>> {
+        let endpoint = shared_protocol::build_state_paths(&config.paths.state_root).ipc_endpoint;
+        let handle = thread::spawn(move || gptd::run_service(config));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if gptd::daemon_is_responsive(&endpoint) {
+                return handle;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("daemon did not become ready");
+    }
+
+    fn stop_daemon(state_root: &Path, handle: thread::JoinHandle<Result<()>>) {
+        let endpoint = shared_protocol::build_state_paths(state_root).ipc_endpoint;
+        let response =
+            gptd::send_request(&endpoint, &shared_protocol::DaemonRequest::Shutdown).unwrap();
+        match response {
+            shared_protocol::DaemonResponse::Ack(_) => {}
+            other => panic!("unexpected daemon shutdown response: {other:?}"),
+        }
+        handle.join().unwrap().unwrap();
+    }
+
     fn test_config() -> (TempDir, AppConfig) {
         let dir = tempdir().unwrap();
         let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
@@ -3608,6 +3676,73 @@ mod tests {
 
         stop_gateway_process(Some(&state_root)).unwrap();
         handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn gateway_health_and_admin_follow_daemon_browser_health() {
+        require_browser_integration_prereqs!();
+        let _guard = integration_lock();
+        let (_fake_server, fake_url) = spawn_fake_chatgpt();
+        let (_dir, config) = test_config();
+        let state_root = config.paths.state_root.clone();
+        let auth = auth_header(&config);
+        let daemon = spawn_daemon(config.clone());
+        let endpoint = shared_protocol::build_state_paths(&state_root).ipc_endpoint;
+
+        let opened = gptd::send_request(
+            &endpoint,
+            &shared_protocol::DaemonRequest::BrowserOpen(shared_protocol::BrowserOpenRequest {
+                target_url: Some(fake_url.clone()),
+                browser_path: None,
+                headless: Some(true),
+            }),
+        )
+        .unwrap();
+        match opened {
+            shared_protocol::DaemonResponse::Browser(snapshot) => {
+                assert!(snapshot.running);
+                assert!(snapshot.authenticated);
+                assert!(snapshot.extension_connected);
+            }
+            other => panic!("unexpected browser open response: {other:?}"),
+        }
+
+        let (gateway_handle, snapshot) = spawn_gateway(config);
+        let health = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            HEALTH_PATH,
+            &[],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        let health_json: Value = serde_json::from_slice(&health.body).unwrap();
+        assert_eq!(health_json["status"], "ok");
+        assert_eq!(health_json["health"]["browser_connected"], true);
+        assert_eq!(health_json["health"]["extension_connected"], true);
+        assert_eq!(health_json["health"]["authenticated"], true);
+
+        let admin = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            ADMIN_STATUS_PATH,
+            &[("Authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        let admin_json: Value = serde_json::from_slice(&admin.body).unwrap();
+        assert_eq!(admin_json["health"]["browser_connected"], true);
+        assert_eq!(admin_json["health"]["extension_connected"], true);
+        assert_eq!(admin_json["health"]["authenticated"], true);
+        assert_eq!(admin_json["browser"]["running"], true);
+
+        stop_gateway_process(Some(&state_root)).unwrap();
+        gateway_handle.join().unwrap().unwrap();
+        stop_daemon(&state_root, daemon);
     }
 
     #[test]

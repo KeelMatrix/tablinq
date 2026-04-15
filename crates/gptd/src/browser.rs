@@ -3,9 +3,9 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
     AskCommand, AskResult, AuthSource, BrowserConnectionMode, BrowserOpenRequest, BrowserOwner,
-    BrowserStatusSnapshot, CapabilityReport, Effort, EventPayload, JobStatus, Mode, ModelClass,
-    ResearchCommand, ResearchResult, SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry,
-    StreamChunk, StreamChunkKind, CHROME_ATTACH_PROFILE_NOTE,
+    BrowserStatusSnapshot, CHROME_ATTACH_PROFILE_NOTE, CapabilityReport, Effort, EventPayload,
+    JobStatus, Mode, ModelClass, ResearchCommand, ResearchResult, SelectorPackSummary,
+    StrategyAttempt, StrategyTelemetryEntry, StreamChunk, StreamChunkKind,
 };
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -1118,7 +1118,8 @@ fn normalize_snapshot(
         snapshot.browser_owner = BrowserOwner::External;
     }
     if uses_chrome_attach_profile(config, snapshot.browser_path.as_deref()) {
-        snapshot.attach_profile_dir = Some(config.paths.chrome_attach_profile_dir.display().to_string());
+        snapshot.attach_profile_dir =
+            Some(config.paths.chrome_attach_profile_dir.display().to_string());
         snapshot.attach_profile_note = Some(CHROME_ATTACH_PROFILE_NOTE.to_owned());
     } else {
         snapshot.attach_profile_dir = None;

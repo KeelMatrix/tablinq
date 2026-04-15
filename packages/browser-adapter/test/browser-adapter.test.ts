@@ -6,8 +6,11 @@ import { chromium } from "playwright-core";
 import {
   BrowserAdapter,
   chooseUniqueArtifactPath,
+  conversationIdFromUrl,
   detectBrowserExecutable,
+  resolveConversationUrl,
   resolveBrowserLaunchConfig,
+  workspaceKeyFromUrl,
 } from "../src/browserAdapter";
 import {
   allocatePort,
@@ -29,6 +32,7 @@ function withHarnessUrl(
       | "research-success"
       | "research-failure";
     missing?: string[];
+    conversationStyle?: "query" | "path";
   } = {},
 ): string {
   const url = new URL(baseUrl);
@@ -40,6 +44,9 @@ function withHarnessUrl(
   }
   if (options.missing && options.missing.length > 0) {
     url.searchParams.set("missing", options.missing.join(","));
+  }
+  if (options.conversationStyle === "query") {
+    url.searchParams.set("conversation_style", "query");
   }
   return url.toString();
 }
@@ -675,6 +682,24 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("normalizes legacy and current conversation urls to the same workspace", () => {
+    const legacy =
+      "https://chatgpt.com/?variant=live&conversation=conv-9";
+    const current = "https://chatgpt.com/c/conv-9?variant=live";
+
+    expect(conversationIdFromUrl(legacy)).toBe("conv-9");
+    expect(conversationIdFromUrl(current)).toBe("conv-9");
+    expect(workspaceKeyFromUrl(legacy)).toBe(
+      "https://chatgpt.com/?variant=live",
+    );
+    expect(workspaceKeyFromUrl(current)).toBe(
+      "https://chatgpt.com/?variant=live",
+    );
+    expect(resolveConversationUrl(legacy, "conv-9")).toBe(
+      "https://chatgpt.com/c/conv-9?variant=live",
+    );
+  });
+
   it("falls back to managed launch when attach mode is configured as managed_fallback", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -893,9 +918,12 @@ describe("browser adapter", () => {
     }));
 
     expect(state).toEqual({
-      currentUrl: withHarnessUrl(server.url, {
-        variant: "live",
-      }).concat(`&conversation=${result.conversation_id}`),
+      currentUrl: resolveConversationUrl(
+        withHarnessUrl(server.url, {
+          variant: "live",
+        }),
+        result.conversation_id,
+      ),
       composerReady: true,
       sendHidden: false,
       stopHidden: true,
@@ -1286,6 +1314,10 @@ describe("browser adapter", () => {
     expect(result.output_text).toBe(
       "Fake response for: complete while disconnected",
     );
+    expect(result.current_url).toContain(`/c/${result.conversation_id}`);
+    expect(conversationIdFromUrl(result.current_url)).toBe(
+      result.conversation_id,
+    );
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -1330,6 +1362,61 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("recovers research streaming when the live conversation moves to /c/<id>", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          scenario: "research-success",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { scenario: "research-success" }),
+      headless: true,
+    });
+
+    const states: string[] = [];
+    let closeTriggered = false;
+    const result = await adapter.research(
+      {
+        jobId: "job-research-recover-current-url",
+        query: "recover research after browser disconnect",
+        timeoutMs: 7_000,
+      },
+      async (update) => {
+        if (
+          !closeTriggered &&
+          (update.status === "waiting_for_sources" ||
+            (update.status === "running" &&
+              Boolean(update.chunk_text?.length)))
+        ) {
+          closeTriggered = true;
+          await adapter.getManagedPageForTest()!.context().browser()!.close();
+        }
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    expect(result.report_text).toContain(
+      "Research report for: recover research after browser disconnect",
+    );
+    expect(result.current_url).toContain(`/c/${result.conversation_id}`);
+    expect(conversationIdFromUrl(result.current_url)).toBe(
+      result.conversation_id,
+    );
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("streams ask responses to completion in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
     const adapter = await createTrackedAdapterForMode("attach", server.url);
@@ -1354,8 +1441,9 @@ describe("browser adapter", () => {
     );
     expect(result.conversation_id).toMatch(/^conv-/);
     expect(result.message_id).toMatch(/^msg-/);
-    expect(result.current_url).toContain(
-      `conversation=${result.conversation_id}`,
+    expect(result.current_url).toContain(`/c/${result.conversation_id}`);
+    expect(conversationIdFromUrl(result.current_url)).toBe(
+      result.conversation_id,
     );
 
     await adapter.shutdown();
@@ -1392,8 +1480,9 @@ describe("browser adapter", () => {
     expect(result.output_text).toBe("Fake response for: configure attach live");
     expect(result.artifacts).toHaveLength(1);
     expect(artifactBody).toContain("Uploads: brief.txt");
-    expect(result.current_url).toContain(
-      `conversation=${result.conversation_id}`,
+    expect(result.current_url).toContain(`/c/${result.conversation_id}`);
+    expect(conversationIdFromUrl(result.current_url)).toBe(
+      result.conversation_id,
     );
 
     await adapter.shutdown();
