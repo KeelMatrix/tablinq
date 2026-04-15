@@ -337,6 +337,41 @@ fn daemon_reports_browser_health_from_adapter() {
 }
 
 #[test]
+fn daemon_doctor_reports_attach_first_recovery_guidance_when_browser_is_not_running() {
+    let _guard = integration_lock();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let doctor = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Doctor,
+    )
+    .unwrap();
+
+    match doctor {
+        DaemonResponse::Doctor(report) => {
+            assert!(!report.browser.running);
+            assert!(
+                report
+                    .recovery_guidance
+                    .iter()
+                    .any(|item| item.contains("gpt browser attach"))
+            );
+            assert!(
+                report
+                    .recovery_guidance
+                    .iter()
+                    .any(|item| item.contains("gpt browser connection-info"))
+            );
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+}
+
+#[test]
 fn daemon_streams_ask_responses_and_persists_conversations() {
     if !browser_integration_prereqs_available() {
         eprintln!(

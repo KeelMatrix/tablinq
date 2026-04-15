@@ -339,3 +339,38 @@ fn cancelled_jobs_report_cancelled_status_in_job_detail() {
     );
     assert!(!detail.cancel_requested);
 }
+
+#[test]
+fn doctor_report_guides_attach_first_bootstrap_when_browser_not_running() {
+    let _guard = integration_lock();
+    let dir = tempdir().unwrap();
+
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let core = CoreService::new(config).unwrap();
+    let report = core.doctor_report().unwrap();
+
+    assert!(
+        report
+            .recovery_guidance
+            .iter()
+            .any(|item| item.contains("gpt browser attach"))
+    );
+    assert!(
+        report
+            .recovery_guidance
+            .iter()
+            .any(|item| item.contains("gpt browser connection-info"))
+    );
+}
+
+#[test]
+fn browser_reset_profile_is_rejected_in_attach_first_mode() {
+    let _guard = integration_lock();
+    let dir = tempdir().unwrap();
+
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let core = CoreService::new(config).unwrap();
+    let err = core.browser_reset_profile().unwrap_err();
+
+    assert!(format!("{err:#}").contains("managed browser recovery"));
+}

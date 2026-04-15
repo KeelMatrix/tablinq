@@ -6,8 +6,8 @@ use crate::db::Database;
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use shared_protocol::{
-    AckEvent, ArtifactList, ArtifactPullResult, AskCommand, AskResult, BrowserDoctor,
-    BrowserOpenRequest, BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot,
+    AckEvent, ArtifactList, ArtifactPullResult, AskCommand, AskResult, BrowserConnectionMode,
+    BrowserDoctor, BrowserOpenRequest, BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot,
     ConfigSnapshot, ConversationSummary, DoctorReport, ErrorCode, EventPayload, FailureBundle,
     GatewayRequestContext, HealthCheck, HealthStatus, JobDetail, JobKind, JobList, JobState,
     JobStatus, PullArtifactCommand, RequestHistory, RequestSummary, ResearchCommand,
@@ -281,14 +281,14 @@ impl CoreService {
                 }
                 db.upsert_session(
                     "browser-primary",
-                    "Managed browser",
+                    "Browser session",
                     Some(&result.current_url),
                     completed_at,
                 )?;
                 db.upsert_conversation(
                     &result.conversation_id,
                     "browser-primary",
-                    "Managed conversation",
+                    "Browser conversation",
                     Some(&result.current_url),
                     Some(&prepared.command.prompt),
                     Some(&result.output_text),
@@ -516,14 +516,14 @@ impl CoreService {
                 )?;
                 db.upsert_session(
                     "browser-primary",
-                    "Managed browser",
+                    "Browser session",
                     Some(&result.current_url),
                     completed_at,
                 )?;
                 db.upsert_conversation(
                     &result.conversation_id,
                     "browser-primary",
-                    "Managed conversation",
+                    "Browser conversation",
                     Some(&result.current_url),
                     Some(&prepared.command.query),
                     Some(&result.report_text),
@@ -636,7 +636,7 @@ impl CoreService {
             status: self.status_snapshot(),
             config: self.config.snapshot(),
             capabilities: browser_snapshot.capability_report.clone(),
-            browser: browser_snapshot,
+            browser: browser_snapshot.clone(),
             selector_pack: diagnostics
                 .as_ref()
                 .and_then(|value| value.selector_pack.clone())
@@ -648,7 +648,11 @@ impl CoreService {
             failure_bundle_count,
             latest_failure_bundle,
             browser_detection,
-            recovery_guidance: recovery_guidance(&self.config, health, diagnostics.as_ref()),
+            recovery_guidance: recovery_guidance(
+                &self.config,
+                &browser_snapshot,
+                diagnostics.as_ref(),
+            ),
         })
     }
 
@@ -864,7 +868,7 @@ impl CoreService {
         let snapshot = lock_browser(&self.browser)?.open(request)?;
         self.open_db()?.upsert_session(
             "browser-primary",
-            "Managed browser",
+            "Browser session",
             snapshot.current_url.as_deref(),
             Utc::now(),
         )?;
@@ -876,10 +880,19 @@ impl CoreService {
     }
 
     pub fn browser_logout(&self) -> Result<BrowserStatusSnapshot> {
-        let snapshot = lock_browser(&self.browser)?.logout()?;
+        let snapshot = if is_attach_primary_mode(self.config.browser_connection_mode()) {
+            let current = lock_browser(&self.browser)?.health()?;
+            lock_browser(&self.browser)?.open(BrowserOpenRequest {
+                target_url: Some(current.target_url),
+                browser_path: current.browser_path,
+                headless: Some(false),
+            })?
+        } else {
+            lock_browser(&self.browser)?.logout()?
+        };
         self.open_db()?.upsert_session(
             "browser-primary",
-            "Managed browser",
+            "Browser session",
             snapshot.current_url.as_deref(),
             Utc::now(),
         )?;
@@ -887,6 +900,11 @@ impl CoreService {
     }
 
     pub fn browser_reset_profile(&self) -> Result<BrowserStatusSnapshot> {
+        if !supports_managed_profile_reset(self.config.browser_connection_mode()) {
+            anyhow::bail!(
+                "browser reset-profile is only available for managed browser recovery; current mode is attach_first"
+            );
+        }
         lock_browser(&self.browser)?.reset_profile()
     }
 
@@ -1090,59 +1108,166 @@ fn health_snapshot(config: &AppConfig, browser: BrowserStatusSnapshot) -> Health
         authenticated: browser.authenticated,
         details: Some(if config.warm_mode() {
             format!(
-                "control plane ready; warm mode enabled; browser_running={}; extension_connected={}",
-                browser.running, browser.extension_connected
+                "control plane ready; warm mode enabled; attach_mode={:?}; browser_running={}; extension_connected={}",
+                browser.attach_mode, browser.running, browser.extension_connected
             )
         } else {
-            match browser.current_url {
-                Some(url) => format!(
-                    "control plane ready; managed tab at {url}; extension_connected={}",
-                    browser.extension_connected
-                ),
-                None => "control plane ready; browser runtime not started yet".to_owned(),
-            }
+            browser_health_details(&browser, config)
         }),
     }
 }
 
 fn recovery_guidance(
     config: &AppConfig,
-    health: HealthCheck,
+    browser: &BrowserStatusSnapshot,
     diagnostics: Option<&BrowserDiagnosticsSnapshot>,
 ) -> Vec<String> {
     let mut guidance = Vec::new();
+    let debug_endpoint = browser
+        .debug_endpoint
+        .clone()
+        .unwrap_or_else(|| config.browser_debug_endpoint());
     if config.safe_mode() {
         guidance.push(
             "safe mode is enabled; ask and research are disabled until config.toml is updated"
                 .to_owned(),
         );
     }
-    if !health.browser_connected {
-        guidance.push(
-            "browser is not running; use `gpt browser open` to launch or recreate the managed tab"
-                .to_owned(),
-        );
+    if is_attach_primary_mode(browser.attach_mode) {
+        if !browser.running {
+            guidance.push(format!(
+                "attach-first is not connected; start your normal browser with the debug endpoint at {debug_endpoint}, then run `gpt browser attach`"
+            ));
+            guidance.push(
+                "if attach still fails, run `gpt browser connection-info` and confirm the configured endpoint, target URL, and browser path"
+                    .to_owned(),
+            );
+        } else {
+            guidance.push(
+                "Tablinq is attached to your normal browser session; run `gpt browser open` to focus or open the configured target tab"
+                    .to_owned(),
+            );
+        }
+        if !browser.target_tab_found {
+            guidance.push(
+                "target tab not found; run `gpt browser open` to create or focus the configured ChatGPT tab"
+                    .to_owned(),
+            );
+        }
+        if !browser.authenticated {
+            guidance.push(
+                "the attached browser tab is signed out or blocked; sign in to ChatGPT in your normal browser and rerun `gpt browser attach`"
+                    .to_owned(),
+            );
+        }
+        if browser.extension_required && !browser.extension_connected {
+            guidance.push(
+                "the Tablinq extension is missing or disconnected in the attached browser profile; reload or reinstall the extension in that browser"
+                    .to_owned(),
+            );
+        }
+        if browser.running
+            && browser.target_tab_found
+            && browser.authenticated
+            && (!browser.extension_required || browser.extension_connected)
+        {
+            guidance.push("attached browser session is ready".to_owned());
+        }
     } else {
-        guidance.push("daemon can recreate the managed tab and relaunch the browser adapter when the page crashes or closes".to_owned());
-    }
-    if !health.authenticated {
-        guidance.push("authentication is required; open the managed browser and sign in before running ask or research".to_owned());
-    }
-    if !health.extension_connected {
-        guidance.push("extension probe is disconnected; reload the managed page or relaunch the browser to refresh capabilities".to_owned());
+        if !browser.running {
+            guidance.push(
+                "managed browser fallback is not running; use `gpt browser open` to start the managed browser tab"
+                    .to_owned(),
+            );
+        } else {
+            guidance.push(
+                "daemon can recreate the managed fallback tab and relaunch the browser adapter when the page crashes or closes"
+                    .to_owned(),
+            );
+        }
+        if !browser.authenticated {
+            guidance.push(
+                "managed browser fallback is signed out; open the managed browser and sign in before running ask or research"
+                    .to_owned(),
+            );
+        }
+        if !browser.extension_connected {
+            guidance.push(
+                "extension probe is disconnected in managed fallback mode; reload the page or relaunch the browser to refresh capabilities"
+                    .to_owned(),
+            );
+        }
     }
     if let Some(diagnostics) = diagnostics {
-        if !diagnostics.profile_accessible {
-            guidance.push("browser profile is not writable; close other managed browser instances or reset the profile directory".to_owned());
-        }
         if !diagnostics.browser_detected {
             guidance.push(
                 "no supported browser was detected; set an explicit browser path in config.toml"
                     .to_owned(),
             );
         }
+        if !diagnostics.profile_accessible && supports_managed_profile_reset(browser.attach_mode) {
+            guidance.push(
+                "browser profile is not writable; close other managed browser instances or run `gpt browser reset-profile`"
+                    .to_owned(),
+            );
+        }
     }
     guidance
+}
+
+fn browser_health_details(browser: &BrowserStatusSnapshot, config: &AppConfig) -> String {
+    if !browser.running {
+        return if is_attach_primary_mode(browser.attach_mode) {
+            format!(
+                "control plane ready; attach-first browser not connected; debug_endpoint={}",
+                browser
+                    .debug_endpoint
+                    .clone()
+                    .unwrap_or_else(|| config.browser_debug_endpoint())
+            )
+        } else {
+            "control plane ready; managed browser fallback not started yet".to_owned()
+        };
+    }
+
+    if is_attach_primary_mode(browser.attach_mode) {
+        if !browser.target_tab_found {
+            return "control plane ready; attached browser is connected but the target tab was not found"
+                .to_owned();
+        }
+        return match browser.current_url.as_deref() {
+            Some(url) => format!(
+                "control plane ready; attached tab at {url}; authenticated={}; extension_connected={}",
+                browser.authenticated, browser.extension_connected
+            ),
+            None => format!(
+                "control plane ready; attached browser is connected; authenticated={}; extension_connected={}",
+                browser.authenticated, browser.extension_connected
+            ),
+        };
+    }
+
+    match browser.current_url.as_deref() {
+        Some(url) => format!(
+            "control plane ready; managed fallback tab at {url}; extension_connected={}",
+            browser.extension_connected
+        ),
+        None => "control plane ready; managed browser fallback is connected".to_owned(),
+    }
+}
+
+fn is_attach_primary_mode(mode: BrowserConnectionMode) -> bool {
+    matches!(
+        mode,
+        BrowserConnectionMode::AttachFirst | BrowserConnectionMode::ManagedFallback
+    )
+}
+
+fn supports_managed_profile_reset(mode: BrowserConnectionMode) -> bool {
+    matches!(
+        mode,
+        BrowserConnectionMode::ManagedFallback | BrowserConnectionMode::ManagedOnly
+    )
 }
 
 fn default_selector_pack_summary() -> Option<SelectorPackSummary> {
