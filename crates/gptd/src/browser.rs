@@ -2,9 +2,10 @@ use crate::config::AppConfig;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
-    AskCommand, AskResult, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport, Effort,
-    EventPayload, JobStatus, Mode, ModelClass, ResearchCommand, ResearchResult,
-    SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry, StreamChunk, StreamChunkKind,
+    AskCommand, AskResult, AuthSource, BrowserOpenRequest, BrowserOwner, BrowserStatusSnapshot,
+    CapabilityReport, Effort, EventPayload, JobStatus, Mode, ModelClass, ResearchCommand,
+    ResearchResult, SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry, StreamChunk,
+    StreamChunkKind,
 };
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -91,6 +92,7 @@ impl BrowserManager {
                 headless,
             }) {
             Ok(snapshot) => {
+                let snapshot = normalize_snapshot(&self.config, snapshot);
                 self.last_snapshot = snapshot.clone();
                 Ok(snapshot)
             }
@@ -327,6 +329,7 @@ impl BrowserManager {
             .request(AdapterRequest::Health)
         {
             Ok(snapshot) => {
+                let snapshot = normalize_snapshot(&self.config, snapshot);
                 self.last_snapshot = snapshot.clone();
                 Ok(snapshot)
             }
@@ -1035,26 +1038,55 @@ fn idle_snapshot(
     target_url: Option<String>,
     browser_path: Option<String>,
 ) -> BrowserStatusSnapshot {
-    BrowserStatusSnapshot {
-        running: false,
-        browser_kind: if cfg!(windows) {
-            "msedge".to_owned()
-        } else {
-            "chromium".to_owned()
+    normalize_snapshot(
+        config,
+        BrowserStatusSnapshot {
+            running: false,
+            browser_kind: if cfg!(windows) {
+                "msedge".to_owned()
+            } else {
+                "chromium".to_owned()
+            },
+            profile_dir: config.paths.browser_profile_dir.display().to_string(),
+            downloads_dir: config.paths.downloads_dir.display().to_string(),
+            target_url: target_url.unwrap_or_else(|| config.browser_target_url().to_owned()),
+            current_url: None,
+            page_title: None,
+            page_ready: false,
+            authenticated: false,
+            reload_count: 0,
+            screenshot_path: None,
+            browser_path,
+            extension_connected: false,
+            capability_report: None,
+            attach_mode: config.browser_connection_mode(),
+            browser_owner: BrowserOwner::Managed,
+            cdp_attached: false,
+            target_tab_found: false,
+            target_tab_id: None,
+            debug_endpoint: Some(config.browser_debug_endpoint()),
+            auth_source: AuthSource::Unknown,
+            extension_required: config.browser_extension_required(),
         },
-        profile_dir: config.paths.browser_profile_dir.display().to_string(),
-        downloads_dir: config.paths.downloads_dir.display().to_string(),
-        target_url: target_url.unwrap_or_else(|| config.browser_target_url().to_owned()),
-        current_url: None,
-        page_title: None,
-        page_ready: false,
-        authenticated: false,
-        reload_count: 0,
-        screenshot_path: None,
-        browser_path,
-        extension_connected: false,
-        capability_report: None,
-    }
+    )
+}
+
+fn normalize_snapshot(
+    config: &AppConfig,
+    mut snapshot: BrowserStatusSnapshot,
+) -> BrowserStatusSnapshot {
+    snapshot.attach_mode = config.browser_connection_mode();
+    snapshot.browser_owner = BrowserOwner::Managed;
+    snapshot.cdp_attached = false;
+    snapshot.target_tab_found = snapshot.running && snapshot.page_ready;
+    snapshot.debug_endpoint = Some(config.browser_debug_endpoint());
+    snapshot.auth_source = if snapshot.authenticated {
+        AuthSource::Page
+    } else {
+        AuthSource::Unknown
+    };
+    snapshot.extension_required = config.browser_extension_required();
+    snapshot
 }
 
 fn resolve_adapter_runtime() -> Result<AdapterRuntime> {

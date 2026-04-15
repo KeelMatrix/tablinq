@@ -231,6 +231,9 @@ export interface BrowserAdapterOptions {
   defaultTargetUrl: string;
   defaultBrowserPath?: string | null;
   extensionDir?: string | null;
+  connectionMode?: "attach_first" | "managed_fallback" | "managed_only" | null;
+  debugEndpoint?: string | null;
+  extensionRequired?: boolean;
 }
 
 export interface BrowserStatusSnapshot {
@@ -248,6 +251,14 @@ export interface BrowserStatusSnapshot {
   browser_path: string | null;
   extension_connected: boolean;
   capability_report: CapabilityReportPayload | null;
+  attach_mode: "attach_first" | "managed_fallback" | "managed_only";
+  browser_owner: "external" | "managed";
+  cdp_attached: boolean;
+  target_tab_found: boolean;
+  target_tab_id: string | null;
+  debug_endpoint: string | null;
+  auth_source: "page" | "extension" | "unknown";
+  extension_required: boolean;
 }
 
 export interface BrowserLaunchConfig {
@@ -325,6 +336,12 @@ export class BrowserAdapter {
   private readonly defaultTargetUrl: string;
   private readonly defaultBrowserPath: string | null;
   private readonly extensionDir: string | null;
+  private readonly connectionMode:
+    | "attach_first"
+    | "managed_fallback"
+    | "managed_only";
+  private readonly debugEndpoint: string | null;
+  private readonly extensionRequired: boolean;
   private currentTargetUrl: string;
   private currentBrowserPath: string | null;
   private currentHeadless = false;
@@ -359,6 +376,9 @@ export class BrowserAdapter {
     this.defaultTargetUrl = options.defaultTargetUrl;
     this.defaultBrowserPath = options.defaultBrowserPath ?? null;
     this.extensionDir = resolveExtensionDir(options.extensionDir);
+    this.connectionMode = options.connectionMode ?? "attach_first";
+    this.debugEndpoint = options.debugEndpoint ?? "http://127.0.0.1:9222";
+    this.extensionRequired = options.extensionRequired ?? true;
     this.currentTargetUrl = options.defaultTargetUrl;
     this.currentBrowserPath = options.defaultBrowserPath ?? null;
     this.capabilityCachePath = resolve(
@@ -417,6 +437,15 @@ export class BrowserAdapter {
       browser_path: this.currentBrowserPath,
       extension_connected: this.extensionConnected,
       capability_report: this.lastCapabilityReport,
+      attach_mode: this.connectionMode,
+      browser_owner: "managed",
+      cdp_attached: false,
+      target_tab_found: running,
+      target_tab_id: null,
+      debug_endpoint: this.debugEndpoint,
+      auth_source:
+        running && inferAuthenticated(page!.url()) ? "page" : "unknown",
+      extension_required: this.extensionRequired,
     };
   }
 
@@ -442,6 +471,15 @@ export class BrowserAdapter {
       browser_path: this.currentBrowserPath,
       extension_connected: this.extensionConnected,
       capability_report: this.lastCapabilityReport,
+      attach_mode: this.connectionMode,
+      browser_owner: "managed",
+      cdp_attached: false,
+      target_tab_found: running,
+      target_tab_id: null,
+      debug_endpoint: this.debugEndpoint,
+      auth_source:
+        running && inferAuthenticated(page!.url()) ? "page" : "unknown",
+      extension_required: this.extensionRequired,
     };
   }
 
@@ -1902,7 +1940,15 @@ function detectWindowsBrowserExecutable(): string | null {
 
   const edgeCandidates = [
     ...(localAppData
-      ? [resolve(localAppData, "Microsoft", "Edge", "Application", "msedge.exe")]
+      ? [
+          resolve(
+            localAppData,
+            "Microsoft",
+            "Edge",
+            "Application",
+            "msedge.exe",
+          ),
+        ]
       : []),
     ...programFiles.map((base) =>
       resolve(base, "Microsoft", "Edge", "Application", "msedge.exe"),

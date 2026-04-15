@@ -281,6 +281,14 @@ async function main() {
         browser_path: args.defaultBrowserPath ?? null,
         extension_connected: false,
         capability_report: null,
+        attach_mode: "attach_first" as const,
+        browser_owner: "managed" as const,
+        cdp_attached: false,
+        target_tab_found: false,
+        target_tab_id: null,
+        debug_endpoint: "http://127.0.0.1:9222",
+        auth_source: "unknown" as const,
+        extension_required: true,
       }));
       response = {
         type: "response",
