@@ -1017,6 +1017,7 @@ pub struct StatePaths {
     pub db_dir: PathBuf,
     pub db_path: PathBuf,
     pub browser_profile_dir: PathBuf,
+    pub chrome_attach_profile_dir: PathBuf,
     pub downloads_dir: PathBuf,
     pub crash_bundles_dir: PathBuf,
     pub lock_path: PathBuf,
@@ -1088,6 +1089,7 @@ pub fn build_state_paths(state_root: impl AsRef<Path>) -> StatePaths {
     let logs_dir = state_root.join("logs");
     let db_dir = state_root.join("db");
     let browser_profile_dir = state_root.join("browser-profile");
+    let chrome_attach_profile_dir = state_root.join("chrome-attach-profile");
     let downloads_dir = state_root.join("downloads");
     let crash_bundles_dir = state_root.join("crash-bundles");
 
@@ -1102,6 +1104,7 @@ pub fn build_state_paths(state_root: impl AsRef<Path>) -> StatePaths {
         logs_dir,
         db_dir,
         browser_profile_dir,
+        chrome_attach_profile_dir,
         downloads_dir,
         crash_bundles_dir,
     }
@@ -1337,5 +1340,15 @@ mod tests {
         assert!(json.contains("\"browser_owner\": \"managed\""));
         assert!(json.contains("\"auth_source\": \"page\""));
         assert!(json.contains("\"target_workspace_key\": \"https://chatgpt.com/\""));
+    }
+
+    #[test]
+    fn build_state_paths_includes_dedicated_chrome_attach_profile_dir() {
+        let root = PathBuf::from("state-root");
+        let paths = build_state_paths(&root);
+
+        assert_eq!(paths.chrome_attach_profile_dir, root.join("chrome-attach-profile"));
+        assert!(paths.chrome_attach_profile_dir.starts_with(&root));
+        assert_ne!(paths.chrome_attach_profile_dir, paths.browser_profile_dir);
     }
 }

@@ -294,6 +294,7 @@ fn ensure_directories(paths: &StatePaths) -> Result<()> {
         &paths.logs_dir,
         &paths.db_dir,
         &paths.browser_profile_dir,
+        &paths.chrome_attach_profile_dir,
         &paths.downloads_dir,
         &paths.crash_bundles_dir,
     ] {

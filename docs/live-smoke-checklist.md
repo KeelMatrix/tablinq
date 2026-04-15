@@ -4,7 +4,7 @@ This checklist stays out of CI. Use it when you want to validate the attach-firs
 
 ## Preconditions
 
-- install locally with `scripts/install.ps1` or `./scripts/install.sh`
+- install locally with `scripts/install.ps1` on Windows or `./scripts/package.sh && ./scripts/install.sh` on Unix-like systems
 - start the daemon with `gpt daemon start`
 - start the gateway with `gpt gateway start`
 - load the unpacked Tablinq extension into your normal Chrome or Edge profile

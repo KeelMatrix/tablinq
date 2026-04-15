@@ -11,23 +11,19 @@ The intended production workflow is:
 - install Tablinq
 - load the Tablinq extension into your normal Chrome or Edge profile
 - start the daemon and gateway
-- start your normal browser in local-debug mode with `gpt browser start-debug`
+- start an attachable browser session with `gpt browser start-debug`
 - sign in manually at `chatgpt.com`
 - let Tablinq attach to that existing browser session with `gpt browser attach`
 
 The old Playwright-owned managed-login flow is not the normal path anymore. It was abandoned as the default because Cloudflare and anti-bot protection at `chatgpt.com` made automation-owned login and startup the wrong operational model. Tablinq still uses Playwright internally for attach, screenshots, uploads, downloads, and recovery, but your actual ChatGPT session is expected to be a user-owned browser session.
+
+On current Chrome, `gpt browser start-debug` launches a dedicated persistent real Chrome profile under the Tablinq state root so Chrome will expose the local debug endpoint. This remains the attach-first model, not managed fallback. You need to sign in once in that dedicated Chrome attach profile before running `gpt browser attach`.
 
 ## Prerequisites
 
 - Rust
 - Node.js 20 or newer
 - `pnpm`
-
-Install workspace dependencies first:
-
-```bash
-pnpm install
-```
 
 ## What gets installed
 
@@ -41,43 +37,37 @@ A normal package install gives you:
 
 ## Windows 10-11
 
-Build and install:
+From a repo checkout, run the one entry point:
 
 ```powershell
-scripts/package.ps1
 scripts/install.ps1
 ```
 
-Then:
+What `scripts/install.ps1` does:
 
-1. Load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension` into your normal Edge or Chrome profile.
-2. Start the daemon:
-   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe daemon start`
-3. Start the gateway:
-   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe gateway start`
-4. Fully close Edge or Chrome so the debug flags can take effect cleanly.
-5. Start your normal browser in attachable mode:
-   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser start-debug`
-6. Sign in manually at `https://chatgpt.com/` in that same browser profile.
-7. Attach and verify:
-   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`
+- checks for `cargo`, `node`, and `pnpm`
+- runs `pnpm install`
+- builds and packages Tablinq
+- replaces the existing install under `%LOCALAPPDATA%\Tablinq\install`
+- initializes the state root under `%LOCALAPPDATA%\Tablinq`
+- registers the user-level native messaging host for Edge and Chrome
+- updates the user `PATH` to include `%LOCALAPPDATA%\Tablinq\install\bin`
+- writes startup helper scripts and starts the daemon and gateway
+
+What still requires you:
+
+1. Remove any previously loaded Tablinq extension from Chrome or Edge if it is still present.
+2. Load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension`.
+3. Fully close Edge or Chrome.
+4. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser start-debug`.
+5. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+   On current Chrome this is the dedicated Tablinq Chrome attach profile under `%LOCALAPPDATA%\Tablinq`; Edge keeps the existing flow.
+6. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`.
+7. Verify with:
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser connection-info`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe status`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe doctor`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe capabilities`
-
-Optional installer flags:
-
-- `scripts/install.ps1 -AutoStartDaemon`
-- `scripts/install.ps1 -AutoStartGateway`
-- `scripts/install.ps1 -AutoStartDaemon -AutoStartGateway`
-
-What the Windows installer does:
-
-- installs the packaged layout under `%LOCALAPPDATA%\Tablinq\install`
-- initializes the state root under `%LOCALAPPDATA%\Tablinq`
-- registers the user-level native messaging host for Edge and Chrome
-- writes startup helper scripts under `%LOCALAPPDATA%\Tablinq\install\startup`
 
 ## Unix-like systems
 
@@ -99,6 +89,7 @@ Then:
 5. Start your normal browser in attachable mode:
    - `~/.local/share/tablinq/install/bin/gpt browser start-debug`
 6. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+   On current Chrome this is the dedicated Tablinq Chrome attach profile under the state root; Edge keeps the existing flow.
 7. Attach and verify:
    - `~/.local/share/tablinq/install/bin/gpt browser attach`
    - `~/.local/share/tablinq/install/bin/gpt browser connection-info`
@@ -110,7 +101,7 @@ The Unix installer prepares install and state directories and writes startup hel
 
 ## First-run checks
 
-After install, run:
+After install and attach, run:
 
 - `gpt status`
 - `gpt doctor`
