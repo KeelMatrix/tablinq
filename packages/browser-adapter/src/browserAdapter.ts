@@ -99,6 +99,7 @@ const NAVIGATION_TIMEOUT_MS = 20_000;
 const ASK_TIMEOUT_MS = 25_000;
 const RESEARCH_TIMEOUT_MS = 60_000;
 const PROBE_TIMEOUT_MS = 5_000;
+const ATTACH_PROBE_GRACE_MS = 1_500;
 const INTERACTION_TIMEOUT_MS = 7_500;
 const UPLOAD_ACK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 10_000;
@@ -258,9 +259,11 @@ export interface BrowserStatusSnapshot {
   cdp_attached: boolean;
   target_tab_found: boolean;
   target_tab_id: string | null;
+  target_workspace_key: string | null;
   debug_endpoint: string | null;
   auth_source: "page" | "extension" | "unknown";
   extension_required: boolean;
+  last_capability_report_at: string | null;
 }
 
 export interface BrowserLaunchConfig {
@@ -330,6 +333,18 @@ interface CapabilityCacheFile {
   telemetry: StrategyTelemetryStat[];
 }
 
+interface TargetPageState {
+  page_id: string;
+  last_seen_url: string | null;
+  workspace_key: string | null;
+  extension_connected: boolean;
+  capability_report: CapabilityReportPayload | null;
+  ui_signature: string | null;
+  dom_neighborhoods: DomNeighborhoodSnapshot[];
+  last_capability_report_at: string | null;
+  probe_ready_until_ms: number;
+}
+
 export class BrowserAdapter {
   private browser: Browser | undefined;
   private context: BrowserContext | undefined;
@@ -357,6 +372,7 @@ export class BrowserAdapter {
   private cdpAttached = false;
   private readonly observedPages = new WeakSet<Page>();
   private readonly observedContexts = new WeakSet<BrowserContext>();
+  private readonly pageStates = new Map<string, TargetPageState>();
   private extensionConnected = false;
   private lastCapabilityReport: CapabilityReportPayload | null = null;
   private lastUiSignature: string | null = null;
@@ -423,10 +439,7 @@ export class BrowserAdapter {
     if (running) {
       await this.refreshCapabilities(page!);
     } else {
-      this.extensionConnected = false;
-      this.lastCapabilityReport = null;
-      this.lastDomNeighborhoods = [];
-      this.lastUiSignature = null;
+      this.clearActiveCapabilityState();
     }
 
     return {
@@ -449,10 +462,12 @@ export class BrowserAdapter {
       cdp_attached: this.cdpAttached,
       target_tab_found: running,
       target_tab_id: running ? this.targetPageId : null,
+      target_workspace_key: running ? this.activeWorkspaceKey() : null,
       debug_endpoint: this.debugEndpoint,
       auth_source:
         running && inferAuthenticated(page!.url()) ? "page" : "unknown",
       extension_required: this.extensionRequired,
+      last_capability_report_at: running ? this.activeCapabilityReportedAt() : null,
     };
   }
 
@@ -480,10 +495,12 @@ export class BrowserAdapter {
       cdp_attached: this.cdpAttached,
       target_tab_found: running,
       target_tab_id: running ? this.targetPageId : null,
+      target_workspace_key: running ? this.activeWorkspaceKey() : null,
       debug_endpoint: this.debugEndpoint,
       auth_source:
         running && inferAuthenticated(page!.url()) ? "page" : "unknown",
       extension_required: this.extensionRequired,
+      last_capability_report_at: running ? this.activeCapabilityReportedAt() : null,
     };
   }
 
@@ -523,10 +540,8 @@ export class BrowserAdapter {
     this.browserOwner =
       this.connectionMode === "managed_only" ? "managed" : "external";
     this.cdpAttached = false;
-    this.extensionConnected = false;
-    this.lastCapabilityReport = null;
-    this.lastDomNeighborhoods = [];
-    this.lastUiSignature = null;
+    this.pageStates.clear();
+    this.clearActiveCapabilityState();
     return this.health();
   }
 
@@ -545,8 +560,119 @@ export class BrowserAdapter {
     return process.platform === "win32" ? "msedge" : "chromium";
   }
 
+  private activeWorkspaceKey(): string | null {
+    return this.activePageState()?.workspace_key ?? null;
+  }
+
+  private activeCapabilityReportedAt(): string | null {
+    return this.activePageState()?.last_capability_report_at ?? null;
+  }
+
+  private activePageState(): TargetPageState | undefined {
+    return this.targetPageId ? this.pageStates.get(this.targetPageId) : undefined;
+  }
+
   getLastDomNeighborhoodsForTest(): DomNeighborhoodSnapshot[] {
     return [...this.lastDomNeighborhoods];
+  }
+
+  private clearActiveCapabilityState(): void {
+    this.extensionConnected = false;
+    this.lastCapabilityReport = null;
+    this.lastDomNeighborhoods = [];
+    this.lastUiSignature = null;
+  }
+
+  private ensurePageState(page: Page): TargetPageState {
+    const pageId = buildTargetPageId(page);
+    const existing = this.pageStates.get(pageId);
+    if (existing) {
+      return existing;
+    }
+
+    const state: TargetPageState = {
+      page_id: pageId,
+      last_seen_url: safePageUrl(page),
+      workspace_key: safePageUrl(page)
+        ? workspaceKeyFromUrl(safePageUrl(page)!)
+        : null,
+      extension_connected: false,
+      capability_report: null,
+      ui_signature: null,
+      dom_neighborhoods: [],
+      last_capability_report_at: null,
+      probe_ready_until_ms: this.cdpAttached ? Date.now() + ATTACH_PROBE_GRACE_MS : 0,
+    };
+    this.pageStates.set(pageId, state);
+    return state;
+  }
+
+  private updatePageLocationState(page: Page): TargetPageState {
+    const state = this.ensurePageState(page);
+    const currentUrl = safePageUrl(page);
+    state.last_seen_url = currentUrl;
+    state.workspace_key = currentUrl ? workspaceKeyFromUrl(currentUrl) : null;
+    if (this.cdpAttached) {
+      state.probe_ready_until_ms = Math.max(
+        state.probe_ready_until_ms,
+        Date.now() + ATTACH_PROBE_GRACE_MS,
+      );
+    }
+    return state;
+  }
+
+  private recordCapabilitySuccess(
+    page: Page,
+    message: CapabilityBridgeMessage,
+  ): TargetPageState {
+    const state = this.updatePageLocationState(page);
+    state.extension_connected = true;
+    state.capability_report = message.report;
+    state.ui_signature = message.runtime.ui_signature;
+    state.dom_neighborhoods = message.runtime.dom_neighborhoods;
+    state.last_capability_report_at = message.report.reported_at;
+    this.strategyTelemetry.set(
+      message.runtime.ui_signature,
+      message.runtime.strategy_matches,
+    );
+    this.recordStrategyStats(message.runtime.strategy_matches);
+    this.persistCapabilitySnapshot(page.url(), message);
+    if (this.targetPageId === state.page_id) {
+      this.applyPageStateToActiveTarget(state);
+    }
+    return state;
+  }
+
+  private recordCapabilityFailure(page: Page): TargetPageState {
+    const state = this.updatePageLocationState(page);
+    state.extension_connected = false;
+    state.capability_report = null;
+    state.ui_signature = null;
+    state.dom_neighborhoods = [];
+    state.last_capability_report_at = null;
+    if (this.targetPageId === state.page_id) {
+      this.applyPageStateToActiveTarget(state);
+    }
+    return state;
+  }
+
+  private applyPageStateToActiveTarget(state: TargetPageState | undefined): void {
+    if (!state) {
+      this.clearActiveCapabilityState();
+      return;
+    }
+    this.extensionConnected = state.extension_connected;
+    this.lastCapabilityReport = state.capability_report;
+    this.lastUiSignature = state.ui_signature;
+    this.lastDomNeighborhoods = [...state.dom_neighborhoods];
+  }
+
+  private activateTargetPage(page: Page, createdByAdapter: boolean): void {
+    const state = this.updatePageLocationState(page);
+    this.managedPage = page;
+    this.targetPageId = state.page_id;
+    this.targetPageCreatedByAdapter = createdByAdapter;
+    this.applyPageStateToActiveTarget(state);
   }
 
   async diagnostics(bundleDir?: string): Promise<BrowserDiagnosticsSnapshot> {
@@ -1463,6 +1589,16 @@ export class BrowserAdapter {
     }
 
     if (this.managedPage && !this.managedPage.isClosed()) {
+      if (this.cdpAttached) {
+        const preferred = await this.findAttachedTargetPage(this.currentTargetUrl);
+        if (preferred && preferred !== this.managedPage) {
+          this.context = preferred.context();
+          this.observeContext(this.context);
+          this.attachPage(preferred, true);
+          this.targetPageCreatedByAdapter = false;
+          return;
+        }
+      }
       return;
     }
 
@@ -1472,8 +1608,7 @@ export class BrowserAdapter {
     if (existing) {
       this.context = existing.context();
       this.observeContext(this.context);
-      this.attachPage(existing);
-      this.managedPage = existing;
+      this.attachPage(existing, true);
       this.targetPageCreatedByAdapter = false;
       return;
     }
@@ -1484,23 +1619,29 @@ export class BrowserAdapter {
     }
   }
 
-  private attachPage(page: Page): void {
+  private attachPage(page: Page, activate = false): void {
     if (this.observedPages.has(page)) {
-      this.managedPage = page;
-      this.targetPageId = buildTargetPageId(page);
+      this.updatePageLocationState(page);
+      if (activate) {
+        this.activateTargetPage(page, this.targetPageCreatedByAdapter);
+      }
       return;
     }
     this.observedPages.add(page);
+    const pageState = this.updatePageLocationState(page);
+    const pageId = pageState.page_id;
 
     const mainFrame = page.mainFrame();
-    let seenInitialNavigation = false;
+    let seenInitialNavigation = Boolean(page.url() && page.url() !== "about:blank");
     page.on("framenavigated", (frame) => {
       if (frame !== mainFrame) {
         return;
       }
+      const state = this.updatePageLocationState(page);
       if (!page.isClosed() && this.managedPage === page) {
         this.currentTargetUrl = page.url();
-        this.targetPageId = buildTargetPageId(page);
+        this.targetPageId = state.page_id;
+        this.applyPageStateToActiveTarget(state);
       }
       if (seenInitialNavigation) {
         this.reloadCount += 1;
@@ -1509,21 +1650,26 @@ export class BrowserAdapter {
       }
     });
     page.on("close", () => {
+      this.pageStates.delete(pageId);
       if (this.managedPage === page) {
         this.managedPage = undefined;
         this.targetPageId = null;
         this.targetPageCreatedByAdapter = false;
+        this.clearActiveCapabilityState();
       }
     });
     page.on("crash", () => {
+      this.pageStates.delete(pageId);
       if (this.managedPage === page) {
         this.managedPage = undefined;
         this.targetPageId = null;
         this.targetPageCreatedByAdapter = false;
+        this.clearActiveCapabilityState();
       }
     });
-    this.managedPage = page;
-    this.targetPageId = buildTargetPageId(page);
+    if (activate) {
+      this.activateTargetPage(page, this.targetPageCreatedByAdapter);
+    }
   }
 
   private async attachToExistingBrowser(): Promise<void> {
@@ -1562,10 +1708,8 @@ export class BrowserAdapter {
       this.targetPageId = null;
       this.targetPageCreatedByAdapter = false;
       this.cdpAttached = false;
-      this.extensionConnected = false;
-      this.lastCapabilityReport = null;
-      this.lastDomNeighborhoods = [];
-      this.lastUiSignature = null;
+      this.pageStates.clear();
+      this.clearActiveCapabilityState();
     });
     for (const existingContext of this.browser.contexts()) {
       this.observeContext(existingContext);
@@ -1613,7 +1757,7 @@ export class BrowserAdapter {
     this.cdpAttached = false;
     this.observeContext(this.context);
     for (const page of this.context.pages()) {
-      this.attachPage(page);
+      this.attachPage(page, !this.managedPage);
     }
   }
 
@@ -1629,10 +1773,7 @@ export class BrowserAdapter {
         this.managedPage = undefined;
         this.targetPageId = null;
         this.targetPageCreatedByAdapter = false;
-        this.extensionConnected = false;
-        this.lastCapabilityReport = null;
-        this.lastDomNeighborhoods = [];
-        this.lastUiSignature = null;
+        this.clearActiveCapabilityState();
       }
     });
     context.on("page", (page) => {
@@ -1646,8 +1787,7 @@ export class BrowserAdapter {
       if (existing) {
         this.context = existing.context();
         this.observeContext(this.context);
-        this.attachPage(existing);
-        this.managedPage = existing;
+        this.attachPage(existing, true);
         this.targetPageCreatedByAdapter = false;
         await existing.bringToFront().catch(() => undefined);
         return existing;
@@ -1668,8 +1808,7 @@ export class BrowserAdapter {
     }
 
     const page = await this.context.newPage();
-    this.attachPage(page);
-    this.managedPage = page;
+    this.attachPage(page, true);
     this.targetPageCreatedByAdapter = true;
     return page;
   }
@@ -1678,6 +1817,13 @@ export class BrowserAdapter {
     page: Page,
     targetUrl: string,
   ): Promise<void> {
+    if (this.cdpAttached && matchesTargetWorkspace(page.url(), targetUrl)) {
+      await page.waitForLoadState("domcontentloaded", {
+        timeout: NAVIGATION_TIMEOUT_MS,
+      });
+      return;
+    }
+
     if (page.url() !== targetUrl) {
       await page.goto(targetUrl, {
         waitUntil: "domcontentloaded",
@@ -1711,17 +1857,22 @@ export class BrowserAdapter {
       !this.managedPage.isClosed() &&
       candidates.includes(this.managedPage)
     ) {
-      return this.managedPage;
-    }
-
-    for (const page of candidates) {
-      await this.refreshCapabilities(page);
-      if (this.extensionConnected) {
-        return page;
+      const activeState = await this.refreshCapabilities(this.managedPage);
+      if (activeState?.extension_connected) {
+        return this.managedPage;
       }
     }
 
-    return candidates.at(-1);
+    let fallback: Page | undefined;
+    for (const page of candidates) {
+      const state = await this.refreshCapabilities(page);
+      if (state?.extension_connected) {
+        return page;
+      }
+      fallback = page;
+    }
+
+    return fallback ?? candidates.at(-1);
   }
 
   private async closeAttachedTargetPage(page: Page): Promise<void> {
@@ -1739,22 +1890,24 @@ export class BrowserAdapter {
     await page.close().catch(() => undefined);
   }
 
-  private async refreshCapabilities(page: Page): Promise<void> {
+  private async refreshCapabilities(
+    page: Page,
+  ): Promise<TargetPageState | undefined> {
     if (page.isClosed()) {
-      this.extensionConnected = false;
-      this.lastCapabilityReport = null;
-      this.lastDomNeighborhoods = [];
-      this.lastUiSignature = null;
-      return;
+      return undefined;
     }
 
-    const preferredStrategies = this.lastUiSignature
-      ? (this.strategyTelemetry.get(this.lastUiSignature) ?? {})
+    const pageState = this.updatePageLocationState(page);
+    const preferredStrategies = pageState.ui_signature
+      ? (this.strategyTelemetry.get(pageState.ui_signature) ?? {})
       : (this.capabilityCache.workspaces[workspaceKeyFromUrl(page.url())]
           ?.preferred_strategies ?? {});
     const selectorPack = this.ensureSelectorPackLoaded();
+    const probeDeadline = this.cdpAttached
+      ? Math.max(pageState.probe_ready_until_ms, Date.now())
+      : Date.now();
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
       try {
         await page.waitForLoadState("domcontentloaded", {
           timeout: PROBE_TIMEOUT_MS,
@@ -1784,29 +1937,30 @@ export class BrowserAdapter {
             } satisfies ProbeDocumentOptions,
           },
         );
-        this.extensionConnected = true;
-        this.lastCapabilityReport = message.report;
-        this.lastUiSignature = message.runtime.ui_signature;
-        this.lastDomNeighborhoods = message.runtime.dom_neighborhoods;
-        this.strategyTelemetry.set(
-          message.runtime.ui_signature,
-          message.runtime.strategy_matches,
-        );
-        this.recordStrategyStats(message.runtime.strategy_matches);
-        this.persistCapabilitySnapshot(page.url(), message);
-        return;
+        if (!hasUsableCapabilityReport(message.report)) {
+          if (this.cdpAttached && Date.now() < probeDeadline) {
+            await sleep(150);
+            continue;
+          }
+          if (this.cdpAttached) {
+            return this.recordCapabilityFailure(page);
+          }
+        }
+        return this.recordCapabilitySuccess(page, message);
       } catch (error) {
         if (attempt < 2 && isTransientPageError(error)) {
           await sleep(150 * (attempt + 1));
           continue;
         }
-        this.extensionConnected = false;
-        this.lastCapabilityReport = null;
-        this.lastDomNeighborhoods = [];
-        this.lastUiSignature = null;
-        return;
+        if (this.cdpAttached && Date.now() < probeDeadline) {
+          await sleep(150);
+          continue;
+        }
+        return this.recordCapabilityFailure(page);
       }
     }
+
+    return this.recordCapabilityFailure(page);
   }
 
   private hydrateCapabilityCache(): void {
@@ -2786,6 +2940,10 @@ function matchesTargetWorkspace(pageUrl: string, targetUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+function hasUsableCapabilityReport(report: CapabilityReportPayload): boolean {
+  return report.matrix.composer_ready || report.matrix.submit_available;
 }
 
 function buildTargetPageId(page: Page): string {

@@ -10,7 +10,7 @@ export interface BridgeStatus {
 }
 
 interface RuntimeMessageSenderLike {
-  tab?: { id?: number };
+  tab?: { id?: number; url?: string };
 }
 
 interface ChromeRuntimeLike {
@@ -113,14 +113,15 @@ export function createBridgeController(
 
   return {
     describe: () => ({ ...status }),
-    handleMessage: async (message: CapabilityBridgeMessage) => {
+    handleMessage: async (message: CapabilityBridgeMessage, sender) => {
+      const annotatedMessage = annotateMessage(message, sender);
       status.last_reported_at = message.report.reported_at;
 
       if (
         transport === "native_messaging" &&
         chromeLike?.runtime?.sendNativeMessage
       ) {
-        chromeLike.runtime.sendNativeMessage(nativeHostName, message);
+        chromeLike.runtime.sendNativeMessage(nativeHostName, annotatedMessage);
         status.connected = true;
         status.last_error = null;
         syncStatus();
@@ -144,7 +145,7 @@ export function createBridgeController(
           });
         }
 
-        connection.send(JSON.stringify(message));
+        connection.send(JSON.stringify(annotatedMessage));
         status.connected = true;
         status.last_error = null;
         syncStatus();
@@ -172,6 +173,34 @@ export function installServiceWorkerBridge(
 
 function pickTransport(webSocketUrl?: string): BridgeTransport {
   return webSocketUrl ? "websocket_dev" : "native_messaging";
+}
+
+function annotateMessage(
+  message: CapabilityBridgeMessage,
+  sender?: RuntimeMessageSenderLike,
+): CapabilityBridgeMessage {
+  const url = sender?.tab?.url ?? null;
+  return {
+    ...message,
+    tab: {
+      id: sender?.tab?.id ?? null,
+      url,
+      workspace_key: url ? workspaceKeyFromUrl(url) : null,
+    },
+  };
+}
+
+function workspaceKeyFromUrl(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    const params = new URLSearchParams(url.search);
+    params.delete("conversation");
+    params.delete("scenario");
+    const query = params.toString();
+    return `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+  } catch {
+    return rawUrl;
+  }
 }
 
 if ((globalThis as { chrome?: ChromeLike }).chrome?.runtime?.onMessage) {
