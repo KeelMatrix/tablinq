@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
-    CONFIG_VERSION, ConfigSnapshot, GatewayConfigSnapshot, StatePaths, build_state_paths,
-    resolve_state_root,
+    BrowserConnectionMode, CONFIG_VERSION, ConfigSnapshot, GatewayConfigSnapshot, StatePaths,
+    build_state_paths, resolve_state_root,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -29,8 +29,15 @@ pub struct FileConfig {
     pub version: Option<u32>,
     pub warm_mode: Option<bool>,
     pub safe_mode: Option<bool>,
+    pub browser_connection_mode: Option<BrowserConnectionMode>,
+    pub browser_debug_endpoint: Option<String>,
+    pub browser_debug_host: Option<String>,
+    pub browser_debug_port: Option<u16>,
+    pub browser_channel: Option<String>,
     pub browser_target_url: Option<String>,
     pub browser_path: Option<String>,
+    pub browser_extension_required: Option<bool>,
+    pub browser_auto_open_target_tab: Option<bool>,
     pub gateway: Option<GatewayFileConfig>,
 }
 
@@ -69,6 +76,13 @@ impl AppConfig {
             safe_mode: self.safe_mode(),
             browser_target_url: self.browser_target_url().to_owned(),
             browser_path: self.browser_path().map(ToOwned::to_owned),
+            browser_connection_mode: self.browser_connection_mode(),
+            browser_debug_endpoint: self.browser_debug_endpoint(),
+            browser_debug_host: self.browser_debug_host().to_owned(),
+            browser_debug_port: self.browser_debug_port(),
+            browser_channel: self.browser_channel().to_owned(),
+            browser_extension_required: self.browser_extension_required(),
+            browser_auto_open_target_tab: self.browser_auto_open_target_tab(),
             gateway: GatewayConfigSnapshot {
                 host: self.gateway_host().to_owned(),
                 port: self.gateway_port(),
@@ -93,6 +107,49 @@ impl AppConfig {
         self.file.safe_mode.unwrap_or(false)
     }
 
+    pub fn browser_connection_mode(&self) -> BrowserConnectionMode {
+        self.file
+            .browser_connection_mode
+            .unwrap_or(BrowserConnectionMode::AttachFirst)
+    }
+
+    pub fn browser_debug_endpoint(&self) -> String {
+        if let Some(value) = self
+            .file
+            .browser_debug_endpoint
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            return value.to_owned();
+        }
+
+        format!(
+            "http://{}:{}",
+            self.browser_debug_host(),
+            self.browser_debug_port()
+        )
+    }
+
+    pub fn browser_debug_host(&self) -> &str {
+        self.file
+            .browser_debug_host
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("127.0.0.1")
+    }
+
+    pub fn browser_debug_port(&self) -> u16 {
+        self.file.browser_debug_port.unwrap_or(9222)
+    }
+
+    pub fn browser_channel(&self) -> &str {
+        self.file
+            .browser_channel
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(if cfg!(windows) { "msedge" } else { "chrome" })
+    }
+
     pub fn browser_target_url(&self) -> &str {
         self.file
             .browser_target_url
@@ -106,6 +163,14 @@ impl AppConfig {
             .browser_path
             .as_deref()
             .filter(|value| !value.trim().is_empty())
+    }
+
+    pub fn browser_extension_required(&self) -> bool {
+        self.file.browser_extension_required.unwrap_or(true)
+    }
+
+    pub fn browser_auto_open_target_tab(&self) -> bool {
+        self.file.browser_auto_open_target_tab.unwrap_or(true)
     }
 
     pub fn gateway_host(&self) -> &str {
@@ -245,8 +310,30 @@ fn upgrade_file_config(mut file: FileConfig) -> FileConfig {
     if file.safe_mode.is_none() {
         file.safe_mode = Some(false);
     }
+    if file.browser_connection_mode.is_none() {
+        file.browser_connection_mode = Some(BrowserConnectionMode::AttachFirst);
+    }
+    if file.browser_debug_host.is_none() {
+        file.browser_debug_host = Some("127.0.0.1".to_owned());
+    }
+    if file.browser_debug_port.is_none() {
+        file.browser_debug_port = Some(9222);
+    }
+    if file.browser_channel.is_none() {
+        file.browser_channel = Some(if cfg!(windows) {
+            "msedge".to_owned()
+        } else {
+            "chrome".to_owned()
+        });
+    }
     if file.browser_target_url.is_none() {
         file.browser_target_url = Some("https://chatgpt.com/".to_owned());
+    }
+    if file.browser_extension_required.is_none() {
+        file.browser_extension_required = Some(true);
+    }
+    if file.browser_auto_open_target_tab.is_none() {
+        file.browser_auto_open_target_tab = Some(true);
     }
     let gateway = file.gateway.get_or_insert_with(GatewayFileConfig::default);
     if gateway.host.is_none() {
@@ -319,9 +406,21 @@ mod tests {
         assert_eq!(config.file.warm_mode, Some(false));
         assert_eq!(config.file.safe_mode, Some(false));
         assert_eq!(
+            config.file.browser_connection_mode,
+            Some(BrowserConnectionMode::AttachFirst)
+        );
+        assert_eq!(config.file.browser_debug_host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(config.file.browser_debug_port, Some(9222));
+        assert_eq!(
+            config.browser_channel(),
+            if cfg!(windows) { "msedge" } else { "chrome" }
+        );
+        assert_eq!(
             config.file.browser_target_url.as_deref(),
             Some("https://chatgpt.com/")
         );
+        assert_eq!(config.browser_extension_required(), true);
+        assert_eq!(config.browser_auto_open_target_tab(), true);
         assert_eq!(config.gateway_host(), "127.0.0.1");
         assert_eq!(config.gateway_port(), 3847);
         assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
@@ -341,6 +440,11 @@ mod tests {
         assert_eq!(parsed.version, Some(CONFIG_VERSION));
         assert_eq!(parsed.warm_mode, Some(false));
         assert_eq!(parsed.safe_mode, Some(false));
+        assert_eq!(
+            parsed.browser_connection_mode,
+            Some(BrowserConnectionMode::AttachFirst)
+        );
+        assert_eq!(parsed.browser_debug_port, Some(9222));
         assert_eq!(
             parsed.browser_target_url.as_deref(),
             Some("https://chatgpt.com/")
@@ -379,6 +483,37 @@ mod tests {
         );
     }
 
+    #[test]
+    fn parse_file_config_upgrades_legacy_config_without_new_browser_fields() {
+        let parsed = parse_file_config(
+            r#"
+version = 1
+warm_mode = true
+safe_mode = false
+browser_target_url = "https://chatgpt.com/"
+
+[gateway]
+port = 3847
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.version, Some(CONFIG_VERSION));
+        assert_eq!(parsed.warm_mode, Some(true));
+        assert_eq!(
+            parsed.browser_connection_mode,
+            Some(BrowserConnectionMode::AttachFirst)
+        );
+        assert_eq!(parsed.browser_debug_host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(parsed.browser_debug_port, Some(9222));
+        assert_eq!(
+            parsed.browser_channel.as_deref(),
+            Some(if cfg!(windows) { "msedge" } else { "chrome" })
+        );
+        assert_eq!(parsed.browser_extension_required, Some(true));
+        assert_eq!(parsed.browser_auto_open_target_tab, Some(true));
+    }
+
     proptest! {
         #[test]
         fn file_config_upgrade_preserves_explicit_warm_mode(
@@ -389,8 +524,15 @@ mod tests {
                 version,
                 warm_mode,
                 safe_mode: None,
+                browser_connection_mode: None,
+                browser_debug_endpoint: None,
+                browser_debug_host: None,
+                browser_debug_port: None,
+                browser_channel: None,
                 browser_target_url: None,
                 browser_path: None,
+                browser_extension_required: None,
+                browser_auto_open_target_tab: None,
                 gateway: None,
             };
             let upgraded = super::upgrade_file_config(file.clone());

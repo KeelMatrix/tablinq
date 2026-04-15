@@ -471,6 +471,8 @@ fn config_show(state_root: Option<&Path>) -> Result<Value> {
 
 fn operational_report(state_root: Option<&Path>) -> Result<Value> {
     let config = gptd::AppConfig::load_or_create(state_root)?;
+    let config_snapshot =
+        serde_json::to_value(config.snapshot()).context("serialize config snapshot")?;
     let state_root_path = config.paths.state_root.display().to_string();
     let ipc_endpoint = config.paths.ipc_endpoint.clone();
     let logs_dir = config.paths.logs_dir.display().to_string();
@@ -521,6 +523,7 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
     Ok(json!({
         "service": "tablinq",
         "state_root": state_root_path,
+        "config": config_snapshot,
         "daemon": {
             "running": daemon_running,
             "ipc_endpoint": ipc_endpoint,
@@ -879,6 +882,8 @@ mod tests {
 
         assert!(output.contains("\"state_root\""));
         assert!(output.contains("\"config_path\""));
+        assert!(output.contains("\"browser_connection_mode\": \"attach_first\""));
+        assert!(output.contains("\"browser_debug_port\": 9222"));
     }
 
     #[test]
@@ -893,9 +898,11 @@ mod tests {
 
         let output = run(&cli).unwrap();
 
+        assert!(output.contains("\"config\""));
         assert!(output.contains("\"daemon\""));
         assert!(output.contains("\"gateway\""));
         assert!(output.contains("\"logs\""));
+        assert!(output.contains("\"browser_connection_mode\": \"attach_first\""));
         assert!(output.contains("\"recovery_commands\""));
     }
 

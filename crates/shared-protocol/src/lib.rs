@@ -7,7 +7,7 @@ use thiserror::Error;
 
 pub const PROTOCOL_VERSION: &str = "tablinq.v1";
 pub const SELECTOR_PACK_FORMAT_VERSION: u32 = 1;
-pub const CONFIG_VERSION: u32 = 1;
+pub const CONFIG_VERSION: u32 = 2;
 pub const APP_NAME: &str = "Tablinq";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,6 +104,32 @@ pub enum HealthStatus {
     Ok,
     Degraded,
     Down,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserConnectionMode {
+    #[default]
+    AttachFirst,
+    ManagedFallback,
+    ManagedOnly,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BrowserOwner {
+    External,
+    #[default]
+    Managed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthSource {
+    Page,
+    Extension,
+    #[default]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -704,6 +730,13 @@ pub struct ConfigSnapshot {
     pub safe_mode: bool,
     pub browser_target_url: String,
     pub browser_path: Option<String>,
+    pub browser_connection_mode: BrowserConnectionMode,
+    pub browser_debug_endpoint: String,
+    pub browser_debug_host: String,
+    pub browser_debug_port: u16,
+    pub browser_channel: String,
+    pub browser_extension_required: bool,
+    pub browser_auto_open_target_tab: bool,
     pub gateway: GatewayConfigSnapshot,
 }
 
@@ -952,6 +985,22 @@ pub struct BrowserStatusSnapshot {
     pub browser_path: Option<String>,
     pub extension_connected: bool,
     pub capability_report: Option<CapabilityReport>,
+    #[serde(default)]
+    pub attach_mode: BrowserConnectionMode,
+    #[serde(default)]
+    pub browser_owner: BrowserOwner,
+    #[serde(default)]
+    pub cdp_attached: bool,
+    #[serde(default)]
+    pub target_tab_found: bool,
+    #[serde(default)]
+    pub target_tab_id: Option<String>,
+    #[serde(default)]
+    pub debug_endpoint: Option<String>,
+    #[serde(default)]
+    pub auth_source: AuthSource,
+    #[serde(default)]
+    pub extension_required: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1245,5 +1294,41 @@ mod tests {
                 strategy_id: "composer-role".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn browser_status_snapshot_round_trips_with_attach_fields() {
+        let snapshot = BrowserStatusSnapshot {
+            running: true,
+            browser_kind: "msedge".to_owned(),
+            profile_dir: "C:/tablinq/browser-profile".to_owned(),
+            downloads_dir: "C:/tablinq/downloads".to_owned(),
+            target_url: "https://chatgpt.com/".to_owned(),
+            current_url: Some("https://chatgpt.com/?conversation=conv-1".to_owned()),
+            page_title: Some("ChatGPT".to_owned()),
+            page_ready: true,
+            authenticated: true,
+            reload_count: 2,
+            screenshot_path: Some("C:/tablinq/crash-bundles/last.png".to_owned()),
+            browser_path: Some("C:/Program Files/Microsoft/Edge/Application/msedge.exe".to_owned()),
+            extension_connected: true,
+            capability_report: None,
+            attach_mode: BrowserConnectionMode::AttachFirst,
+            browser_owner: BrowserOwner::Managed,
+            cdp_attached: false,
+            target_tab_found: true,
+            target_tab_id: Some("tab-1".to_owned()),
+            debug_endpoint: Some("http://127.0.0.1:9222".to_owned()),
+            auth_source: AuthSource::Page,
+            extension_required: true,
+        };
+
+        let json = serde_json::to_string_pretty(&snapshot).unwrap();
+        let restored: BrowserStatusSnapshot = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored, snapshot);
+        assert!(json.contains("\"attach_mode\": \"attach_first\""));
+        assert!(json.contains("\"browser_owner\": \"managed\""));
+        assert!(json.contains("\"auth_source\": \"page\""));
     }
 }

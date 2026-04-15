@@ -95,6 +95,14 @@ describe("browser adapter", () => {
     expect(snapshot.authenticated).toBe(true);
     expect(snapshot.extension_connected).toBe(true);
     expect(snapshot.capability_report?.matrix.composer_ready).toBe(true);
+    expect(snapshot.attach_mode).toBe("attach_first");
+    expect(snapshot.browser_owner).toBe("managed");
+    expect(snapshot.cdp_attached).toBe(false);
+    expect(snapshot.target_tab_found).toBe(true);
+    expect(snapshot.target_tab_id).toBeNull();
+    expect(snapshot.debug_endpoint).toBe("http://127.0.0.1:9222");
+    expect(snapshot.auth_source).toBe("page");
+    expect(snapshot.extension_required).toBe(true);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -922,7 +930,9 @@ describe("browser launch config", () => {
   });
 
   it("prefers Chrome before Edge on Windows", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-detect-"));
+    const root = await mkdtemp(
+      path.join(os.tmpdir(), "tablinq-browser-detect-"),
+    );
     const localAppData = path.join(root, "LocalAppData");
     const programFiles = path.join(root, "ProgramFiles");
     const chromePath = path.join(
