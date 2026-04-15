@@ -1313,18 +1313,17 @@ fn supports_managed_profile_reset(mode: BrowserConnectionMode) -> bool {
 }
 
 fn browser_session_identity(snapshot: &BrowserStatusSnapshot) -> (String, String) {
-    if snapshot.cdp_attached {
-        if let Some(tab_id) = snapshot
+    if snapshot.cdp_attached
+        && let Some(tab_id) = snapshot
             .target_tab_id
             .as_deref()
             .filter(|value| !value.trim().is_empty())
-        {
-            let short_id = &tab_id[..tab_id.len().min(8)];
-            return (
-                format!("browser-tab-{tab_id}"),
-                format!("Browser tab {short_id}"),
-            );
-        }
+    {
+        let short_id = &tab_id[..tab_id.len().min(8)];
+        return (
+            format!("browser-tab-{tab_id}"),
+            format!("Browser tab {short_id}"),
+        );
     }
 
     ("browser-primary".to_owned(), "Browser session".to_owned())

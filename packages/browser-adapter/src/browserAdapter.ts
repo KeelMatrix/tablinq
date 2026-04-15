@@ -2363,7 +2363,8 @@ function detectWindowsBrowserExecutable(): string | null {
 }
 
 function inferBrowserKind(browserPath: string): string {
-  const fileName = basename(browserPath).toLowerCase();
+  const normalizedPath = browserPath.replaceAll("\\", "/");
+  const fileName = basename(normalizedPath).toLowerCase();
   if (fileName === "chrome.exe" || fileName === "google-chrome") {
     return "chrome";
   }
