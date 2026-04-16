@@ -26,7 +26,7 @@ interface ChromeRuntimeLike {
     host: string,
     message: CapabilityBridgeMessage,
     callback?: (response: unknown) => void,
-  ) => void;
+  ) => void | Promise<unknown>;
 }
 
 interface ChromeLike {
@@ -121,9 +121,18 @@ export function createBridgeController(
         transport === "native_messaging" &&
         chromeLike?.runtime?.sendNativeMessage
       ) {
-        chromeLike.runtime.sendNativeMessage(nativeHostName, annotatedMessage);
-        status.connected = true;
-        status.last_error = null;
+        try {
+          await chromeLike.runtime.sendNativeMessage(
+            nativeHostName,
+            annotatedMessage,
+          );
+          status.connected = true;
+          status.last_error = null;
+        } catch (error) {
+          status.connected = false;
+          status.last_error =
+            error instanceof Error ? error.message : "native messaging failed";
+        }
         syncStatus();
         return;
       }
