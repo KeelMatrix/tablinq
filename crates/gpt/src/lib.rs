@@ -763,6 +763,7 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
 
     let mut stdout = io::stdout();
     let mut printed_any = false;
+    let mut streamed_text = String::new();
     let green_responses = ansi_green_enabled_for_stdout();
     let mut response_color_active = false;
     thread::spawn(move || {
@@ -781,6 +782,7 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
             Ok(CliStreamMessage::Event(event)) => {
                 if let EventPayload::StreamChunk(chunk) = *event {
                     if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
+                        streamed_text.push_str(&chunk.text);
                         write_response_chunk(
                             &mut stdout,
                             &chunk.text,
@@ -788,13 +790,6 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
                             &mut response_color_active,
                         )?;
                         printed_any = true;
-                    }
-                    if chunk.kind == StreamChunkKind::Done && printed_any {
-                        finish_terminal_stream(
-                            &mut stdout,
-                            printed_any,
-                            &mut response_color_active,
-                        )?;
                     }
                 }
             }
@@ -808,9 +803,14 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
 
     match response {
         DaemonResponse::Ask(result) => {
-            if !printed_any && !result.output_text.is_empty() {
-                write_complete_response(&mut stdout, &result.output_text, green_responses)?;
-            }
+            reconcile_streamed_response(
+                &mut stdout,
+                &streamed_text,
+                &result.output_text,
+                printed_any,
+                green_responses,
+                &mut response_color_active,
+            )?;
             Ok(())
         }
         DaemonResponse::Error(error) => {
@@ -934,6 +934,80 @@ fn write_complete_response(
         writeln!(stdout, "{ANSI_GREEN}{text}{ANSI_RESET}")?;
     } else {
         writeln!(stdout, "{text}")?;
+    }
+    stdout.flush()?;
+    Ok(())
+}
+
+fn reconcile_streamed_response(
+    stdout: &mut impl Write,
+    streamed_text: &str,
+    final_text: &str,
+    printed_any: bool,
+    green_responses: bool,
+    response_color_active: &mut bool,
+) -> Result<()> {
+    if !printed_any {
+        if !final_text.is_empty() {
+            write_complete_response(stdout, final_text, green_responses)?;
+        }
+        return Ok(());
+    }
+
+    if streamed_text == final_text {
+        return finish_terminal_stream(stdout, true, response_color_active);
+    }
+
+    if let Some(suffix) = final_text.strip_prefix(streamed_text) {
+        if !suffix.is_empty() {
+            write_response_chunk(stdout, suffix, green_responses, response_color_active)?;
+        }
+        return finish_terminal_stream(stdout, true, response_color_active);
+    }
+
+    if can_rewrite_response_line(streamed_text, final_text) {
+        return rewrite_response_line(
+            stdout,
+            streamed_text,
+            final_text,
+            green_responses,
+            response_color_active,
+        );
+    }
+
+    finish_terminal_stream(stdout, true, response_color_active)?;
+    if !final_text.is_empty() {
+        write_complete_response(stdout, final_text, green_responses)?;
+    }
+    Ok(())
+}
+
+fn can_rewrite_response_line(streamed_text: &str, final_text: &str) -> bool {
+    !streamed_text.chars().any(|ch| matches!(ch, '\n' | '\r'))
+        && !final_text.chars().any(|ch| matches!(ch, '\n' | '\r'))
+}
+
+fn rewrite_response_line(
+    stdout: &mut impl Write,
+    streamed_text: &str,
+    final_text: &str,
+    green_responses: bool,
+    response_color_active: &mut bool,
+) -> Result<()> {
+    if *response_color_active {
+        write!(stdout, "{ANSI_RESET}")?;
+        *response_color_active = false;
+    }
+
+    let clear_width = streamed_text.chars().count().saturating_sub(final_text.chars().count());
+    let clear_padding = " ".repeat(clear_width);
+    if green_responses {
+        writeln!(
+            stdout,
+            "\r{ANSI_GREEN}{final_text}{ANSI_RESET}{clear_padding}"
+        )?;
+    } else {
+        writeln!(stdout, "\r{final_text}{clear_padding}")?;
     }
     stdout.flush()?;
     Ok(())
@@ -1742,6 +1816,70 @@ mod tests {
             "0;15".to_owned()
         )]));
         assert!(!shell_background_is_black(&[]));
+    }
+
+    fn render_reconciled_response(
+        streamed_chunks: &[&str],
+        final_text: &str,
+        green_responses: bool,
+    ) -> String {
+        let mut stdout = Vec::new();
+        let mut response_color_active = false;
+        let mut streamed_text = String::new();
+        let mut printed_any = false;
+
+        for chunk in streamed_chunks {
+            streamed_text.push_str(chunk);
+            write_response_chunk(
+                &mut stdout,
+                chunk,
+                green_responses,
+                &mut response_color_active,
+            )
+            .unwrap();
+            printed_any = true;
+        }
+
+        reconcile_streamed_response(
+            &mut stdout,
+            &streamed_text,
+            final_text,
+            printed_any,
+            green_responses,
+            &mut response_color_active,
+        )
+        .unwrap();
+
+        String::from_utf8(stdout).unwrap()
+    }
+
+    #[test]
+    fn reconcile_streamed_response_appends_missing_suffix_and_resets_green_output() {
+        assert_eq!(
+            render_reconciled_response(&["ASK_O"], "ASK_OK", true),
+            format!("{ANSI_GREEN}ASK_OK{ANSI_RESET}\n")
+        );
+    }
+
+    #[test]
+    fn reconcile_streamed_response_rewrites_duplicate_single_line_chunks() {
+        assert_eq!(
+            render_reconciled_response(&["ASK_", "ASK_"], "ASK_OK", false),
+            "ASK_ASK_\rASK_OK  \n"
+        );
+    }
+
+    #[test]
+    fn reconcile_streamed_response_rewrites_divergent_single_line_chunks() {
+        assert_eq!(
+            render_reconciled_response(&["WRONG"], "ASK_OK", false),
+            "WRONG\rASK_OK\n"
+        );
+    }
+
+    #[test]
+    fn reconcile_streamed_response_prints_final_output_when_no_chunks_stream() {
+        assert_eq!(render_reconciled_response(&[], "ASK_OK", false), "ASK_OK\n");
     }
 
     #[cfg(windows)]

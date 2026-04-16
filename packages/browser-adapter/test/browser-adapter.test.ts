@@ -28,6 +28,7 @@ function withHarnessUrl(
       | "reload"
       | "followup-rich-text"
       | "followup-stale"
+      | "done-early"
       | "stall-recover"
       | "stall-recover-transient"
       | "recover-complete"
@@ -1735,6 +1736,41 @@ describe("browser adapter", () => {
     expect(conversationIdFromUrl(result.current_url)).toBe(
       result.conversation_id,
     );
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("waits for a stabilized final ask snapshot in attach mode", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "done-early",
+    });
+    const adapter = await createTrackedAdapterForMode("attach", targetUrl);
+    const fixtureRoot = await mkdtemp(
+      path.join(os.tmpdir(), "tablinq-browser-"),
+    );
+    const fixture = path.join(fixtureRoot, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    await adapter.open({ targetUrl, headless: true });
+
+    const chunks: string[] = [];
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-done-early-attach",
+        prompt: "Reply with exactly: ASK_OK",
+        files: [fixture],
+      },
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+    );
+
+    expect(result.output_text).toBe("Fake response for: Reply with exactly: ASK_OK");
+    expect(chunks.join("")).toBe(result.output_text);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
