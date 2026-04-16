@@ -26,6 +26,7 @@ function withHarnessUrl(
       | "success"
       | "timeout"
       | "reload"
+      | "followup-rich-text"
       | "followup-stale"
       | "stall-recover"
       | "stall-recover-transient"
@@ -837,6 +838,59 @@ describe("browser adapter", () => {
     expect(second.output_text).toBe("Fake response for: what can you do?");
     expect(secondChunks.join("")).toBe(second.output_text);
     expect(secondChunks.join("")).not.toContain(first.output_text);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("streams a multi-paragraph follow-up ask without repeating earlier text or failing reconciliation", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "followup-rich-text",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const first = await adapter.ask(
+      {
+        jobId: "job-ask-followup-rich-text-first",
+        prompt: "hey",
+      },
+      () => {},
+    );
+
+    const secondChunks: string[] = [];
+    const second = await adapter.ask(
+      {
+        jobId: "job-ask-followup-rich-text-second",
+        prompt: "what are your capabilities?",
+      },
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          secondChunks.push(chunk.text);
+        }
+      },
+    );
+
+    const expected =
+      "I can help with thinking work and doing work.\n\n" +
+      "I can explain concepts, write and edit, summarize, brainstorm, tutor, code, debug, analyze data, compare options, plan projects, draft emails/messages, and turn rough notes into polished documents.";
+
+    expect(second.conversation_id).toBe(first.conversation_id);
+    expect(second.artifacts).toHaveLength(0);
+    expect(second.output_text).toBe(expected);
+    expect(secondChunks.join("")).toBe(expected);
+    expect(secondChunks.join("")).not.toContain(
+      `${first.output_text}\n${first.output_text}`,
+    );
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

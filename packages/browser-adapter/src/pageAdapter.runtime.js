@@ -344,24 +344,29 @@ export function createTablinqPageAdapterRuntime() {
     if (!(root instanceof HTMLElement)) {
       return "";
     }
-    const lines = uniqueCollapsed(
-      Array.from(
-        root.querySelectorAll(
-          [
-            "[data-message-content]",
-            ".markdown",
-            "p",
-            "pre",
-            "code",
-            "li",
-            "div",
-          ].join(", "),
+    const blockSelector = [
+      "[data-message-content]",
+      "p",
+      "pre",
+      "li",
+      "blockquote",
+      "h1",
+      "h2",
+      "h3",
+      "h4",
+      "h5",
+      "h6",
+    ].join(", ");
+    const leafBlocks = Array.from(root.querySelectorAll(blockSelector)).filter(
+      (node) =>
+        !Array.from(node.querySelectorAll(blockSelector)).some(
+          (child) => child !== node,
         ),
-      ).map((node) => node.textContent),
     );
+    const lines = uniqueCollapsed(leafBlocks.map((node) => node.textContent));
 
     if (lines.length > 0) {
-      return lines.join("\n");
+      return lines.join("\n\n");
     }
 
     const directText = uniqueCollapsed(

@@ -284,6 +284,10 @@ root.innerHTML =
             <div class="markdown">
               <p>Streaming output lands here.</p>
             </div>
+            ${
+              scenario === "followup-rich-text"
+                ? ""
+                : `
             <a
               href="#"
               data-testid="artifact-download"
@@ -291,6 +295,8 @@ root.innerHTML =
             >
               Download report
             </a>
+            `
+            }
           </article>
         </section>
         <section class="notice-panel" aria-label="workspace notices">
@@ -351,6 +357,9 @@ const uploadInput = document.querySelector("input[type='file']");
 const uploadList = document.querySelector("[data-slot='upload-list']");
 const messageArticle = document.querySelector(
   "[data-slot='assistant-message'], [data-message-author-role='assistant']",
+);
+const messageMarkdown = document.querySelector(
+  "[data-message-author-role='assistant'] .markdown",
 );
 const message = document.querySelector(
   "[data-slot='assistant-message'] p, [data-message-author-role='assistant'] .markdown p",
@@ -527,7 +536,31 @@ function renderChunk(state) {
   }
 
   const text = state.responseText.slice(0, state.index);
-  message.textContent = text;
+  if (
+    scenario === "followup-rich-text" &&
+    variant === "live" &&
+    state.askNumber > 1 &&
+    Array.isArray(state.responseBlocks) &&
+    messageMarkdown instanceof HTMLElement
+  ) {
+    let remaining = text.length;
+    const blocks = [];
+    for (let index = 0; index < state.responseBlocks.length; index += 1) {
+      const block = state.responseBlocks[index];
+      if (!block || remaining <= 0) {
+        break;
+      }
+      const visibleLength = Math.min(block.length, remaining);
+      blocks.push(`<p>${block.slice(0, visibleLength)}</p>`);
+      remaining -= visibleLength;
+      if (index < state.responseBlocks.length - 1 && remaining > 0) {
+        remaining = Math.max(0, remaining - 2);
+      }
+    }
+    messageMarkdown.innerHTML = blocks.join("");
+  } else {
+    message.textContent = text;
+  }
   messageArticle?.setAttribute("data-message-id", state.messageId);
 }
 
@@ -725,13 +758,23 @@ function startStream(promptText) {
   const conversationId = currentConversationId();
   const messageId = uniqueId("msg");
   const askNumber = nextAskNumber(conversationId);
+  const responseBlocks =
+    scenario === "followup-rich-text" && askNumber > 1
+      ? [
+          "I can help with thinking work and doing work.",
+          "I can explain concepts, write and edit, summarize, brainstorm, tutor, code, debug, analyze data, compare options, plan projects, draft emails/messages, and turn rough notes into polished documents.",
+        ]
+      : null;
   const state = {
     conversationId,
     messageId,
     promptText,
-    responseText: promptText
-      ? `Fake response for: ${promptText}`
-      : "Fake response for an empty prompt.",
+    responseText: responseBlocks
+      ? responseBlocks.join("\n\n")
+      : promptText
+        ? `Fake response for: ${promptText}`
+        : "Fake response for an empty prompt.",
+    responseBlocks,
     index: 0,
     askNumber,
     didReload: false,
