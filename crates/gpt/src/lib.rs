@@ -788,6 +788,7 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
             }
             Ok(CliStreamMessage::Done(result)) => break (*result)?,
             Err(_) => {
+                finish_terminal_stream_before_error(&mut stdout, printed_any)?;
                 anyhow::bail!("ask request timed out after {} ms", timeout.as_millis());
             }
         }
@@ -800,7 +801,10 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
             }
             Ok(())
         }
-        DaemonResponse::Error(error) => bail!("{}", error.message),
+        DaemonResponse::Error(error) => {
+            finish_terminal_stream_before_error(&mut stdout, printed_any)?;
+            bail!("{}", error.message)
+        }
         other => bail!("unexpected ask response: {other:?}"),
     }
 }
@@ -861,6 +865,7 @@ fn execute_research_with_terminal_presentation(
             },
             Ok(CliStreamMessage::Done(result)) => break (*result)?,
             Err(_) => {
+                finish_terminal_stream_before_error(&mut stdout, printed_any)?;
                 anyhow::bail!(
                     "research request timed out after {} ms",
                     timeout.as_millis()
@@ -876,9 +881,27 @@ fn execute_research_with_terminal_presentation(
             }
             Ok(())
         }
-        DaemonResponse::Error(error) => bail!("{}", error.message),
+        DaemonResponse::Error(error) => {
+            finish_terminal_stream_before_error(&mut stdout, printed_any)?;
+            bail!("{}", error.message)
+        }
         other => bail!("unexpected research response: {other:?}"),
     }
+}
+
+fn finish_terminal_stream_before_error(
+    stdout: &mut impl Write,
+    printed_any: bool,
+) -> Result<()> {
+    if printed_any {
+        writeln!(stdout)?;
+        stdout.flush()?;
+    }
+    Ok(())
+}
+
+pub fn format_cli_error(err: &anyhow::Error) -> String {
+    format!("error: {err:#}")
 }
 
 fn config_show(state_root: Option<&Path>) -> Result<Value> {
@@ -1466,6 +1489,15 @@ mod tests {
 
         assert!(output.contains("\"status\": \"ok\""));
         assert!(output.contains('\n'));
+    }
+
+    #[test]
+    fn format_cli_error_prefixes_terminal_failures() {
+        let err = anyhow::anyhow!("interrupted ask could not be reconciled");
+        assert_eq!(
+            format_cli_error(&err),
+            "error: interrupted ask could not be reconciled"
+        );
     }
 
     #[test]
