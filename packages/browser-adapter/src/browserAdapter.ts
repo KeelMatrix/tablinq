@@ -107,6 +107,7 @@ const SNAPSHOT_POLL_INTERVAL_MS = 75;
 const STABLE_DONE_POLLS = 3;
 const STALL_DETECTION_MIN_MS = 500;
 const STALL_DETECTION_MAX_MS = 2_000;
+const ASK_STALL_RECOVERY_GRACE_MS = 5_000;
 const MAX_RECOVERY_ATTEMPTS = 3;
 
 function loadProbeSource(): string {
@@ -830,6 +831,13 @@ export class BrowserAdapter {
       command.timeoutMs,
       ASK_TIMEOUT_MS,
     );
+    const initialAskStallTimeoutMs = Math.max(
+      stallTimeoutMs,
+      Math.min(
+        ASK_STALL_RECOVERY_GRACE_MS,
+        Math.floor((command.timeoutMs ?? ASK_TIMEOUT_MS) / 2),
+      ),
+    );
     let page = await this.openExecutionPage(
       this.resolveConversationTarget(command.conversationId),
     );
@@ -874,6 +882,7 @@ export class BrowserAdapter {
       if (recovered.result) {
         return recovered.result;
       }
+      state.lastProgressAt = Date.now();
     }
 
     while (Date.now() < timeoutAt) {
@@ -898,6 +907,7 @@ export class BrowserAdapter {
           if (recovered.result) {
             return recovered.result;
           }
+          state.lastProgressAt = Date.now();
           await sleep(SNAPSHOT_POLL_INTERVAL_MS);
           continue;
         }
@@ -929,8 +939,12 @@ export class BrowserAdapter {
         state.emittedText.length > 0 ||
         state.knownConversationId !== null ||
         state.knownMessageId !== null;
+      const askStallTimeoutMs =
+        state.emittedText.length === 0 && state.knownMessageId === null
+          ? initialAskStallTimeoutMs
+          : stallTimeoutMs;
       if (
-        Date.now() - state.lastProgressAt >= stallTimeoutMs &&
+        Date.now() - state.lastProgressAt >= askStallTimeoutMs &&
         state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS &&
         canRecoverFromAskStall
       ) {
@@ -947,6 +961,7 @@ export class BrowserAdapter {
         if (recovered.result) {
           return recovered.result;
         }
+        state.lastProgressAt = Date.now();
       }
 
       await sleep(SNAPSHOT_POLL_INTERVAL_MS);
@@ -1310,6 +1325,7 @@ export class BrowserAdapter {
       const candidate = await readAskSnapshot(recoveredPage);
       this.rememberAskSnapshot(state, candidate);
       const relation = textRelation(state.emittedText, candidate.text);
+      const relationIsUsable = relation === "same" || relation === "ahead";
       const commandConversationId = normalizeOptionalString(
         state.knownConversationId ?? command.conversationId,
       );
@@ -1322,18 +1338,16 @@ export class BrowserAdapter {
         !commandConversationId ||
         !snapshotConversationId ||
         commandConversationId === snapshotConversationId;
-      const hasIdentity = Boolean(normalizedConversationId);
+      const hasAssistantSignal =
+        candidate.hasAssistantMessage &&
+        (candidate.messageId !== null || candidate.text.length > 0);
       const canContinue =
         conversationMatches &&
-        relation !== "mismatch" &&
+        relationIsUsable &&
         (candidate.state === "running" || candidate.state === "done") &&
-        (hasIdentity ||
-          state.emittedText.length > 0 ||
-          candidate.text.length > 0);
-      const awaitingLiveState =
-        hasIdentity &&
-        candidate.state === "idle" &&
-        candidate.text.length === 0;
+        hasAssistantSignal;
+      const hardMismatch =
+        !conversationMatches || relation === "mismatch";
       logRecoveryDecision("ask", {
         commandConversationId,
         snapshotConversationId,
@@ -1341,18 +1355,19 @@ export class BrowserAdapter {
         normalizedConversationId,
         relation,
         conversationMatches,
-        hasIdentity,
+        hasAssistantSignal,
         snapshotState: candidate.state,
         emittedTextLength: state.emittedText.length,
         observedTextLength: candidate.text.length,
-        awaitingLiveState,
+        hasAssistantMessage: candidate.hasAssistantMessage,
+        hardMismatch,
         canContinue,
       });
       if (canContinue) {
         snapshot = candidate;
         break;
       }
-      if (!conversationMatches || relation === "mismatch" || !awaitingLiveState) {
+      if (hardMismatch) {
         throw new Error(
           "interrupted ask could not be reconciled against the live conversation",
         );
@@ -2606,6 +2621,7 @@ function textRelation(
 }
 
 interface AskSnapshot {
+  hasAssistantMessage: boolean;
   text: string;
   state: string;
   conversationId: string | null;
