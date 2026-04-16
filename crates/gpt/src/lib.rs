@@ -10,7 +10,7 @@ use shared_protocol::{
 };
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::mpsc;
@@ -18,6 +18,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const IPC_TIMEOUT_BUFFER: Duration = Duration::from_secs(30);
+const ANSI_RESET: &str = "\x1b[0m";
+const ANSI_RED: &str = "\x1b[31m";
+const ANSI_GREEN: &str = "\x1b[32m";
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "gpt", version, about = "Tablinq local CLI")]
@@ -760,6 +763,8 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
 
     let mut stdout = io::stdout();
     let mut printed_any = false;
+    let green_responses = ansi_green_enabled_for_stdout();
+    let mut response_color_active = false;
     thread::spawn(move || {
         let request = DaemonRequest::Ask(command);
         let result = gptd::send_request_stream(&endpoint, &request, |event| {
@@ -776,19 +781,26 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
             Ok(CliStreamMessage::Event(event)) => {
                 if let EventPayload::StreamChunk(chunk) = *event {
                     if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
-                        write!(stdout, "{}", chunk.text)?;
-                        stdout.flush()?;
+                        write_response_chunk(
+                            &mut stdout,
+                            &chunk.text,
+                            green_responses,
+                            &mut response_color_active,
+                        )?;
                         printed_any = true;
                     }
                     if chunk.kind == StreamChunkKind::Done && printed_any {
-                        writeln!(stdout)?;
-                        stdout.flush()?;
+                        finish_terminal_stream(
+                            &mut stdout,
+                            printed_any,
+                            &mut response_color_active,
+                        )?;
                     }
                 }
             }
             Ok(CliStreamMessage::Done(result)) => break (*result)?,
             Err(_) => {
-                finish_terminal_stream_before_error(&mut stdout, printed_any)?;
+                finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
                 anyhow::bail!("ask request timed out after {} ms", timeout.as_millis());
             }
         }
@@ -797,12 +809,12 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
     match response {
         DaemonResponse::Ask(result) => {
             if !printed_any && !result.output_text.is_empty() {
-                writeln!(stdout, "{}", result.output_text)?;
+                write_complete_response(&mut stdout, &result.output_text, green_responses)?;
             }
             Ok(())
         }
         DaemonResponse::Error(error) => {
-            finish_terminal_stream_before_error(&mut stdout, printed_any)?;
+            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
             bail!("{}", error.message)
         }
         other => bail!("unexpected ask response: {other:?}"),
@@ -823,6 +835,8 @@ fn execute_research_with_terminal_presentation(
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
     let mut printed_any = false;
+    let green_responses = ansi_green_enabled_for_stdout();
+    let mut response_color_active = false;
     let mut last_status: Option<JobStatusLine> = None;
     thread::spawn(move || {
         let request = DaemonRequest::Research(command);
@@ -840,13 +854,20 @@ fn execute_research_with_terminal_presentation(
             Ok(CliStreamMessage::Event(event)) => match *event {
                 EventPayload::StreamChunk(chunk) => match chunk.kind {
                     StreamChunkKind::Delta if !chunk.text.is_empty() => {
-                        write!(stdout, "{}", chunk.text)?;
-                        stdout.flush()?;
+                        write_response_chunk(
+                            &mut stdout,
+                            &chunk.text,
+                            green_responses,
+                            &mut response_color_active,
+                        )?;
                         printed_any = true;
                     }
                     StreamChunkKind::Done if printed_any => {
-                        writeln!(stdout)?;
-                        stdout.flush()?;
+                        finish_terminal_stream(
+                            &mut stdout,
+                            printed_any,
+                            &mut response_color_active,
+                        )?;
                     }
                     _ => {}
                 },
@@ -865,7 +886,7 @@ fn execute_research_with_terminal_presentation(
             },
             Ok(CliStreamMessage::Done(result)) => break (*result)?,
             Err(_) => {
-                finish_terminal_stream_before_error(&mut stdout, printed_any)?;
+                finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
                 anyhow::bail!(
                     "research request timed out after {} ms",
                     timeout.as_millis()
@@ -877,22 +898,56 @@ fn execute_research_with_terminal_presentation(
     match response {
         DaemonResponse::Research(result) => {
             if !printed_any && !result.report_text.is_empty() {
-                writeln!(stdout, "{}", result.report_text)?;
+                write_complete_response(&mut stdout, &result.report_text, green_responses)?;
             }
             Ok(())
         }
         DaemonResponse::Error(error) => {
-            finish_terminal_stream_before_error(&mut stdout, printed_any)?;
+            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
             bail!("{}", error.message)
         }
         other => bail!("unexpected research response: {other:?}"),
     }
 }
 
-fn finish_terminal_stream_before_error(
+fn write_response_chunk(
+    stdout: &mut impl Write,
+    text: &str,
+    green_responses: bool,
+    response_color_active: &mut bool,
+) -> Result<()> {
+    if green_responses && !*response_color_active {
+        write!(stdout, "{ANSI_GREEN}")?;
+        *response_color_active = true;
+    }
+    write!(stdout, "{text}")?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn write_complete_response(
+    stdout: &mut impl Write,
+    text: &str,
+    green_responses: bool,
+) -> Result<()> {
+    if green_responses {
+        writeln!(stdout, "{ANSI_GREEN}{text}{ANSI_RESET}")?;
+    } else {
+        writeln!(stdout, "{text}")?;
+    }
+    stdout.flush()?;
+    Ok(())
+}
+
+fn finish_terminal_stream(
     stdout: &mut impl Write,
     printed_any: bool,
+    response_color_active: &mut bool,
 ) -> Result<()> {
+    if *response_color_active {
+        write!(stdout, "{ANSI_RESET}")?;
+        *response_color_active = false;
+    }
     if printed_any {
         writeln!(stdout)?;
         stdout.flush()?;
@@ -901,7 +956,83 @@ fn finish_terminal_stream_before_error(
 }
 
 pub fn format_cli_error(err: &anyhow::Error) -> String {
-    format!("error: {err:#}")
+    format_cli_error_with_color(err, ansi_color_enabled_for_stderr())
+}
+
+fn format_cli_error_with_color(err: &anyhow::Error, ansi_color: bool) -> String {
+    if ansi_color {
+        format!("{ANSI_RED}error:{ANSI_RESET} {err:#}")
+    } else {
+        format!("error: {err:#}")
+    }
+}
+
+fn ansi_green_enabled_for_stdout() -> bool {
+    if !io::stdout().is_terminal() {
+        return false;
+    }
+    let env = env::vars().collect::<Vec<_>>();
+    ansi_color_supported_by_env(&env) && shell_background_is_black(&env)
+}
+
+fn ansi_color_enabled_for_stderr() -> bool {
+    if !io::stderr().is_terminal() {
+        return false;
+    }
+    ansi_color_supported_by_env(&env::vars().collect::<Vec<_>>())
+}
+
+fn ansi_color_supported_by_env(env: &[(String, String)]) -> bool {
+    let get = |key: &str| {
+        env.iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, value)| value.as_str())
+    };
+
+    if get("NO_COLOR").is_some() {
+        return false;
+    }
+
+    if matches!(get("CLICOLOR_FORCE"), Some(value) if value != "0")
+        || matches!(get("FORCE_COLOR"), Some(value) if value != "0")
+    {
+        return true;
+    }
+
+    let term = get("TERM").unwrap_or_default();
+    if term.eq_ignore_ascii_case("dumb") {
+        return false;
+    }
+
+    #[cfg(windows)]
+    {
+        return get("WT_SESSION").is_some()
+            || get("ANSICON").is_some()
+            || matches!(get("ConEmuANSI"), Some(value) if value.eq_ignore_ascii_case("ON"))
+            || (!term.is_empty() && !term.eq_ignore_ascii_case("dumb"));
+    }
+
+    #[cfg(not(windows))]
+    {
+        !term.is_empty()
+    }
+}
+
+fn shell_background_is_black(env: &[(String, String)]) -> bool {
+    let colorfgbg = env
+        .iter()
+        .find(|(candidate, _)| candidate == "COLORFGBG")
+        .map(|(_, value)| value.as_str());
+
+    let Some(colorfgbg) = colorfgbg else {
+        return false;
+    };
+
+    colorfgbg
+        .rsplit(';')
+        .next()
+        .and_then(|value| value.trim().parse::<u8>().ok())
+        == Some(0)
 }
 
 fn config_show(state_root: Option<&Path>) -> Result<Value> {
@@ -1495,9 +1626,51 @@ mod tests {
     fn format_cli_error_prefixes_terminal_failures() {
         let err = anyhow::anyhow!("interrupted ask could not be reconciled");
         assert_eq!(
-            format_cli_error(&err),
+            format_cli_error_with_color(&err, false),
             "error: interrupted ask could not be reconciled"
         );
+    }
+
+    #[test]
+    fn format_cli_error_adds_red_prefix_when_color_is_enabled() {
+        let err = anyhow::anyhow!("adapter failed");
+        assert_eq!(
+            format_cli_error_with_color(&err, true),
+            "\u{1b}[31merror:\u{1b}[0m adapter failed"
+        );
+    }
+
+    #[test]
+    fn ansi_color_supported_by_env_respects_no_color_and_force_color() {
+        assert!(!ansi_color_supported_by_env(&[(
+            "NO_COLOR".to_owned(),
+            "1".to_owned()
+        )]));
+        assert!(ansi_color_supported_by_env(&[(
+            "FORCE_COLOR".to_owned(),
+            "1".to_owned()
+        )]));
+    }
+
+    #[test]
+    fn ansi_color_supported_by_env_rejects_dumb_term_without_force() {
+        assert!(!ansi_color_supported_by_env(&[(
+            "TERM".to_owned(),
+            "dumb".to_owned()
+        )]));
+    }
+
+    #[test]
+    fn shell_background_is_black_requires_explicit_black_background() {
+        assert!(shell_background_is_black(&[(
+            "COLORFGBG".to_owned(),
+            "15;0".to_owned()
+        )]));
+        assert!(!shell_background_is_black(&[(
+            "COLORFGBG".to_owned(),
+            "0;15".to_owned()
+        )]));
+        assert!(!shell_background_is_black(&[]));
     }
 
     #[test]
