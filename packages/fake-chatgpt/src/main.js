@@ -9,6 +9,10 @@ const variant =
     ? requestedVariant
     : "classic";
 const scenario = params.get("scenario") || "success";
+const usesComposerPlusTrap =
+  scenario === "submit-upload-trap" ||
+  scenario === "submit-upload-trap-no-keyboard";
+const keyboardSubmitEnabled = scenario !== "submit-upload-trap-no-keyboard";
 const requestedInitialModel = params.get("initial_model");
 const initialModel =
   requestedInitialModel === "instant" || requestedInitialModel === "thinking"
@@ -68,6 +72,8 @@ document.body.dataset.researchStatusMessage = "";
 document.body.dataset.conversationId =
   conversationIdFromPathname(window.location.pathname) || "";
 document.body.dataset.lastMessageId = "";
+document.body.dataset.uploadPopoverOpen = "false";
+document.body.dataset.lastSubmissionMethod = "";
 
 note.textContent =
   variant === "aria"
@@ -75,7 +81,9 @@ note.textContent =
     : variant === "menu"
       ? "Menu-picker variant with a model trigger and thinking-only effort controls."
     : variant === "live"
-      ? "Live-like variant with prompt-textarea, send/stop buttons, upload chips, and download controls."
+      ? usesComposerPlusTrap
+        ? "Live-like variant with a composer plus button trap and keyboard submit fallback."
+        : "Live-like variant with prompt-textarea, send/stop buttons, upload chips, and download controls."
       : "Classic variant with grouped controls and direct toolbar buttons.";
 
 function hasControl(name) {
@@ -254,9 +262,55 @@ function liveUploadControl() {
   if (!hasControl("upload")) {
     return "";
   }
+  if (usesComposerPlusTrap) {
+    return `
+      <input id="live-upload-input" type="file" hidden multiple />
+    `;
+  }
   return `
     <button type="button" data-testid="upload-button" aria-label="Add photos and files">Add files</button>
     <input id="live-upload-input" type="file" hidden multiple />
+  `;
+}
+
+function liveComposerActions() {
+  if (usesComposerPlusTrap) {
+    return `
+      <div class="pill">
+        <button
+          type="button"
+          id="composer-plus-btn"
+          aria-label="Add photos and files"
+          aria-haspopup="dialog"
+        >
+          +
+        </button>
+        <button type="button" id="composer-send-glyph">
+          <span aria-hidden="true">></span>
+        </button>
+        <button
+          type="button"
+          data-testid="stop-button"
+          aria-label="Stop generating"
+          hidden
+        >
+          Stop
+        </button>
+      </div>
+    `;
+  }
+  return `
+    <div class="pill">
+      <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+      <button
+        type="button"
+        data-testid="stop-button"
+        aria-label="Stop generating"
+        hidden
+      >
+        Stop
+      </button>
+    </div>
   `;
 }
 
@@ -314,17 +368,7 @@ root.innerHTML =
             aria-label="Message ChatGPT"
             placeholder="Message ChatGPT"
           ></textarea>
-          <div class="pill">
-            <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
-            <button
-              type="button"
-              data-testid="stop-button"
-              aria-label="Stop generating"
-              hidden
-            >
-              Stop
-            </button>
-          </div>
+          ${liveComposerActions()}
         </form>
         <div class="stacked-toolbar" data-slot="upload-list"></div>
         <section class="transcript">
@@ -449,6 +493,7 @@ const composer = document.querySelector(
 const sendButton = document.querySelector(
   "[data-action='submit'], [aria-label='Submit prompt'], [data-testid='send-button'], [aria-label='Send prompt']",
 );
+const composerPlusButton = document.querySelector("#composer-plus-btn");
 const stopButton = document.querySelector("[data-testid='stop-button']");
 const uploadEntry = document.querySelector(
   "[data-slot='upload-entry'], [data-testid='upload-button']",
@@ -519,6 +564,10 @@ function setResearchState(state, statusMessage = "") {
   document.body.dataset.researchStatusMessage = statusMessage;
 }
 
+function setUploadPopoverOpen(open) {
+  document.body.dataset.uploadPopoverOpen = open ? "true" : "false";
+}
+
 function uploadedFiles() {
   return (document.body.dataset.uploadedFiles || "")
     .split("|")
@@ -543,6 +592,9 @@ function setStreamingControls(running) {
   if (sendButton instanceof HTMLElement) {
     sendButton.hidden = running;
   }
+  if (composerPlusButton instanceof HTMLElement) {
+    composerPlusButton.disabled = running;
+  }
   if (stopButton instanceof HTMLElement) {
     stopButton.hidden = !running;
   }
@@ -561,6 +613,26 @@ function resetArtifactLink() {
     artifactLink.setAttribute("download", "artifact.txt");
     artifactLink.setAttribute("data-artifact-ready", "false");
   }
+}
+
+function submitPrompt(method) {
+  if (!composer || !message) {
+    return;
+  }
+
+  stopTimer();
+  setUploadPopoverOpen(false);
+  document.body.dataset.lastSubmissionMethod = method;
+  const promptText =
+    "value" in composer ? composer.value.trim() : composer.textContent.trim();
+  if (
+    document.body.dataset.selectedMode === "research" &&
+    scenario.startsWith("research-")
+  ) {
+    startResearch(promptText);
+    return;
+  }
+  startStream(promptText);
 }
 
 function setUploadedFiles(fileNames) {
@@ -1025,6 +1097,13 @@ uploadEntry?.addEventListener("click", () => {
   }
 });
 
+composerPlusButton?.addEventListener("click", () => {
+  setUploadPopoverOpen(true);
+  if (uploadInput instanceof HTMLElement) {
+    uploadInput.click();
+  }
+});
+
 uploadInput?.addEventListener("change", () => {
   const fileNames = Array.from(uploadInput.files || []).map(
     (file) => file.name,
@@ -1041,21 +1120,19 @@ window.__tablinqCancelStream = () => {
 };
 
 sendButton?.addEventListener("click", () => {
-  if (!composer || !message) {
-    return;
-  }
+  submitPrompt("button");
+});
 
-  stopTimer();
-  const promptText =
-    "value" in composer ? composer.value.trim() : composer.textContent.trim();
+composer?.addEventListener("keydown", (event) => {
   if (
-    document.body.dataset.selectedMode === "research" &&
-    scenario.startsWith("research-")
+    !keyboardSubmitEnabled ||
+    event.key !== "Enter" ||
+    (!event.ctrlKey && !event.metaKey)
   ) {
-    startResearch(promptText);
     return;
   }
-  startStream(promptText);
+  event.preventDefault();
+  submitPrompt("keyboard");
 });
 
 stopButton?.addEventListener("click", () => {

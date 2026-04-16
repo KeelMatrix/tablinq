@@ -102,6 +102,7 @@ const PROBE_TIMEOUT_MS = 5_000;
 const ATTACH_PROBE_GRACE_MS = 1_500;
 const INTERACTION_TIMEOUT_MS = 7_500;
 const UPLOAD_ACK_TIMEOUT_MS = 10_000;
+const SUBMIT_START_TIMEOUT_MS = 3_000;
 const DOWNLOAD_TIMEOUT_MS = 10_000;
 const SNAPSHOT_POLL_INTERVAL_MS = 75;
 const STABLE_DONE_POLLS = 3;
@@ -2749,6 +2750,14 @@ interface AskBaseline {
   text: string;
 }
 
+interface SubmitStateSnapshot {
+  composerText: string;
+  composerDisabled: boolean;
+  stopVisible: boolean;
+  assistantMessageCount: number;
+  streamState: string;
+}
+
 interface ResearchSnapshot {
   status: "waiting_for_sources" | "running" | "done" | "failed";
   statusMessage: string | null;
@@ -2766,9 +2775,11 @@ async function callPageAdapter<T>(
     | "clickSubmit"
     | "applyAskConfiguration"
     | "uploadAcknowledged"
+    | "readSubmitState"
     | "readAskBaseline"
     | "readAskSnapshot"
-    | "readResearchSnapshot",
+    | "readResearchSnapshot"
+    | "submitStarted",
   payload?: unknown,
 ): Promise<T> {
   return page.evaluate(
@@ -2800,7 +2811,7 @@ async function callPageAdapter<T>(
 
 async function waitForPageAdapterCondition(
   page: Page,
-  methodName: "composerReady" | "uploadAcknowledged",
+  methodName: "composerReady" | "uploadAcknowledged" | "submitStarted",
   payload: unknown,
   timeoutMs: number,
 ): Promise<void> {
@@ -2851,6 +2862,27 @@ async function waitForInteractionSurface(page: Page): Promise<void> {
 async function fillComposer(page: Page, prompt: string): Promise<void> {
   await waitForInteractionSurface(page);
   await callPageAdapter(page, "fillComposer", { prompt });
+}
+
+async function focusComposer(page: Page): Promise<void> {
+  const composer = page.locator(
+    [
+      "#prompt-textarea",
+      "[data-slot='composer']",
+      "[data-testid='composer-root'] textarea",
+      "[data-testid='composer-root'] [contenteditable='true']",
+      "textarea[aria-label*='Message']",
+      "textarea[placeholder*='message']",
+      "[role='textbox'][aria-label*='Message']",
+      "[contenteditable='true'][aria-label*='Message']",
+      "textarea",
+      "[role='textbox']",
+      "[contenteditable='true']",
+    ].join(", "),
+  );
+  if ((await composer.count()) > 0) {
+    await composer.first().focus().catch(() => undefined);
+  }
 }
 
 async function applyAskConfiguration(
@@ -2955,13 +2987,41 @@ async function uploadAttachments(
 
 async function clickSubmit(page: Page): Promise<void> {
   await waitForInteractionSurface(page);
+  const baseline = await callPageAdapter<SubmitStateSnapshot>(
+    page,
+    "readSubmitState",
+  );
   const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
-  if (clicked) {
+  if (
+    clicked &&
+    (await waitForPageAdapterCondition(
+      page,
+      "submitStarted",
+      { baseline },
+      SUBMIT_START_TIMEOUT_MS,
+    )
+      .then(() => true)
+      .catch(() => false))
+  ) {
     return;
   }
 
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await focusComposer(page);
   await page.keyboard.press(`${modifier}+Enter`).catch(() => undefined);
+  const submitted = await waitForPageAdapterCondition(
+    page,
+    "submitStarted",
+    { baseline },
+    SUBMIT_START_TIMEOUT_MS,
+  )
+    .then(() => true)
+    .catch(() => false);
+  if (!submitted) {
+    throw new Error(
+      "submit failed: prompt was not sent after clicking submit controls or using the keyboard shortcut",
+    );
+  }
 }
 
 async function readAskBaseline(page: Page): Promise<AskBaseline> {
