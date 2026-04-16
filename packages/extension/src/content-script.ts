@@ -1,9 +1,3 @@
-import {
-  probeDocument,
-  type CapabilityBridgeMessage,
-  type ProbeDocumentOptions,
-} from "./probe.js";
-
 interface ChromeRuntimeLike {
   sendMessage?: (message: CapabilityBridgeMessage) => void;
   id?: string;
@@ -13,20 +7,51 @@ interface ChromeLike {
   runtime?: ChromeRuntimeLike;
 }
 
-declare global {
-  interface Window {
-    __TABLINQ_DISABLE_CONTENT_SCRIPT_AUTOSTART__?: boolean;
-  }
+interface ProbeDocumentOptions {
+  selectorPackId?: string;
+  selectorPackVersion?: string;
+  reportedAt?: string;
+  preferredStrategies?: Record<string, string>;
+  selectorPack?: unknown;
 }
 
-export { probeDocument };
+interface CapabilityBridgeMessage {
+  type: "capability_report";
+  report: {
+    reported_at: string;
+  };
+  runtime: unknown;
+  tab?: {
+    id: number | null;
+    url: string | null;
+    workspace_key: string | null;
+  };
+}
 
-export interface ContentScriptHandle {
+interface ContentScriptHandle {
   publish: () => CapabilityBridgeMessage;
   dispose: () => void;
 }
 
-export function installContentScript(
+interface TablinqGlobal {
+  __TABLINQ_PROBE_DOCUMENT__?: (
+    options?: ProbeDocumentOptions,
+  ) => CapabilityBridgeMessage;
+}
+
+interface TablinqWindow extends Window {
+  __TABLINQ_DISABLE_CONTENT_SCRIPT_AUTOSTART__?: boolean;
+}
+
+function probeDocument(options: ProbeDocumentOptions = {}): CapabilityBridgeMessage {
+  const probe = (globalThis as TablinqGlobal).__TABLINQ_PROBE_DOCUMENT__;
+  if (typeof probe !== "function") {
+    throw new Error("Tablinq probe helper is not available");
+  }
+  return probe(options);
+}
+
+function installContentScript(
   options: ProbeDocumentOptions = {},
 ): ContentScriptHandle {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -73,7 +98,7 @@ export function installContentScript(
   };
 }
 
-export function sendMessage(message: CapabilityBridgeMessage): void {
+function sendMessage(message: CapabilityBridgeMessage): void {
   const runtime = (globalThis as { chrome?: ChromeLike }).chrome?.runtime;
   if (runtime?.sendMessage) {
     runtime.sendMessage(message);
@@ -92,7 +117,7 @@ export function sendMessage(message: CapabilityBridgeMessage): void {
 if (
   typeof window !== "undefined" &&
   typeof document !== "undefined" &&
-  !window.__TABLINQ_DISABLE_CONTENT_SCRIPT_AUTOSTART__
+  !(window as TablinqWindow).__TABLINQ_DISABLE_CONTENT_SCRIPT_AUTOSTART__
 ) {
   installContentScript();
 }
