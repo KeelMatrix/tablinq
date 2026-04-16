@@ -938,7 +938,26 @@ export class BrowserAdapter {
       }
 
       if (snapshot.state === "done" && state.doneStreak >= STABLE_DONE_POLLS) {
-        return this.finalizeAsk(command, page, state, snapshot, onChunk);
+        snapshot = await this.stabilizeAskCompletion(
+          page,
+          state.askBaseline,
+          snapshot,
+          timeoutAt,
+        );
+        this.rememberAskSnapshot(state, snapshot);
+        const stabilizedProgress = await this.applyAskSnapshot(
+          command,
+          state,
+          snapshot,
+          onChunk,
+        );
+        if (stabilizedProgress) {
+          state.lastProgressAt = Date.now();
+        }
+        if (snapshot.state === "done") {
+          return this.finalizeAsk(command, page, state, snapshot, onChunk);
+        }
+        state.doneStreak = 0;
       }
 
       const canRecoverFromAskStall =
@@ -1408,6 +1427,24 @@ export class BrowserAdapter {
       state.doneStreak = 0;
     }
     if (snapshot.state === "done") {
+      snapshot = await this.stabilizeAskCompletion(
+        recoveredPage,
+        state.askBaseline,
+        snapshot,
+        timeoutAt,
+      );
+      this.rememberAskSnapshot(state, snapshot);
+      const stabilizedProgress = await this.applyAskSnapshot(
+        command,
+        state,
+        snapshot,
+        onChunk,
+      );
+      if (stabilizedProgress) {
+        state.doneStreak = 0;
+      }
+    }
+    if (snapshot.state === "done") {
       state.doneStreak = STABLE_DONE_POLLS;
       return {
         page: recoveredPage,
@@ -1566,6 +1603,32 @@ export class BrowserAdapter {
       };
     }
     return { page: recoveredPage };
+  }
+
+  private async stabilizeAskCompletion(
+    page: Page,
+    baseline: AskBaseline | null,
+    snapshot: AskSnapshot,
+    timeoutAt: number,
+  ): Promise<AskSnapshot> {
+    let stableSnapshot = snapshot;
+    let stableDonePolls = 0;
+
+    while (Date.now() < timeoutAt && stableDonePolls < STABLE_DONE_POLLS) {
+      await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+      const candidate = await readAskSnapshot(page, baseline);
+      if (candidate.state !== "done") {
+        return candidate;
+      }
+      if (sameAskCompletionSnapshot(stableSnapshot, candidate)) {
+        stableDonePolls += 1;
+        continue;
+      }
+      stableSnapshot = candidate;
+      stableDonePolls = 0;
+    }
+
+    return stableSnapshot;
   }
 
   private async finalizeAsk(
@@ -2633,6 +2696,19 @@ function textRelation(
     return "behind";
   }
   return "mismatch";
+}
+
+function sameAskCompletionSnapshot(
+  left: AskSnapshot,
+  right: AskSnapshot,
+): boolean {
+  return (
+    left.state === right.state &&
+    left.text === right.text &&
+    left.conversationId === right.conversationId &&
+    left.messageId === right.messageId &&
+    left.currentUrl === right.currentUrl
+  );
 }
 
 interface AskSnapshot {

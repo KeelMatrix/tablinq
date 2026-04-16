@@ -741,6 +741,20 @@ function tickStream(state) {
     return;
   }
 
+  if (
+    scenario === "done-early" &&
+    !state.didFinishEarly &&
+    state.index >= state.responseText.length - 1
+  ) {
+    state.didFinishEarly = true;
+    state.index = Math.max(0, state.responseText.length - 1);
+    renderChunk(state);
+    setStreamState("done");
+    persistState(state);
+    activeTimer = setTimeout(() => finishStream(state), 180);
+    return;
+  }
+
   if (state.index >= state.responseText.length) {
     finishStream(state);
     return;
