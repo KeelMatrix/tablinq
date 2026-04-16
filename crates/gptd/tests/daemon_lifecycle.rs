@@ -1,15 +1,18 @@
 use chrono::{Duration, Utc};
 use gptd::{AppConfig, Database, daemon_is_responsive, send_request, send_request_stream};
+use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
+use interprocess::local_socket::traits::Stream as LocalSocketStreamTrait;
 use shared_protocol::{
     AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, Effort, ErrorCode, EventPayload,
     HealthStatus, JobStatus, Mode, ModelClass, PullArtifactCommand, ResearchCommand,
     build_state_paths,
 };
 use std::fs;
+use std::io::Write;
 use std::net::TcpListener;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 use tempfile::tempdir;
@@ -157,6 +160,25 @@ fn wait_for_job_id(state_root: &Path) -> String {
     }
 
     panic!("job id was not created in time");
+}
+
+fn wait_for_job_status(state_root: &Path, job_id: &str, expected: JobStatus) {
+    let deadline = Instant::now() + StdDuration::from_secs(10);
+    while Instant::now() < deadline {
+        let response = send_request(
+            &build_state_paths(state_root).ipc_endpoint,
+            &DaemonRequest::JobsShow(job_id.to_owned()),
+        )
+        .unwrap();
+        if let DaemonResponse::Job(job) = response
+            && job.status == expected
+        {
+            return;
+        }
+        thread::sleep(StdDuration::from_millis(50));
+    }
+
+    panic!("job {job_id} did not reach status {expected:?} in time");
 }
 
 #[test]
@@ -522,6 +544,319 @@ fn daemon_reports_timeout_errors_for_stalled_asks() {
         }
         other => panic!("unexpected response: {other:?}"),
     }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn stuck_ask_does_not_block_later_status_or_doctor() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?scenario=timeout")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let endpoint = build_state_paths(dir.path()).ipc_endpoint;
+    let ask_handle = thread::spawn({
+        let endpoint = endpoint.clone();
+        move || {
+            send_request_stream(
+                &endpoint,
+                &DaemonRequest::Ask(AskCommand {
+                    prompt: "keep hanging".to_owned(),
+                    conversation_id: None,
+                    new_conversation: false,
+                    mode: Mode::Normal,
+                    model_class: None,
+                    effort: None,
+                    files: vec![],
+                }),
+                |_event| Ok(()),
+            )
+            .unwrap()
+        }
+    });
+
+    let job_id = wait_for_job_id(dir.path());
+    wait_for_job_status(dir.path(), &job_id, JobStatus::Running);
+
+    let status_started = Instant::now();
+    let status = send_request(&endpoint, &DaemonRequest::Status).unwrap();
+    assert!(status_started.elapsed() < StdDuration::from_secs(2));
+    assert!(matches!(status, DaemonResponse::Status(_)));
+
+    let doctor_started = Instant::now();
+    let doctor = send_request(&endpoint, &DaemonRequest::Doctor).unwrap();
+    assert!(doctor_started.elapsed() < StdDuration::from_secs(2));
+    match doctor {
+        DaemonResponse::Doctor(_) => {}
+        DaemonResponse::Error(error) => {
+            assert!(error.message.contains("browser busy"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let cancel = send_request(
+        &endpoint,
+        &DaemonRequest::JobsCancel(shared_protocol::CancelJobCommand {
+            job_id: job_id.clone(),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(cancel, DaemonResponse::Ack(_)));
+
+    let response = ask_handle.join().unwrap();
+    match response {
+        DaemonResponse::Error(error) => {
+            assert!(error.message.contains("cancelled"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn stuck_ask_does_not_block_later_browser_attach() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?scenario=timeout")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let endpoint = build_state_paths(dir.path()).ipc_endpoint;
+    let ask_handle = thread::spawn({
+        let endpoint = endpoint.clone();
+        move || {
+            send_request_stream(
+                &endpoint,
+                &DaemonRequest::Ask(AskCommand {
+                    prompt: "hang before attach".to_owned(),
+                    conversation_id: None,
+                    new_conversation: false,
+                    mode: Mode::Normal,
+                    model_class: None,
+                    effort: None,
+                    files: vec![],
+                }),
+                |_event| Ok(()),
+            )
+            .unwrap()
+        }
+    });
+
+    let job_id = wait_for_job_id(dir.path());
+    wait_for_job_status(dir.path(), &job_id, JobStatus::Running);
+
+    let attach_started = Instant::now();
+    let attach = send_request(
+        &endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(fake_url.clone()),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(attach_started.elapsed() < StdDuration::from_secs(2));
+    match attach {
+        DaemonResponse::Browser(_) => {}
+        DaemonResponse::Error(error) => {
+            assert!(error.message.contains("browser busy"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let _ = send_request(
+        &endpoint,
+        &DaemonRequest::JobsCancel(shared_protocol::CancelJobCommand { job_id }),
+    )
+    .unwrap();
+    let _ = ask_handle.join().unwrap();
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn client_disconnect_during_ask_cancels_the_job() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?scenario=timeout")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let endpoint = build_state_paths(dir.path()).ipc_endpoint;
+    let name = endpoint
+        .clone()
+        .to_ns_name::<GenericNamespaced>()
+        .expect("convert endpoint to local socket name");
+    let mut stream = Stream::connect(name).expect("connect to daemon");
+    let raw = serde_json::to_string(&DaemonRequest::Ask(AskCommand {
+        prompt: "disconnect mid-ask".to_owned(),
+        conversation_id: None,
+        new_conversation: false,
+        mode: Mode::Normal,
+        model_class: None,
+        effort: None,
+        files: vec![],
+    }))
+    .unwrap();
+    stream.write_all(raw.as_bytes()).unwrap();
+    stream.write_all(b"\n").unwrap();
+    stream.flush().unwrap();
+    drop(stream);
+
+    let job_id = wait_for_job_id(dir.path());
+    wait_for_job_status(dir.path(), &job_id, JobStatus::Cancelled);
+
+    let status = send_request(&endpoint, &DaemonRequest::Status).unwrap();
+    assert!(matches!(status, DaemonResponse::Status(_)));
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn cancelled_ask_releases_browser_capacity() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?scenario=timeout")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let endpoint = build_state_paths(dir.path()).ipc_endpoint;
+    let (job_tx, job_rx) = mpsc::channel();
+    let ask_handle = thread::spawn({
+        let endpoint = endpoint.clone();
+        move || {
+            send_request_stream(
+                &endpoint,
+                &DaemonRequest::Ask(AskCommand {
+                    prompt: "cancel and recover".to_owned(),
+                    conversation_id: None,
+                    new_conversation: false,
+                    mode: Mode::Normal,
+                    model_class: None,
+                    effort: None,
+                    files: vec![],
+                }),
+                |event| {
+                    if let EventPayload::JobState(state) = event
+                        && state.status == JobStatus::Running
+                    {
+                        let _ = job_tx.send(state.job_id);
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap()
+        }
+    });
+
+    let job_id = job_rx
+        .recv_timeout(StdDuration::from_secs(10))
+        .expect("running ask job id");
+    let cancel = send_request(
+        &endpoint,
+        &DaemonRequest::JobsCancel(shared_protocol::CancelJobCommand {
+            job_id: job_id.clone(),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(cancel, DaemonResponse::Ack(_)));
+    wait_for_job_status(dir.path(), &job_id, JobStatus::Cancelled);
+
+    let response = ask_handle.join().unwrap();
+    match response {
+        DaemonResponse::Error(error) => assert!(error.message.contains("cancelled")),
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let reopen = send_request(
+        &endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(fake_url.clone()),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(reopen, DaemonResponse::Browser(_)));
 
     stop_daemon(dir.path(), &mut daemon);
     let _ = fake_server.kill();
