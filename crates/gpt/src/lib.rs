@@ -1019,6 +1019,11 @@ fn ansi_color_supported_by_env(env: &[(String, String)]) -> bool {
 }
 
 fn shell_background_is_black(env: &[(String, String)]) -> bool {
+    #[cfg(windows)]
+    if let Some(is_black) = windows_console_background_is_black() {
+        return is_black;
+    }
+
     let colorfgbg = env
         .iter()
         .find(|(candidate, _)| candidate == "COLORFGBG")
@@ -1033,6 +1038,72 @@ fn shell_background_is_black(env: &[(String, String)]) -> bool {
         .next()
         .and_then(|value| value.trim().parse::<u8>().ok())
         == Some(0)
+}
+
+#[cfg(windows)]
+fn windows_console_background_is_black() -> Option<bool> {
+    const STD_OUTPUT_HANDLE: i32 = -11;
+
+    #[repr(C)]
+    struct Coord {
+        x: i16,
+        y: i16,
+    }
+
+    #[repr(C)]
+    struct SmallRect {
+        left: i16,
+        top: i16,
+        right: i16,
+        bottom: i16,
+    }
+
+    #[repr(C)]
+    struct ConsoleScreenBufferInfo {
+        dw_size: Coord,
+        dw_cursor_position: Coord,
+        w_attributes: u16,
+        sr_window: SmallRect,
+        dw_maximum_window_size: Coord,
+    }
+
+    unsafe extern "system" {
+        fn GetStdHandle(n_std_handle: i32) -> *mut std::ffi::c_void;
+        fn GetConsoleScreenBufferInfo(
+            h_console_output: *mut std::ffi::c_void,
+            lp_console_screen_buffer_info: *mut ConsoleScreenBufferInfo,
+        ) -> i32;
+    }
+
+    let handle = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) };
+    if handle.is_null() || handle as isize == -1 {
+        return None;
+    }
+
+    let mut info = ConsoleScreenBufferInfo {
+        dw_size: Coord { x: 0, y: 0 },
+        dw_cursor_position: Coord { x: 0, y: 0 },
+        w_attributes: 0,
+        sr_window: SmallRect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        },
+        dw_maximum_window_size: Coord { x: 0, y: 0 },
+    };
+    let ok = unsafe { GetConsoleScreenBufferInfo(handle, &mut info) };
+    if ok == 0 {
+        return None;
+    }
+
+    Some(console_attributes_background_is_black(info.w_attributes))
+}
+
+#[cfg(windows)]
+fn console_attributes_background_is_black(attributes: u16) -> bool {
+    const BACKGROUND_MASK: u16 = 0x00F0;
+    (attributes & BACKGROUND_MASK) == 0
 }
 
 fn config_show(state_root: Option<&Path>) -> Result<Value> {
@@ -1671,6 +1742,14 @@ mod tests {
             "0;15".to_owned()
         )]));
         assert!(!shell_background_is_black(&[]));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn console_attributes_background_is_black_reads_console_background_bits() {
+        assert!(console_attributes_background_is_black(0));
+        assert!(!console_attributes_background_is_black(0x0010));
+        assert!(!console_attributes_background_is_black(0x00F0));
     }
 
     #[test]
