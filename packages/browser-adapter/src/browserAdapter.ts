@@ -102,6 +102,7 @@ const PROBE_TIMEOUT_MS = 5_000;
 const ATTACH_PROBE_GRACE_MS = 1_500;
 const INTERACTION_TIMEOUT_MS = 7_500;
 const UPLOAD_ACK_TIMEOUT_MS = 10_000;
+const SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS = 60_000;
 const SUBMIT_START_TIMEOUT_MS = 3_000;
 const DOWNLOAD_TIMEOUT_MS = 10_000;
 const SNAPSHOT_POLL_INTERVAL_MS = 75;
@@ -883,6 +884,15 @@ export class BrowserAdapter {
         this.lastCapabilityReport,
       );
       await fillComposer(page, command.prompt);
+      if ((command.files ?? []).length > 0) {
+        await waitForSubmitReadyAfterUploads(
+          page,
+          Math.min(
+            SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+            Math.max(1, timeoutAt - Date.now()),
+          ),
+        );
+      }
       await clickSubmit(page);
     }
 
@@ -1059,6 +1069,15 @@ export class BrowserAdapter {
         this.lastCapabilityReport,
       );
       await fillComposer(page, command.query);
+      if ((command.files ?? []).length > 0) {
+        await waitForSubmitReadyAfterUploads(
+          page,
+          Math.min(
+            SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+            Math.max(1, timeoutAt - Date.now()),
+          ),
+        );
+      }
       await clickSubmit(page);
     }
 
@@ -2753,6 +2772,11 @@ interface AskBaseline {
 interface SubmitStateSnapshot {
   composerText: string;
   composerDisabled: boolean;
+  submitVisible: boolean;
+  submitEnabled: boolean;
+  submitBusy: boolean;
+  keyboardReady: boolean;
+  attachmentsProcessing: boolean;
   stopVisible: boolean;
   assistantMessageCount: number;
   streamState: string;
@@ -2775,6 +2799,8 @@ async function callPageAdapter<T>(
     | "clickSubmit"
     | "applyAskConfiguration"
     | "uploadAcknowledged"
+    | "submitReady"
+    | "attachmentsStillProcessing"
     | "readSubmitState"
     | "readAskBaseline"
     | "readAskSnapshot"
@@ -2811,7 +2837,12 @@ async function callPageAdapter<T>(
 
 async function waitForPageAdapterCondition(
   page: Page,
-  methodName: "composerReady" | "uploadAcknowledged" | "submitStarted",
+  methodName:
+    | "composerReady"
+    | "uploadAcknowledged"
+    | "submitReady"
+    | "attachmentsStillProcessing"
+    | "submitStarted",
   payload: unknown,
   timeoutMs: number,
 ): Promise<void> {
@@ -2839,6 +2870,36 @@ async function waitForPageAdapterCondition(
     {
       timeout: timeoutMs,
     },
+  );
+}
+
+async function waitForSubmitReadyAfterUploads(
+  page: Page,
+  timeoutMs = SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+): Promise<void> {
+  const ready = await waitForPageAdapterCondition(
+    page,
+    "submitReady",
+    undefined,
+    timeoutMs,
+  )
+    .then(() => true)
+    .catch(() => false);
+  if (ready) {
+    return;
+  }
+
+  const state = await callPageAdapter<SubmitStateSnapshot>(
+    page,
+    "readSubmitState",
+  ).catch(() => null);
+  if (state?.attachmentsProcessing) {
+    throw new Error(
+      `submit failed: upload was acknowledged but attachments are still processing after ${timeoutMs}ms`,
+    );
+  }
+  throw new Error(
+    `submit failed: upload was acknowledged but submit never became ready after ${timeoutMs}ms`,
   );
 }
 

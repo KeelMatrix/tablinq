@@ -445,8 +445,11 @@ export function createTablinqPageAdapterRuntime() {
     );
   };
 
-  const submitCandidateScore = (element) => {
-    if (!(element instanceof HTMLElement) || isDisabled(element)) {
+  const submitCandidateScore = (element, { allowDisabled = false } = {}) => {
+    if (!(element instanceof HTMLElement)) {
+      return Number.NEGATIVE_INFINITY;
+    }
+    if (!allowDisabled && isDisabled(element)) {
       return Number.NEGATIVE_INFINITY;
     }
     if (isUploadLikeControl(element)) {
@@ -462,7 +465,7 @@ export function createTablinqPageAdapterRuntime() {
           "[data-testid='send-button']",
           "button[aria-label='Submit prompt']",
           "button[aria-label*='Send']",
-          "button[type='submit']",
+          "input[type='submit']",
         ].join(", "),
       )
     ) {
@@ -471,8 +474,14 @@ export function createTablinqPageAdapterRuntime() {
     if (hasToken(fingerprint, ["send", "submit", "ask"])) {
       score += 6;
     }
-    if (element.getAttribute("type") === "submit") {
+    if (
+      element.tagName.toLowerCase() === "input" &&
+      element.getAttribute("type") === "submit"
+    ) {
       score += 4;
+    }
+    if (isDisabled(element)) {
+      score -= 3;
     }
     if (hasToken(fingerprint, ["stop", "cancel"])) {
       score -= 10;
@@ -511,22 +520,25 @@ export function createTablinqPageAdapterRuntime() {
     return candidates;
   };
 
-  const findSubmitButton = () => {
+  const findSubmitButton = ({ allowDisabled = false } = {}) => {
     const explicit = queryFirstVisible([
       "[data-action='submit']",
       "[data-testid='send-button']",
       "button[aria-label='Submit prompt']",
       "button[aria-label*='Send']",
-      "button[type='submit']",
+      "input[type='submit']",
     ]);
-    if (explicit && submitCandidateScore(explicit) > 0) {
+    if (
+      explicit &&
+      submitCandidateScore(explicit, { allowDisabled }) > 0
+    ) {
       return explicit;
     }
 
     const nearby = submitCandidatesNearComposer()
       .map((element) => ({
         element,
-        score: submitCandidateScore(element),
+        score: submitCandidateScore(element, { allowDisabled }),
       }))
       .filter((entry) => entry.score > 0)
       .sort((left, right) => right.score - left.score);
@@ -536,9 +548,157 @@ export function createTablinqPageAdapterRuntime() {
 
     return findByAliases({
       fallbackTokens: ["send", "submit", "ask"],
-      exclude: (element) => submitCandidateScore(element) <= 0,
+      exclude: (element) =>
+        submitCandidateScore(element, { allowDisabled }) <= 0,
     });
   };
+
+  const submitButtonBusy = (element) =>
+    element instanceof HTMLElement &&
+    (element.getAttribute("aria-busy") === "true" ||
+      element.dataset.busy === "true" ||
+      element.dataset.loading === "true");
+
+  const readSubmitControlState = () => {
+    const button = findSubmitButton({ allowDisabled: true });
+    const visible = button instanceof HTMLElement;
+    const enabled = visible && !isDisabled(button);
+    const busy = visible && submitButtonBusy(button);
+    return {
+      submitVisible: visible,
+      submitEnabled: enabled,
+      submitBusy: busy,
+    };
+  };
+
+  const uploadAttachmentSelectors = [
+    "[data-slot='uploaded-file']",
+    "[data-slot='upload-entry-name']",
+    "[data-testid='upload-chip']",
+    "[data-testid*='attachment']",
+    "[aria-label*='Attached file']",
+    "[aria-label*='attachment']",
+  ].join(", ");
+
+  const visibleAttachmentElements = () =>
+    visibleUnique(document.querySelectorAll(uploadAttachmentSelectors));
+
+  const hasAcknowledgedAttachments = () =>
+    unique((document.body.dataset.uploadedFiles ?? "").split("|")).length > 0 ||
+    visibleAttachmentElements().length > 0;
+
+  const attachmentRegions = () => {
+    const seen = new Set();
+    const roots = [];
+    const add = (element) => {
+      if (!(element instanceof HTMLElement) || seen.has(element)) {
+        return;
+      }
+      seen.add(element);
+      roots.push(element);
+    };
+
+    add(queryFirstVisible(["[data-slot='upload-list']"]));
+    for (const container of composerContainers()) {
+      add(container);
+    }
+    for (const element of visibleAttachmentElements()) {
+      add(element.closest("[data-slot='upload-list']"));
+      add(element.closest("[data-testid='composer-root']"));
+      add(element.parentElement);
+    }
+    if (roots.length === 0) {
+      add(document.body);
+    }
+    return roots;
+  };
+
+  const attachmentProcessingSelectors = [
+    "[data-slot='upload-processing']",
+    "[data-upload-processing='true']",
+    "[data-upload-state='processing']",
+    "[data-upload-state='uploading']",
+    "[data-testid*='upload-progress']",
+    "[data-testid*='attachment-progress']",
+    "[data-testid*='upload-processing']",
+    "[role='progressbar']",
+    "[aria-busy='true']",
+  ];
+
+  const attachmentsStillProcessing = () => {
+    if (
+      document.body.dataset.uploadProcessing === "true" ||
+      document.body.dataset.attachmentsProcessing === "true"
+    ) {
+      return true;
+    }
+    if (!hasAcknowledgedAttachments()) {
+      return false;
+    }
+
+    for (const root of attachmentRegions()) {
+      for (const selector of attachmentProcessingSelectors) {
+        const match = firstVisible(root.querySelectorAll(selector));
+        if (match) {
+          return true;
+        }
+      }
+
+      for (const element of visibleUnique(
+        root.querySelectorAll("span, div, li, p, button"),
+      )) {
+        const fingerprint = controlFingerprint(element);
+        if (
+          hasToken(fingerprint, [
+            "upload",
+            "attachment",
+            "file",
+            "processing",
+            "uploading",
+            "indexing",
+            "analyzing",
+          ]) &&
+          (element.getAttribute("aria-busy") === "true" ||
+            hasToken(fingerprint, [
+              "processing",
+              "uploading",
+              "indexing",
+              "analyzing",
+            ]))
+        ) {
+          return true;
+        }
+      }
+    }
+
+    const submitState = readSubmitControlState();
+    return submitState.submitVisible && submitState.submitBusy;
+  };
+
+  const keyboardSubmitReady = () => {
+    const explicit = document.body.dataset.keyboardSubmitReady;
+    if (explicit === "true") {
+      return true;
+    }
+    if (explicit === "false") {
+      return false;
+    }
+    const composer = findComposer();
+    return (
+      composer instanceof HTMLElement &&
+      !composerDisabled() &&
+      !readSubmitControlState().submitVisible
+    );
+  };
+
+  const submitButtonEnabled = () => {
+    const state = readSubmitControlState();
+    return state.submitVisible && state.submitEnabled && !state.submitBusy;
+  };
+
+  const submitReady = () =>
+    !attachmentsStillProcessing() &&
+    (submitButtonEnabled() || keyboardSubmitReady());
 
   const stopButtonVisible = () =>
     Boolean(
@@ -554,6 +714,9 @@ export function createTablinqPageAdapterRuntime() {
   const readSubmitState = () => ({
     composerText: readComposerText(),
     composerDisabled: composerDisabled(),
+    ...readSubmitControlState(),
+    keyboardReady: keyboardSubmitReady(),
+    attachmentsProcessing: attachmentsStillProcessing(),
     stopVisible: stopButtonVisible(),
     assistantMessageCount: findAssistantMessages().length,
     streamState:
@@ -573,9 +736,15 @@ export function createTablinqPageAdapterRuntime() {
       (current.streamState !== "idle" &&
         current.streamState !== (baseline.streamState ?? "idle")) ||
       current.assistantMessageCount > (baseline.assistantMessageCount ?? 0) ||
+      (current.submitBusy && !baseline.submitBusy) ||
       (baseline.composerText &&
         current.composerText !== baseline.composerText) ||
-      (current.composerDisabled && !baseline.composerDisabled)
+      (current.composerDisabled && !baseline.composerDisabled) ||
+      (baseline.submitEnabled &&
+        !current.submitEnabled &&
+        (current.stopVisible ||
+          current.streamState !== "idle" ||
+          current.submitBusy))
     );
   };
 
@@ -1441,6 +1610,12 @@ export function createTablinqPageAdapterRuntime() {
     },
     readSubmitState() {
       return readSubmitState();
+    },
+    submitReady() {
+      return submitReady();
+    },
+    attachmentsStillProcessing() {
+      return attachmentsStillProcessing();
     },
     submitStarted(payload) {
       return submitStarted(payload ?? {});

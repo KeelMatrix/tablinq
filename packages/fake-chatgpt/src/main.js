@@ -12,7 +12,12 @@ const scenario = params.get("scenario") || "success";
 const usesComposerPlusTrap =
   scenario === "submit-upload-trap" ||
   scenario === "submit-upload-trap-no-keyboard";
-const keyboardSubmitEnabled = scenario !== "submit-upload-trap-no-keyboard";
+const hasDelayedUploadProcessing = scenario === "upload-processing-delay";
+const hasStuckUploadProcessing = scenario === "upload-processing-stuck";
+const hasBlockedSubmitAfterUpload = scenario === "submit-never-ready";
+const keyboardSubmitEnabled =
+  scenario !== "submit-upload-trap-no-keyboard" &&
+  scenario !== "submit-never-ready";
 const requestedInitialModel = params.get("initial_model");
 const initialModel =
   requestedInitialModel === "instant" || requestedInitialModel === "thinking"
@@ -67,6 +72,7 @@ document.body.dataset.selectedModel = initialModel;
 document.body.dataset.selectedEffort = "standard";
 document.body.dataset.selectedMode = "normal";
 document.body.dataset.uploadedFiles = "";
+document.body.dataset.uploadProcessing = "false";
 document.body.dataset.researchState = "idle";
 document.body.dataset.researchStatusMessage = "";
 document.body.dataset.conversationId =
@@ -74,6 +80,9 @@ document.body.dataset.conversationId =
 document.body.dataset.lastMessageId = "";
 document.body.dataset.uploadPopoverOpen = "false";
 document.body.dataset.lastSubmissionMethod = "";
+document.body.dataset.keyboardSubmitReady = keyboardSubmitEnabled
+  ? "true"
+  : "false";
 
 note.textContent =
   variant === "aria"
@@ -524,6 +533,7 @@ const artifactLink = document.querySelector(
   "[data-slot='artifact-link'], [data-testid='artifact-download']",
 );
 let activeTimer = null;
+let uploadProcessingTimer = null;
 
 function uniqueId(prefix) {
   return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
@@ -590,18 +600,38 @@ function renderUploadedFiles(fileNames) {
   if (!uploadList) {
     return;
   }
-  uploadList.innerHTML = fileNames
+  const chips = fileNames
     .map((fileName) =>
       variant === "live"
         ? `<span class="pill" data-testid="upload-chip" aria-label="Attached file ${fileName}">${fileName}</span>`
         : `<span class="pill" data-slot="uploaded-file">${fileName}</span>`,
     )
     .join("");
+  const processingIndicator =
+    document.body.dataset.uploadProcessing === "true"
+      ? `<span class="pill" data-slot="upload-processing" data-upload-processing="true" aria-busy="true">Processing upload</span>`
+      : "";
+  uploadList.innerHTML = `${chips}${processingIndicator}`;
 }
 
-function setStreamingControls(running) {
+function syncSubmissionControls() {
+  const running = document.body.dataset.streamState === "running";
+  const uploadProcessing = document.body.dataset.uploadProcessing === "true";
+  const submitBlocked =
+    hasBlockedSubmitAfterUpload && uploadedFiles().length > 0 && !running;
   if (sendButton instanceof HTMLElement) {
     sendButton.hidden = running;
+    sendButton.setAttribute(
+      "aria-disabled",
+      uploadProcessing || submitBlocked ? "true" : "false",
+    );
+    sendButton.setAttribute("aria-busy", uploadProcessing ? "true" : "false");
+    sendButton.dataset.disabled =
+      uploadProcessing || submitBlocked ? "true" : "false";
+    sendButton.dataset.busy = uploadProcessing ? "true" : "false";
+    if ("disabled" in sendButton) {
+      sendButton.disabled = uploadProcessing || submitBlocked;
+    }
   }
   if (composerPlusButton instanceof HTMLElement) {
     composerPlusButton.disabled = running;
@@ -609,6 +639,25 @@ function setStreamingControls(running) {
   if (stopButton instanceof HTMLElement) {
     stopButton.hidden = !running;
   }
+  document.body.dataset.keyboardSubmitReady =
+    !running && !uploadProcessing && keyboardSubmitEnabled ? "true" : "false";
+}
+
+function setStreamingControls(running) {
+  syncSubmissionControls();
+}
+
+function stopUploadProcessingTimer() {
+  if (uploadProcessingTimer) {
+    clearTimeout(uploadProcessingTimer);
+    uploadProcessingTimer = null;
+  }
+}
+
+function setUploadProcessing(processing) {
+  document.body.dataset.uploadProcessing = processing ? "true" : "false";
+  renderUploadedFiles(uploadedFiles());
+  syncSubmissionControls();
 }
 
 function resetArtifactLink() {
@@ -628,6 +677,9 @@ function resetArtifactLink() {
 
 function submitPrompt(method) {
   if (!composer || !message) {
+    return;
+  }
+  if (document.body.dataset.uploadProcessing === "true") {
     return;
   }
 
@@ -1156,6 +1208,22 @@ uploadInput?.addEventListener("change", () => {
     (file) => file.name,
   );
   setUploadedFiles(fileNames);
+  stopUploadProcessingTimer();
+  if (fileNames.length === 0) {
+    setUploadProcessing(false);
+    return;
+  }
+  if (hasDelayedUploadProcessing || hasStuckUploadProcessing) {
+    setUploadProcessing(true);
+  } else {
+    setUploadProcessing(false);
+  }
+  if (hasDelayedUploadProcessing) {
+    uploadProcessingTimer = setTimeout(() => {
+      setUploadProcessing(false);
+      uploadProcessingTimer = null;
+    }, 2200);
+  }
 });
 
 window.__tablinqCancelStream = () => {
@@ -1189,6 +1257,6 @@ stopButton?.addEventListener("click", () => {
 syncSelectedState();
 renderUploadedFiles(uploadedFiles());
 resetArtifactLink();
-setStreamingControls(false);
+syncSubmissionControls();
 resumeResearchIfNeeded();
 resumeStreamIfNeeded();
