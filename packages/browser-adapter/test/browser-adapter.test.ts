@@ -21,7 +21,7 @@ import {
 function withHarnessUrl(
   baseUrl: string,
   options: {
-    variant?: "classic" | "aria" | "live";
+    variant?: "classic" | "aria" | "live" | "menu";
     scenario?:
       | "success"
       | "timeout"
@@ -37,6 +37,7 @@ function withHarnessUrl(
       | "research-failure";
     missing?: string[];
     conversationStyle?: "query" | "path";
+    initialModel?: "instant" | "thinking";
   } = {},
 ): string {
   const url = new URL(baseUrl);
@@ -51,6 +52,9 @@ function withHarnessUrl(
   }
   if (options.conversationStyle === "query") {
     url.searchParams.set("conversation_style", "query");
+  }
+  if (options.initialModel) {
+    url.searchParams.set("initial_model", options.initialModel);
   }
   return url.toString();
 }
@@ -1002,6 +1006,154 @@ describe("browser adapter", () => {
       model: "thinking",
       effort: "extended",
     });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("keeps direct model buttons working on the classic harness", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+      }),
+    );
+    await adapter.open({ targetUrl: server.url, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-direct-model-buttons",
+        prompt: "use classic direct buttons",
+        modelClass: "instant",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+    }));
+
+    expect(state).toEqual({
+      model: "instant",
+      effort: "standard",
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("selects a model from a menu picker and then applies thinking effort", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "menu",
+      initialModel: "instant",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-menu-model-picker",
+        prompt: "configure menu picker",
+        mode: "search",
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      model: "thinking",
+      effort: "extended",
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("reports capability missing when the requested model option is absent from the picker", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "menu",
+      initialModel: "thinking",
+      missing: ["instant-model"],
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-menu-missing-instant",
+          prompt: "configure missing instant",
+          modelClass: "instant",
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(
+      /capability missing: model class; requested=instant; discovered=thinking=\[gpt-5.4 thinking\]/i,
+    );
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("reports capability missing when thinking effort controls never appear", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "menu",
+      initialModel: "instant",
+      missing: ["effort"],
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-menu-missing-effort",
+          prompt: "configure missing effort",
+          modelClass: "thinking",
+          effort: "extended",
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(
+      /capability missing: thinking effort; requested=extended; discovered=none/i,
+    );
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

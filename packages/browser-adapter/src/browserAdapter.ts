@@ -852,7 +852,30 @@ export class BrowserAdapter {
       }
       askBaseline = await readAskBaseline(page);
       await this.refreshCapabilities(page);
-      await applyAskConfiguration(page, command, this.lastCapabilityReport);
+      if (command.modelClass) {
+        await applyAskConfiguration(
+          page,
+          {
+            ...command,
+            effort: undefined,
+            mode: undefined,
+          },
+          this.lastCapabilityReport,
+        );
+        if (command.effort || (command.mode && command.mode !== "normal")) {
+          await this.refreshCapabilities(page);
+        }
+      }
+      if (!command.modelClass || command.effort || command.mode) {
+        await applyAskConfiguration(
+          page,
+          {
+            ...command,
+            modelClass: undefined,
+          },
+          this.lastCapabilityReport,
+        );
+      }
       await uploadAttachments(
         page,
         command.files ?? [],

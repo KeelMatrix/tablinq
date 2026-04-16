@@ -658,9 +658,6 @@ export function probeDocument(options = {}) {
           addAlias("model_classes", "thinking", name);
         }
       }
-      if (Object.keys(aliases.model_classes).length === 0) {
-        addAlias("model_classes", "thinking", names[0]);
-      }
     }
     if (capability === "thinking_effort_visible") {
       for (const name of names) {
