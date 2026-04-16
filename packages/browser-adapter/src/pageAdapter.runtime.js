@@ -155,21 +155,21 @@ export function createTablinqPageAdapterRuntime() {
     return null;
   };
 
+  const actionableSelector = [
+    "button",
+    "[role='button']",
+    "[role='tab']",
+    "[role='switch']",
+    "[role='option']",
+    "[role='menuitem']",
+    "[role='menuitemradio']",
+    "[aria-haspopup]",
+    "label[for]",
+    "a",
+  ].join(", ");
+
   const actionableElements = () =>
-    Array.from(
-      document.querySelectorAll(
-        [
-          "button",
-          "[role='button']",
-          "[role='tab']",
-          "[role='switch']",
-          "[role='option']",
-          "[aria-haspopup]",
-          "label[for]",
-          "a",
-        ].join(", "),
-      ),
-    ).filter(isVisible);
+    Array.from(document.querySelectorAll(actionableSelector)).filter(isVisible);
 
   const latestVisible = (selectors) => {
     const matches = [];
@@ -215,16 +215,21 @@ export function createTablinqPageAdapterRuntime() {
     selectors = [],
     aliases = [],
     fallbackTokens = [],
+    include,
     exclude,
   }) => {
     const selectorMatch = queryFirstVisible(selectors);
-    if (selectorMatch && !exclude?.(selectorMatch)) {
+    if (
+      selectorMatch &&
+      !exclude?.(selectorMatch) &&
+      (!include || include(selectorMatch))
+    ) {
       return selectorMatch;
     }
 
     const normalizedAliases = unique(aliases);
     for (const element of actionableElements()) {
-      if (exclude?.(element)) {
+      if (exclude?.(element) || (include && !include(element))) {
         continue;
       }
       const name = accessibleName(element);
@@ -242,7 +247,7 @@ export function createTablinqPageAdapterRuntime() {
     }
 
     for (const element of actionableElements()) {
-      if (exclude?.(element)) {
+      if (exclude?.(element) || (include && !include(element))) {
         continue;
       }
       if (hasToken(accessibleName(element), fallbackTokens)) {
@@ -298,6 +303,70 @@ export function createTablinqPageAdapterRuntime() {
       "[role='textbox']",
       "[contenteditable='true']",
     ]);
+
+  const composerContainers = () => {
+    const composer = findComposer();
+    const seen = new Set();
+    const containers = [];
+    for (const container of [
+      composer?.closest("[data-testid='composer-root']"),
+      composer?.closest("form"),
+      composer?.parentElement,
+      composer?.closest("section"),
+      composer?.closest("main"),
+    ]) {
+      if (!(container instanceof HTMLElement) || seen.has(container)) {
+        continue;
+      }
+      seen.add(container);
+      containers.push(container);
+    }
+    return containers;
+  };
+
+  const isComposerAdjacent = (element) =>
+    element instanceof HTMLElement &&
+    composerContainers().some(
+      (container) => container === element || container.contains(element),
+    );
+
+  const findComposerAdjacentControl = ({
+    selectors = [],
+    tokens = [],
+    requirePopup = false,
+    include,
+    exclude,
+  }) => {
+    for (const container of composerContainers()) {
+      for (const selector of selectors) {
+        const match = firstVisible(container.querySelectorAll(selector));
+        if (
+          match &&
+          !exclude?.(match) &&
+          (!include || include(match)) &&
+          (!requirePopup || match.getAttribute("aria-haspopup") !== null)
+        ) {
+          return match;
+        }
+      }
+
+      for (const element of visibleUnique(
+        container.querySelectorAll(actionableSelector),
+      )) {
+        if (
+          exclude?.(element) ||
+          (include && !include(element)) ||
+          (requirePopup && element.getAttribute("aria-haspopup") === null)
+        ) {
+          continue;
+        }
+        if (hasToken(accessibleName(element), tokens)) {
+          return element;
+        }
+      }
+    }
+    return null;
+  };
 
   const readComposerText = () => {
     const composer = findComposer();
@@ -763,8 +832,8 @@ export function createTablinqPageAdapterRuntime() {
 
   const modelDefaults = (modelClass) => [
     modelClass,
-    modelClass === "instant" ? "gpt-5.3 instant" : "gpt-5.4 thinking",
     modelClass === "instant" ? "instant answers" : "deep thinking",
+    modelClass === "instant" ? "gpt-5.3 instant" : "gpt-5.4 thinking",
   ];
 
   const modelFallbackTokens = (modelClass) =>
@@ -772,7 +841,8 @@ export function createTablinqPageAdapterRuntime() {
 
   const effortDefaults = (effort) => [
     effort,
-    effort === "standard" ? "standard reasoning" : "extended reasoning",
+    effort === "standard" ? "standard reasoning" : "extended thinking",
+    effort === "standard" ? "default thinking" : "extended reasoning",
   ];
 
   const effortFallbackTokens = (effort) =>
@@ -784,24 +854,54 @@ export function createTablinqPageAdapterRuntime() {
     (element.matches("[data-slot='model-picker']") ||
       element.getAttribute("aria-haspopup") !== null) &&
     hasToken(accessibleName(element), [
+      "chatgpt",
       "model",
       "selector",
       "engine",
       "gpt",
+      "latest",
       "instant",
       "thinking",
+      "pro",
     ]);
 
   const isEffortPickerTrigger = (element) =>
     element instanceof HTMLElement &&
     !element.hasAttribute("data-effort") &&
     (element.matches("[data-slot='effort-toggle']") ||
-      element.getAttribute("aria-haspopup") !== null) &&
+      (element.getAttribute("aria-haspopup") !== null &&
+        isComposerAdjacent(element))) &&
     hasToken(accessibleName(element), [
       "effort",
       "reasoning",
+      "thinking",
       "standard",
       "extended",
+    ]);
+
+  const isModelOption = (element) =>
+    element instanceof HTMLElement &&
+    !isModelPickerTrigger(element) &&
+    (element.hasAttribute("data-model") ||
+      element.closest("[data-slot='model-menu']") !== null) &&
+    hasToken(accessibleName(element), [
+      "latest",
+      "instant",
+      "thinking",
+      "pro",
+      "gpt",
+    ]);
+
+  const isEffortOption = (element) =>
+    element instanceof HTMLElement &&
+    !isEffortPickerTrigger(element) &&
+    (element.hasAttribute("data-effort") ||
+      element.closest("[data-slot='effort-menu']") !== null) &&
+    hasToken(accessibleName(element), [
+      "standard",
+      "extended",
+      "reasoning",
+      "thinking",
     ]);
 
   const discoverVisibleAliases = ({ keys, exclude }) => {
@@ -830,7 +930,7 @@ export function createTablinqPageAdapterRuntime() {
         instant: ["instant"],
         thinking: ["thinking"],
       },
-      exclude: isModelPickerTrigger,
+      exclude: (element) => isModelPickerTrigger(element) || !isModelOption(element),
     });
 
   const discoverVisibleEffortAliases = () =>
@@ -840,7 +940,8 @@ export function createTablinqPageAdapterRuntime() {
         extended: ["extended"],
         none: ["none", "auto"],
       },
-      exclude: isEffortPickerTrigger,
+      exclude: (element) =>
+        isEffortPickerTrigger(element) || !isEffortOption(element),
     });
 
   const ensurePickerOpen = (trigger) => {
@@ -856,8 +957,11 @@ export function createTablinqPageAdapterRuntime() {
   const findModelPickerTrigger = (aliases, fallbackTokens) =>
     findByAliases({
       selectors: [
+        "[data-slot='model-picker']",
         "[data-slot='model-picker'][aria-haspopup]",
         "[data-slot='model-picker'] [aria-haspopup]",
+        "button[aria-haspopup][aria-label*='ChatGPT']",
+        "button[aria-haspopup][aria-label*='chatgpt']",
         "button[aria-haspopup][aria-label*='Model']",
         "button[aria-haspopup][aria-label*='model']",
         "button[aria-haspopup][aria-label*='Engine']",
@@ -865,20 +969,23 @@ export function createTablinqPageAdapterRuntime() {
         "button[aria-haspopup][aria-label*='GPT']",
         "button[aria-haspopup][aria-label*='gpt']",
       ],
-      aliases,
+      aliases: unique(["chatgpt", ...aliases]),
       fallbackTokens: unique([
+        "chatgpt",
         "model",
         "selector",
         "engine",
         "gpt",
         ...fallbackTokens,
       ]),
+      include: isModelPickerTrigger,
       exclude: (element) => !isModelPickerTrigger(element),
     });
 
   const findEffortPickerTrigger = (aliases, fallbackTokens) =>
-    findByAliases({
+    findComposerAdjacentControl({
       selectors: [
+        "[data-slot='effort-toggle']",
         "[data-slot='effort-toggle'][aria-haspopup]",
         "[data-slot='effort-toggle'] [aria-haspopup]",
         "button[aria-haspopup][aria-label*='Effort']",
@@ -890,8 +997,11 @@ export function createTablinqPageAdapterRuntime() {
       fallbackTokens: unique([
         "effort",
         "reasoning",
+        "thinking",
         ...fallbackTokens,
       ]),
+      include: isEffortPickerTrigger,
+      requirePopup: true,
       exclude: (element) => !isEffortPickerTrigger(element),
     });
 
@@ -917,28 +1027,24 @@ export function createTablinqPageAdapterRuntime() {
     selectors = [],
     aliases = [],
     fallbackTokens = [],
+    include,
     exclude,
   }) => {
     const selectorMatch = queryFirstVisibleInRoots(roots, selectors);
-    if (selectorMatch && !exclude?.(selectorMatch)) {
+    if (
+      selectorMatch &&
+      !exclude?.(selectorMatch) &&
+      (!include || include(selectorMatch))
+    ) {
       return selectorMatch;
     }
 
     const normalizedAliases = unique(aliases);
     for (const root of roots) {
       for (const element of visibleUnique(
-        root.querySelectorAll(
-          [
-            "button",
-            "[role='button']",
-            "[role='tab']",
-            "[role='option']",
-            "[role='menuitemradio']",
-            "label[for]",
-          ].join(", "),
-        ),
+        root.querySelectorAll(actionableSelector),
       )) {
-        if (exclude?.(element)) {
+        if (exclude?.(element) || (include && !include(element))) {
           continue;
         }
         const name = accessibleName(element);
@@ -957,19 +1063,8 @@ export function createTablinqPageAdapterRuntime() {
     }
 
     for (const root of roots) {
-      for (const element of visibleUnique(
-        root.querySelectorAll(
-          [
-            "button",
-            "[role='button']",
-            "[role='tab']",
-            "[role='option']",
-            "[role='menuitemradio']",
-            "label[for]",
-          ].join(", "),
-        ),
-      )) {
-        if (exclude?.(element)) {
+      for (const element of visibleUnique(root.querySelectorAll(actionableSelector))) {
+        if (exclude?.(element) || (include && !include(element))) {
           continue;
         }
         if (hasToken(accessibleName(element), fallbackTokens)) {
@@ -985,27 +1080,51 @@ export function createTablinqPageAdapterRuntime() {
     findByAliases({
       selectors:
         modelClass === "instant"
-          ? ["[data-model='instant']", "button[aria-label*='Instant']"]
-          : ["[data-model='thinking']", "button[aria-label*='Thinking']"],
-      aliases: expandAliases(report, "model_classes", modelClass, modelDefaults(modelClass)),
+          ? [
+              "[data-model='instant']",
+              "[role='menuitemradio'][data-model='instant']",
+              "button[aria-label*='Instant']",
+            ]
+          : [
+              "[data-model='thinking']",
+              "[role='menuitemradio'][data-model='thinking']",
+              "button[aria-label*='Thinking']",
+            ],
+      aliases: expandAliases(
+        report,
+        "model_classes",
+        modelClass,
+        modelDefaults(modelClass),
+      ),
       fallbackTokens: modelFallbackTokens(modelClass),
+      include: isModelOption,
       exclude: isModelPickerTrigger,
     });
 
   const findOpenModelMenuControl = (report, modelClass) =>
-    findByAliasesInRoots({
-      roots: visibleRoots([
-        "[data-slot='model-menu']",
-        "[role='menu']",
-        "[role='listbox']",
-        "[role='dialog']",
-      ]),
+    findByAliases({
       selectors:
         modelClass === "instant"
-          ? ["[data-model='instant']", "button[aria-label*='Instant']"]
-          : ["[data-model='thinking']", "button[aria-label*='Thinking']"],
-      aliases: expandAliases(report, "model_classes", modelClass, modelDefaults(modelClass)),
+          ? [
+              "[role='menuitemradio'][data-model='instant']",
+              "[role='menuitem'][data-model='instant']",
+              "[data-model='instant']",
+              "button[aria-label*='Instant']",
+            ]
+          : [
+              "[role='menuitemradio'][data-model='thinking']",
+              "[role='menuitem'][data-model='thinking']",
+              "[data-model='thinking']",
+              "button[aria-label*='Thinking']",
+            ],
+      aliases: expandAliases(
+        report,
+        "model_classes",
+        modelClass,
+        modelDefaults(modelClass),
+      ),
       fallbackTokens: modelFallbackTokens(modelClass),
+      include: isModelOption,
       exclude: isModelPickerTrigger,
     });
 
@@ -1013,27 +1132,41 @@ export function createTablinqPageAdapterRuntime() {
     findByAliases({
       selectors:
         effort === "standard"
-          ? ["[data-effort='standard']", "button[aria-label*='Standard']"]
-          : ["[data-effort='extended']", "button[aria-label*='Extended']"],
+          ? [
+              "[data-effort='standard']",
+              "[role='menuitemradio'][data-effort='standard']",
+              "button[aria-label*='Standard']",
+            ]
+          : [
+              "[data-effort='extended']",
+              "[role='menuitemradio'][data-effort='extended']",
+              "button[aria-label*='Extended']",
+            ],
       aliases: expandAliases(report, "efforts", effort, effortDefaults(effort)),
       fallbackTokens: effortFallbackTokens(effort),
+      include: isEffortOption,
       exclude: isEffortPickerTrigger,
     });
 
   const findOpenEffortMenuControl = (report, effort) =>
-    findByAliasesInRoots({
-      roots: visibleRoots([
-        "[data-slot='effort-menu']",
-        "[role='menu']",
-        "[role='listbox']",
-        "[role='dialog']",
-      ]),
+    findByAliases({
       selectors:
         effort === "standard"
-          ? ["[data-effort='standard']", "button[aria-label*='Standard']"]
-          : ["[data-effort='extended']", "button[aria-label*='Extended']"],
+          ? [
+              "[role='menuitemradio'][data-effort='standard']",
+              "[role='menuitem'][data-effort='standard']",
+              "[data-effort='standard']",
+              "button[aria-label*='Standard']",
+            ]
+          : [
+              "[role='menuitemradio'][data-effort='extended']",
+              "[role='menuitem'][data-effort='extended']",
+              "[data-effort='extended']",
+              "button[aria-label*='Extended']",
+            ],
       aliases: expandAliases(report, "efforts", effort, effortDefaults(effort)),
       fallbackTokens: effortFallbackTokens(effort),
+      include: isEffortOption,
       exclude: isEffortPickerTrigger,
     });
 

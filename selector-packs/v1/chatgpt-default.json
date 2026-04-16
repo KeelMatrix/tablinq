@@ -2,7 +2,7 @@
   "format_version": 1,
   "pack_id": "chatgpt-default",
   "description": "Baseline selectors and semantic fallbacks for fake-chatgpt plus live-like ChatGPT surfaces.",
-  "updated_at": "2026-04-12T00:00:00Z",
+  "updated_at": "2026-04-16T00:00:00Z",
   "capabilities": {
     "composer_ready": [
       {
@@ -70,15 +70,21 @@
         "score": 1.0
       },
       {
-        "strategy_id": "chatgpt-model-controls",
+        "strategy_id": "chatgpt-model-trigger",
         "kind": "text",
-        "selector": "GPT-5.4 Thinking",
-        "score": 0.96
+        "selector": "ChatGPT",
+        "score": 0.98
+      },
+      {
+        "strategy_id": "visible-model-options",
+        "kind": "text",
+        "selector": "Instant",
+        "score": 0.95
       },
       {
         "strategy_id": "aria-model-trigger",
         "kind": "dom_neighborhood",
-        "selector": ".toolbar button:first-child",
+        "selector": ".stacked-toolbar button[aria-haspopup]",
         "score": 0.9
       }
     ],
@@ -90,15 +96,21 @@
         "score": 1.0
       },
       {
-        "strategy_id": "chatgpt-effort-toggle",
+        "strategy_id": "composer-effort-trigger",
         "kind": "text",
-        "selector": "Standard reasoning",
+        "selector": "Standard",
         "score": 0.93
       },
       {
-        "strategy_id": "aria-effort-toggle",
+        "strategy_id": "visible-effort-options",
         "kind": "text",
         "selector": "Standard",
+        "score": 0.91
+      },
+      {
+        "strategy_id": "aria-effort-toggle",
+        "kind": "dom_neighborhood",
+        "selector": "[data-testid='composer-root'] [aria-haspopup]",
         "score": 0.88
       }
     ],

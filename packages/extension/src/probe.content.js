@@ -57,6 +57,19 @@
       return null;
     };
 
+    const controlCandidateSelector = [
+      "button",
+      "[role='button']",
+      "[role='switch']",
+      "[role='tab']",
+      "[role='option']",
+      "[role='menuitem']",
+      "[role='menuitemradio']",
+      "[aria-haspopup]",
+      "label",
+      "a",
+    ].join(", ");
+
     const implicitRole = (element) => {
       const tagName = element.tagName.toLowerCase();
       if (tagName === "button") {
@@ -144,26 +157,24 @@
       return null;
     };
 
-    const findNamedControl = (tokens) => {
-      const candidates = documentRoot.querySelectorAll(
-        [
-          "button",
-          "[role='button']",
-          "[role='switch']",
-          "[role='tab']",
-          "[role='option']",
-          "[aria-haspopup]",
-          "label",
-          "a",
-        ].join(", "),
-      );
-      for (const candidate of Array.from(candidates)) {
-        if (!isVisible(candidate)) {
-          continue;
-        }
-        const name = accessibleName(candidate);
-        if (hasToken(name, tokens)) {
-          return candidate;
+    const findNamedControl = (tokens, options = {}) => {
+      const { include, roots = [documentRoot] } = options;
+      for (const root of roots) {
+        const candidates =
+          root instanceof Document || root instanceof Element
+            ? root.querySelectorAll(controlCandidateSelector)
+            : [];
+        for (const candidate of Array.from(candidates)) {
+          if (!isVisible(candidate)) {
+            continue;
+          }
+          if (include && !include(candidate)) {
+            continue;
+          }
+          const name = accessibleName(candidate);
+          if (hasToken(name, tokens)) {
+            return candidate;
+          }
         }
       }
       return null;
@@ -205,6 +216,141 @@
         }
       }
       return null;
+    };
+
+    const composerContainers = () => {
+      const composer = findTextbox();
+      const seen = new Set();
+      const containers = [];
+      for (const container of [
+        composer?.closest("[data-testid='composer-root']"),
+        composer?.closest("form"),
+        composer?.parentElement,
+        composer?.closest("section"),
+        composer?.closest("main"),
+      ]) {
+        if (!(container instanceof HTMLElement) || seen.has(container)) {
+          continue;
+        }
+        seen.add(container);
+        containers.push(container);
+      }
+      return containers;
+    };
+
+    const isComposerAdjacent = (element) =>
+      element instanceof HTMLElement &&
+      composerContainers().some(
+        (container) => container === element || container.contains(element),
+      );
+
+    const findComposerAdjacentNamedControl = (tokens, options = {}) =>
+      findNamedControl(tokens, {
+        ...options,
+        roots: composerContainers(),
+      });
+
+    const isModelPickerTrigger = (element) =>
+      element instanceof HTMLElement &&
+      !element.hasAttribute("data-model") &&
+      (element.matches("[data-slot='model-picker']") ||
+        element.getAttribute("aria-haspopup") !== null) &&
+      hasToken(accessibleName(element), [
+        "chatgpt",
+        "model",
+        "selector",
+        "engine",
+        "gpt",
+        "latest",
+        "instant",
+        "thinking",
+        "pro",
+      ]);
+
+    const isEffortPickerTrigger = (element) =>
+      element instanceof HTMLElement &&
+      !element.hasAttribute("data-effort") &&
+      (element.matches("[data-slot='effort-toggle']") ||
+        (element.getAttribute("aria-haspopup") !== null &&
+          isComposerAdjacent(element))) &&
+      hasToken(accessibleName(element), [
+        "effort",
+        "reasoning",
+        "thinking",
+        "standard",
+        "extended",
+      ]);
+
+    const isModelOption = (element) =>
+      element instanceof HTMLElement &&
+      !isModelPickerTrigger(element) &&
+      (element.hasAttribute("data-model") ||
+        element.closest("[data-slot='model-menu']") !== null) &&
+      hasToken(accessibleName(element), [
+        "latest",
+        "instant",
+        "thinking",
+        "pro",
+        "gpt",
+        "deep",
+      ]);
+
+    const isEffortOption = (element) =>
+      element instanceof HTMLElement &&
+      !isEffortPickerTrigger(element) &&
+      (element.hasAttribute("data-effort") ||
+        element.closest("[data-slot='effort-menu']") !== null) &&
+      hasToken(accessibleName(element), [
+        "standard",
+        "extended",
+        "reasoning",
+        "thinking",
+      ]);
+
+    const findModelPickerTrigger = () =>
+      firstVisibleBySelectors([
+        "[data-slot='model-picker']",
+        "button[aria-haspopup][aria-label*='ChatGPT']",
+        "button[aria-haspopup][aria-label*='chatgpt']",
+      ]) ??
+      findNamedControl(
+        ["chatgpt", "model", "gpt", "instant", "thinking", "pro"],
+        {
+          include: isModelPickerTrigger,
+        },
+      );
+
+    const findEffortPickerTrigger = () =>
+      firstVisibleBySelectors([
+        "[data-slot='effort-toggle']",
+        "[data-slot='effort-toggle'][aria-haspopup]",
+      ]) ??
+      findComposerAdjacentNamedControl(
+        ["standard", "extended", "effort", "reasoning", "thinking"],
+        {
+          include: isEffortPickerTrigger,
+        },
+      );
+
+    const discoverNamedControls = (tokens, options = {}) => {
+      const { includeHidden = false, include } = options;
+      const names = [];
+      for (const candidate of Array.from(
+        documentRoot.querySelectorAll(controlCandidateSelector),
+      )) {
+        if (!includeHidden && !isVisible(candidate)) {
+          continue;
+        }
+        if (include && !include(candidate)) {
+          continue;
+        }
+        const name = accessibleName(candidate);
+        if (!name || !hasToken(name, tokens) || names.includes(name)) {
+          continue;
+        }
+        names.push(name);
+      }
+      return names;
     };
 
     const findSubmitNearComposer = () => {
@@ -398,29 +544,27 @@
             find: () => firstVisibleBySelector("[data-slot='model-picker']"),
           },
           {
-            id: "chatgpt-model-controls",
-            score: 0.96,
-            find: () =>
-              findNamedControl([
-                "gpt-5.3",
-                "gpt-5.4",
-                "instant",
-                "thinking",
-                "engine",
-                "model",
-              ]),
+            id: "chatgpt-model-trigger",
+            score: 0.98,
+            find: () => findModelPickerTrigger(),
+          },
+          {
+            id: "visible-model-options",
+            score: 0.95,
+            find: () => findNamedControl(["instant", "thinking", "gpt"], {
+              include: isModelOption,
+            }),
           },
           {
             id: "aria-model-trigger",
             score: 0.9,
             find: () =>
-              findNamedControl([
-                "gpt",
-                "model",
-                "engine",
-                "instant",
-                "thinking",
-              ]),
+              findNamedControl(
+                ["chatgpt", "gpt", "model", "engine", "instant", "thinking"],
+                {
+                  include: isModelPickerTrigger,
+                },
+              ),
           },
         ],
       },
@@ -433,19 +577,28 @@
             find: () => firstVisibleBySelector("[data-slot='effort-toggle']"),
           },
           {
-            id: "chatgpt-effort-toggle",
+            id: "composer-effort-trigger",
             score: 0.93,
+            find: () => findEffortPickerTrigger(),
+          },
+          {
+            id: "visible-effort-options",
+            score: 0.91,
             find: () =>
-              firstVisibleBySelectors([
-                "button[aria-label*='Standard']",
-                "button[aria-label*='Extended']",
-              ]) ?? findNamedControl(["standard", "extended", "reasoning"]),
+              findNamedControl(["standard", "extended", "reasoning"], {
+                include: isEffortOption,
+              }),
           },
           {
             id: "aria-effort-toggle",
             score: 0.88,
             find: () =>
-              findNamedControl(["standard", "extended", "effort", "reasoning"]),
+              findComposerAdjacentNamedControl(
+                ["standard", "extended", "effort", "reasoning", "thinking"],
+                {
+                  include: isEffortPickerTrigger,
+                },
+              ),
           },
         ],
       },
@@ -616,10 +769,11 @@
       }
     };
 
-    const collectAliasCandidates = (element) => {
+    const collectAliasCandidates = (capability, element) => {
       const names = [];
       const pushName = (candidate) => {
-        const name = accessibleName(candidate);
+        const name =
+          typeof candidate === "string" ? candidate : accessibleName(candidate);
         if (name && !names.includes(name)) {
           names.push(name);
         }
@@ -632,19 +786,36 @@
         ? element
         : element.parentElement;
       for (const candidate of Array.from(
-        scoped?.querySelectorAll(
-          [
-            "button",
-            "[role='button']",
-            "[role='tab']",
-            "[role='option']",
-            "[aria-haspopup]",
-            "label",
-          ].join(", "),
-        ) ?? [],
+          scoped?.querySelectorAll(
+            [
+              controlCandidateSelector,
+            ].join(", "),
+          ) ?? [],
       )) {
         if (isVisible(candidate)) {
           pushName(candidate);
+        }
+      }
+      if (capability === "model_picker_visible") {
+        for (const name of discoverNamedControls(
+          ["latest", "instant", "thinking", "pro", "gpt"],
+          {
+            includeHidden: true,
+            include: isModelOption,
+          },
+        )) {
+          pushName(name);
+        }
+      }
+      if (capability === "thinking_effort_visible") {
+        for (const name of discoverNamedControls(
+          ["standard", "extended", "effort", "reasoning", "thinking"],
+          {
+            includeHidden: true,
+            include: isEffortOption,
+          },
+        )) {
+          pushName(name);
         }
       }
       return names;
@@ -654,7 +825,7 @@
       if (!element) {
         return;
       }
-      const names = collectAliasCandidates(element);
+      const names = collectAliasCandidates(capability, element);
       if (names.length === 0) {
         return;
       }
@@ -667,8 +838,12 @@
             addAlias("model_classes", "thinking", name);
           }
         }
-        if (Object.keys(aliases.model_classes).length === 0) {
-          addAlias("model_classes", "thinking", names[0]);
+        if (
+          Object.keys(aliases.model_classes).length === 0 &&
+          hasToken(accessibleName(element), ["chatgpt"])
+        ) {
+          addAlias("model_classes", "instant", "instant");
+          addAlias("model_classes", "thinking", "thinking");
         }
       }
       if (capability === "thinking_effort_visible") {

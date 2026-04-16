@@ -1049,7 +1049,47 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
-  it("selects a model from a menu picker and then applies thinking effort", async () => {
+  it("selects Instant from the current ChatGPT model menu", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "menu",
+      initialModel: "thinking",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-menu-instant",
+        prompt: "configure current menu instant",
+        mode: "search",
+        modelClass: "instant",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      model: "instant",
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("selects Thinking from the current ChatGPT model menu and then applies Extended effort", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
     const targetUrl = withHarnessUrl(server.url, {
@@ -1067,8 +1107,8 @@ describe("browser adapter", () => {
 
     await adapter.ask(
       {
-        jobId: "job-ask-menu-model-picker",
-        prompt: "configure menu picker",
+        jobId: "job-ask-menu-thinking-extended",
+        prompt: "configure current menu thinking",
         mode: "search",
         modelClass: "thinking",
         effort: "extended",
@@ -1119,7 +1159,7 @@ describe("browser adapter", () => {
         () => {},
       ),
     ).rejects.toThrow(
-      /capability missing: model class; requested=instant; discovered=thinking=\[gpt-5.4 thinking\]/i,
+      /capability missing: model class; requested=instant; discovered=thinking=\[thinking\]/i,
     );
 
     await adapter.shutdown();
@@ -1161,6 +1201,54 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("runs ask --model instant on the current live harness", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, { variant: "live" }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { variant: "live" }),
+      headless: true,
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-live-instant",
+        prompt: "configure live instant",
+        modelClass: "instant",
+        files: [fixture],
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effortVisible:
+        !(
+          document
+            .querySelector("[data-slot='effort-toggle']")
+            ?.hasAttribute("hidden") ?? true
+        ),
+    }));
+
+    expect(result.output_text).toBe("Fake response for: configure live instant");
+    expect(result.artifacts).toHaveLength(1);
+    expect(state).toEqual({
+      model: "instant",
+      effortVisible: false,
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("drives the live-like harness through ask, download recovery, and ready-state checks", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -1183,7 +1271,7 @@ describe("browser adapter", () => {
         jobId: "job-ask-live-variant",
         prompt: "configure live",
         mode: "research",
-        modelClass: "instant",
+        modelClass: "thinking",
         effort: "extended",
         files: [fixture],
       },
@@ -1221,7 +1309,7 @@ describe("browser adapter", () => {
     expect(result.output_text).toBe("Fake response for: configure live");
     expect(result.artifacts).toHaveLength(1);
     expect(artifactBody).toContain("Mode: research");
-    expect(artifactBody).toContain("Model: instant");
+    expect(artifactBody).toContain("Model: thinking");
     expect(artifactBody).toContain("Effort: extended");
     expect(artifactBody).toContain("Uploads: brief.txt");
 
@@ -1951,7 +2039,7 @@ describe("browser adapter", () => {
         jobId: "job-ask-live-attach",
         prompt: "configure attach live",
         mode: "research",
-        modelClass: "instant",
+        modelClass: "thinking",
         effort: "extended",
         files: [fixture],
       },
@@ -1964,6 +2052,8 @@ describe("browser adapter", () => {
 
     expect(result.output_text).toBe("Fake response for: configure attach live");
     expect(result.artifacts).toHaveLength(1);
+    expect(artifactBody).toContain("Model: thinking");
+    expect(artifactBody).toContain("Effort: extended");
     expect(artifactBody).toContain("Uploads: brief.txt");
     expect(result.current_url).toContain(`/c/${result.conversation_id}`);
     expect(conversationIdFromUrl(result.current_url)).toBe(

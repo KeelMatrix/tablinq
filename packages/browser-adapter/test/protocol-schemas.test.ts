@@ -66,12 +66,12 @@ describe("protocol schemas", () => {
               search: ["Search"],
             },
             model_classes: {
-              instant: ["GPT-5.3 Instant"],
-              thinking: ["GPT-5.4 Thinking"],
+              instant: ["Instant"],
+              thinking: ["Thinking"],
             },
             efforts: {
               standard: ["Standard"],
-              extended: ["Extended"],
+              extended: ["Extended thinking"],
             },
           },
         },
@@ -110,7 +110,7 @@ describe("protocol schemas", () => {
           normal: ["Chat"],
         },
         model_classes: {
-          instant: ["GPT-5.3 Instant"],
+          instant: ["Instant"],
         },
         efforts: {
           none: ["None"],
