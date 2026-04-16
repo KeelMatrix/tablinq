@@ -26,6 +26,9 @@ function withHarnessUrl(
       | "success"
       | "timeout"
       | "reload"
+      | "upload-processing-delay"
+      | "upload-processing-stuck"
+      | "submit-never-ready"
       | "submit-upload-trap"
       | "submit-upload-trap-no-keyboard"
       | "followup-rich-text"
@@ -1545,14 +1548,95 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
-  it("fails fast when no submit action starts after click and keyboard fallback", async () => {
+  it("waits for real submit readiness after upload acknowledgment", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
     const fixture = path.join(root, "brief.txt");
     await writeFile(fixture, "brief body", "utf8");
     const targetUrl = withHarnessUrl(server.url, {
       variant: "live",
-      scenario: "submit-upload-trap-no-keyboard",
+      scenario: "upload-processing-delay",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const startedAt = Date.now();
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-upload-processing-delay",
+        prompt: "repeat attached file after processing",
+        files: [fixture],
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+    const elapsedMs = Date.now() - startedAt;
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadProcessing: document.body.dataset.uploadProcessing,
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+    }));
+
+    expect(result.output_text).toBe(
+      "Fake response for: repeat attached file after processing",
+    );
+    expect(elapsedMs).toBeGreaterThanOrEqual(1_800);
+    expect(state).toEqual({
+      uploadProcessing: "false",
+      lastSubmissionMethod: "button",
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails clearly when upload acknowledgment never becomes send-ready", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "upload-processing-stuck",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-upload-processing-stuck",
+          prompt: "repeat attached file",
+          files: [fixture],
+          timeoutMs: 1_500,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/attachments are still processing/i);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails clearly when submit never becomes ready after upload acknowledgment", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "submit-never-ready",
     });
     const adapter = trackAdapter(
       new BrowserAdapter({
@@ -1569,10 +1653,11 @@ describe("browser adapter", () => {
           jobId: "job-ask-submit-upload-trap-fail",
           prompt: "repeat attached file",
           files: [fixture],
+          timeoutMs: 1_500,
         },
         () => {},
       ),
-    ).rejects.toThrow(/submit failed/i);
+    ).rejects.toThrow(/submit never became ready/i);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
