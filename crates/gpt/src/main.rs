@@ -9,7 +9,7 @@ fn main() {
             }
         }
         Err(err) => {
-            eprintln!("{err:#}");
+            eprintln!("{}", gpt::format_cli_error(&err));
             std::process::exit(1);
         }
     }
