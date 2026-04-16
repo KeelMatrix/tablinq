@@ -3,10 +3,17 @@ const note = document.querySelector("#variant-note");
 const params = new URLSearchParams(window.location.search);
 const requestedVariant = params.get("variant");
 const variant =
-  requestedVariant === "aria" || requestedVariant === "live"
+  requestedVariant === "aria" ||
+  requestedVariant === "live" ||
+  requestedVariant === "menu"
     ? requestedVariant
     : "classic";
 const scenario = params.get("scenario") || "success";
+const requestedInitialModel = params.get("initial_model");
+const initialModel =
+  requestedInitialModel === "instant" || requestedInitialModel === "thinking"
+    ? requestedInitialModel
+    : "thinking";
 const missingControls = new Set(
   (params.get("missing") || "")
     .split(",")
@@ -52,7 +59,7 @@ function conversationPathname(pathname, conversationId) {
 
 document.body.dataset.uiVariant = variant;
 document.body.dataset.streamState = "idle";
-document.body.dataset.selectedModel = "thinking";
+document.body.dataset.selectedModel = initialModel;
 document.body.dataset.selectedEffort = "standard";
 document.body.dataset.selectedMode = "normal";
 document.body.dataset.uploadedFiles = "";
@@ -65,6 +72,8 @@ document.body.dataset.lastMessageId = "";
 note.textContent =
   variant === "aria"
     ? "ARIA-first variant with moved controls, renamed labels, and semantic groups."
+    : variant === "menu"
+      ? "Menu-picker variant with a model trigger and thinking-only effort controls."
     : variant === "live"
       ? "Live-like variant with prompt-textarea, send/stop buttons, upload chips, and download controls."
       : "Classic variant with grouped controls and direct toolbar buttons.";
@@ -175,6 +184,37 @@ function liveModelControls() {
   `;
 }
 
+function menuModelControls() {
+  if (!hasControl("model")) {
+    return "";
+  }
+  return `
+    <div class="pill">
+      <button
+        type="button"
+        data-slot="model-picker"
+        aria-label="Model selector"
+        aria-haspopup="menu"
+        aria-expanded="false"
+      >
+        Model selector
+      </button>
+      <div data-slot="model-menu" role="menu" hidden>
+        ${
+          hasControl("instant-model")
+            ? `<button type="button" role="menuitemradio" data-model="instant" hidden>GPT-5.3 Instant</button>`
+            : ""
+        }
+        ${
+          hasControl("thinking-model")
+            ? `<button type="button" role="menuitemradio" data-model="thinking" hidden>GPT-5.4 Thinking</button>`
+            : ""
+        }
+      </div>
+    </div>
+  `;
+}
+
 function liveModeControls() {
   return [
     hasControl("search")
@@ -194,6 +234,18 @@ function liveEffortControls() {
     <div class="pill" role="group" aria-label="Reasoning effort">
       <button type="button" data-effort="standard" aria-label="Standard reasoning" aria-pressed="true">Standard</button>
       <button type="button" data-effort="extended" aria-label="Extended reasoning" aria-pressed="false">Extended</button>
+    </div>
+  `;
+}
+
+function menuEffortControls() {
+  if (!hasControl("effort")) {
+    return "";
+  }
+  return `
+    <div class="pill" data-slot="effort-toggle" role="group" aria-label="Thinking effort" hidden>
+      <button type="button" data-effort="standard" hidden>Standard reasoning</button>
+      <button type="button" data-effort="extended" hidden>Extended reasoning</button>
     </div>
   `;
 }
@@ -302,6 +354,54 @@ root.innerHTML =
         <section class="notice-panel" aria-label="workspace notices">
           <article class="message" data-slot="notice-card">
             <p>Workspace notices appear here while ChatGPT is thinking.</p>
+          </article>
+        </section>
+      </main>
+    `
+      : variant === "menu"
+        ? `
+      <main aria-label="chatgpt workspace">
+        <section class="stacked-toolbar">
+          ${menuModelControls()}
+          ${liveModeControls()}
+          ${menuEffortControls()}
+          ${liveUploadControl()}
+        </section>
+        <form data-testid="composer-root" class="stacked-composer">
+          <textarea
+            id="prompt-textarea"
+            aria-label="Message ChatGPT"
+            placeholder="Message ChatGPT"
+          ></textarea>
+          <div class="pill">
+            <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+            <button
+              type="button"
+              data-testid="stop-button"
+              aria-label="Stop generating"
+              hidden
+            >
+              Stop
+            </button>
+          </div>
+        </form>
+        <div class="stacked-toolbar" data-slot="upload-list"></div>
+        <section class="transcript">
+          <article
+            class="message"
+            data-message-author-role="assistant"
+            data-stream-state="idle"
+          >
+            <div class="markdown">
+              <p>Streaming output lands here.</p>
+            </div>
+            <a
+              href="#"
+              data-testid="artifact-download"
+              aria-label="Download report"
+            >
+              Download report
+            </a>
           </article>
         </section>
       </main>
@@ -527,6 +627,22 @@ function syncSelectedState() {
     const selected = element.getAttribute("data-mode") === selectedMode;
     element.setAttribute("aria-pressed", selected ? "true" : "false");
     element.dataset.selected = selected ? "true" : "false";
+  });
+
+  const modelMenu = document.querySelector("[data-slot='model-menu']");
+  const modelTrigger = document.querySelector("[data-slot='model-picker']");
+  const modelMenuOpen = modelTrigger?.getAttribute("aria-expanded") === "true";
+  modelMenu?.toggleAttribute("hidden", !modelMenuOpen);
+  modelMenu?.querySelectorAll("[data-model]").forEach((element) => {
+    element.toggleAttribute("hidden", !modelMenuOpen);
+  });
+
+  const effortVisible =
+    variant !== "menu" || document.body.dataset.selectedModel === "thinking";
+  const effortToggle = document.querySelector("[data-slot='effort-toggle']");
+  effortToggle?.toggleAttribute("hidden", !effortVisible);
+  effortToggle?.querySelectorAll("[data-effort]").forEach((element) => {
+    element.toggleAttribute("hidden", !effortVisible);
   });
 }
 
@@ -873,9 +989,18 @@ function resumeResearchIfNeeded() {
   activeTimer = setTimeout(() => tickResearch(state), 80);
 }
 
+const modelPickerTrigger = document.querySelector("[data-slot='model-picker']");
+
+modelPickerTrigger?.addEventListener("click", () => {
+  const expanded = modelPickerTrigger.getAttribute("aria-expanded") === "true";
+  modelPickerTrigger.setAttribute("aria-expanded", expanded ? "false" : "true");
+  syncSelectedState();
+});
+
 document.querySelectorAll("[data-model]").forEach((element) => {
   element.addEventListener("click", () => {
     document.body.dataset.selectedModel = element.getAttribute("data-model");
+    modelPickerTrigger?.setAttribute("aria-expanded", "false");
     syncSelectedState();
   });
 });

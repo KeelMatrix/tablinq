@@ -221,6 +221,44 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.model_classes.instant).toBeUndefined();
   });
 
+  it("does not treat a model picker trigger as a concrete thinking alias", () => {
+    document.body.dataset.uiVariant = "menu";
+    document.body.innerHTML = `
+      <main aria-label="chatgpt workspace">
+        <section>
+          <button
+            type="button"
+            data-slot="model-picker"
+            aria-label="Model selector"
+            aria-haspopup="menu"
+            aria-expanded="false"
+          >
+            Model selector
+          </button>
+          <div role="menu" hidden>
+            <button type="button" role="menuitemradio" data-model="instant" hidden>
+              GPT-5.3 Instant
+            </button>
+            <button type="button" role="menuitemradio" data-model="thinking" hidden>
+              GPT-5.4 Thinking
+            </button>
+          </div>
+          <textarea id="prompt-textarea" aria-label="Message ChatGPT"></textarea>
+          <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+        </section>
+      </main>
+    `;
+
+    const message = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(message.report.matrix.model_picker_visible).toBe(true);
+    expect(message.report.aliases.model_classes.instant).toBeUndefined();
+    expect(message.report.aliases.model_classes.thinking).toBeUndefined();
+    expect(message.runtime.strategy_matches.model_picker_visible).toBeTruthy();
+  });
+
   it("accepts selector-pack driven strategy ordering metadata", () => {
     document.body.innerHTML = `
       <section>

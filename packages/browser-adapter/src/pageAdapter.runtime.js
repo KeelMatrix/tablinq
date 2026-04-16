@@ -215,14 +215,18 @@ export function createTablinqPageAdapterRuntime() {
     selectors = [],
     aliases = [],
     fallbackTokens = [],
+    exclude,
   }) => {
     const selectorMatch = queryFirstVisible(selectors);
-    if (selectorMatch) {
+    if (selectorMatch && !exclude?.(selectorMatch)) {
       return selectorMatch;
     }
 
     const normalizedAliases = unique(aliases);
     for (const element of actionableElements()) {
+      if (exclude?.(element)) {
+        continue;
+      }
       const name = accessibleName(element);
       if (!name) {
         continue;
@@ -238,6 +242,9 @@ export function createTablinqPageAdapterRuntime() {
     }
 
     for (const element of actionableElements()) {
+      if (exclude?.(element)) {
+        continue;
+      }
       if (hasToken(accessibleName(element), fallbackTokens)) {
         return element;
       }
@@ -580,6 +587,293 @@ export function createTablinqPageAdapterRuntime() {
     throw new Error(`ui drift: ${detail}`);
   };
 
+  const mergeAliasBuckets = (...buckets) => {
+    const merged = {};
+    for (const bucket of buckets) {
+      for (const [key, labels] of Object.entries(bucket ?? {})) {
+        const current = merged[key] ?? [];
+        merged[key] = unique([...current, ...(labels ?? [])]);
+      }
+    }
+    return merged;
+  };
+
+  const modelDefaults = (modelClass) => [
+    modelClass,
+    modelClass === "instant" ? "gpt-5.3 instant" : "gpt-5.4 thinking",
+    modelClass === "instant" ? "instant answers" : "deep thinking",
+  ];
+
+  const modelFallbackTokens = (modelClass) =>
+    modelClass === "instant" ? ["instant"] : ["thinking"];
+
+  const effortDefaults = (effort) => [
+    effort,
+    effort === "standard" ? "standard reasoning" : "extended reasoning",
+  ];
+
+  const effortFallbackTokens = (effort) =>
+    effort === "standard" ? ["standard"] : ["extended"];
+
+  const isModelPickerTrigger = (element) =>
+    element instanceof HTMLElement &&
+    !element.hasAttribute("data-model") &&
+    (element.matches("[data-slot='model-picker']") ||
+      element.getAttribute("aria-haspopup") !== null) &&
+    hasToken(accessibleName(element), [
+      "model",
+      "selector",
+      "engine",
+      "gpt",
+      "instant",
+      "thinking",
+    ]);
+
+  const isEffortPickerTrigger = (element) =>
+    element instanceof HTMLElement &&
+    !element.hasAttribute("data-effort") &&
+    (element.matches("[data-slot='effort-toggle']") ||
+      element.getAttribute("aria-haspopup") !== null) &&
+    hasToken(accessibleName(element), [
+      "effort",
+      "reasoning",
+      "standard",
+      "extended",
+    ]);
+
+  const discoverVisibleAliases = ({ keys, exclude }) => {
+    const discovered = {};
+    for (const element of actionableElements()) {
+      if (exclude?.(element)) {
+        continue;
+      }
+      const name = accessibleName(element);
+      if (!name) {
+        continue;
+      }
+      for (const [key, tokens] of Object.entries(keys)) {
+        if (hasToken(name, tokens)) {
+          const current = discovered[key] ?? [];
+          discovered[key] = unique([...current, name]);
+        }
+      }
+    }
+    return discovered;
+  };
+
+  const discoverVisibleModelAliases = () =>
+    discoverVisibleAliases({
+      keys: {
+        instant: ["instant"],
+        thinking: ["thinking"],
+      },
+      exclude: isModelPickerTrigger,
+    });
+
+  const discoverVisibleEffortAliases = () =>
+    discoverVisibleAliases({
+      keys: {
+        standard: ["standard"],
+        extended: ["extended"],
+        none: ["none", "auto"],
+      },
+      exclude: isEffortPickerTrigger,
+    });
+
+  const ensurePickerOpen = (trigger) => {
+    if (!(trigger instanceof HTMLElement)) {
+      return false;
+    }
+    if (trigger.getAttribute("aria-expanded") === "true") {
+      return true;
+    }
+    return clickControl(trigger);
+  };
+
+  const findModelPickerTrigger = (aliases, fallbackTokens) =>
+    findByAliases({
+      selectors: [
+        "[data-slot='model-picker'][aria-haspopup]",
+        "[data-slot='model-picker'] [aria-haspopup]",
+        "button[aria-haspopup][aria-label*='Model']",
+        "button[aria-haspopup][aria-label*='model']",
+        "button[aria-haspopup][aria-label*='Engine']",
+        "button[aria-haspopup][aria-label*='engine']",
+        "button[aria-haspopup][aria-label*='GPT']",
+        "button[aria-haspopup][aria-label*='gpt']",
+      ],
+      aliases,
+      fallbackTokens: unique([
+        "model",
+        "selector",
+        "engine",
+        "gpt",
+        ...fallbackTokens,
+      ]),
+      exclude: (element) => !isModelPickerTrigger(element),
+    });
+
+  const findEffortPickerTrigger = (aliases, fallbackTokens) =>
+    findByAliases({
+      selectors: [
+        "[data-slot='effort-toggle'][aria-haspopup]",
+        "[data-slot='effort-toggle'] [aria-haspopup]",
+        "button[aria-haspopup][aria-label*='Effort']",
+        "button[aria-haspopup][aria-label*='effort']",
+        "button[aria-haspopup][aria-label*='Reasoning']",
+        "button[aria-haspopup][aria-label*='reasoning']",
+      ],
+      aliases,
+      fallbackTokens: unique([
+        "effort",
+        "reasoning",
+        ...fallbackTokens,
+      ]),
+      exclude: (element) => !isEffortPickerTrigger(element),
+    });
+
+  const visibleRoots = (selectors) =>
+    visibleUnique(
+      selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector))),
+    );
+
+  const queryFirstVisibleInRoots = (roots, selectors) => {
+    for (const root of roots) {
+      for (const selector of selectors) {
+        const match = firstVisible(root.querySelectorAll(selector));
+        if (match) {
+          return match;
+        }
+      }
+    }
+    return null;
+  };
+
+  const findByAliasesInRoots = ({
+    roots,
+    selectors = [],
+    aliases = [],
+    fallbackTokens = [],
+    exclude,
+  }) => {
+    const selectorMatch = queryFirstVisibleInRoots(roots, selectors);
+    if (selectorMatch && !exclude?.(selectorMatch)) {
+      return selectorMatch;
+    }
+
+    const normalizedAliases = unique(aliases);
+    for (const root of roots) {
+      for (const element of visibleUnique(
+        root.querySelectorAll(
+          [
+            "button",
+            "[role='button']",
+            "[role='tab']",
+            "[role='option']",
+            "[role='menuitemradio']",
+            "label[for]",
+          ].join(", "),
+        ),
+      )) {
+        if (exclude?.(element)) {
+          continue;
+        }
+        const name = accessibleName(element);
+        if (!name) {
+          continue;
+        }
+        if (
+          normalizedAliases.some(
+            (alias) =>
+              name === alias || name.includes(alias) || alias.includes(name),
+          )
+        ) {
+          return element;
+        }
+      }
+    }
+
+    for (const root of roots) {
+      for (const element of visibleUnique(
+        root.querySelectorAll(
+          [
+            "button",
+            "[role='button']",
+            "[role='tab']",
+            "[role='option']",
+            "[role='menuitemradio']",
+            "label[for]",
+          ].join(", "),
+        ),
+      )) {
+        if (exclude?.(element)) {
+          continue;
+        }
+        if (hasToken(accessibleName(element), fallbackTokens)) {
+          return element;
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const findConcreteModelControl = (report, modelClass) =>
+    findByAliases({
+      selectors:
+        modelClass === "instant"
+          ? ["[data-model='instant']", "button[aria-label*='Instant']"]
+          : ["[data-model='thinking']", "button[aria-label*='Thinking']"],
+      aliases: expandAliases(report, "model_classes", modelClass, modelDefaults(modelClass)),
+      fallbackTokens: modelFallbackTokens(modelClass),
+      exclude: isModelPickerTrigger,
+    });
+
+  const findOpenModelMenuControl = (report, modelClass) =>
+    findByAliasesInRoots({
+      roots: visibleRoots([
+        "[data-slot='model-menu']",
+        "[role='menu']",
+        "[role='listbox']",
+        "[role='dialog']",
+      ]),
+      selectors:
+        modelClass === "instant"
+          ? ["[data-model='instant']", "button[aria-label*='Instant']"]
+          : ["[data-model='thinking']", "button[aria-label*='Thinking']"],
+      aliases: expandAliases(report, "model_classes", modelClass, modelDefaults(modelClass)),
+      fallbackTokens: modelFallbackTokens(modelClass),
+      exclude: isModelPickerTrigger,
+    });
+
+  const findConcreteEffortControl = (report, effort) =>
+    findByAliases({
+      selectors:
+        effort === "standard"
+          ? ["[data-effort='standard']", "button[aria-label*='Standard']"]
+          : ["[data-effort='extended']", "button[aria-label*='Extended']"],
+      aliases: expandAliases(report, "efforts", effort, effortDefaults(effort)),
+      fallbackTokens: effortFallbackTokens(effort),
+      exclude: isEffortPickerTrigger,
+    });
+
+  const findOpenEffortMenuControl = (report, effort) =>
+    findByAliasesInRoots({
+      roots: visibleRoots([
+        "[data-slot='effort-menu']",
+        "[role='menu']",
+        "[role='listbox']",
+        "[role='dialog']",
+      ]),
+      selectors:
+        effort === "standard"
+          ? ["[data-effort='standard']", "button[aria-label*='Standard']"]
+          : ["[data-effort='extended']", "button[aria-label*='Extended']"],
+      aliases: expandAliases(report, "efforts", effort, effortDefaults(effort)),
+      fallbackTokens: effortFallbackTokens(effort),
+      exclude: isEffortPickerTrigger,
+    });
+
   const ensureMode = (report, mode) => {
     if (mode === "normal") {
       return;
@@ -630,32 +924,28 @@ export function createTablinqPageAdapterRuntime() {
         report.aliases.model_classes,
       );
     }
-    const aliases = expandAliases(report, "model_classes", modelClass, [
-      modelClass,
-      modelClass === "instant" ? "gpt-5.3 instant" : "gpt-5.4 thinking",
-      modelClass === "instant" ? "instant answers" : "deep thinking",
-    ]);
-    if (aliases.length === 0) {
-      throwCapabilityMissing(
-        "model class",
-        modelClass,
-        report.aliases.model_classes,
-      );
-    }
-    const control = findByAliases({
-      selectors:
-        modelClass === "instant"
-          ? ["[data-model='instant']", "button[aria-label*='Instant']"]
-          : ["[data-model='thinking']", "button[aria-label*='Thinking']"],
-      aliases,
-      fallbackTokens:
-        modelClass === "instant"
-          ? ["instant", "fast", "quick"]
-          : ["thinking", "reason", "deep"],
-    });
+    let control = findConcreteModelControl(report, modelClass);
     if (!control) {
+      const trigger = findModelPickerTrigger(
+        modelDefaults(modelClass),
+        modelFallbackTokens(modelClass),
+      );
+      if (trigger && ensurePickerOpen(trigger)) {
+        control =
+          findOpenModelMenuControl(report, modelClass) ??
+          findConcreteModelControl(report, modelClass);
+      }
+    }
+    if (!control) {
+      const discoveredAliases = mergeAliasBuckets(
+        report.aliases.model_classes,
+        discoverVisibleModelAliases(),
+      );
+      if ((discoveredAliases[modelClass] ?? []).length === 0) {
+        throwCapabilityMissing("model class", modelClass, discoveredAliases);
+      }
       throwUiDrift(
-        `could not find a control for model=${modelClass} after alias discovery`,
+        `could not find a concrete control for model=${modelClass} after alias discovery`,
       );
     }
     if (!isSelected(control) && !clickControl(control)) {
@@ -667,30 +957,28 @@ export function createTablinqPageAdapterRuntime() {
     if (effort === "none") {
       return;
     }
-    if (!report.matrix.thinking_effort_visible) {
-      throwCapabilityMissing("thinking effort", effort, report.aliases.efforts);
-    }
-    const aliases = expandAliases(report, "efforts", effort, [
-      effort,
-      effort === "standard" ? "standard reasoning" : "extended reasoning",
-    ]);
-    if (aliases.length === 0) {
-      throwCapabilityMissing("thinking effort", effort, report.aliases.efforts);
-    }
-    const control = findByAliases({
-      selectors:
-        effort === "standard"
-          ? ["[data-effort='standard']", "button[aria-label*='Standard']"]
-          : ["[data-effort='extended']", "button[aria-label*='Extended']"],
-      aliases,
-      fallbackTokens:
-        effort === "standard"
-          ? ["standard", "default"]
-          : ["extended", "longer", "heavy"],
-    });
+    let control = findConcreteEffortControl(report, effort);
     if (!control) {
+      const trigger = findEffortPickerTrigger(
+        effortDefaults(effort),
+        effortFallbackTokens(effort),
+      );
+      if (trigger && ensurePickerOpen(trigger)) {
+        control =
+          findOpenEffortMenuControl(report, effort) ??
+          findConcreteEffortControl(report, effort);
+      }
+    }
+    if (!control) {
+      const discoveredAliases = mergeAliasBuckets(
+        report.aliases.efforts,
+        discoverVisibleEffortAliases(),
+      );
+      if ((discoveredAliases[effort] ?? []).length === 0) {
+        throwCapabilityMissing("thinking effort", effort, discoveredAliases);
+      }
       throwUiDrift(
-        `could not find a control for effort=${effort} after alias discovery`,
+        `could not find a concrete control for effort=${effort} after alias discovery`,
       );
     }
     if (!isSelected(control) && !clickControl(control)) {
