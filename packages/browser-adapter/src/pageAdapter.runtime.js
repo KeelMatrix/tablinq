@@ -183,19 +183,17 @@ export function createTablinqPageAdapterRuntime() {
     return visible[visible.length - 1] ?? null;
   };
 
-  const latestVisibleWithin = (root, selectors) => {
-    if (!(root instanceof Element)) {
-      return null;
+  const visibleUnique = (elements) => {
+    const seen = new Set();
+    const output = [];
+    for (const element of Array.from(elements)) {
+      if (!isVisible(element) || seen.has(element)) {
+        continue;
+      }
+      seen.add(element);
+      output.push(element);
     }
-    const matches = [];
-    for (const selector of selectors) {
-      matches.push(...Array.from(root.querySelectorAll(selector)));
-    }
-    const visible = matches.filter(isVisible);
-    if (visible.length === 0) {
-      return null;
-    }
-    return visible[visible.length - 1] ?? null;
+    return output;
   };
 
   const expandAliases = (report, bucket, key, defaults) =>
@@ -374,26 +372,85 @@ export function createTablinqPageAdapterRuntime() {
     return directText.join("\n");
   };
 
-  const findLatestAssistantMessage = () =>
-    latestVisible([
-      "[data-slot='assistant-message']",
-      "[data-message-author-role='assistant']",
-      "article.assistant",
-    ]) ??
-    latestVisibleWithin(
-      queryFirstVisible([
-        "[data-testid='conversation-turns']",
-        "[data-slot='conversation-thread']",
-        ".transcript",
-        "main",
-      ]),
-      [
-        "article[data-message-id]",
-        "article[data-stream-state]",
-        "article.message",
-        "article",
-      ],
+  const findAssistantMessages = () => {
+    const direct = visibleUnique(
+      document.querySelectorAll(
+        [
+          "[data-slot='assistant-message']",
+          "[data-message-author-role='assistant']",
+          "article.assistant",
+        ].join(", "),
+      ),
     );
+    if (direct.length > 0) {
+      return direct;
+    }
+
+    const transcript = queryFirstVisible([
+      "[data-testid='conversation-turns']",
+      "[data-slot='conversation-thread']",
+      ".transcript",
+      "main",
+    ]);
+    if (!(transcript instanceof Element)) {
+      return [];
+    }
+    return visibleUnique(
+      transcript.querySelectorAll(
+        [
+          "article[data-message-id]",
+          "article[data-stream-state]",
+          "article.message",
+          "article",
+        ].join(", "),
+      ),
+    );
+  };
+
+  const findLatestAssistantMessage = () => {
+    const messages = findAssistantMessages();
+    return messages[messages.length - 1] ?? null;
+  };
+
+  const resolveAskArticle = (baseline) => {
+    const messages = findAssistantMessages();
+    if (messages.length === 0) {
+      return null;
+    }
+    if (!baseline) {
+      return messages[messages.length - 1] ?? null;
+    }
+
+    const latest = messages[messages.length - 1] ?? null;
+    const latestMessageId = datasetValue(
+      latest?.getAttribute("data-message-id"),
+    );
+    const latestText = latest ? collectText(latest) : "";
+    const streamState =
+      latest?.getAttribute("data-stream-state") ??
+      document.body.dataset.streamState;
+
+    if (messages.length > Math.max(0, baseline.assistantMessageCount ?? 0)) {
+      return latest;
+    }
+    if (
+      latest &&
+      latestMessageId &&
+      latestMessageId !== baseline.messageId
+    ) {
+      return latest;
+    }
+    if (
+      latest &&
+      latestText &&
+      latestText !== (baseline.text ?? "") &&
+      streamState &&
+      streamState !== "idle"
+    ) {
+      return latest;
+    }
+    return null;
+  };
 
   const inferAskState = (text, article) => {
     const explicitState =
@@ -735,8 +792,17 @@ export function createTablinqPageAdapterRuntime() {
           ),
       );
     },
-    readAskSnapshot() {
+    readAskBaseline() {
       const article = findLatestAssistantMessage();
+      const messages = findAssistantMessages();
+      return {
+        assistantMessageCount: messages.length,
+        messageId: datasetValue(article?.getAttribute("data-message-id")) ?? null,
+        text: article ? collectText(article) : "",
+      };
+    },
+    readAskSnapshot({ baseline } = {}) {
+      const article = resolveAskArticle(baseline ?? null);
       const text = article ? collectText(article) : "";
       return {
         hasAssistantMessage: Boolean(article),

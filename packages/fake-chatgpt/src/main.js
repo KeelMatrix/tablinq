@@ -377,8 +377,19 @@ function streamStorageKey(conversationId) {
   return `tablinq-stream:${conversationId}`;
 }
 
+function askCountStorageKey(conversationId) {
+  return `tablinq-ask-count:${conversationId}`;
+}
+
 function researchStorageKey(conversationId) {
   return `tablinq-research:${conversationId}`;
+}
+
+function nextAskNumber(conversationId) {
+  const key = askCountStorageKey(conversationId);
+  const next = Number.parseInt(localStorage.getItem(key) || "0", 10) + 1;
+  localStorage.setItem(key, String(next));
+  return next;
 }
 
 function writeConversationState(conversationId, messageId) {
@@ -713,6 +724,7 @@ function startStream(promptText) {
 
   const conversationId = currentConversationId();
   const messageId = uniqueId("msg");
+  const askNumber = nextAskNumber(conversationId);
   const state = {
     conversationId,
     messageId,
@@ -721,12 +733,27 @@ function startStream(promptText) {
       ? `Fake response for: ${promptText}`
       : "Fake response for an empty prompt.",
     index: 0,
+    askNumber,
     didReload: false,
+    pendingStart: false,
   };
 
-  writeConversationState(conversationId, messageId);
   setStreamState("running");
   setStreamingControls(true);
+  if (scenario === "followup-stale" && askNumber > 1) {
+    state.pendingStart = true;
+    persistState(state);
+    activeTimer = setTimeout(() => {
+      state.pendingStart = false;
+      writeConversationState(state.conversationId, state.messageId);
+      renderChunk(state);
+      persistState(state);
+      scheduleNextTick(state);
+    }, 250);
+    return;
+  }
+
+  writeConversationState(conversationId, messageId);
   message.textContent = "";
   renderChunk(state);
   persistState(state);
@@ -756,6 +783,9 @@ function resumeStreamIfNeeded() {
     return;
   }
   setStreamState("running");
+  if (state.pendingStart) {
+    state.pendingStart = false;
+  }
   renderChunk(state);
 
   if (scenario === "timeout") {
