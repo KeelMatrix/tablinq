@@ -299,19 +299,125 @@ export function createTablinqPageAdapterRuntime() {
       "[contenteditable='true']",
     ]);
 
-  const findSubmitButton = () => {
-    const explicit = queryFirstVisible([
-      "[data-action='submit']",
-      "[data-testid='send-button']",
-      "button[aria-label='Submit prompt']",
-      "button[aria-label*='Send']",
-      "button[type='submit']",
-    ]);
-    if (explicit) {
-      return explicit;
+  const readComposerText = () => {
+    const composer = findComposer();
+    if (!(composer instanceof HTMLElement)) {
+      return "";
+    }
+    if (
+      composer instanceof HTMLTextAreaElement ||
+      composer instanceof HTMLInputElement
+    ) {
+      return collapseText(composer.value);
+    }
+    return collapseText(composer.textContent);
+  };
+
+  const composerDisabled = () => {
+    const composer = findComposer();
+    if (!(composer instanceof HTMLElement)) {
+      return false;
+    }
+    return (
+      composer.getAttribute("aria-disabled") === "true" ||
+      composer.hasAttribute("disabled") ||
+      composer.getAttribute("contenteditable") === "false"
+    );
+  };
+
+  const controlFingerprint = (element) =>
+    normalizeText(
+      [
+        accessibleName(element),
+        element?.id ?? "",
+        element?.getAttribute?.("data-testid") ?? "",
+        element?.getAttribute?.("data-slot") ?? "",
+        element?.getAttribute?.("name") ?? "",
+        typeof element?.className === "string" ? element.className : "",
+      ].join(" "),
+    );
+
+  const isUploadLikeControl = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (
+      element.matches(
+        [
+          "[data-slot='upload-entry']",
+          "[data-testid='upload-button']",
+          "label[for]",
+          "input[type='file']",
+        ].join(", "),
+      )
+    ) {
+      return true;
+    }
+    const fingerprint = controlFingerprint(element);
+    if (
+      hasToken(fingerprint, [
+        "plus",
+        "add",
+        "upload",
+        "file",
+        "files",
+        "photo",
+        "photos",
+        "attach",
+        "attachment",
+        "paperclip",
+      ])
+    ) {
+      return true;
+    }
+    return (
+      element.getAttribute("aria-haspopup") !== null &&
+      !hasToken(fingerprint, ["send", "submit", "ask"])
+    );
+  };
+
+  const submitCandidateScore = (element) => {
+    if (!(element instanceof HTMLElement) || isDisabled(element)) {
+      return Number.NEGATIVE_INFINITY;
+    }
+    if (isUploadLikeControl(element)) {
+      return Number.NEGATIVE_INFINITY;
     }
 
+    let score = 0;
+    const fingerprint = controlFingerprint(element);
+    if (
+      element.matches(
+        [
+          "[data-action='submit']",
+          "[data-testid='send-button']",
+          "button[aria-label='Submit prompt']",
+          "button[aria-label*='Send']",
+          "button[type='submit']",
+        ].join(", "),
+      )
+    ) {
+      score += 10;
+    }
+    if (hasToken(fingerprint, ["send", "submit", "ask"])) {
+      score += 6;
+    }
+    if (element.getAttribute("type") === "submit") {
+      score += 4;
+    }
+    if (hasToken(fingerprint, ["stop", "cancel"])) {
+      score -= 10;
+    }
+    if (element.getAttribute("aria-haspopup") !== null) {
+      score -= 4;
+    }
+    return score;
+  };
+
+  const submitCandidatesNearComposer = () => {
     const composer = findComposer();
+    const seen = new Set();
+    const candidates = [];
     for (const container of [
       composer?.closest("form"),
       composer?.parentElement,
@@ -321,18 +427,47 @@ export function createTablinqPageAdapterRuntime() {
       if (!container) {
         continue;
       }
-      const nearby = firstVisible(
+      for (const candidate of visibleUnique(
         container.querySelectorAll(
           "button, [role='button'], input[type='submit']",
         ),
-      );
-      if (nearby) {
-        return nearby;
+      )) {
+        if (seen.has(candidate)) {
+          continue;
+        }
+        seen.add(candidate);
+        candidates.push(candidate);
       }
+    }
+    return candidates;
+  };
+
+  const findSubmitButton = () => {
+    const explicit = queryFirstVisible([
+      "[data-action='submit']",
+      "[data-testid='send-button']",
+      "button[aria-label='Submit prompt']",
+      "button[aria-label*='Send']",
+      "button[type='submit']",
+    ]);
+    if (explicit && submitCandidateScore(explicit) > 0) {
+      return explicit;
+    }
+
+    const nearby = submitCandidatesNearComposer()
+      .map((element) => ({
+        element,
+        score: submitCandidateScore(element),
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => right.score - left.score);
+    if (nearby[0]?.element) {
+      return nearby[0].element;
     }
 
     return findByAliases({
       fallbackTokens: ["send", "submit", "ask"],
+      exclude: (element) => submitCandidateScore(element) <= 0,
     });
   };
 
@@ -346,6 +481,34 @@ export function createTablinqPageAdapterRuntime() {
         fallbackTokens: ["stop", "cancel"],
       }),
     );
+
+  const readSubmitState = () => ({
+    composerText: readComposerText(),
+    composerDisabled: composerDisabled(),
+    stopVisible: stopButtonVisible(),
+    assistantMessageCount: findAssistantMessages().length,
+    streamState:
+      document.body.dataset.streamState ??
+      findLatestAssistantMessage()?.getAttribute("data-stream-state") ??
+      "idle",
+  });
+
+  const submitStarted = ({ baseline }) => {
+    const current = readSubmitState();
+    if (!baseline) {
+      return current.stopVisible || current.streamState === "running";
+    }
+    return (
+      (current.stopVisible && !baseline.stopVisible) ||
+      current.streamState === "running" ||
+      (current.streamState !== "idle" &&
+        current.streamState !== (baseline.streamState ?? "idle")) ||
+      current.assistantMessageCount > (baseline.assistantMessageCount ?? 0) ||
+      (baseline.composerText &&
+        current.composerText !== baseline.composerText) ||
+      (current.composerDisabled && !baseline.composerDisabled)
+    );
+  };
 
   const collectText = (root) => {
     if (!(root instanceof HTMLElement)) {
@@ -1142,6 +1305,12 @@ export function createTablinqPageAdapterRuntime() {
           null,
         currentUrl: window.location.href,
       };
+    },
+    readSubmitState() {
+      return readSubmitState();
+    },
+    submitStarted(payload) {
+      return submitStarted(payload ?? {});
     },
   };
 }

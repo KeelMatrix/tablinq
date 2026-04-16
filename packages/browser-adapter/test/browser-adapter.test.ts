@@ -26,6 +26,8 @@ function withHarnessUrl(
       | "success"
       | "timeout"
       | "reload"
+      | "submit-upload-trap"
+      | "submit-upload-trap-no-keyboard"
       | "followup-rich-text"
       | "followup-stale"
       | "done-early"
@@ -1404,6 +1406,85 @@ describe("browser adapter", () => {
         () => {},
       ),
     ).rejects.toThrow(/upload failed/i);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("falls back to keyboard submit when a composer plus button sits next to send", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "submit-upload-trap",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-submit-upload-trap",
+        prompt: "repeat attached file",
+        files: [fixture],
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadPopoverOpen: document.body.dataset.uploadPopoverOpen,
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+      uploadChips: document.querySelectorAll("[data-testid='upload-chip']").length,
+      plusPresent: Boolean(document.querySelector("#composer-plus-btn")),
+    }));
+
+    expect(result.output_text).toBe("Fake response for: repeat attached file");
+    expect(state).toEqual({
+      uploadPopoverOpen: "false",
+      lastSubmissionMethod: "keyboard",
+      uploadChips: 1,
+      plusPresent: true,
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails fast when no submit action starts after click and keyboard fallback", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "submit-upload-trap-no-keyboard",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-submit-upload-trap-fail",
+          prompt: "repeat attached file",
+          files: [fixture],
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/submit failed/i);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
