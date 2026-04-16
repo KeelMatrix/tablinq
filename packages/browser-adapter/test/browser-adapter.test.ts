@@ -27,6 +27,7 @@ function withHarnessUrl(
       | "timeout"
       | "reload"
       | "stall-recover"
+      | "stall-recover-transient"
       | "recover-complete"
       | "recover-mismatch"
       | "research-success"
@@ -1264,6 +1265,63 @@ describe("browser adapter", () => {
       "Fake response for: resume after a temporary stall",
     );
     expect(chunks.join("")).toBe(result.output_text);
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers ask when the live page is transiently ambiguous during stall recovery", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
+          scenario: "stall-recover-transient",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "stall-recover-transient",
+      }),
+      headless: true,
+    });
+
+    const chunks: string[] = [];
+    const states: string[] = [];
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-stall-recover-transient",
+        prompt: "recover after a transient live page",
+        files: [fixture],
+        timeoutMs: 7000,
+      },
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    expect(result.output_text).toBe(
+      "Fake response for: recover after a transient live page",
+    );
+    expect(result.artifacts).toHaveLength(1);
+    expect(chunks.join("")).toBe(result.output_text);
+    expect(result.current_url).toContain(`/c/${result.conversation_id}`);
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

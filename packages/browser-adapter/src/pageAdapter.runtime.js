@@ -183,6 +183,21 @@ export function createTablinqPageAdapterRuntime() {
     return visible[visible.length - 1] ?? null;
   };
 
+  const latestVisibleWithin = (root, selectors) => {
+    if (!(root instanceof Element)) {
+      return null;
+    }
+    const matches = [];
+    for (const selector of selectors) {
+      matches.push(...Array.from(root.querySelectorAll(selector)));
+    }
+    const visible = matches.filter(isVisible);
+    if (visible.length === 0) {
+      return null;
+    }
+    return visible[visible.length - 1] ?? null;
+  };
+
   const expandAliases = (report, bucket, key, defaults) =>
     unique([...(report?.aliases?.[bucket]?.[key] ?? []), ...defaults]);
 
@@ -364,9 +379,21 @@ export function createTablinqPageAdapterRuntime() {
       "[data-slot='assistant-message']",
       "[data-message-author-role='assistant']",
       "article.assistant",
-      "main article",
-      ".message",
-    ]);
+    ]) ??
+    latestVisibleWithin(
+      queryFirstVisible([
+        "[data-testid='conversation-turns']",
+        "[data-slot='conversation-thread']",
+        ".transcript",
+        "main",
+      ]),
+      [
+        "article[data-message-id]",
+        "article[data-stream-state]",
+        "article.message",
+        "article",
+      ],
+    );
 
   const inferAskState = (text, article) => {
     const explicitState =
@@ -712,6 +739,7 @@ export function createTablinqPageAdapterRuntime() {
       const article = findLatestAssistantMessage();
       const text = article ? collectText(article) : "";
       return {
+        hasAssistantMessage: Boolean(article),
         text,
         state: inferAskState(text, article),
         conversationId:
@@ -719,7 +747,7 @@ export function createTablinqPageAdapterRuntime() {
           parseConversationIdFromUrl(),
         messageId:
           datasetValue(article?.getAttribute("data-message-id")) ??
-          datasetValue(document.body.dataset.lastMessageId) ??
+          (article ? datasetValue(document.body.dataset.lastMessageId) : null) ??
           null,
         currentUrl: window.location.href,
       };

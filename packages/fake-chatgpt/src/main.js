@@ -293,6 +293,11 @@ root.innerHTML =
             </a>
           </article>
         </section>
+        <section class="notice-panel" aria-label="workspace notices">
+          <article class="message" data-slot="notice-card">
+            <p>Workspace notices appear here while ChatGPT is thinking.</p>
+          </article>
+        </section>
       </main>
     `
       : `
@@ -665,6 +670,30 @@ function tickStream(state) {
     state.didStall = true;
     persistState(state);
     activeTimer = setTimeout(() => tickStream(state), 2400);
+    return;
+  }
+
+  if (
+    scenario === "stall-recover-transient" &&
+    !state.didStall &&
+    state.index >= 18
+  ) {
+    state.didStall = true;
+    persistState(state);
+    setStreamState("idle");
+    setStreamingControls(false);
+    message.textContent = "";
+    messageArticle?.removeAttribute("data-message-author-role");
+    messageArticle?.removeAttribute("data-message-id");
+    document.body.dataset.lastMessageId = "";
+    activeTimer = setTimeout(() => {
+      writeConversationState(state.conversationId, state.messageId);
+      messageArticle?.setAttribute("data-message-author-role", "assistant");
+      setStreamState("running");
+      setStreamingControls(true);
+      renderChunk(state);
+      scheduleNextTick(state);
+    }, 2400);
     return;
   }
 
