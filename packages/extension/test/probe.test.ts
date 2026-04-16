@@ -138,28 +138,52 @@ describe("extension capability probe", () => {
     expect(validateCapabilityReport(message.report)).toBe(true);
   });
 
-  it("detects a live-like ChatGPT surface and maps current labels", () => {
+  it("detects the current ChatGPT picker and composer-adjacent effort control", () => {
     document.body.dataset.uiVariant = "live";
     document.body.innerHTML = `
       <main aria-label="chatgpt workspace">
-        <section>
-          <div role="group" aria-label="Choose a model">
-            <button type="button" data-model="instant" aria-pressed="false">GPT-5.3 Instant</button>
-            <button type="button" data-model="thinking" aria-pressed="true">GPT-5.4 Thinking</button>
-          </div>
+        <section class="topbar">
+          <button
+            type="button"
+            data-slot="model-picker"
+            aria-label="ChatGPT"
+            aria-haspopup="menu"
+            aria-expanded="false"
+          >
+            ChatGPT
+          </button>
           <button type="button" data-mode="search" aria-label="Search">Search</button>
           <button type="button" data-mode="research" aria-label="Deep research">Deep research</button>
-          <div role="group" aria-label="Reasoning effort">
-            <button type="button" data-effort="standard" aria-label="Standard reasoning" aria-pressed="true">Standard</button>
-            <button type="button" data-effort="extended" aria-label="Extended reasoning" aria-pressed="false">Extended</button>
-          </div>
           <button type="button" data-testid="upload-button" aria-label="Add photos and files">Add files</button>
-          <input id="live-upload-input" type="file" hidden />
+          <input id="live-upload-input" type="file" hidden multiple />
         </section>
         <form data-testid="composer-root">
           <textarea id="prompt-textarea" aria-label="Message ChatGPT" placeholder="Message ChatGPT"></textarea>
+          <div class="composer-actions">
+            <button
+              type="button"
+              data-slot="effort-toggle"
+              aria-label="Thinking effort"
+              aria-haspopup="menu"
+              aria-expanded="false"
+            >
+              Standard
+            </button>
+          </div>
           <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
         </form>
+        <div data-slot="portal-root">
+          <div data-slot="model-menu" role="menu" hidden>
+            <button type="button" role="menuitemradio" data-model="latest" hidden>Latest</button>
+            <button type="button" role="menuitemradio" data-model="instant" hidden>Instant</button>
+            <button type="button" role="menuitemradio" data-model="thinking" hidden>Thinking</button>
+            <button type="button" role="menuitemradio" data-model="pro" hidden>Pro</button>
+          </div>
+          <div data-slot="effort-menu" role="menu" hidden>
+            <button type="button" role="menuitemradio" data-effort="standard" hidden>Standard</button>
+            <button type="button" role="menuitemradio" data-effort="extended" hidden>Extended thinking</button>
+          </div>
+        </div>
         <article data-message-author-role="assistant">
           <div class="markdown">
             <p>Live-like answer text</p>
@@ -189,15 +213,11 @@ describe("extension capability probe", () => {
     expect(message.runtime.strategy_matches.submit_available).toBe(
       "chatgpt-send-button",
     );
-    expect(message.report.aliases.model_classes.instant).toContain(
-      "gpt-5.3 instant",
-    );
-    expect(message.report.aliases.model_classes.thinking).toContain(
-      "gpt-5.4 thinking",
-    );
+    expect(message.report.aliases.model_classes.instant).toContain("instant");
+    expect(message.report.aliases.model_classes.thinking).toContain("thinking");
     expect(message.report.aliases.modes.research).toContain("deep research");
     expect(message.report.aliases.efforts.extended).toContain(
-      "extended reasoning",
+      "extended thinking",
     );
   });
 
@@ -221,7 +241,7 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.model_classes.instant).toBeUndefined();
   });
 
-  it("does not treat a model picker trigger as a concrete thinking alias", () => {
+  it("infers instant and thinking aliases from the current ChatGPT trigger before the menu opens", () => {
     document.body.dataset.uiVariant = "menu";
     document.body.innerHTML = `
       <main aria-label="chatgpt workspace">
@@ -229,20 +249,12 @@ describe("extension capability probe", () => {
           <button
             type="button"
             data-slot="model-picker"
-            aria-label="Model selector"
+            aria-label="ChatGPT"
             aria-haspopup="menu"
             aria-expanded="false"
           >
-            Model selector
+            ChatGPT
           </button>
-          <div role="menu" hidden>
-            <button type="button" role="menuitemradio" data-model="instant" hidden>
-              GPT-5.3 Instant
-            </button>
-            <button type="button" role="menuitemradio" data-model="thinking" hidden>
-              GPT-5.4 Thinking
-            </button>
-          </div>
           <textarea id="prompt-textarea" aria-label="Message ChatGPT"></textarea>
           <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
         </section>
@@ -254,8 +266,8 @@ describe("extension capability probe", () => {
     });
 
     expect(message.report.matrix.model_picker_visible).toBe(true);
-    expect(message.report.aliases.model_classes.instant).toBeUndefined();
-    expect(message.report.aliases.model_classes.thinking).toBeUndefined();
+    expect(message.report.aliases.model_classes.instant).toContain("instant");
+    expect(message.report.aliases.model_classes.thinking).toContain("thinking");
     expect(message.runtime.strategy_matches.model_picker_visible).toBeTruthy();
   });
 

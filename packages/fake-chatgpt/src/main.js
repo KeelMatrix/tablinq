@@ -79,11 +79,11 @@ note.textContent =
   variant === "aria"
     ? "ARIA-first variant with moved controls, renamed labels, and semantic groups."
     : variant === "menu"
-      ? "Menu-picker variant with a model trigger and thinking-only effort controls."
+      ? "Current menu variant with a ChatGPT trigger, portal menus, and composer-adjacent effort controls."
     : variant === "live"
       ? usesComposerPlusTrap
-        ? "Live-like variant with a composer plus button trap and keyboard submit fallback."
-        : "Live-like variant with prompt-textarea, send/stop buttons, upload chips, and download controls."
+        ? "Current live variant with a ChatGPT trigger, portal menus, and a composer plus button trap."
+        : "Current live variant with a ChatGPT trigger, portal menus, and composer-adjacent effort controls."
       : "Classic variant with grouped controls and direct toolbar buttons.";
 
 function hasControl(name) {
@@ -185,42 +185,22 @@ function liveModelControls() {
     return "";
   }
   return `
-    <div class="pill" role="group" aria-label="Choose a model">
-      <button type="button" data-model="instant" aria-pressed="false">GPT-5.3 Instant</button>
-      <button type="button" data-model="thinking" aria-pressed="true">GPT-5.4 Thinking</button>
+    <div class="pill">
+      <button
+        type="button"
+        data-slot="model-picker"
+        aria-label="ChatGPT"
+        aria-haspopup="menu"
+        aria-expanded="false"
+      >
+        ChatGPT
+      </button>
     </div>
   `;
 }
 
 function menuModelControls() {
-  if (!hasControl("model")) {
-    return "";
-  }
-  return `
-    <div class="pill">
-      <button
-        type="button"
-        data-slot="model-picker"
-        aria-label="Model selector"
-        aria-haspopup="menu"
-        aria-expanded="false"
-      >
-        Model selector
-      </button>
-      <div data-slot="model-menu" role="menu" hidden>
-        ${
-          hasControl("instant-model")
-            ? `<button type="button" role="menuitemradio" data-model="instant" hidden>GPT-5.3 Instant</button>`
-            : ""
-        }
-        ${
-          hasControl("thinking-model")
-            ? `<button type="button" role="menuitemradio" data-model="thinking" hidden>GPT-5.4 Thinking</button>`
-            : ""
-        }
-      </div>
-    </div>
-  `;
+  return liveModelControls();
 }
 
 function liveModeControls() {
@@ -239,21 +219,60 @@ function liveEffortControls() {
     return "";
   }
   return `
-    <div class="pill" role="group" aria-label="Reasoning effort">
-      <button type="button" data-effort="standard" aria-label="Standard reasoning" aria-pressed="true">Standard</button>
-      <button type="button" data-effort="extended" aria-label="Extended reasoning" aria-pressed="false">Extended</button>
-    </div>
+    <button
+      type="button"
+      class="pill"
+      data-slot="effort-toggle"
+      aria-label="Thinking effort"
+      aria-haspopup="menu"
+      aria-expanded="false"
+      hidden
+    >
+      Standard
+    </button>
   `;
 }
 
 function menuEffortControls() {
-  if (!hasControl("effort")) {
+  return liveEffortControls();
+}
+
+function currentPortalMenus() {
+  if (variant !== "live" && variant !== "menu") {
     return "";
   }
   return `
-    <div class="pill" data-slot="effort-toggle" role="group" aria-label="Thinking effort" hidden>
-      <button type="button" data-effort="standard" hidden>Standard reasoning</button>
-      <button type="button" data-effort="extended" hidden>Extended reasoning</button>
+    <div data-slot="portal-root">
+      ${
+        hasControl("model")
+          ? `
+      <div data-slot="model-menu" role="menu" hidden>
+        <button type="button" role="menuitemradio" data-model="latest" hidden>Latest</button>
+        ${
+          hasControl("instant-model")
+            ? `<button type="button" role="menuitemradio" data-model="instant" hidden>Instant</button>`
+            : ""
+        }
+        ${
+          hasControl("thinking-model")
+            ? `<button type="button" role="menuitemradio" data-model="thinking" hidden>Thinking</button>`
+            : ""
+        }
+        <button type="button" role="menuitemradio" data-model="pro" hidden>Pro</button>
+      </div>
+      `
+          : ""
+      }
+      ${
+        hasControl("effort")
+          ? `
+      <div data-slot="effort-menu" role="menu" hidden>
+        <button type="button" role="menuitemradio" data-effort="standard" hidden>Standard</button>
+        <button type="button" role="menuitemradio" data-effort="extended" hidden>Extended thinking</button>
+      </div>
+      `
+          : ""
+      }
     </div>
   `;
 }
@@ -277,6 +296,7 @@ function liveComposerActions() {
   if (usesComposerPlusTrap) {
     return `
       <div class="pill">
+        ${liveEffortControls()}
         <button
           type="button"
           id="composer-plus-btn"
@@ -301,6 +321,7 @@ function liveComposerActions() {
   }
   return `
     <div class="pill">
+      ${liveEffortControls()}
       <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
       <button
         type="button"
@@ -354,12 +375,11 @@ root.innerHTML =
       </section>
     `
     : variant === "live"
-      ? `
+    ? `
       <main aria-label="chatgpt workspace">
         <section class="stacked-toolbar">
           ${liveModelControls()}
           ${liveModeControls()}
-          ${liveEffortControls()}
           ${liveUploadControl()}
         </section>
         <form data-testid="composer-root" class="stacked-composer">
@@ -400,6 +420,7 @@ root.innerHTML =
             <p>Workspace notices appear here while ChatGPT is thinking.</p>
           </article>
         </section>
+        ${currentPortalMenus()}
       </main>
     `
       : variant === "menu"
@@ -408,7 +429,6 @@ root.innerHTML =
         <section class="stacked-toolbar">
           ${menuModelControls()}
           ${liveModeControls()}
-          ${menuEffortControls()}
           ${liveUploadControl()}
         </section>
         <form data-testid="composer-root" class="stacked-composer">
@@ -417,17 +437,7 @@ root.innerHTML =
             aria-label="Message ChatGPT"
             placeholder="Message ChatGPT"
           ></textarea>
-          <div class="pill">
-            <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
-            <button
-              type="button"
-              data-testid="stop-button"
-              aria-label="Stop generating"
-              hidden
-            >
-              Stop
-            </button>
-          </div>
+          ${liveComposerActions()}
         </form>
         <div class="stacked-toolbar" data-slot="upload-list"></div>
         <section class="transcript">
@@ -448,6 +458,7 @@ root.innerHTML =
             </a>
           </article>
         </section>
+        ${currentPortalMenus()}
       </main>
     `
       : `
@@ -687,6 +698,9 @@ function applyPressedState(selector, selectedValue) {
       element.getAttribute("data-mode");
     const selected = key === selectedValue;
     element.setAttribute("aria-pressed", selected ? "true" : "false");
+    if (element.getAttribute("role") === "menuitemradio") {
+      element.setAttribute("aria-checked", selected ? "true" : "false");
+    }
     element.dataset.selected = selected ? "true" : "false";
   });
 }
@@ -709,12 +723,32 @@ function syncSelectedState() {
     element.toggleAttribute("hidden", !modelMenuOpen);
   });
 
+  const currentUiVariant = variant === "live" || variant === "menu";
   const effortVisible =
-    variant !== "menu" || document.body.dataset.selectedModel === "thinking";
+    hasControl("effort") &&
+    (!currentUiVariant || document.body.dataset.selectedModel === "thinking");
   const effortToggle = document.querySelector("[data-slot='effort-toggle']");
-  effortToggle?.toggleAttribute("hidden", !effortVisible);
-  effortToggle?.querySelectorAll("[data-effort]").forEach((element) => {
-    element.toggleAttribute("hidden", !effortVisible);
+  const effortToggleIsMenuTrigger =
+    effortToggle instanceof HTMLElement &&
+    effortToggle.getAttribute("aria-haspopup") !== null;
+  if (effortToggleIsMenuTrigger) {
+    effortToggle.toggleAttribute("hidden", !effortVisible);
+    effortToggle.textContent =
+      document.body.dataset.selectedEffort === "extended"
+        ? "Extended"
+        : "Standard";
+    if (!effortVisible) {
+      effortToggle.setAttribute("aria-expanded", "false");
+    }
+  }
+  const effortMenu = document.querySelector("[data-slot='effort-menu']");
+  const effortMenuOpen =
+    effortVisible &&
+    effortToggleIsMenuTrigger &&
+    effortToggle.getAttribute("aria-expanded") === "true";
+  effortMenu?.toggleAttribute("hidden", !effortMenuOpen);
+  effortMenu?.querySelectorAll("[data-effort]").forEach((element) => {
+    element.toggleAttribute("hidden", !effortMenuOpen);
   });
 }
 
@@ -1062,6 +1096,7 @@ function resumeResearchIfNeeded() {
 }
 
 const modelPickerTrigger = document.querySelector("[data-slot='model-picker']");
+const effortPickerTrigger = document.querySelector("[data-slot='effort-toggle']");
 
 modelPickerTrigger?.addEventListener("click", () => {
   const expanded = modelPickerTrigger.getAttribute("aria-expanded") === "true";
@@ -1073,13 +1108,25 @@ document.querySelectorAll("[data-model]").forEach((element) => {
   element.addEventListener("click", () => {
     document.body.dataset.selectedModel = element.getAttribute("data-model");
     modelPickerTrigger?.setAttribute("aria-expanded", "false");
+    effortPickerTrigger?.setAttribute("aria-expanded", "false");
     syncSelectedState();
   });
+});
+
+effortPickerTrigger?.addEventListener("click", () => {
+  const expanded =
+    effortPickerTrigger.getAttribute("aria-expanded") === "true";
+  effortPickerTrigger.setAttribute(
+    "aria-expanded",
+    expanded ? "false" : "true",
+  );
+  syncSelectedState();
 });
 
 document.querySelectorAll("[data-effort]").forEach((element) => {
   element.addEventListener("click", () => {
     document.body.dataset.selectedEffort = element.getAttribute("data-effort");
+    effortPickerTrigger?.setAttribute("aria-expanded", "false");
     syncSelectedState();
   });
 });
