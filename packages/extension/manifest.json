@@ -23,7 +23,7 @@
         "http://127.0.0.1/*",
         "http://localhost/*"
       ],
-      "js": ["src/content-script.js"],
+      "js": ["src/probe.content.js", "src/content-script.js"],
       "run_at": "document_idle"
     }
   ]
