@@ -26,6 +26,7 @@ function withHarnessUrl(
       | "success"
       | "timeout"
       | "reload"
+      | "followup-stale"
       | "stall-recover"
       | "stall-recover-transient"
       | "recover-complete"
@@ -754,6 +755,93 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("does not replay the previous reply when a follow-up ask reuses the latest conversation implicitly", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, { scenario: "followup-stale" });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const first = await adapter.ask(
+      {
+        jobId: "job-ask-followup-implicit-first",
+        prompt: "hello gpt",
+      },
+      () => {},
+    );
+
+    const secondChunks: string[] = [];
+    const second = await adapter.ask(
+      {
+        jobId: "job-ask-followup-implicit-second",
+        prompt: "what can you do?",
+      },
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          secondChunks.push(chunk.text);
+        }
+      },
+    );
+
+    expect(second.conversation_id).toBe(first.conversation_id);
+    expect(second.output_text).toBe("Fake response for: what can you do?");
+    expect(secondChunks.join("")).toBe(second.output_text);
+    expect(secondChunks.join("")).not.toContain(first.output_text);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("does not replay the previous reply when a follow-up ask uses the explicit conversation id", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, { scenario: "followup-stale" });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const first = await adapter.ask(
+      {
+        jobId: "job-ask-followup-explicit-first",
+        prompt: "hello gpt",
+      },
+      () => {},
+    );
+
+    const secondChunks: string[] = [];
+    const second = await adapter.ask(
+      {
+        jobId: "job-ask-followup-explicit-second",
+        prompt: "what can you do?",
+        conversationId: first.conversation_id,
+      },
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          secondChunks.push(chunk.text);
+        }
+      },
+    );
+
+    expect(second.conversation_id).toBe(first.conversation_id);
+    expect(second.output_text).toBe("Fake response for: what can you do?");
+    expect(secondChunks.join("")).toBe(second.output_text);
+    expect(secondChunks.join("")).not.toContain(first.output_text);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("refuses asks when the managed page is a signed-out local login screen", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -1219,6 +1307,65 @@ describe("browser adapter", () => {
     expect(result.output_text).toBe(
       "Fake response for: recover after browser disconnect",
     );
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers a follow-up ask in the same conversation without replaying the previous reply", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, { scenario: "followup-stale" });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const first = await adapter.ask(
+      {
+        jobId: "job-ask-followup-recovery-first",
+        prompt: "hello gpt",
+      },
+      () => {},
+    );
+
+    const states: string[] = [];
+    const secondChunks: string[] = [];
+    let closeTriggered = false;
+    const request = adapter.ask(
+      {
+        jobId: "job-ask-followup-recovery-second",
+        prompt: "recover the follow-up ask",
+        conversationId: first.conversation_id,
+        timeoutMs: 7000,
+      },
+      async (chunk) => {
+        if (chunk.kind === "delta") {
+          secondChunks.push(chunk.text);
+          if (!closeTriggered) {
+            closeTriggered = true;
+            await adapter.getManagedPageForTest()!.context().browser()!.close();
+          }
+        }
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    const second = await request;
+    expect(second.conversation_id).toBe(first.conversation_id);
+    expect(second.output_text).toBe(
+      "Fake response for: recover the follow-up ask",
+    );
+    expect(secondChunks.join("")).toBe(second.output_text);
+    expect(secondChunks.join("")).not.toContain(first.output_text);
     expect(states).toContain("interrupted");
     expect(states).toContain("recovered");
 

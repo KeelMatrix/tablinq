@@ -839,13 +839,18 @@ export class BrowserAdapter {
       ),
     );
     let page = await this.openExecutionPage(
-      this.resolveConversationTarget(command.conversationId),
+      this.resolveAskTarget(command.conversationId),
     );
+    let askBaseline: AskBaseline | null = null;
 
     if (options.submitPrompt) {
-      if (!command.conversationId) {
+      if (
+        !command.conversationId &&
+        !conversationIdFromUrl(safePageUrl(page))
+      ) {
         await resetConversationIdentity(page);
       }
+      askBaseline = await readAskBaseline(page);
       await this.refreshCapabilities(page);
       await applyAskConfiguration(page, command, this.lastCapabilityReport);
       await uploadAttachments(
@@ -863,6 +868,7 @@ export class BrowserAdapter {
       doneStreak: 0,
       knownConversationId: command.conversationId ?? null,
       knownMessageId: null as string | null,
+      askBaseline,
       lastProgressAt: Date.now(),
       recoveryAttempts: 0,
       lastStatusAt: 0,
@@ -888,7 +894,7 @@ export class BrowserAdapter {
     while (Date.now() < timeoutAt) {
       let snapshot: AskSnapshot;
       try {
-        snapshot = await readAskSnapshot(page);
+        snapshot = await readAskSnapshot(page, state.askBaseline);
       } catch (error) {
         if (
           isTransientPageError(error) &&
@@ -1286,6 +1292,7 @@ export class BrowserAdapter {
       doneStreak: number;
       knownConversationId: string | null;
       knownMessageId: string | null;
+      askBaseline: AskBaseline | null;
       recoveryAttempts: number;
       lastStatusAt: number;
     },
@@ -1310,9 +1317,7 @@ export class BrowserAdapter {
     }
 
     const recoveredPage = await this.openExecutionPage(
-      this.resolveConversationTarget(
-        state.knownConversationId ?? command.conversationId,
-      ),
+      this.resolveAskTarget(state.knownConversationId ?? command.conversationId),
     );
     if (Date.now() >= timeoutAt) {
       throw new Error(
@@ -1322,7 +1327,7 @@ export class BrowserAdapter {
 
     let snapshot: AskSnapshot | null = null;
     while (Date.now() < timeoutAt) {
-      const candidate = await readAskSnapshot(recoveredPage);
+      const candidate = await readAskSnapshot(recoveredPage, state.askBaseline);
       this.rememberAskSnapshot(state, candidate);
       const relation = textRelation(state.emittedText, candidate.text);
       const relationIsUsable = relation === "same" || relation === "ahead";
@@ -1692,6 +1697,16 @@ export class BrowserAdapter {
 
   private resolveConversationTarget(conversationId?: string | null): string {
     return resolveConversationUrl(this.currentTargetUrl, conversationId);
+  }
+
+  private resolveAskTarget(conversationId?: string | null): string {
+    const normalizedConversationId = normalizeOptionalString(conversationId);
+    if (normalizedConversationId) {
+      return this.resolveConversationTarget(normalizedConversationId);
+    }
+    return conversationIdFromUrl(this.currentTargetUrl)
+      ? this.currentTargetUrl
+      : this.resolveConversationTarget(null);
   }
 
   private async recoverManagedPage(): Promise<void> {
@@ -2629,6 +2644,12 @@ interface AskSnapshot {
   currentUrl: string;
 }
 
+interface AskBaseline {
+  assistantMessageCount: number;
+  messageId: string | null;
+  text: string;
+}
+
 interface ResearchSnapshot {
   status: "waiting_for_sources" | "running" | "done" | "failed";
   statusMessage: string | null;
@@ -2646,6 +2667,7 @@ async function callPageAdapter<T>(
     | "clickSubmit"
     | "applyAskConfiguration"
     | "uploadAcknowledged"
+    | "readAskBaseline"
     | "readAskSnapshot"
     | "readResearchSnapshot",
   payload?: unknown,
@@ -2843,9 +2865,20 @@ async function clickSubmit(page: Page): Promise<void> {
   await page.keyboard.press(`${modifier}+Enter`).catch(() => undefined);
 }
 
-async function readAskSnapshot(page: Page): Promise<AskSnapshot> {
+async function readAskBaseline(page: Page): Promise<AskBaseline> {
+  return normalizeAskBaseline(
+    await callPageAdapter<AskBaseline>(page, "readAskBaseline"),
+  );
+}
+
+async function readAskSnapshot(
+  page: Page,
+  baseline?: AskBaseline | null,
+): Promise<AskSnapshot> {
   return normalizeAskSnapshot(
-    await callPageAdapter<AskSnapshot>(page, "readAskSnapshot"),
+    await callPageAdapter<AskSnapshot>(page, "readAskSnapshot", {
+      baseline: baseline ?? null,
+    }),
   );
 }
 
@@ -3048,6 +3081,16 @@ function normalizeAskSnapshot(snapshot: AskSnapshot): AskSnapshot {
       normalizeOptionalString(snapshot.conversationId) ??
       conversationIdFromUrl(snapshot.currentUrl),
     messageId: normalizeOptionalString(snapshot.messageId),
+  };
+}
+
+function normalizeAskBaseline(baseline: AskBaseline): AskBaseline {
+  return {
+    assistantMessageCount: Number.isFinite(baseline.assistantMessageCount)
+      ? Math.max(0, Math.floor(baseline.assistantMessageCount))
+      : 0,
+    messageId: normalizeOptionalString(baseline.messageId),
+    text: baseline.text ?? "",
   };
 }
 
