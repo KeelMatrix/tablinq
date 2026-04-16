@@ -17,7 +17,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 
 const ARTIFACT_RETENTION_LIMIT: usize = 100;
 
@@ -609,14 +609,18 @@ impl CoreService {
     }
 
     pub fn health_snapshot(&self) -> Result<HealthCheck> {
-        let browser = lock_browser(&self.browser)?.health()?;
-        Ok(health_snapshot(&self.config, browser))
+        let Some(mut browser) = try_lock_browser(&self.browser)? else {
+            return Ok(busy_health_snapshot());
+        };
+        Ok(health_snapshot(&self.config, browser.health()?))
     }
 
     pub fn doctor_report(&self) -> Result<DoctorReport> {
         let db = self.open_db()?;
-        let browser_snapshot = lock_browser(&self.browser)?.profile_info()?;
-        let diagnostics = lock_browser(&self.browser)?.diagnostics(None).ok();
+        let mut browser = try_lock_browser(&self.browser)?
+            .ok_or_else(|| anyhow!(browser_busy_message()))?;
+        let browser_snapshot = browser.profile_info()?;
+        let diagnostics = browser.diagnostics(None).ok();
         let browser_detection = diagnostics
             .as_ref()
             .map(|value| BrowserDoctor {
@@ -662,7 +666,9 @@ impl CoreService {
 
     pub fn capabilities(&self) -> Result<CapabilitySnapshot> {
         Ok(CapabilitySnapshot {
-            report: lock_browser(&self.browser)?.capabilities()?,
+            report: try_lock_browser(&self.browser)?
+                .ok_or_else(|| anyhow!(browser_busy_message()))?
+                .capabilities()?,
         })
     }
 
@@ -869,7 +875,9 @@ impl CoreService {
     }
 
     pub fn browser_open(&self, request: BrowserOpenRequest) -> Result<BrowserStatusSnapshot> {
-        let snapshot = lock_browser(&self.browser)?.open(request)?;
+        let snapshot = try_lock_browser(&self.browser)?
+            .ok_or_else(|| anyhow!(browser_busy_message()))?
+            .open(request)?;
         let (session_id, session_label) = browser_session_identity(&snapshot);
         self.open_db()?.upsert_session(
             &session_id,
@@ -881,19 +889,25 @@ impl CoreService {
     }
 
     pub fn browser_close(&self) -> Result<BrowserStatusSnapshot> {
-        lock_browser(&self.browser)?.close()
+        try_lock_browser(&self.browser)?
+            .ok_or_else(|| anyhow!(browser_busy_message()))?
+            .close()
     }
 
     pub fn browser_logout(&self) -> Result<BrowserStatusSnapshot> {
         let snapshot = if is_attach_primary_mode(self.config.browser_connection_mode()) {
-            let current = lock_browser(&self.browser)?.health()?;
-            lock_browser(&self.browser)?.open(BrowserOpenRequest {
+            let mut browser = try_lock_browser(&self.browser)?
+                .ok_or_else(|| anyhow!(browser_busy_message()))?;
+            let current = browser.health()?;
+            browser.open(BrowserOpenRequest {
                 target_url: Some(current.target_url),
                 browser_path: current.browser_path,
                 headless: Some(false),
             })?
         } else {
-            lock_browser(&self.browser)?.logout()?
+            try_lock_browser(&self.browser)?
+                .ok_or_else(|| anyhow!(browser_busy_message()))?
+                .logout()?
         };
         let (session_id, session_label) = browser_session_identity(&snapshot);
         self.open_db()?.upsert_session(
@@ -911,11 +925,15 @@ impl CoreService {
                 "browser reset-profile is only available for managed browser recovery; current mode is attach_first"
             );
         }
-        lock_browser(&self.browser)?.reset_profile()
+        try_lock_browser(&self.browser)?
+            .ok_or_else(|| anyhow!(browser_busy_message()))?
+            .reset_profile()
     }
 
     pub fn browser_profile_info(&self) -> Result<BrowserStatusSnapshot> {
-        lock_browser(&self.browser)?.profile_info()
+        try_lock_browser(&self.browser)?
+            .ok_or_else(|| anyhow!(browser_busy_message()))?
+            .profile_info()
     }
 
     pub fn capture_failure_bundle(
@@ -1088,6 +1106,16 @@ fn lock_browser<'a>(
         .map_err(|_| anyhow!("browser manager lock poisoned"))
 }
 
+fn try_lock_browser<'a>(
+    browser: &'a Arc<Mutex<BrowserManager>>,
+) -> Result<Option<MutexGuard<'a, BrowserManager>>> {
+    match browser.try_lock() {
+        Ok(guard) => Ok(Some(guard)),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Poisoned(_)) => Err(anyhow!("browser manager lock poisoned")),
+    }
+}
+
 fn lock_cancel_registry<'a>(
     registry: &'a Arc<Mutex<HashSet<String>>>,
 ) -> Result<MutexGuard<'a, HashSet<String>>> {
@@ -1098,6 +1126,21 @@ fn lock_cancel_registry<'a>(
 
 fn is_cancelled_message(message: &str) -> bool {
     message.contains("cancelled")
+}
+
+fn browser_busy_message() -> &'static str {
+    "browser busy: another ask or research request is already using the browser session"
+}
+
+fn busy_health_snapshot() -> HealthCheck {
+    HealthCheck {
+        status: HealthStatus::Degraded,
+        checked_at: Utc::now(),
+        browser_connected: false,
+        extension_connected: false,
+        authenticated: false,
+        details: Some(browser_busy_message().to_owned()),
+    }
 }
 
 fn health_snapshot(config: &AppConfig, browser: BrowserStatusSnapshot) -> HealthCheck {

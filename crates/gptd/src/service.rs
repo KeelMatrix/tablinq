@@ -7,7 +7,8 @@ use anyhow::Result;
 use interprocess::local_socket::traits::Listener as LocalSocketListenerTrait;
 use serde_json::json;
 use shared_protocol::{
-    DaemonErrorResponse, DaemonFrame, DaemonRequest, DaemonResponse, EventPayload,
+    CancelJobCommand, DaemonErrorResponse, DaemonFrame, DaemonRequest, DaemonResponse,
+    EventPayload, JobState, JobStatus,
 };
 use std::sync::Arc;
 use std::thread;
@@ -53,25 +54,34 @@ pub fn run_service(config: AppConfig) -> Result<()> {
         let should_shutdown = matches!(request, DaemonRequest::Shutdown);
         match request {
             DaemonRequest::Ask(command) => {
-                let failure_mode = Some(command.mode);
-                if let Err(err) = handle_ask_request(&core, &stream, command) {
-                    let error_message = format!("{err:#}");
-                    logger.warn(
-                        "daemon request failed",
-                        json!({
-                            "error": error_message,
-                        }),
-                    )?;
-                    if let Ok(bundle) =
-                        core.capture_failure_bundle(failure_mode, &error_message, None)
-                    {
-                        let _ = ipc::write_frame(
-                            &stream,
-                            &DaemonFrame::Event(EventPayload::Failure(bundle)),
-                        );
+                let core = Arc::clone(&core);
+                let config = config.clone();
+                thread::spawn(move || {
+                    let logger = JsonLogger::new(&config.paths.log_path).ok();
+                    let failure_mode = Some(command.mode);
+                    if let Err(err) = handle_ask_request(&core, &stream, command) {
+                        let error_message = format!("{err:#}");
+                        if !is_client_disconnect_error(&error_message) {
+                            if let Ok(bundle) =
+                                core.capture_failure_bundle(failure_mode, &error_message, None)
+                            {
+                                let _ = ipc::write_frame(
+                                    &stream,
+                                    &DaemonFrame::Event(EventPayload::Failure(bundle)),
+                                );
+                            }
+                            let _ = ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
+                        }
+                        if let Some(logger) = logger {
+                            let _ = logger.warn(
+                                "daemon ask request failed",
+                                json!({
+                                    "error": error_message,
+                                }),
+                            );
+                        }
                     }
-                    ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)))?;
-                }
+                });
                 continue;
             }
             DaemonRequest::Research(command) => {
@@ -134,11 +144,35 @@ fn handle_ask_request(
     stream: &interprocess::local_socket::Stream,
     command: shared_protocol::AskCommand,
 ) -> Result<()> {
-    let result = core.ask(command, |event| {
-        ipc::write_frame(stream, &DaemonFrame::Event(event.clone()))?;
-        Ok(())
+    let prepared = core.prepare_ask(command)?;
+    if let Err(err) = ipc::write_frame(
+        stream,
+        &DaemonFrame::Event(EventPayload::JobState(JobState {
+            job_id: prepared.job_id.clone(),
+            status: JobStatus::Queued,
+            message: Some("queued ask job".to_owned()),
+            conversation_id: prepared.command.conversation_id.clone(),
+            updated_at: prepared.created_at,
+            artifacts: vec![],
+        })),
+    ) {
+        let message = format!("ask cancelled: client disconnected before execution: {err:#}");
+        let _ = core.mark_job_cancelled(&prepared.job_id, &message);
+        anyhow::bail!(message);
+    }
+    let result = core.execute_prepared_ask(&prepared, |event| {
+        write_ask_event(core, stream, &prepared.job_id, event.clone())
     })?;
-    ipc::write_frame(stream, &DaemonFrame::Response(DaemonResponse::Ask(result)))
+    match ipc::write_frame(stream, &DaemonFrame::Response(DaemonResponse::Ask(result))) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if is_stream_closed_error(&err) {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 fn handle_research_request(
@@ -195,4 +229,34 @@ fn map_error(err: anyhow::Error) -> DaemonResponse {
         error_code: error_code_for_message(&message),
         message,
     })
+}
+
+fn write_ask_event(
+    core: &CoreService,
+    stream: &interprocess::local_socket::Stream,
+    job_id: &str,
+    event: EventPayload,
+) -> Result<()> {
+    match ipc::write_frame(stream, &DaemonFrame::Event(event)) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = core.cancel_job(CancelJobCommand {
+                job_id: job_id.to_owned(),
+            });
+            anyhow::bail!("ask cancelled: client disconnected: {err:#}");
+        }
+    }
+}
+
+fn is_stream_closed_error(err: &anyhow::Error) -> bool {
+    let message = format!("{err:#}");
+    is_client_disconnect_error(&message)
+}
+
+fn is_client_disconnect_error(message: &str) -> bool {
+    message.contains("client disconnected")
+        || message.contains("broken pipe")
+        || message.contains("connection aborted")
+        || message.contains("connection reset")
+        || message.contains("transport endpoint is not connected")
 }

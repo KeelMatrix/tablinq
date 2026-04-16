@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+ctrlc.workspace = true
 gptd = { path = "../gptd" }
 serde_json.workspace = true
 shared-protocol = { path = "../shared-protocol" }
