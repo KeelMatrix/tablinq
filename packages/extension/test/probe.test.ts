@@ -266,6 +266,34 @@ describe("extension capability probe", () => {
 });
 
 describe("service worker bridge", () => {
+  it("records missing native host errors without throwing", async () => {
+    const controller = createBridgeController({
+      transport: "native_messaging",
+      chrome: {
+        runtime: {
+          sendNativeMessage: async () => {
+            throw new Error("Specified native messaging host not found.");
+          },
+        },
+      },
+    });
+
+    document.body.innerHTML = `
+      <textarea data-slot="composer" aria-label="Prompt composer"></textarea>
+      <button type="button" data-action="submit">Send</button>
+    `;
+    const message = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    await expect(controller.handleMessage(message)).resolves.toBeUndefined();
+    expect(controller.describe()).toMatchObject({
+      connected: false,
+      last_error: "Specified native messaging host not found.",
+      transport: "native_messaging",
+    });
+  });
+
   it("forwards capability reports through the development websocket bridge", async () => {
     let sentPayload = "";
     const statusUpdates: BridgeStatus[] = [];
