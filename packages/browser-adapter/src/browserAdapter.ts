@@ -103,6 +103,7 @@ const ATTACH_PROBE_GRACE_MS = 1_500;
 const INTERACTION_TIMEOUT_MS = 7_500;
 const UPLOAD_ACK_TIMEOUT_MS = 10_000;
 const SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS = 60_000;
+const RESEARCH_SUBMISSION_START_TIMEOUT_MS = 7_500;
 const SUBMIT_START_TIMEOUT_MS = 3_000;
 const DOWNLOAD_TIMEOUT_MS = 10_000;
 const SNAPSHOT_POLL_INTERVAL_MS = 75;
@@ -1048,6 +1049,7 @@ export class BrowserAdapter {
     let page = await this.openExecutionPage(
       this.resolveConversationTarget(command.conversationId),
     );
+    let submissionState: ResearchSubmissionStateSnapshot | null = null;
 
     if (options.submitPrompt) {
       if (!command.conversationId) {
@@ -1063,12 +1065,20 @@ export class BrowserAdapter {
         },
         this.lastCapabilityReport,
       );
+      await this.refreshCapabilities(page);
       await uploadAttachments(
         page,
         command.files ?? [],
         this.lastCapabilityReport,
       );
-      await fillComposer(page, command.query);
+      await ensureResearchComposerFilled(
+        page,
+        command.query,
+        Math.min(
+          INTERACTION_TIMEOUT_MS,
+          Math.max(1, timeoutAt - Date.now()),
+        ),
+      );
       if ((command.files ?? []).length > 0) {
         await waitForSubmitReadyAfterUploads(
           page,
@@ -1078,7 +1088,14 @@ export class BrowserAdapter {
           ),
         );
       }
-      await clickSubmit(page);
+      submissionState = await submitResearch(
+        page,
+        command.query,
+        Math.min(
+          RESEARCH_SUBMISSION_START_TIMEOUT_MS,
+          Math.max(1, timeoutAt - Date.now()),
+        ),
+      );
     }
 
     const state = {
@@ -1092,18 +1109,24 @@ export class BrowserAdapter {
       lastProgressAt: Date.now(),
       recoveryAttempts: 0,
       announcedStart: false,
+      submissionConfirmed: !options.submitPrompt,
       lastStatusAt: 0,
     };
+
+    if (submissionState) {
+      this.rememberResearchSnapshot(state, submissionState);
+    }
 
     if (options.submitPrompt) {
       await onUpdate({
         status: "starting",
         message: "starting research",
-        conversation_id: null,
-        message_id: null,
-        current_url: page.url(),
+        conversation_id: submissionState?.conversationId ?? null,
+        message_id: submissionState?.messageId ?? null,
+        current_url: submissionState?.currentUrl ?? page.url(),
       });
       state.announcedStart = true;
+      state.submissionConfirmed = true;
     }
 
     if (!options.submitPrompt) {
@@ -1177,6 +1200,7 @@ export class BrowserAdapter {
       }
 
       if (
+        state.submissionConfirmed &&
         Date.now() - state.lastProgressAt >= stallTimeoutMs &&
         state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
       ) {
@@ -1516,6 +1540,7 @@ export class BrowserAdapter {
       knownMessageId: string | null;
       recoveryAttempts: number;
       announcedStart: boolean;
+      submissionConfirmed: boolean;
       lastStatusAt: number;
     },
     onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
@@ -1630,6 +1655,7 @@ export class BrowserAdapter {
       snapshot,
       onUpdate,
     );
+    state.submissionConfirmed = true;
     if (progressed) {
       state.doneStreak = 0;
     }
@@ -2783,12 +2809,29 @@ interface SubmitStateSnapshot {
 }
 
 interface ResearchSnapshot {
-  status: "waiting_for_sources" | "running" | "done" | "failed";
+  status: "idle" | "waiting_for_sources" | "running" | "done" | "failed";
   statusMessage: string | null;
   reportText: string;
   conversationId: string | null;
   messageId: string | null;
   currentUrl: string;
+}
+
+interface ResearchSubmissionStateSnapshot {
+  composerReady: boolean;
+  composerText: string;
+  composerDisabled: boolean;
+  submitVisible: boolean;
+  submitEnabled: boolean;
+  submitBusy: boolean;
+  onDeepResearchLanding: boolean;
+  status: "idle" | "waiting_for_sources" | "running" | "done" | "failed";
+  statusMessage: string | null;
+  reportText: string;
+  conversationId: string | null;
+  messageId: string | null;
+  currentUrl: string;
+  submitted: boolean;
 }
 
 async function callPageAdapter<T>(
@@ -2804,8 +2847,10 @@ async function callPageAdapter<T>(
     | "readSubmitState"
     | "readAskBaseline"
     | "readAskSnapshot"
+    | "readResearchSubmissionState"
     | "readResearchSnapshot"
-    | "submitStarted",
+    | "submitStarted"
+    | "researchSubmissionStarted",
   payload?: unknown,
 ): Promise<T> {
   return page.evaluate(
@@ -2842,7 +2887,8 @@ async function waitForPageAdapterCondition(
     | "uploadAcknowledged"
     | "submitReady"
     | "attachmentsStillProcessing"
-    | "submitStarted",
+    | "submitStarted"
+    | "researchSubmissionStarted",
   payload: unknown,
   timeoutMs: number,
 ): Promise<void> {
@@ -2923,6 +2969,100 @@ async function waitForInteractionSurface(page: Page): Promise<void> {
 async function fillComposer(page: Page, prompt: string): Promise<void> {
   await waitForInteractionSurface(page);
   await callPageAdapter(page, "fillComposer", { prompt });
+}
+
+async function readResearchSubmissionState(
+  page: Page,
+): Promise<ResearchSubmissionStateSnapshot> {
+  return normalizeResearchSubmissionState(
+    await callPageAdapter<ResearchSubmissionStateSnapshot>(
+      page,
+      "readResearchSubmissionState",
+    ),
+  );
+}
+
+function normalizePromptText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+async function ensureResearchComposerFilled(
+  page: Page,
+  query: string,
+  timeoutMs: number,
+): Promise<ResearchSubmissionStateSnapshot> {
+  await fillComposer(page, query);
+  const deadline = Date.now() + timeoutMs;
+  const expected = normalizePromptText(query);
+
+  while (Date.now() < deadline) {
+    const state = await readResearchSubmissionState(page).catch(() => null);
+    if (state && normalizePromptText(state.composerText) === expected) {
+      return state;
+    }
+    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+  }
+
+  throw new Error(
+    "research submit failed: query was not present in the composer before submission",
+  );
+}
+
+async function submitResearch(
+  page: Page,
+  query: string,
+  timeoutMs: number,
+): Promise<ResearchSubmissionStateSnapshot> {
+  await waitForInteractionSurface(page);
+  const baseline = await readResearchSubmissionState(page);
+  if (normalizePromptText(baseline.composerText) !== normalizePromptText(query)) {
+    throw new Error(
+      "research submit failed: query was not present in the composer before submission",
+    );
+  }
+
+  const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
+  if (
+    clicked &&
+    (await waitForPageAdapterCondition(
+      page,
+      "researchSubmissionStarted",
+      { baseline, prompt: query },
+      timeoutMs,
+    )
+      .then(() => true)
+      .catch(() => false))
+  ) {
+    return readResearchSubmissionState(page);
+  }
+
+  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  await focusComposer(page);
+  await page.keyboard.press(`${modifier}+Enter`).catch(() => undefined);
+  const submitted = await waitForPageAdapterCondition(
+    page,
+    "researchSubmissionStarted",
+    { baseline, prompt: query },
+    timeoutMs,
+  )
+    .then(() => true)
+    .catch(() => false);
+  if (submitted) {
+    return readResearchSubmissionState(page);
+  }
+
+  const current = await readResearchSubmissionState(page).catch(() => baseline);
+  if (normalizePromptText(current.composerText) !== normalizePromptText(query)) {
+    throw new Error(
+      "research submit failed: query was not present in the composer before submission",
+    );
+  }
+  if (current.onDeepResearchLanding) {
+    throw new Error(
+      "research submit failed: query was filled on /deep-research but research never started",
+    );
+  }
+  throw new Error("research submit failed: query was filled but research never started");
 }
 
 async function focusComposer(page: Page): Promise<void> {
@@ -3322,6 +3462,21 @@ function normalizeResearchSnapshot(snapshot: ResearchSnapshot): ResearchSnapshot
       conversationIdFromUrl(snapshot.currentUrl),
     messageId: normalizeOptionalString(snapshot.messageId),
     statusMessage: normalizeOptionalString(snapshot.statusMessage),
+  };
+}
+
+function normalizeResearchSubmissionState(
+  state: ResearchSubmissionStateSnapshot,
+): ResearchSubmissionStateSnapshot {
+  return {
+    ...state,
+    composerText: state.composerText ?? "",
+    conversationId:
+      normalizeOptionalString(state.conversationId) ??
+      conversationIdFromUrl(state.currentUrl),
+    messageId: normalizeOptionalString(state.messageId),
+    statusMessage: normalizeOptionalString(state.statusMessage),
+    reportText: state.reportText ?? "",
   };
 }
 

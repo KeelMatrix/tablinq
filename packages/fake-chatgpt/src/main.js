@@ -15,6 +15,10 @@ const usesComposerPlusTrap =
 const hasDelayedUploadProcessing = scenario === "upload-processing-delay";
 const hasStuckUploadProcessing = scenario === "upload-processing-stuck";
 const hasBlockedSubmitAfterUpload = scenario === "submit-never-ready";
+const usesDeepResearchLanding =
+  scenario === "research-deep-landing" ||
+  scenario === "research-deep-landing-submit-fail";
+const researchSubmissionFails = scenario === "research-deep-landing-submit-fail";
 const keyboardSubmitEnabled =
   scenario !== "submit-upload-trap-no-keyboard" &&
   scenario !== "submit-never-ready";
@@ -66,6 +70,12 @@ function conversationPathname(pathname, conversationId) {
   return pathnameFromSegments(segments);
 }
 
+function deepResearchPathname(pathname) {
+  const segments = pathnameSegments(conversationWorkspacePathname(pathname));
+  segments.push("deep-research");
+  return pathnameFromSegments(segments);
+}
+
 document.body.dataset.uiVariant = variant;
 document.body.dataset.streamState = "idle";
 document.body.dataset.selectedModel = initialModel;
@@ -83,6 +93,8 @@ document.body.dataset.lastSubmissionMethod = "";
 document.body.dataset.keyboardSubmitReady = keyboardSubmitEnabled
   ? "true"
   : "false";
+document.body.dataset.researchSubmitted = "false";
+document.body.dataset.researchLandingVisited = "false";
 
 note.textContent =
   variant === "aria"
@@ -585,6 +597,43 @@ function setResearchState(state, statusMessage = "") {
   document.body.dataset.researchStatusMessage = statusMessage;
 }
 
+function clearComposer() {
+  if (!composer) {
+    return;
+  }
+  if ("value" in composer) {
+    composer.value = "";
+    composer.dispatchEvent(new Event("input", { bubbles: true }));
+    composer.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+  composer.textContent = "";
+  composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
+}
+
+function enterDeepResearchLanding() {
+  const url = new URL(window.location.href);
+  url.pathname = deepResearchPathname(url.pathname);
+  history.replaceState({}, "", url);
+  document.body.dataset.conversationId = "";
+  document.body.dataset.lastMessageId = "";
+  document.body.dataset.researchSubmitted = "false";
+  document.body.dataset.researchLandingVisited = "true";
+  setStreamState("idle");
+  setResearchState("idle", "");
+  setStreamingControls(false);
+  clearComposer();
+  if (messageArticle instanceof HTMLElement) {
+    messageArticle.hidden = true;
+    messageArticle.removeAttribute("data-message-id");
+    messageArticle.removeAttribute("data-message-author-role");
+    messageArticle.setAttribute("data-stream-state", "idle");
+  }
+  if (message) {
+    message.textContent = "";
+  }
+}
+
 function setUploadPopoverOpen(open) {
   document.body.dataset.uploadPopoverOpen = open ? "true" : "false";
 }
@@ -690,8 +739,11 @@ function submitPrompt(method) {
     "value" in composer ? composer.value.trim() : composer.textContent.trim();
   if (
     document.body.dataset.selectedMode === "research" &&
-    scenario.startsWith("research-")
+    (scenario.startsWith("research-") || usesDeepResearchLanding)
   ) {
+    if (researchSubmissionFails) {
+      return;
+    }
     startResearch(promptText);
     return;
   }
@@ -956,6 +1008,9 @@ function startResearch(promptText) {
     waitTicks: 0,
   };
 
+  document.body.dataset.researchSubmitted = "true";
+  messageArticle.hidden = false;
+  messageArticle.setAttribute("data-message-author-role", "assistant");
   writeConversationState(conversationId, messageId);
   setStreamState("running");
   setResearchState("waiting_for_sources", "gathering sources");
@@ -1186,6 +1241,12 @@ document.querySelectorAll("[data-effort]").forEach((element) => {
 document.querySelectorAll("[data-mode]").forEach((element) => {
   element.addEventListener("click", () => {
     document.body.dataset.selectedMode = element.getAttribute("data-mode");
+    if (
+      usesDeepResearchLanding &&
+      document.body.dataset.selectedMode === "research"
+    ) {
+      enterDeepResearchLanding();
+    }
     syncSelectedState();
   });
 });
