@@ -483,6 +483,20 @@ function Test-ManagedBinaryRunning {
   } | Select-Object -First 1)
 }
 
+function Test-DaemonResponsive {
+  param(
+    [string]$CliExecutablePath,
+    [string]$StateRoot
+  )
+
+  if (-not (Test-Path $CliExecutablePath)) {
+    return $false
+  }
+
+  & $CliExecutablePath --state-root $StateRoot daemon status | Out-Null
+  return ($LASTEXITCODE -eq 0)
+}
+
 function Write-GptWrapper {
   param(
     [string]$WrapperPath,
@@ -749,7 +763,7 @@ if (-not $SkipLaunch) {
   Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -Label "Installed gateway"
 }
 
-$daemonRunning = Test-ManagedBinaryRunning -ExecutablePath (Join-Path $InstallRoot "bin\gptd.exe")
+$daemonRunning = Test-DaemonResponsive -CliExecutablePath (Join-Path $InstallRoot "bin\gpt.exe") -StateRoot $StateRoot
 $gatewayRunning = Test-ManagedBinaryRunning -ExecutablePath (Join-Path $InstallRoot "bin\tablinq-gateway.exe")
 
 Write-Host "Auto-start: enabled ($autoStartMode)"
