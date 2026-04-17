@@ -21,8 +21,8 @@ const IPC_TIMEOUT_BUFFER: Duration = Duration::from_secs(30);
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_RED: &str = "\x1b[31m";
 const ANSI_GREEN: &str = "\x1b[32m";
-static ASK_INTERRUPT_HANDLER: OnceLock<()> = OnceLock::new();
-static ASK_INTERRUPT_SENDER: OnceLock<Mutex<Option<mpsc::Sender<()>>>> = OnceLock::new();
+static EXECUTION_INTERRUPT_HANDLER: OnceLock<()> = OnceLock::new();
+static EXECUTION_INTERRUPT_SENDER: OnceLock<Mutex<Option<mpsc::Sender<()>>>> = OnceLock::new();
 
 #[derive(Debug, Parser, PartialEq, Eq)]
 #[command(name = "gpt", version, about = "Tablinq local CLI")]
@@ -764,7 +764,7 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
     let worker_endpoint = endpoint.clone();
     let (tx, rx) = mpsc::channel();
     let (interrupt_tx, interrupt_rx) = mpsc::channel();
-    let _interrupt_guard = install_ask_interrupt_sender(interrupt_tx)?;
+    let _interrupt_guard = install_execution_interrupt_sender(interrupt_tx)?;
 
     let mut stdout = io::stdout();
     let mut printed_any = false;
@@ -863,7 +863,10 @@ fn execute_research_with_terminal_presentation(
     let command = build_research_command(args);
     let timeout = Duration::from_millis(config.research_timeout_ms()) + IPC_TIMEOUT_BUFFER;
     let endpoint = paths.ipc_endpoint.clone();
+    let worker_endpoint = endpoint.clone();
     let (tx, rx) = mpsc::channel();
+    let (interrupt_tx, interrupt_rx) = mpsc::channel();
+    let _interrupt_guard = install_execution_interrupt_sender(interrupt_tx)?;
 
     let mut stdout = io::stdout();
     let mut stderr = io::stderr();
@@ -871,22 +874,43 @@ fn execute_research_with_terminal_presentation(
     let green_responses = ansi_green_enabled_for_stdout();
     let mut response_color_active = false;
     let mut last_status: Option<JobStatusLine> = None;
+    let started_at = Instant::now();
+    let mut current_job_id: Option<String> = None;
     thread::spawn(move || {
         let request = DaemonRequest::Research(command);
-        let result = gptd::send_request_stream(&endpoint, &request, |event| {
+        let result = gptd::send_request_stream(&worker_endpoint, &request, |event| {
             tx.send(CliStreamMessage::Event(Box::new(event)))
                 .map_err(|_| anyhow::anyhow!("CLI stream receiver closed"))?;
             Ok(())
         })
-        .with_context(|| format!("connect to daemon at {endpoint}"));
+        .with_context(|| format!("connect to daemon at {worker_endpoint}"));
         let _ = tx.send(CliStreamMessage::Done(Box::new(result)));
     });
 
     let response = loop {
-        match rx.recv_timeout(timeout) {
+        if interrupt_rx.try_recv().is_ok() {
+            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+            if let Some(job_id) = current_job_id.as_deref() {
+                let cancel_notice = request_job_cancellation(&endpoint, job_id).err();
+                if let Some(err) = cancel_notice {
+                    anyhow::bail!(
+                        "research cancelled by Ctrl+C (failed to notify daemon about {}: {err:#})",
+                        job_id
+                    );
+                }
+            }
+            anyhow::bail!("research cancelled by Ctrl+C");
+        }
+
+        let Some(remaining) = timeout.checked_sub(started_at.elapsed()) else {
+            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+            anyhow::bail!("research request timed out after {} ms", timeout.as_millis());
+        };
+        match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
             Ok(CliStreamMessage::Event(event)) => match *event {
                 EventPayload::StreamChunk(chunk) => match chunk.kind {
                     StreamChunkKind::Delta if !chunk.text.is_empty() => {
+                        current_job_id = Some(chunk.job_id.clone());
                         write_response_chunk(
                             &mut stdout,
                             &chunk.text,
@@ -905,6 +929,7 @@ fn execute_research_with_terminal_presentation(
                     _ => {}
                 },
                 EventPayload::JobState(state) => {
+                    current_job_id = Some(state.job_id.clone());
                     let next = JobStatusLine {
                         status: format!("{:?}", state.status).to_lowercase(),
                         message: state.message.unwrap_or_default(),
@@ -918,12 +943,10 @@ fn execute_research_with_terminal_presentation(
                 _ => {}
             },
             Ok(CliStreamMessage::Done(result)) => break (*result)?,
-            Err(_) => {
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
                 finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
-                anyhow::bail!(
-                    "research request timed out after {} ms",
-                    timeout.as_millis()
-                );
+                anyhow::bail!("research request stream closed before a daemon response arrived");
             }
         }
     };
@@ -1534,24 +1557,26 @@ enum CliStreamMessage {
     Done(Box<Result<DaemonResponse>>),
 }
 
-struct ActiveAskInterruptGuard;
+struct ActiveExecutionInterruptGuard;
 
-impl Drop for ActiveAskInterruptGuard {
+impl Drop for ActiveExecutionInterruptGuard {
     fn drop(&mut self) {
-        if let Ok(mut slot) = ask_interrupt_sender_slot().lock() {
+        if let Ok(mut slot) = execution_interrupt_sender_slot().lock() {
             *slot = None;
         }
     }
 }
 
-fn ask_interrupt_sender_slot() -> &'static Mutex<Option<mpsc::Sender<()>>> {
-    ASK_INTERRUPT_SENDER.get_or_init(|| Mutex::new(None))
+fn execution_interrupt_sender_slot() -> &'static Mutex<Option<mpsc::Sender<()>>> {
+    EXECUTION_INTERRUPT_SENDER.get_or_init(|| Mutex::new(None))
 }
 
-fn install_ask_interrupt_sender(sender: mpsc::Sender<()>) -> Result<ActiveAskInterruptGuard> {
-    if ASK_INTERRUPT_HANDLER.get().is_none() {
+fn install_execution_interrupt_sender(
+    sender: mpsc::Sender<()>,
+) -> Result<ActiveExecutionInterruptGuard> {
+    if EXECUTION_INTERRUPT_HANDLER.get().is_none() {
         ctrlc::set_handler(|| {
-            let sender = ask_interrupt_sender_slot()
+            let sender = execution_interrupt_sender_slot()
                 .lock()
                 .ok()
                 .and_then(|slot| slot.clone());
@@ -1560,19 +1585,19 @@ fn install_ask_interrupt_sender(sender: mpsc::Sender<()>) -> Result<ActiveAskInt
             }
         })
         .context("install Ctrl+C handler")?;
-        let _ = ASK_INTERRUPT_HANDLER.set(());
+        let _ = EXECUTION_INTERRUPT_HANDLER.set(());
     }
-    let mut slot = ask_interrupt_sender_slot()
+    let mut slot = execution_interrupt_sender_slot()
         .lock()
         .map_err(|_| anyhow::anyhow!("Ctrl+C handler state lock poisoned"))?;
     *slot = Some(sender);
-    Ok(ActiveAskInterruptGuard)
+    Ok(ActiveExecutionInterruptGuard)
 }
 
 fn request_job_cancellation(endpoint: &str, job_id: &str) -> Result<()> {
     let endpoint = endpoint.to_owned();
     let job_id = job_id.to_owned();
-    let _ = run_with_timeout(
+    let response = run_with_timeout(
         Duration::from_secs(5),
         format!("job cancellation timed out for {job_id}"),
         move || {
@@ -1583,7 +1608,11 @@ fn request_job_cancellation(endpoint: &str, job_id: &str) -> Result<()> {
             .context("request daemon job cancellation")
         },
     )?;
-    Ok(())
+    match response {
+        DaemonResponse::Ack(_) => Ok(()),
+        DaemonResponse::Error(error) => bail!("{}", error.message),
+        other => bail!("unexpected cancellation response: {other:?}"),
+    }
 }
 
 fn run_with_timeout<T, F>(timeout: Duration, timeout_message: String, work: F) -> Result<T>

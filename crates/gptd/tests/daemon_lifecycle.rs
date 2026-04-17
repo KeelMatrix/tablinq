@@ -775,6 +775,61 @@ fn client_disconnect_during_ask_cancels_the_job() {
 }
 
 #[test]
+fn client_disconnect_during_research_cancels_the_job() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed daemon test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let mut daemon = spawn_daemon(dir.path());
+    wait_until_ready(dir.path());
+
+    let browser_open = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::BrowserOpen(BrowserOpenRequest {
+            target_url: Some(format!("{fake_url}/?scenario=research-success")),
+            browser_path: None,
+            headless: Some(true),
+        }),
+    )
+    .unwrap();
+    assert!(matches!(browser_open, DaemonResponse::Browser(_)));
+
+    let endpoint = build_state_paths(dir.path()).ipc_endpoint;
+    let name = endpoint
+        .clone()
+        .to_ns_name::<GenericNamespaced>()
+        .expect("convert endpoint to local socket name");
+    let mut stream = Stream::connect(name).expect("connect to daemon");
+    let raw = serde_json::to_string(&DaemonRequest::Research(ResearchCommand {
+        query: "disconnect mid-research".to_owned(),
+        conversation_id: None,
+        new_conversation: false,
+        files: vec![],
+        output_dir: None,
+    }))
+    .unwrap();
+    stream.write_all(raw.as_bytes()).unwrap();
+    stream.write_all(b"\n").unwrap();
+    stream.flush().unwrap();
+    drop(stream);
+
+    let job_id = wait_for_job_id(dir.path());
+    wait_for_job_status(dir.path(), &job_id, JobStatus::Cancelled);
+
+    let status = send_request(&endpoint, &DaemonRequest::Status).unwrap();
+    assert!(matches!(status, DaemonResponse::Status(_)));
+
+    stop_daemon(dir.path(), &mut daemon);
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
 fn cancelled_ask_releases_browser_capacity() {
     if !browser_integration_prereqs_available() {
         eprintln!(
@@ -1279,7 +1334,7 @@ fn daemon_cancels_running_research_jobs() {
 
     let detail = send_request(
         &build_state_paths(dir.path()).ipc_endpoint,
-        &DaemonRequest::JobsShow(job_id),
+        &DaemonRequest::JobsShow(job_id.clone()),
     )
     .unwrap();
     match detail {
@@ -1288,6 +1343,26 @@ fn daemon_cancels_running_research_jobs() {
         }
         other => panic!("unexpected response: {other:?}"),
     }
+
+    let second_cancel = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::JobsCancel(shared_protocol::CancelJobCommand { job_id }),
+    )
+    .unwrap();
+    match second_cancel {
+        DaemonResponse::Ack(ack) => {
+            assert!(!ack.accepted);
+            assert!(ack.message.contains("already finished"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
+    let status = send_request(
+        &build_state_paths(dir.path()).ipc_endpoint,
+        &DaemonRequest::Status,
+    )
+    .unwrap();
+    assert!(matches!(status, DaemonResponse::Status(_)));
 
     stop_daemon(dir.path(), &mut daemon);
     let _ = fake_server.kill();
