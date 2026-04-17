@@ -1,5 +1,7 @@
 use crate::config::AppConfig;
+use crate::logging::JsonLogger;
 use anyhow::{Context, Result, bail};
+use serde_json::json;
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
     AskCommand, AskResult, AuthSource, BrowserConnectionMode, BrowserOpenRequest, BrowserOwner,
@@ -373,18 +375,53 @@ impl BrowserManager {
 
     fn teardown_process(&mut self) {
         if let Some(mut process) = self.process.take() {
+            self.log_process_event(
+                "browser adapter teardown starting",
+                json!({
+                    "teardown_in_progress": true,
+                    "target_url": self.last_snapshot.target_url,
+                }),
+            );
             process.terminate();
+            self.log_process_event(
+                "browser adapter teardown finished",
+                json!({
+                    "teardown_in_progress": false,
+                    "target_url": self.last_snapshot.target_url,
+                }),
+            );
         }
     }
 
     fn relaunch_for_recovery(&mut self) -> Result<()> {
+        self.log_process_event(
+            "browser adapter recovery relaunch starting",
+            json!({
+                "teardown_in_progress": self.process.is_some(),
+                "target_url": self.last_snapshot.target_url,
+            }),
+        );
         self.teardown_process();
         self.ensure_process()?;
+        self.log_process_event(
+            "browser adapter recovery relaunch finished",
+            json!({
+                "teardown_in_progress": false,
+                "adapter_running": self.process.is_some(),
+                "target_url": self.last_snapshot.target_url,
+            }),
+        );
         Ok(())
     }
 
     fn current_target(&self) -> String {
         self.last_snapshot.target_url.clone()
+    }
+
+    fn log_process_event(&self, message: &str, fields: serde_json::Value) {
+        if let Ok(logger) = JsonLogger::new(&self.config.paths.log_path) {
+            let _ = logger.info(message, fields);
+        }
     }
 }
 

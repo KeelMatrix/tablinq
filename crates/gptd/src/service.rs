@@ -91,22 +91,26 @@ pub fn run_service(config: AppConfig) -> Result<()> {
                     let logger = JsonLogger::new(&config.paths.log_path).ok();
                     if let Err(err) = handle_research_request(&core, &stream, command) {
                         let error_message = format!("{err:#}");
-                        if let Ok(bundle) = core.capture_failure_bundle(
-                            Some(shared_protocol::Mode::Research),
-                            &error_message,
-                            None,
-                        ) {
-                            let _ = ipc::write_frame(
-                                &stream,
-                                &DaemonFrame::Event(EventPayload::Failure(bundle)),
-                            );
+                        let client_disconnect = is_client_disconnect_error(&error_message);
+                        if !client_disconnect {
+                            if let Ok(bundle) = core.capture_failure_bundle(
+                                Some(shared_protocol::Mode::Research),
+                                &error_message,
+                                None,
+                            ) {
+                                let _ = ipc::write_frame(
+                                    &stream,
+                                    &DaemonFrame::Event(EventPayload::Failure(bundle)),
+                                );
+                            }
+                            let _ = ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
                         }
-                        let _ = ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
                         if let Some(logger) = logger {
                             let _ = logger.warn(
                                 "daemon research request failed",
                                 json!({
                                     "error": error_message,
+                                    "client_disconnect": client_disconnect,
                                 }),
                             );
                         }
@@ -180,14 +184,38 @@ fn handle_research_request(
     stream: &interprocess::local_socket::Stream,
     command: shared_protocol::ResearchCommand,
 ) -> Result<()> {
-    let result = core.research(command, |event| {
-        ipc::write_frame(stream, &DaemonFrame::Event(event.clone()))?;
-        Ok(())
-    })?;
-    ipc::write_frame(
+    let prepared = core.prepare_research(command)?;
+    if let Err(err) = ipc::write_frame(
         stream,
-        &DaemonFrame::Response(DaemonResponse::Research(result)),
-    )
+        &DaemonFrame::Event(EventPayload::JobState(JobState {
+            job_id: prepared.job_id.clone(),
+            status: JobStatus::Queued,
+            message: Some("queued research job".to_owned()),
+            conversation_id: prepared.command.conversation_id.clone(),
+            updated_at: prepared.created_at,
+            artifacts: vec![],
+        })),
+    ) {
+        let message = format!(
+            "research cancelled: client disconnected before execution for job {}; daemon_cancel=not_requested job_marked_cancelled=true; stream_error={err:#}",
+            prepared.job_id
+        );
+        let _ = core.mark_job_cancelled(&prepared.job_id, &message);
+        anyhow::bail!(message);
+    }
+    let result = core.execute_prepared_research(&prepared, |event| {
+        write_research_event(core, stream, &prepared.job_id, event.clone())
+    })?;
+    match ipc::write_frame(stream, &DaemonFrame::Response(DaemonResponse::Research(result))) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if is_stream_closed_error(&err) {
+                Ok(())
+            } else {
+                Err(err)
+            }
+        }
+    }
 }
 
 fn handle_request(core: &CoreService, request: DaemonRequest) -> Result<DaemonResponse> {
@@ -240,11 +268,46 @@ fn write_ask_event(
     match ipc::write_frame(stream, &DaemonFrame::Event(event)) {
         Ok(()) => Ok(()),
         Err(err) => {
-            let _ = core.cancel_job(CancelJobCommand {
+            let cancel_result = core.cancel_job(CancelJobCommand {
                 job_id: job_id.to_owned(),
             });
-            anyhow::bail!("ask cancelled: client disconnected: {err:#}");
+            anyhow::bail!(
+                "ask cancelled: client disconnected while streaming job {}; {}; stream_error={err:#}",
+                job_id,
+                format_cancel_result(cancel_result)
+            );
         }
+    }
+}
+
+fn write_research_event(
+    core: &CoreService,
+    stream: &interprocess::local_socket::Stream,
+    job_id: &str,
+    event: EventPayload,
+) -> Result<()> {
+    match ipc::write_frame(stream, &DaemonFrame::Event(event)) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let cancel_result = core.cancel_job(CancelJobCommand {
+                job_id: job_id.to_owned(),
+            });
+            anyhow::bail!(
+                "research cancelled: client disconnected while streaming job {}; {}; stream_error={err:#}",
+                job_id,
+                format_cancel_result(cancel_result)
+            );
+        }
+    }
+}
+
+fn format_cancel_result(result: Result<shared_protocol::AckEvent>) -> String {
+    match result {
+        Ok(ack) => format!(
+            "daemon_cancel=accepted={} message={}",
+            ack.accepted, ack.message
+        ),
+        Err(err) => format!("daemon_cancel_error={err:#}"),
     }
 }
 
