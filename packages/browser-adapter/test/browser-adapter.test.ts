@@ -37,7 +37,10 @@ function withHarnessUrl(
       | "stall-recover"
       | "stall-recover-transient"
       | "recover-complete"
+      | "recover-done-transient"
+      | "recover-running-transient"
       | "recover-mismatch"
+      | "recover-wrong-conversation"
       | "research-success"
       | "research-failure"
       | "research-deep-landing"
@@ -2089,6 +2092,109 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("recovers a final ask after transient placeholder drift stabilizes", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          scenario: "recover-done-transient",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        scenario: "recover-done-transient",
+      }),
+      headless: true,
+    });
+
+    const states: string[] = [];
+    let closeTriggered = false;
+    const request = adapter.ask(
+      {
+        jobId: "job-ask-recover-done-transient",
+        prompt: "Reply with exactly: ASK_OK",
+        timeoutMs: 7000,
+      },
+      async (chunk) => {
+        if (!closeTriggered && chunk.kind === "delta") {
+          closeTriggered = true;
+          await adapter.getManagedPageForTest()!.context().browser()!.close();
+        }
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    const result = await request;
+    expect(result.output_text).toBe(
+      "Fake response for: Reply with exactly: ASK_OK",
+    );
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers an in-flight ask mismatch that later converges on the same message", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          scenario: "recover-running-transient",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        scenario: "recover-running-transient",
+      }),
+      headless: true,
+    });
+
+    const states: string[] = [];
+    const chunks: string[] = [];
+    let closeTriggered = false;
+    const request = adapter.ask(
+      {
+        jobId: "job-ask-recover-running-transient",
+        prompt: "recover after placeholder drift",
+        timeoutMs: 7000,
+      },
+      async (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+          if (!closeTriggered) {
+            closeTriggered = true;
+            await adapter.getManagedPageForTest()!.context().browser()!.close();
+          }
+        }
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    const result = await request;
+    expect(result.output_text).toBe(
+      "Fake response for: recover after placeholder drift",
+    );
+    expect(chunks.join("")).toBe(result.output_text);
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("fails when an interrupted ask cannot be reconciled against the live conversation", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -2111,6 +2217,47 @@ describe("browser adapter", () => {
       {
         jobId: "job-ask-recover-mismatch",
         prompt: "fail recovery on mismatched output",
+        timeoutMs: 7000,
+      },
+      async (chunk) => {
+        if (!closeTriggered && chunk.kind === "delta") {
+          closeTriggered = true;
+          await adapter.getManagedPageForTest()!.context().browser()!.close();
+        }
+      },
+      () => {},
+    );
+
+    await expect(request).rejects.toThrow(/could not be reconciled/i);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails when interrupted ask recovery lands on a different conversation", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          scenario: "recover-wrong-conversation",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        scenario: "recover-wrong-conversation",
+      }),
+      headless: true,
+    });
+
+    let closeTriggered = false;
+    const request = adapter.ask(
+      {
+        jobId: "job-ask-recover-wrong-conversation",
+        prompt: "fail recovery on wrong conversation",
         timeoutMs: 7000,
       },
       async (chunk) => {

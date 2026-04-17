@@ -890,6 +890,16 @@ function renderChunk(state) {
   messageArticle?.setAttribute("data-message-id", state.messageId);
 }
 
+function renderPlaceholderDrift(state) {
+  if (!message) {
+    return;
+  }
+  const visibleLength = Math.max(1, state.index);
+  const stableLength = Math.max(0, visibleLength - 1);
+  message.textContent = `${state.responseText.slice(0, stableLength)}_`;
+  messageArticle?.setAttribute("data-message-id", state.messageId);
+}
+
 function persistState(state) {
   localStorage.setItem(
     streamStorageKey(state.conversationId),
@@ -1159,6 +1169,15 @@ function resumeStreamIfNeeded() {
     finishStream(state);
     return;
   }
+  if (scenario === "recover-done-transient") {
+    state.index = state.responseText.length;
+    renderPlaceholderDrift(state);
+    setStreamState("done");
+    setStreamingControls(false);
+    persistState(state);
+    activeTimer = setTimeout(() => finishStream(state), 180);
+    return;
+  }
   if (scenario === "recover-mismatch") {
     state.responseText = "Unexpected response after interruption";
     state.index = state.responseText.length;
@@ -1166,6 +1185,32 @@ function resumeStreamIfNeeded() {
     setStreamState("done");
     setStreamingControls(false);
     persistState(state);
+    return;
+  }
+  if (scenario === "recover-wrong-conversation") {
+    const originalConversationId = state.conversationId;
+    state.conversationId = uniqueId("conv");
+    state.messageId = uniqueId("msg");
+    state.responseText = "Unexpected response after interruption";
+    state.index = state.responseText.length;
+    clearState(originalConversationId);
+    writeConversationState(state.conversationId, state.messageId);
+    renderChunk(state);
+    setStreamState("done");
+    setStreamingControls(false);
+    persistState(state);
+    return;
+  }
+  if (scenario === "recover-running-transient") {
+    setStreamState("running");
+    setStreamingControls(true);
+    renderPlaceholderDrift(state);
+    persistState(state);
+    activeTimer = setTimeout(() => {
+      renderChunk(state);
+      persistState(state);
+      scheduleNextTick(state);
+    }, 180);
     return;
   }
   setStreamState("running");
