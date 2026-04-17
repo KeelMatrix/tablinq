@@ -1102,17 +1102,20 @@ fn ansi_green_enabled_for_stdout() -> bool {
         return false;
     }
     let env = env::vars().collect::<Vec<_>>();
-    ansi_color_supported_by_env(&env) && shell_background_is_black(&env)
+    ansi_color_supported(&env, windows_stdout_supports_ansi()) && shell_background_is_black(&env)
 }
 
 fn ansi_color_enabled_for_stderr() -> bool {
     if !io::stderr().is_terminal() {
         return false;
     }
-    ansi_color_supported_by_env(&env::vars().collect::<Vec<_>>())
+    ansi_color_supported(
+        &env::vars().collect::<Vec<_>>(),
+        windows_stderr_supports_ansi(),
+    )
 }
 
-fn ansi_color_supported_by_env(env: &[(String, String)]) -> bool {
+fn ansi_color_supported(env: &[(String, String)], windows_console_support: Option<bool>) -> bool {
     let get = |key: &str| {
         env.iter()
             .find(|(candidate, _)| candidate == key)
@@ -1136,7 +1139,8 @@ fn ansi_color_supported_by_env(env: &[(String, String)]) -> bool {
 
     #[cfg(windows)]
     {
-        return get("WT_SESSION").is_some()
+        return windows_console_support.unwrap_or(false)
+            || get("WT_SESSION").is_some()
             || get("ANSICON").is_some()
             || matches!(get("ConEmuANSI"), Some(value) if value.eq_ignore_ascii_case("ON"))
             || (!term.is_empty() && !term.eq_ignore_ascii_case("dumb"));
@@ -1168,6 +1172,54 @@ fn shell_background_is_black(env: &[(String, String)]) -> bool {
         .next()
         .and_then(|value| value.trim().parse::<u8>().ok())
         == Some(0)
+}
+
+#[cfg(windows)]
+fn windows_stdout_supports_ansi() -> Option<bool> {
+    windows_console_supports_ansi(-11)
+}
+
+#[cfg(not(windows))]
+fn windows_stdout_supports_ansi() -> Option<bool> {
+    None
+}
+
+#[cfg(windows)]
+fn windows_stderr_supports_ansi() -> Option<bool> {
+    windows_console_supports_ansi(-12)
+}
+
+#[cfg(not(windows))]
+fn windows_stderr_supports_ansi() -> Option<bool> {
+    None
+}
+
+#[cfg(windows)]
+fn windows_console_supports_ansi(std_handle: i32) -> Option<bool> {
+    const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+
+    unsafe extern "system" {
+        fn GetStdHandle(n_std_handle: i32) -> *mut std::ffi::c_void;
+        fn GetConsoleMode(h_console_handle: *mut std::ffi::c_void, lp_mode: *mut u32) -> i32;
+        fn SetConsoleMode(h_console_handle: *mut std::ffi::c_void, dw_mode: u32) -> i32;
+    }
+
+    let handle = unsafe { GetStdHandle(std_handle) };
+    if handle.is_null() || handle as isize == -1 {
+        return None;
+    }
+
+    let mut mode = 0u32;
+    if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+        return None;
+    }
+
+    if (mode & ENABLE_VIRTUAL_TERMINAL_PROCESSING) != 0 {
+        return Some(true);
+    }
+
+    let enabled_mode = mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    Some(unsafe { SetConsoleMode(handle, enabled_mode) != 0 })
 }
 
 #[cfg(windows)]
@@ -1924,22 +1976,43 @@ mod tests {
 
     #[test]
     fn ansi_color_supported_by_env_respects_no_color_and_force_color() {
-        assert!(!ansi_color_supported_by_env(&[(
-            "NO_COLOR".to_owned(),
-            "1".to_owned()
-        )]));
-        assert!(ansi_color_supported_by_env(&[(
-            "FORCE_COLOR".to_owned(),
-            "1".to_owned()
-        )]));
+        assert!(!ansi_color_supported(
+            &[("NO_COLOR".to_owned(), "1".to_owned())],
+            None
+        ));
+        assert!(ansi_color_supported(
+            &[("FORCE_COLOR".to_owned(), "1".to_owned())],
+            None
+        ));
     }
 
     #[test]
     fn ansi_color_supported_by_env_rejects_dumb_term_without_force() {
-        assert!(!ansi_color_supported_by_env(&[(
-            "TERM".to_owned(),
-            "dumb".to_owned()
-        )]));
+        assert!(!ansi_color_supported(
+            &[("TERM".to_owned(), "dumb".to_owned())],
+            None
+        ));
+    }
+
+    #[test]
+    fn ansi_color_supported_prefers_real_windows_console_capability() {
+        assert!(ansi_color_supported(&[], Some(true)));
+        assert!(!ansi_color_supported(&[], Some(false)));
+    }
+
+    #[test]
+    fn ansi_color_supported_force_color_overrides_missing_windows_console_capability() {
+        assert!(ansi_color_supported(
+            &[("FORCE_COLOR".to_owned(), "1".to_owned())],
+            Some(false)
+        ));
+        assert!(!ansi_color_supported(
+            &[
+                ("FORCE_COLOR".to_owned(), "1".to_owned()),
+                ("NO_COLOR".to_owned(), "1".to_owned())
+            ],
+            Some(true)
+        ));
     }
 
     #[test]
