@@ -39,7 +39,9 @@ function withHarnessUrl(
       | "recover-complete"
       | "recover-mismatch"
       | "research-success"
-      | "research-failure";
+      | "research-failure"
+      | "research-deep-landing"
+      | "research-deep-landing-submit-fail";
     missing?: string[];
     conversationStyle?: "query" | "path";
     initialModel?: "instant" | "thinking";
@@ -1433,6 +1435,112 @@ describe("browser adapter", () => {
       "Research report for: investigate launch risks",
     );
     expect(result.artifacts).toHaveLength(1);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("submits research from the /deep-research landing page and completes normally", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
+          scenario: "research-deep-landing",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-deep-landing",
+      }),
+      headless: true,
+    });
+
+    const updates: string[] = [];
+    const result = await adapter.research(
+      {
+        jobId: "job-research-deep-landing",
+        query: "investigate deep research landing submission",
+        files: [fixture],
+        timeoutMs: 8_000,
+      },
+      (update) => {
+        updates.push(update.status);
+      },
+    );
+    const pageState = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      researchLandingVisited: document.body.dataset.researchLandingVisited,
+      researchSubmitted: document.body.dataset.researchSubmitted,
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+    }));
+
+    expect(result.report_text).toContain(
+      "Research report for: investigate deep research landing submission",
+    );
+    expect(updates).toContain("starting");
+    expect(updates).toContain("waiting_for_sources");
+    expect(updates).toContain("running");
+    expect(pageState.researchLandingVisited).toBe("true");
+    expect(pageState.researchSubmitted).toBe("true");
+    expect(["button", "keyboard"]).toContain(pageState.lastSubmissionMethod);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails clearly when /deep-research landing submission never starts and does not emit recovery loops", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
+          scenario: "research-deep-landing-submit-fail",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-deep-landing-submit-fail",
+      }),
+      headless: true,
+    });
+
+    const states: string[] = [];
+    await expect(
+      adapter.research(
+        {
+          jobId: "job-research-deep-landing-submit-fail",
+          query: "fail deep research landing submission",
+          timeoutMs: 2_000,
+        },
+        () => {},
+        (update) => {
+          states.push(update.state);
+        },
+      ),
+    ).rejects.toThrow(/deep-research but research never started/i);
+
+    const pageState = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      researchLandingVisited: document.body.dataset.researchLandingVisited,
+      researchSubmitted: document.body.dataset.researchSubmitted,
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+    }));
+
+    expect(states).toEqual([]);
+    expect(pageState.researchLandingVisited).toBe("true");
+    expect(pageState.researchSubmitted).toBe("false");
+    expect(["button", "keyboard"]).toContain(pageState.lastSubmissionMethod);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

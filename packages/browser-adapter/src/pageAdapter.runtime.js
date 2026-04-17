@@ -289,6 +289,14 @@ export function createTablinqPageAdapterRuntime() {
     }
   };
 
+  const currentPathname = () => {
+    try {
+      return new URL(window.location.href).pathname.toLowerCase();
+    } catch {
+      return "";
+    }
+  };
+
   const findComposer = () =>
     queryFirstVisible([
       "#prompt-textarea",
@@ -881,20 +889,58 @@ export function createTablinqPageAdapterRuntime() {
     return "idle";
   };
 
-  const inferResearchStatus = (text) => {
-    const explicitState = document.body.dataset.researchState;
-    if (explicitState) {
+  const readResearchStatusMessage = () =>
+    datasetValue(document.body.dataset.researchStatusMessage) ??
+    normalizeText(
+      queryFirstVisible([
+        "[data-slot='research-status']",
+        "[data-testid='research-status']",
+        "[aria-live='polite']",
+      ])?.textContent,
+    ) ??
+    null;
+
+  const onDeepResearchLanding = () =>
+    /(^|\/)deep-research$/.test(currentPathname()) &&
+    parseConversationIdFromUrl() === null;
+
+  const isPlaceholderResearchText = (text) =>
+    hasToken(text, ["streaming", "output", "lands", "here"]) ||
+    hasToken(text, ["workspace", "notices", "appear", "thinking"]);
+
+  const normalizeResearchReportText = (text) => {
+    const collapsed = collapseText(text);
+    return collapsed && !isPlaceholderResearchText(collapsed) ? collapsed : "";
+  };
+
+  const findResearchReportArticle = () => {
+    const explicit = latestVisible([
+      "[data-slot='research-report']",
+      "[data-message-author-role='assistant'][data-message-id]",
+      "[data-slot='assistant-message'][data-message-id]",
+    ]);
+    if (explicit) {
+      return explicit;
+    }
+
+    const latest = findLatestAssistantMessage();
+    if (
+      latest &&
+      (datasetValue(latest.getAttribute("data-message-id")) ||
+        latest.getAttribute("data-stream-state") === "running")
+    ) {
+      return latest;
+    }
+    return null;
+  };
+
+  const inferResearchStatus = (text, statusMessage = readResearchStatusMessage()) => {
+    const explicitState = datasetValue(document.body.dataset.researchState);
+    if (explicitState && explicitState !== "idle") {
       return explicitState;
     }
 
-    const statusText = normalizeText(
-      document.body.dataset.researchStatusMessage ??
-        queryFirstVisible([
-          "[data-slot='research-status']",
-          "[data-testid='research-status']",
-          "[aria-live='polite']",
-        ])?.textContent,
-    );
+    const statusText = normalizeText(statusMessage);
 
     if (
       hasToken(statusText, ["failed", "error", "retry"]) &&
@@ -905,14 +951,53 @@ export function createTablinqPageAdapterRuntime() {
     if (hasToken(statusText, ["source", "sources", "gathering", "finding"])) {
       return "waiting_for_sources";
     }
+    if (hasToken(statusText, ["running", "drafting", "working"])) {
+      return "running";
+    }
     if (stopButtonVisible()) {
       return "running";
     }
     if (text) {
       return "done";
     }
-    return "running";
+    return "idle";
   };
+
+  const readResearchSubmissionState = () => {
+    const article = findResearchReportArticle();
+    const reportText = normalizeResearchReportText(
+      article ? collectText(article) : "",
+    );
+    const statusMessage = readResearchStatusMessage();
+    const status = inferResearchStatus(reportText, statusMessage);
+    const controlState = readSubmitControlState();
+    const conversationId =
+      datasetValue(document.body.dataset.conversationId) ??
+      parseConversationIdFromUrl();
+    const messageId =
+      datasetValue(article?.getAttribute("data-message-id")) ??
+      datasetValue(document.body.dataset.lastMessageId) ??
+      null;
+    const submitted =
+      status !== "idle" || Boolean(conversationId) || Boolean(messageId);
+
+    return {
+      composerReady: Boolean(findComposer()),
+      composerText: readComposerText(),
+      composerDisabled: composerDisabled(),
+      ...controlState,
+      onDeepResearchLanding: onDeepResearchLanding(),
+      status,
+      statusMessage,
+      reportText,
+      conversationId,
+      messageId,
+      currentUrl: window.location.href,
+      submitted,
+    };
+  };
+
+  const researchSubmissionStarted = () => readResearchSubmissionState().submitted;
 
   const setComposerValue = (element, value) => {
     if (!(element instanceof HTMLElement)) {
@@ -1577,36 +1662,21 @@ export function createTablinqPageAdapterRuntime() {
       };
     },
     readResearchSnapshot() {
-      const article =
-        latestVisible([
-          "[data-slot='research-report']",
-          "[data-message-author-role='assistant']",
-          "[data-slot='assistant-message']",
-          ".message",
-        ]) ?? findLatestAssistantMessage();
-      const reportText = article ? collectText(article) : "";
+      const submission = readResearchSubmissionState();
       return {
-        status: inferResearchStatus(reportText),
-        statusMessage:
-          document.body.dataset.researchStatusMessage ??
-          normalizeText(
-            queryFirstVisible([
-              "[data-slot='research-status']",
-              "[data-testid='research-status']",
-              "[aria-live='polite']",
-            ])?.textContent,
-          ) ??
-          null,
-        reportText,
-        conversationId:
-          datasetValue(document.body.dataset.conversationId) ??
-          parseConversationIdFromUrl(),
-        messageId:
-          datasetValue(article?.getAttribute("data-message-id")) ??
-          datasetValue(document.body.dataset.lastMessageId) ??
-          null,
-        currentUrl: window.location.href,
+        status: submission.status,
+        statusMessage: submission.statusMessage,
+        reportText: submission.reportText,
+        conversationId: submission.conversationId,
+        messageId: submission.messageId,
+        currentUrl: submission.currentUrl,
       };
+    },
+    readResearchSubmissionState() {
+      return readResearchSubmissionState();
+    },
+    researchSubmissionStarted() {
+      return researchSubmissionStarted();
     },
     readSubmitState() {
       return readSubmitState();
