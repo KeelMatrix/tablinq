@@ -275,7 +275,40 @@ export function createTablinqPageAdapterRuntime() {
         }
       }
     }
-    element.click();
+    element.focus?.();
+    const rect = element.getBoundingClientRect();
+    const eventInit = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      button: 0,
+      buttons: 1,
+      clientX: rect.left + Math.max(1, Math.min(rect.width / 2, rect.width - 1)),
+      clientY: rect.top + Math.max(1, Math.min(rect.height / 2, rect.height - 1)),
+    };
+    if (typeof PointerEvent === "function") {
+      element.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          ...eventInit,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+        }),
+      );
+    }
+    element.dispatchEvent(new MouseEvent("mousedown", eventInit));
+    if (typeof PointerEvent === "function") {
+      element.dispatchEvent(
+        new PointerEvent("pointerup", {
+          ...eventInit,
+          pointerId: 1,
+          pointerType: "mouse",
+          isPrimary: true,
+        }),
+      );
+    }
+    element.dispatchEvent(new MouseEvent("mouseup", eventInit));
+    element.dispatchEvent(new MouseEvent("click", eventInit));
     return true;
   };
 
@@ -1086,8 +1119,7 @@ export function createTablinqPageAdapterRuntime() {
 
   const modelDefaults = (modelClass) => [
     modelClass,
-    modelClass === "instant" ? "instant answers" : "deep thinking",
-    modelClass === "instant" ? "gpt-5.3 instant" : "gpt-5.4 thinking",
+    modelClass === "instant" ? "for everyday chats" : "for complex questions",
   ];
 
   const modelFallbackTokens = (modelClass) =>
@@ -1095,68 +1127,52 @@ export function createTablinqPageAdapterRuntime() {
 
   const effortDefaults = (effort) => [
     effort,
-    effort === "standard" ? "standard reasoning" : "extended thinking",
-    effort === "standard" ? "default thinking" : "extended reasoning",
+    effort === "standard" ? "thinking" : "extended thinking",
   ];
 
   const effortFallbackTokens = (effort) =>
     effort === "standard" ? ["standard"] : ["extended"];
 
+  const menuOptionSelector = "[role='menuitemradio'], [role='menuitem'], [role='option']";
+  const popupRootSelector = "[role='menu'], [role='listbox']";
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const elementRole = (element) => element?.getAttribute?.("role") ?? "";
+  const isPopupOption = (element) =>
+    element instanceof HTMLElement &&
+    ["menuitemradio", "menuitem", "option"].includes(elementRole(element));
+
   const isModelPickerTrigger = (element) =>
     element instanceof HTMLElement &&
-    !element.hasAttribute("data-model") &&
-    (element.matches("[data-slot='model-picker']") ||
-      element.getAttribute("aria-haspopup") !== null) &&
-    hasToken(accessibleName(element), [
-      "chatgpt",
-      "model",
-      "selector",
-      "engine",
-      "gpt",
-      "latest",
-      "instant",
-      "thinking",
-      "pro",
-    ]);
+    element.getAttribute("aria-haspopup") !== null &&
+    (element.matches("button[aria-label='Model selector']") ||
+      element.matches("button[data-testid='model-switcher-dropdown-button']") ||
+      hasToken(accessibleName(element), ["chatgpt", "model", "selector"]));
 
   const isEffortPickerTrigger = (element) =>
     element instanceof HTMLElement &&
-    !element.hasAttribute("data-effort") &&
-    (element.matches("[data-slot='effort-toggle']") ||
-      (element.getAttribute("aria-haspopup") !== null &&
-        isComposerAdjacent(element))) &&
-    hasToken(accessibleName(element), [
-      "effort",
-      "reasoning",
-      "thinking",
-      "standard",
-      "extended",
-    ]);
+    element.getAttribute("aria-haspopup") !== null &&
+    isComposerAdjacent(element) &&
+    (element.matches("button.__composer-pill") ||
+      hasToken(accessibleName(element), [
+        "thinking",
+        "standard",
+        "extended",
+        "effort",
+      ]));
 
   const isModelOption = (element) =>
     element instanceof HTMLElement &&
     !isModelPickerTrigger(element) &&
-    (element.hasAttribute("data-model") ||
-      element.closest("[data-slot='model-menu']") !== null) &&
-    hasToken(accessibleName(element), [
-      "latest",
-      "instant",
-      "thinking",
-      "pro",
-      "gpt",
-    ]);
+    isPopupOption(element) &&
+    element.closest(popupRootSelector) !== null &&
+    hasToken(accessibleName(element), ["instant", "thinking", "pro"]);
 
   const isEffortOption = (element) =>
     element instanceof HTMLElement &&
     !isEffortPickerTrigger(element) &&
-    (element.hasAttribute("data-effort") ||
-      element.closest("[data-slot='effort-menu']") !== null) &&
-    hasToken(accessibleName(element), [
-      "standard",
-      "extended",
-      "reasoning",
-      "thinking",
-    ]);
+    isPopupOption(element) &&
+    element.closest(popupRootSelector) !== null &&
+    hasToken(accessibleName(element), ["standard", "extended"]);
 
   const discoverVisibleAliases = ({ keys, exclude }) => {
     const discovered = {};
@@ -1198,30 +1214,54 @@ export function createTablinqPageAdapterRuntime() {
         isEffortPickerTrigger(element) || !isEffortOption(element),
     });
 
-  const ensurePickerOpen = (trigger) => {
+  const ensurePickerOpen = async (trigger) => {
     if (!(trigger instanceof HTMLElement)) {
-      return false;
+      return [];
     }
-    if (trigger.getAttribute("aria-expanded") === "true") {
-      return true;
+    const resolveRoots = () => {
+      const roots = [];
+      const controlledId = trigger.getAttribute("aria-controls");
+      if (controlledId) {
+        const controlled = document.getElementById(controlledId);
+        if (controlled instanceof HTMLElement && isVisible(controlled)) {
+          roots.push(controlled);
+        }
+      }
+      for (const root of visibleUnique(document.querySelectorAll(popupRootSelector))) {
+        if (
+          !roots.includes(root) &&
+          visibleUnique(root.querySelectorAll(menuOptionSelector)).some(
+            (element) => isModelOption(element) || isEffortOption(element),
+          )
+        ) {
+          roots.push(root);
+        }
+      }
+      return roots;
+    };
+    const initialRoots = resolveRoots();
+    if (initialRoots.length > 0) {
+      return initialRoots;
     }
-    return clickControl(trigger);
+    if (!clickControl(trigger)) {
+      return [];
+    }
+    const deadline = Date.now() + 1500;
+    while (Date.now() < deadline) {
+      const roots = resolveRoots();
+      if (roots.length > 0) {
+        return roots;
+      }
+      await sleep(50);
+    }
+    return resolveRoots();
   };
 
   const findModelPickerTrigger = (aliases, fallbackTokens) =>
     findByAliases({
       selectors: [
-        "[data-slot='model-picker']",
-        "[data-slot='model-picker'][aria-haspopup]",
-        "[data-slot='model-picker'] [aria-haspopup]",
-        "button[aria-haspopup][aria-label*='ChatGPT']",
-        "button[aria-haspopup][aria-label*='chatgpt']",
-        "button[aria-haspopup][aria-label*='Model']",
-        "button[aria-haspopup][aria-label*='model']",
-        "button[aria-haspopup][aria-label*='Engine']",
-        "button[aria-haspopup][aria-label*='engine']",
-        "button[aria-haspopup][aria-label*='GPT']",
-        "button[aria-haspopup][aria-label*='gpt']",
+        "button[aria-label='Model selector']",
+        "button[data-testid='model-switcher-dropdown-button']",
       ],
       aliases: unique(["chatgpt", ...aliases]),
       fallbackTokens: unique([
@@ -1239,13 +1279,9 @@ export function createTablinqPageAdapterRuntime() {
   const findEffortPickerTrigger = (aliases, fallbackTokens) =>
     findComposerAdjacentControl({
       selectors: [
-        "[data-slot='effort-toggle']",
-        "[data-slot='effort-toggle'][aria-haspopup]",
-        "[data-slot='effort-toggle'] [aria-haspopup]",
-        "button[aria-haspopup][aria-label*='Effort']",
-        "button[aria-haspopup][aria-label*='effort']",
-        "button[aria-haspopup][aria-label*='Reasoning']",
-        "button[aria-haspopup][aria-label*='reasoning']",
+        "button.__composer-pill[aria-haspopup]",
+        "button[aria-haspopup][aria-label*='Thinking']",
+        "button[aria-haspopup][aria-label*='thinking']",
       ],
       aliases,
       fallbackTokens: unique([
@@ -1330,47 +1366,68 @@ export function createTablinqPageAdapterRuntime() {
     return null;
   };
 
-  const findConcreteModelControl = (report, modelClass) =>
-    findByAliases({
-      selectors:
-        modelClass === "instant"
-          ? [
-              "[data-model='instant']",
-              "[role='menuitemradio'][data-model='instant']",
-              "button[aria-label*='Instant']",
-            ]
-          : [
-              "[data-model='thinking']",
-              "[role='menuitemradio'][data-model='thinking']",
-              "button[aria-label*='Thinking']",
-            ],
-      aliases: expandAliases(
-        report,
-        "model_classes",
-        modelClass,
-        modelDefaults(modelClass),
+  const openPopupRootsFor = async (trigger, include) => {
+    const roots = await ensurePickerOpen(trigger);
+    return roots.filter((root) =>
+      visibleUnique(root.querySelectorAll(menuOptionSelector)).some((element) =>
+        include(element),
       ),
-      fallbackTokens: modelFallbackTokens(modelClass),
-      include: isModelOption,
-      exclude: isModelPickerTrigger,
-    });
+    );
+  };
+
+  const visiblePopupRootsFor = (include, trigger = null) => {
+    const roots = [];
+    if (trigger instanceof HTMLElement) {
+      const controlledId = trigger.getAttribute("aria-controls");
+      if (controlledId) {
+        const controlled = document.getElementById(controlledId);
+        if (controlled instanceof HTMLElement && isVisible(controlled)) {
+          roots.push(controlled);
+        }
+      }
+    }
+    for (const root of visibleUnique(document.querySelectorAll(popupRootSelector))) {
+      if (
+        !roots.includes(root) &&
+        visibleUnique(root.querySelectorAll(menuOptionSelector)).some((element) =>
+          include(element),
+        )
+      ) {
+        roots.push(root);
+      }
+    }
+    return roots;
+  };
+
+  const findConcreteModelControl = (report, modelClass, roots = []) =>
+    roots.length > 0
+      ? findByAliasesInRoots({
+          roots,
+          aliases: expandAliases(
+            report,
+            "model_classes",
+            modelClass,
+            modelDefaults(modelClass),
+          ),
+          fallbackTokens: modelFallbackTokens(modelClass),
+          include: isModelOption,
+          exclude: isModelPickerTrigger,
+        })
+      : findByAliases({
+          aliases: expandAliases(
+            report,
+            "model_classes",
+            modelClass,
+            modelDefaults(modelClass),
+          ),
+          fallbackTokens: modelFallbackTokens(modelClass),
+          include: isModelOption,
+          exclude: isModelPickerTrigger,
+        });
 
   const findOpenModelMenuControl = (report, modelClass) =>
-    findByAliases({
-      selectors:
-        modelClass === "instant"
-          ? [
-              "[role='menuitemradio'][data-model='instant']",
-              "[role='menuitem'][data-model='instant']",
-              "[data-model='instant']",
-              "button[aria-label*='Instant']",
-            ]
-          : [
-              "[role='menuitemradio'][data-model='thinking']",
-              "[role='menuitem'][data-model='thinking']",
-              "[data-model='thinking']",
-              "button[aria-label*='Thinking']",
-            ],
+    findByAliasesInRoots({
+      roots: visiblePopupRootsFor(isModelOption),
       aliases: expandAliases(
         report,
         "model_classes",
@@ -1382,42 +1439,35 @@ export function createTablinqPageAdapterRuntime() {
       exclude: isModelPickerTrigger,
     });
 
-  const findConcreteEffortControl = (report, effort) =>
-    findByAliases({
-      selectors:
-        effort === "standard"
-          ? [
-              "[data-effort='standard']",
-              "[role='menuitemradio'][data-effort='standard']",
-              "button[aria-label*='Standard']",
-            ]
-          : [
-              "[data-effort='extended']",
-              "[role='menuitemradio'][data-effort='extended']",
-              "button[aria-label*='Extended']",
-            ],
-      aliases: expandAliases(report, "efforts", effort, effortDefaults(effort)),
-      fallbackTokens: effortFallbackTokens(effort),
-      include: isEffortOption,
-      exclude: isEffortPickerTrigger,
-    });
+  const findConcreteEffortControl = (report, effort, roots = []) =>
+    roots.length > 0
+      ? findByAliasesInRoots({
+          roots,
+          aliases: expandAliases(
+            report,
+            "efforts",
+            effort,
+            effortDefaults(effort),
+          ),
+          fallbackTokens: effortFallbackTokens(effort),
+          include: isEffortOption,
+          exclude: isEffortPickerTrigger,
+        })
+      : findByAliases({
+          aliases: expandAliases(
+            report,
+            "efforts",
+            effort,
+            effortDefaults(effort),
+          ),
+          fallbackTokens: effortFallbackTokens(effort),
+          include: isEffortOption,
+          exclude: isEffortPickerTrigger,
+        });
 
   const findOpenEffortMenuControl = (report, effort) =>
-    findByAliases({
-      selectors:
-        effort === "standard"
-          ? [
-              "[role='menuitemradio'][data-effort='standard']",
-              "[role='menuitem'][data-effort='standard']",
-              "[data-effort='standard']",
-              "button[aria-label*='Standard']",
-            ]
-          : [
-              "[role='menuitemradio'][data-effort='extended']",
-              "[role='menuitem'][data-effort='extended']",
-              "[data-effort='extended']",
-              "button[aria-label*='Extended']",
-            ],
+    findByAliasesInRoots({
+      roots: visiblePopupRootsFor(isEffortOption),
       aliases: expandAliases(report, "efforts", effort, effortDefaults(effort)),
       fallbackTokens: effortFallbackTokens(effort),
       include: isEffortOption,
@@ -1466,7 +1516,7 @@ export function createTablinqPageAdapterRuntime() {
     }
   };
 
-  const ensureModelClass = (report, modelClass) => {
+  const ensureModelClass = async (report, modelClass) => {
     if (!report.matrix.model_picker_visible) {
       throwCapabilityMissing(
         "model picker",
@@ -1480,8 +1530,10 @@ export function createTablinqPageAdapterRuntime() {
         modelDefaults(modelClass),
         modelFallbackTokens(modelClass),
       );
-      if (trigger && ensurePickerOpen(trigger)) {
+      if (trigger) {
+        const roots = await openPopupRootsFor(trigger, isModelOption);
         control =
+          findConcreteModelControl(report, modelClass, roots) ??
           findOpenModelMenuControl(report, modelClass) ??
           findConcreteModelControl(report, modelClass);
       }
@@ -1501,9 +1553,10 @@ export function createTablinqPageAdapterRuntime() {
     if (!isSelected(control) && !clickControl(control)) {
       throwUiDrift(`could not activate model=${modelClass}`);
     }
+    await sleep(150);
   };
 
-  const ensureEffort = (report, effort) => {
+  const ensureEffort = async (report, effort) => {
     if (effort === "none") {
       return;
     }
@@ -1513,8 +1566,10 @@ export function createTablinqPageAdapterRuntime() {
         effortDefaults(effort),
         effortFallbackTokens(effort),
       );
-      if (trigger && ensurePickerOpen(trigger)) {
+      if (trigger) {
+        const roots = await openPopupRootsFor(trigger, isEffortOption);
         control =
+          findConcreteEffortControl(report, effort, roots) ??
           findOpenEffortMenuControl(report, effort) ??
           findConcreteEffortControl(report, effort);
       }
@@ -1534,6 +1589,7 @@ export function createTablinqPageAdapterRuntime() {
     if (!isSelected(control) && !clickControl(control)) {
       throwUiDrift(`could not activate effort=${effort}`);
     }
+    await sleep(150);
   };
 
   return {
@@ -1570,7 +1626,7 @@ export function createTablinqPageAdapterRuntime() {
       );
       return false;
     },
-    applyAskConfiguration({ report, request }) {
+    async applyAskConfiguration({ report, request }) {
       if (
         !request.modelClass &&
         !request.effort &&
@@ -1584,10 +1640,10 @@ export function createTablinqPageAdapterRuntime() {
         );
       }
       if (request.modelClass) {
-        ensureModelClass(report, request.modelClass);
+        await ensureModelClass(report, request.modelClass);
       }
       if (request.effort) {
-        ensureEffort(report, request.effort);
+        await ensureEffort(report, request.effort);
       }
       if (request.mode) {
         ensureMode(report, request.mode);
