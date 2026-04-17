@@ -1280,18 +1280,10 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         .and_then(|value| value.get("browser"))
         .cloned()
         .unwrap_or(Value::Null);
-    let extension_connected = health
-        .get("extension_connected")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let authenticated = health
-        .get("authenticated")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let browser_connected = health
-        .get("browser_connected")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let connectivity = resolved_browser_connectivity(&browser, &health);
+    let extension_connected = connectivity.extension_connected;
+    let authenticated = connectivity.authenticated;
+    let browser_connected = connectivity.browser_connected;
     let queue = gateway.get("scheduler").cloned().unwrap_or(Value::Null);
     let browser_state = browser_runtime_state(
         connection_mode,
@@ -1339,6 +1331,37 @@ fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         "recovery_guidance": recovery_guidance,
         "recovery_commands": browser_recovery_commands(connection_mode),
     }))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BrowserConnectivity {
+    browser_connected: bool,
+    extension_connected: bool,
+    authenticated: bool,
+}
+
+fn resolved_browser_connectivity(browser: &Value, health: &Value) -> BrowserConnectivity {
+    let browser_connected = browser
+        .get("running")
+        .and_then(Value::as_bool)
+        .or_else(|| health.get("browser_connected").and_then(Value::as_bool))
+        .unwrap_or(false);
+    let extension_connected = browser
+        .get("extension_connected")
+        .and_then(Value::as_bool)
+        .or_else(|| health.get("extension_connected").and_then(Value::as_bool))
+        .unwrap_or(false);
+    let authenticated = browser
+        .get("authenticated")
+        .and_then(Value::as_bool)
+        .or_else(|| health.get("authenticated").and_then(Value::as_bool))
+        .unwrap_or(false);
+
+    BrowserConnectivity {
+        browser_connected,
+        extension_connected,
+        authenticated,
+    }
 }
 
 fn daemon_response_payload<'a>(value: &'a Value, response_type: &str) -> Option<&'a Value> {
@@ -2150,6 +2173,33 @@ mod tests {
         );
 
         assert_eq!(browser_state, "attached_ready");
+    }
+
+    #[test]
+    fn resolved_browser_connectivity_prefers_live_browser_snapshot() {
+        let browser = json!({
+            "running": true,
+            "extension_connected": true,
+            "authenticated": true,
+            "browser_owner": "external",
+            "target_tab_found": true
+        });
+        let stale_health = json!({
+            "browser_connected": false,
+            "extension_connected": false,
+            "authenticated": false
+        });
+
+        let connectivity = resolved_browser_connectivity(&browser, &stale_health);
+
+        assert_eq!(
+            connectivity,
+            BrowserConnectivity {
+                browser_connected: true,
+                extension_connected: true,
+                authenticated: true,
+            }
+        );
     }
 
     #[test]

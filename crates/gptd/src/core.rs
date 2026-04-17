@@ -637,7 +637,7 @@ impl CoreService {
             });
         let latest_failure_bundle = db.latest_failure_bundle()?;
         let failure_bundle_count = db.count_failure_bundles()?;
-        let health = self.health_snapshot()?;
+        let health = health_snapshot(&self.config, browser_snapshot.clone());
 
         Ok(DoctorReport {
             health: health.clone(),
