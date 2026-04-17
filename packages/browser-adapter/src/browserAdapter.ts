@@ -3203,14 +3203,173 @@ async function applyAskConfiguration(
   }
 
   await waitForInteractionSurface(page);
-  await callPageAdapter(page, "applyAskConfiguration", {
-    report,
-    request: {
-      modelClass: command.modelClass ?? undefined,
-      effort: command.effort ?? undefined,
-      mode: command.mode ?? "normal",
-    },
-  });
+  if (command.modelClass) {
+    await ensureConfiguredModelClass(page, report, command.modelClass);
+  }
+  if (command.effort) {
+    await ensureConfiguredEffort(page, report, command.effort);
+  }
+  if (command.mode && command.mode !== "normal") {
+    await ensureConfiguredMode(page, report, command.mode);
+  }
+}
+
+async function waitForVisibleLocator(
+  locator: Locator,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  const candidate = locator.first();
+  try {
+    await candidate.waitFor({ state: "visible", timeout: timeoutMs });
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+async function findVisiblePopupChoicePoint(
+  page: Page,
+  token: string,
+): Promise<{ x: number; y: number; checked: string | null } | null> {
+  const deadline = Date.now() + INTERACTION_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const point = await page.evaluate((expectedToken: string) => {
+      const normalize = (value: string | null | undefined) =>
+        (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+      const isVisible = (element: Element) => {
+        if (!(element instanceof HTMLElement) || element.hidden) {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0"
+        );
+      };
+
+      for (const element of Array.from(
+        document.querySelectorAll(
+          "[role='menuitemradio'], [role='menuitem'], [role='option']",
+        ),
+      )) {
+        if (!isVisible(element)) {
+          continue;
+        }
+        if (!normalize(element.textContent).includes(expectedToken)) {
+          continue;
+        }
+        const rect = element.getBoundingClientRect();
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+          checked: element.getAttribute("aria-checked"),
+        };
+      }
+      return null;
+    }, token);
+    if (point) {
+      return point;
+    }
+    await page.waitForTimeout(100);
+  }
+  return null;
+}
+
+async function ensureConfiguredModelClass(
+  page: Page,
+  report: CapabilityReportPayload,
+  modelClass: "instant" | "thinking",
+): Promise<void> {
+  if (!report.matrix.model_picker_visible) {
+    throw new Error(`capability missing: model picker; requested=${modelClass}`);
+  }
+
+  const trigger = await waitForVisibleLocator(
+    page.locator(
+      "button[aria-label='Model selector'], button[data-testid='model-switcher-dropdown-button']",
+    ),
+    INTERACTION_TIMEOUT_MS,
+  );
+  if (!trigger) {
+    throw new Error(
+      `ui drift: could not find a model selector trigger for model=${modelClass}`,
+    );
+  }
+
+  await trigger.click();
+  const option = await findVisiblePopupChoicePoint(page, modelClass);
+  if (!option) {
+    throw new Error(
+      `ui drift: could not find a concrete control for model=${modelClass} after alias discovery`,
+    );
+  }
+  if (option.checked !== "true") {
+    await page.mouse.click(option.x, option.y);
+  }
+}
+
+async function ensureConfiguredEffort(
+  page: Page,
+  report: CapabilityReportPayload,
+  effort: "none" | "standard" | "extended",
+): Promise<void> {
+  if (effort === "none") {
+    return;
+  }
+  if (!report.matrix.thinking_effort_visible) {
+    throw new Error(`capability missing: thinking effort; requested=${effort}`);
+  }
+
+  const trigger = await waitForVisibleLocator(
+    page.locator("button.__composer-pill[aria-haspopup]"),
+    INTERACTION_TIMEOUT_MS,
+  );
+  if (!trigger) {
+    throw new Error(
+      `ui drift: could not find an effort trigger for effort=${effort}`,
+    );
+  }
+
+  await trigger.click();
+  const option = await findVisiblePopupChoicePoint(page, effort);
+  if (!option) {
+    throw new Error(
+      `ui drift: could not find a concrete control for effort=${effort} after alias discovery`,
+    );
+  }
+  if (option.checked !== "true") {
+    await page.mouse.click(option.x, option.y);
+  }
+}
+
+async function ensureConfiguredMode(
+  page: Page,
+  report: CapabilityReportPayload,
+  mode: "search" | "research",
+): Promise<void> {
+  const visible =
+    mode === "search"
+      ? report.matrix.search_mode_visible
+      : report.matrix.research_mode_visible;
+  if (!visible) {
+    throw new Error(`capability missing: ${mode} mode; requested=${mode}`);
+  }
+
+  const locator = await waitForVisibleLocator(
+    page.locator(
+      mode === "search"
+        ? "[data-mode='search'], button[aria-label*='Search'], button[aria-label*='web']"
+        : "[data-mode='research'], button[aria-label*='Research'], button[aria-label*='Deep research']",
+    ),
+    INTERACTION_TIMEOUT_MS,
+  );
+  if (!locator) {
+    throw new Error(`ui drift: could not find ${mode} mode control after probing it`);
+  }
+  if ((await locator.getAttribute("aria-pressed")) !== "true") {
+    await locator.click();
+  }
 }
 
 async function uploadAttachments(

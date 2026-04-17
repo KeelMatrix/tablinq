@@ -1709,7 +1709,7 @@ fn build_ask_command(args: &AskArgs) -> AskCommand {
         conversation_id: args.conversation.clone(),
         new_conversation: false,
         mode: map_mode(args.mode),
-        model_class: args.model_class.map(map_model),
+        model_class: Some(args.model_class.map(map_model).unwrap_or(ModelClass::Instant)),
         effort: args.effort.map(map_effort),
         files: args
             .files
@@ -1943,6 +1943,21 @@ mod tests {
         assert_eq!(command.effort, Some(Effort::Extended));
         assert_eq!(command.files, vec!["notes.txt".to_owned()]);
         assert_eq!(command.conversation_id.as_deref(), Some("conv-7"));
+    }
+
+    #[test]
+    fn build_ask_command_defaults_to_instant_model() {
+        let args = AskArgs {
+            prompt: "hello".to_owned(),
+            mode: CliMode::Normal,
+            model_class: None,
+            effort: None,
+            files: vec![],
+            conversation: None,
+        };
+
+        let command = build_ask_command(&args);
+        assert_eq!(command.model_class, Some(ModelClass::Instant));
     }
 
     #[test]

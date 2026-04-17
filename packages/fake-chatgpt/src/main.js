@@ -26,7 +26,7 @@ const requestedInitialModel = params.get("initial_model");
 const initialModel =
   requestedInitialModel === "instant" || requestedInitialModel === "thinking"
     ? requestedInitialModel
-    : "thinking";
+    : "instant";
 const missingControls = new Set(
   (params.get("missing") || "")
     .split(",")
@@ -209,9 +209,11 @@ function liveModelControls() {
     <div class="pill">
       <button
         type="button"
-        data-slot="model-picker"
-        aria-label="ChatGPT"
+        id="model-switcher-trigger"
+        data-testid="model-switcher-dropdown-button"
+        aria-label="Model selector"
         aria-haspopup="menu"
+        aria-controls="tablinq-model-menu"
         aria-expanded="false"
       >
         ChatGPT
@@ -242,14 +244,15 @@ function liveEffortControls() {
   return `
     <button
       type="button"
-      class="pill"
-      data-slot="effort-toggle"
-      aria-label="Thinking effort"
+      id="thinking-effort-trigger"
+      class="pill __composer-pill"
+      aria-label="Thinking"
       aria-haspopup="menu"
+      aria-controls="tablinq-effort-menu"
       aria-expanded="false"
       hidden
     >
-      Standard
+      Thinking
     </button>
   `;
 }
@@ -267,19 +270,35 @@ function currentPortalMenus() {
       ${
         hasControl("model")
           ? `
-      <div data-slot="model-menu" role="menu" hidden>
-        <button type="button" role="menuitemradio" data-model="latest" hidden>Latest</button>
+      <div id="tablinq-model-menu" role="menu" hidden>
+        <div class="pill" aria-hidden="true">Latest</div>
         ${
           hasControl("instant-model")
-            ? `<button type="button" role="menuitemradio" data-model="instant" hidden>Instant</button>`
+            ? `
+        <div id="model-option-instant" role="menuitemradio" data-testid="model-switcher-gpt-5-3" hidden>
+          <div>Instant</div>
+          <div>For everyday chats</div>
+        </div>
+      `
             : ""
         }
         ${
           hasControl("thinking-model")
-            ? `<button type="button" role="menuitemradio" data-model="thinking" hidden>Thinking</button>`
+            ? `
+        <div id="model-option-thinking" role="menuitemradio" data-testid="model-switcher-gpt-5-4-thinking" hidden>
+          <div>Thinking</div>
+          <div>For complex questions</div>
+        </div>
+      `
             : ""
         }
-        <button type="button" role="menuitemradio" data-model="pro" hidden>Pro</button>
+        <div id="model-option-pro" role="menuitemradio" data-testid="model-switcher-gpt-5-4-pro" hidden>
+          <div>Pro</div>
+          <div>Research-grade intelligence</div>
+        </div>
+        <div id="model-option-configure" role="menuitem" data-testid="model-configure-modal" hidden>
+          Configure...
+        </div>
       </div>
       `
           : ""
@@ -287,9 +306,10 @@ function currentPortalMenus() {
       ${
         hasControl("effort")
           ? `
-      <div data-slot="effort-menu" role="menu" hidden>
-        <button type="button" role="menuitemradio" data-effort="standard" hidden>Standard</button>
-        <button type="button" role="menuitemradio" data-effort="extended" hidden>Extended thinking</button>
+      <div id="tablinq-effort-menu" role="menu" hidden>
+        <div class="pill" aria-hidden="true">Thinking effort</div>
+        <div id="effort-option-standard" role="menuitemradio" hidden>Standard</div>
+        <div id="effort-option-extended" role="menuitemradio" hidden>Extended</div>
       </div>
       `
           : ""
@@ -796,10 +816,7 @@ function prepareArtifact(promptText) {
 
 function applyPressedState(selector, selectedValue) {
   document.querySelectorAll(selector).forEach((element) => {
-    const key =
-      element.getAttribute("data-model") ||
-      element.getAttribute("data-effort") ||
-      element.getAttribute("data-mode");
+    const key = element.getAttribute("data-mode");
     const selected = key === selectedValue;
     element.setAttribute("aria-pressed", selected ? "true" : "false");
     if (element.getAttribute("role") === "menuitemradio") {
@@ -809,9 +826,16 @@ function applyPressedState(selector, selectedValue) {
   });
 }
 
+function syncModernMenuOption(selector, selected) {
+  const element = document.querySelector(selector);
+  if (!(element instanceof HTMLElement)) {
+    return;
+  }
+  element.setAttribute("aria-checked", selected ? "true" : "false");
+  element.dataset.selected = selected ? "true" : "false";
+}
+
 function syncSelectedState() {
-  applyPressedState("[data-model]", document.body.dataset.selectedModel);
-  applyPressedState("[data-effort]", document.body.dataset.selectedEffort);
   const selectedMode = document.body.dataset.selectedMode;
   document.querySelectorAll("[data-mode]").forEach((element) => {
     const selected = element.getAttribute("data-mode") === selectedMode;
@@ -819,11 +843,29 @@ function syncSelectedState() {
     element.dataset.selected = selected ? "true" : "false";
   });
 
-  const modelMenu = document.querySelector("[data-slot='model-menu']");
-  const modelTrigger = document.querySelector("[data-slot='model-picker']");
+  syncModernMenuOption(
+    "#model-option-instant",
+    document.body.dataset.selectedModel === "instant",
+  );
+  syncModernMenuOption(
+    "#model-option-thinking",
+    document.body.dataset.selectedModel === "thinking",
+  );
+  syncModernMenuOption("#model-option-pro", false);
+  syncModernMenuOption(
+    "#effort-option-standard",
+    document.body.dataset.selectedEffort === "standard",
+  );
+  syncModernMenuOption(
+    "#effort-option-extended",
+    document.body.dataset.selectedEffort === "extended",
+  );
+
+  const modelMenu = document.querySelector("#tablinq-model-menu");
+  const modelTrigger = document.querySelector("#model-switcher-trigger");
   const modelMenuOpen = modelTrigger?.getAttribute("aria-expanded") === "true";
   modelMenu?.toggleAttribute("hidden", !modelMenuOpen);
-  modelMenu?.querySelectorAll("[data-model]").forEach((element) => {
+  modelMenu?.querySelectorAll("[role='menuitemradio'], [role='menuitem']").forEach((element) => {
     element.toggleAttribute("hidden", !modelMenuOpen);
   });
 
@@ -831,7 +873,7 @@ function syncSelectedState() {
   const effortVisible =
     hasControl("effort") &&
     (!currentUiVariant || document.body.dataset.selectedModel === "thinking");
-  const effortToggle = document.querySelector("[data-slot='effort-toggle']");
+  const effortToggle = document.querySelector("#thinking-effort-trigger");
   const effortToggleIsMenuTrigger =
     effortToggle instanceof HTMLElement &&
     effortToggle.getAttribute("aria-haspopup") !== null;
@@ -839,19 +881,19 @@ function syncSelectedState() {
     effortToggle.toggleAttribute("hidden", !effortVisible);
     effortToggle.textContent =
       document.body.dataset.selectedEffort === "extended"
-        ? "Extended"
-        : "Standard";
+        ? "Extended thinking"
+        : "Thinking";
     if (!effortVisible) {
       effortToggle.setAttribute("aria-expanded", "false");
     }
   }
-  const effortMenu = document.querySelector("[data-slot='effort-menu']");
+  const effortMenu = document.querySelector("#tablinq-effort-menu");
   const effortMenuOpen =
     effortVisible &&
     effortToggleIsMenuTrigger &&
     effortToggle.getAttribute("aria-expanded") === "true";
   effortMenu?.toggleAttribute("hidden", !effortMenuOpen);
-  effortMenu?.querySelectorAll("[data-effort]").forEach((element) => {
+  effortMenu?.querySelectorAll("[role='menuitemradio']").forEach((element) => {
     element.toggleAttribute("hidden", !effortMenuOpen);
   });
 }
@@ -1247,8 +1289,8 @@ function resumeResearchIfNeeded() {
   activeTimer = setTimeout(() => tickResearch(state), 80);
 }
 
-const modelPickerTrigger = document.querySelector("[data-slot='model-picker']");
-const effortPickerTrigger = document.querySelector("[data-slot='effort-toggle']");
+const modelPickerTrigger = document.querySelector("#model-switcher-trigger");
+const effortPickerTrigger = document.querySelector("#thinking-effort-trigger");
 
 modelPickerTrigger?.addEventListener("click", () => {
   const expanded = modelPickerTrigger.getAttribute("aria-expanded") === "true";
@@ -1256,13 +1298,17 @@ modelPickerTrigger?.addEventListener("click", () => {
   syncSelectedState();
 });
 
-document.querySelectorAll("[data-model]").forEach((element) => {
-  element.addEventListener("click", () => {
-    document.body.dataset.selectedModel = element.getAttribute("data-model");
-    modelPickerTrigger?.setAttribute("aria-expanded", "false");
-    effortPickerTrigger?.setAttribute("aria-expanded", "false");
-    syncSelectedState();
-  });
+document.querySelector("#model-option-instant")?.addEventListener("click", () => {
+  document.body.dataset.selectedModel = "instant";
+  modelPickerTrigger?.setAttribute("aria-expanded", "false");
+  effortPickerTrigger?.setAttribute("aria-expanded", "false");
+  syncSelectedState();
+});
+
+document.querySelector("#model-option-thinking")?.addEventListener("click", () => {
+  document.body.dataset.selectedModel = "thinking";
+  modelPickerTrigger?.setAttribute("aria-expanded", "false");
+  syncSelectedState();
 });
 
 effortPickerTrigger?.addEventListener("click", () => {
@@ -1275,12 +1321,16 @@ effortPickerTrigger?.addEventListener("click", () => {
   syncSelectedState();
 });
 
-document.querySelectorAll("[data-effort]").forEach((element) => {
-  element.addEventListener("click", () => {
-    document.body.dataset.selectedEffort = element.getAttribute("data-effort");
-    effortPickerTrigger?.setAttribute("aria-expanded", "false");
-    syncSelectedState();
-  });
+document.querySelector("#effort-option-standard")?.addEventListener("click", () => {
+  document.body.dataset.selectedEffort = "standard";
+  effortPickerTrigger?.setAttribute("aria-expanded", "false");
+  syncSelectedState();
+});
+
+document.querySelector("#effort-option-extended")?.addEventListener("click", () => {
+  document.body.dataset.selectedEffort = "extended";
+  effortPickerTrigger?.setAttribute("aria-expanded", "false");
+  syncSelectedState();
 });
 
 document.querySelectorAll("[data-mode]").forEach((element) => {

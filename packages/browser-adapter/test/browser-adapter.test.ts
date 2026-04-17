@@ -243,24 +243,27 @@ describe("browser adapter", () => {
   });
 
   it.each([
-    ["classic", "classic"],
-    ["aria fallback", "aria"],
-    ["live-like", "live"],
+    ["menu", "menu"],
+    ["live", "live"],
   ] as const)(
-    "captures a full capability matrix for the %s harness",
+    "captures the modern ChatGPT capability matrix for the %s harness",
     async (_label, variant) => {
       const server = await startTrackedFakeChatGptServer();
       const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+      const targetUrl = withHarnessUrl(server.url, {
+        variant,
+        initialModel: "thinking",
+      });
       const adapter = trackAdapter(
         new BrowserAdapter({
           profileDir: path.join(root, "profile"),
           downloadsDir: path.join(root, "downloads"),
-          defaultTargetUrl: withHarnessUrl(server.url, { variant }),
+          defaultTargetUrl: targetUrl,
         }),
       );
 
       const snapshot = await adapter.open({
-        targetUrl: withHarnessUrl(server.url, { variant }),
+        targetUrl,
         headless: true,
       });
 
@@ -281,6 +284,8 @@ describe("browser adapter", () => {
       expect(
         snapshot.capability_report?.aliases.model_classes.thinking,
       ).toBeTruthy();
+      expect(snapshot.capability_report?.aliases.efforts.standard).toBeTruthy();
+      expect(snapshot.capability_report?.aliases.efforts.extended).toBeTruthy();
       const diagnostics = await adapter.diagnostics();
       expect(diagnostics.selector_pack?.pack_id).toBe("chatgpt-default");
       expect(diagnostics.strategy_attempts.length).toBeGreaterThan(3);
@@ -293,6 +298,72 @@ describe("browser adapter", () => {
       await stopFakeChatGptServer(server.process);
     },
   );
+
+  it("keeps the effort control absent until Thinking is selected on the modern menu harness", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "menu",
+      initialModel: "instant",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+
+    const snapshot = await adapter.open({ targetUrl, headless: true });
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      modelTriggerLabel:
+        document
+          .querySelector("#model-switcher-trigger")
+          ?.textContent?.replace(/\s+/g, " ")
+          .trim() ?? null,
+      modelTriggerAria:
+        document
+          .querySelector("#model-switcher-trigger")
+          ?.getAttribute("aria-label") ?? null,
+      effortVisible:
+        !(
+          document
+            .querySelector("#thinking-effort-trigger")
+            ?.hasAttribute("hidden") ?? true
+        ),
+      menuItems: [
+        document
+          .querySelector("#model-option-instant")
+          ?.textContent?.replace(/\s+/g, " ")
+          .trim() ?? "",
+        document
+          .querySelector("#model-option-thinking")
+          ?.textContent?.replace(/\s+/g, " ")
+          .trim() ?? "",
+        document
+          .querySelector("#model-option-pro")
+          ?.textContent?.replace(/\s+/g, " ")
+          .trim() ?? "",
+      ],
+    }));
+
+    expect(snapshot.capability_report?.matrix.thinking_effort_visible).toBe(
+      false,
+    );
+    expect(state).toEqual({
+      modelTriggerLabel: "ChatGPT",
+      modelTriggerAria: "Model selector",
+      effortVisible: false,
+      menuItems: [
+        "Instant For everyday chats",
+        "Thinking For complex questions",
+        "Pro Research-grade intelligence",
+      ],
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
 
   it("reuses the managed page on repeated open", async () => {
     const server = await startTrackedFakeChatGptServer();
@@ -617,13 +688,14 @@ describe("browser adapter", () => {
 
   it("waits briefly for extension readiness after attach", async () => {
     const server = await startTrackedFakeChatGptServer();
-    const attached = await startTrackedAttachableBrowser(server.url);
+    const targetUrl = withHarnessUrl(server.url, { variant: "menu" });
+    const attached = await startTrackedAttachableBrowser(targetUrl);
     await withAttachedBrowser(attached.endpoint, async (browser) => {
       const page = browser.contexts()[0]!.pages()[0]!;
       await page.evaluate(() => {
         const controls = Array.from(
           document.querySelectorAll(
-            "[data-slot='composer'], [data-action='submit'], [data-slot='model-picker'], [data-slot='effort-toggle'], [data-slot='upload-entry']",
+            "#prompt-textarea, [data-testid='send-button'], #model-switcher-trigger, #thinking-effort-trigger, [data-testid='upload-button']",
           ),
         ) as HTMLElement[];
         for (const control of controls) {
@@ -643,14 +715,14 @@ describe("browser adapter", () => {
       new BrowserAdapter({
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: server.url,
+        defaultTargetUrl: targetUrl,
         connectionMode: "attach_first",
         debugEndpoint: attached.endpoint,
       }),
     );
 
     const snapshot = await adapter.open({
-      targetUrl: server.url,
+      targetUrl,
       headless: true,
     });
 
@@ -940,123 +1012,6 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
-  it("selects model, effort, and search mode on the classic harness", async () => {
-    const server = await startTrackedFakeChatGptServer();
-    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: server.url,
-      }),
-    );
-    await adapter.open({ targetUrl: server.url, headless: true });
-
-    await adapter.ask(
-      {
-        jobId: "job-ask-configured-classic",
-        prompt: "configure classic",
-        mode: "search",
-        modelClass: "instant",
-        effort: "extended",
-      },
-      () => {},
-    );
-
-    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
-      mode: document.body.dataset.selectedMode,
-      model: document.body.dataset.selectedModel,
-      effort: document.body.dataset.selectedEffort,
-    }));
-
-    expect(state).toEqual({
-      mode: "search",
-      model: "instant",
-      effort: "extended",
-    });
-
-    await adapter.shutdown();
-    await stopFakeChatGptServer(server.process);
-  });
-
-  it("selects renamed controls on the aria harness", async () => {
-    const server = await startTrackedFakeChatGptServer();
-    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: withHarnessUrl(server.url, { variant: "aria" }),
-      }),
-    );
-    await adapter.open({
-      targetUrl: withHarnessUrl(server.url, { variant: "aria" }),
-      headless: true,
-    });
-
-    await adapter.ask(
-      {
-        jobId: "job-ask-configured-aria",
-        prompt: "configure aria",
-        mode: "research",
-        modelClass: "thinking",
-        effort: "extended",
-      },
-      () => {},
-    );
-
-    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
-      mode: document.body.dataset.selectedMode,
-      model: document.body.dataset.selectedModel,
-      effort: document.body.dataset.selectedEffort,
-    }));
-
-    expect(state).toEqual({
-      mode: "research",
-      model: "thinking",
-      effort: "extended",
-    });
-
-    await adapter.shutdown();
-    await stopFakeChatGptServer(server.process);
-  });
-
-  it("keeps direct model buttons working on the classic harness", async () => {
-    const server = await startTrackedFakeChatGptServer();
-    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const adapter = trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: server.url,
-      }),
-    );
-    await adapter.open({ targetUrl: server.url, headless: true });
-
-    await adapter.ask(
-      {
-        jobId: "job-ask-direct-model-buttons",
-        prompt: "use classic direct buttons",
-        modelClass: "instant",
-        effort: "standard",
-      },
-      () => {},
-    );
-
-    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
-      model: document.body.dataset.selectedModel,
-      effort: document.body.dataset.selectedEffort,
-    }));
-
-    expect(state).toEqual({
-      model: "instant",
-      effort: "standard",
-    });
-
-    await adapter.shutdown();
-    await stopFakeChatGptServer(server.process);
-  });
-
   it("selects Instant from the current ChatGPT model menu", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -1166,9 +1121,7 @@ describe("browser adapter", () => {
         },
         () => {},
       ),
-    ).rejects.toThrow(
-      /capability missing: model class; requested=instant; discovered=thinking=\[thinking\]/i,
-    );
+    ).rejects.toThrow(/ui drift: could not find a concrete control for model=instant/i);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -1201,9 +1154,7 @@ describe("browser adapter", () => {
         },
         () => {},
       ),
-    ).rejects.toThrow(
-      /capability missing: thinking effort; requested=extended; discovered=none/i,
-    );
+    ).rejects.toThrow(/capability missing: thinking effort; requested=extended/i);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -1241,7 +1192,7 @@ describe("browser adapter", () => {
       effortVisible:
         !(
           document
-            .querySelector("[data-slot='effort-toggle']")
+            .querySelector("#thinking-effort-trigger")
             ?.hasAttribute("hidden") ?? true
         ),
     }));
