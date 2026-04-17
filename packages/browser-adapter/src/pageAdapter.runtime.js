@@ -155,6 +155,11 @@ export function createTablinqPageAdapterRuntime() {
     return null;
   };
 
+  const queryVisible = (selectors) =>
+    visibleUnique(
+      selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector))),
+    );
+
   const actionableSelector = [
     "button",
     "[role='button']",
@@ -276,6 +281,10 @@ export function createTablinqPageAdapterRuntime() {
       }
     }
     element.focus?.();
+    try {
+      element.click();
+      return true;
+    } catch {}
     const rect = element.getBoundingClientRect();
     const eventInit = {
       bubbles: true,
@@ -498,6 +507,7 @@ export function createTablinqPageAdapterRuntime() {
     }
 
     let score = 0;
+    const composer = findComposer();
     const fingerprint = controlFingerprint(element);
     if (
       element.matches(
@@ -520,6 +530,17 @@ export function createTablinqPageAdapterRuntime() {
       element.getAttribute("type") === "submit"
     ) {
       score += 4;
+    }
+    if (composer) {
+      if (element.closest("form") === composer.closest("form")) {
+        score += 8;
+      }
+      if (element.parentElement === composer.parentElement) {
+        score += 4;
+      }
+      if (element.closest("main") === composer.closest("main")) {
+        score += 1;
+      }
     }
     if (isDisabled(element)) {
       score -= 3;
@@ -562,18 +583,21 @@ export function createTablinqPageAdapterRuntime() {
   };
 
   const findSubmitButton = ({ allowDisabled = false } = {}) => {
-    const explicit = queryFirstVisible([
+    const explicit = queryVisible([
       "[data-action='submit']",
       "[data-testid='send-button']",
       "button[aria-label='Submit prompt']",
       "button[aria-label*='Send']",
       "input[type='submit']",
-    ]);
-    if (
-      explicit &&
-      submitCandidateScore(explicit, { allowDisabled }) > 0
-    ) {
-      return explicit;
+    ])
+      .map((element) => ({
+        element,
+        score: submitCandidateScore(element, { allowDisabled }),
+      }))
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => right.score - left.score);
+    if (explicit[0]?.element) {
+      return explicit[0].element;
     }
 
     const nearby = submitCandidatesNearComposer()
@@ -880,10 +904,21 @@ export function createTablinqPageAdapterRuntime() {
       latest?.getAttribute("data-message-id"),
     );
     const latestText = latest ? collectText(latest) : "";
+    const currentConversationId =
+      datasetValue(document.body.dataset.conversationId) ??
+      parseConversationIdFromUrl();
     const streamState =
       latest?.getAttribute("data-stream-state") ??
       document.body.dataset.streamState;
 
+    if (
+      latest &&
+      latestText &&
+      baseline.conversationId !== currentConversationId &&
+      currentConversationId
+    ) {
+      return latest;
+    }
     if (messages.length > Math.max(0, baseline.assistantMessageCount ?? 0)) {
       return latest;
     }
@@ -1696,6 +1731,9 @@ export function createTablinqPageAdapterRuntime() {
       const messages = findAssistantMessages();
       return {
         assistantMessageCount: messages.length,
+        conversationId:
+          datasetValue(document.body.dataset.conversationId) ??
+          parseConversationIdFromUrl(),
         messageId: datasetValue(article?.getAttribute("data-message-id")) ?? null,
         text: article ? collectText(article) : "",
       };

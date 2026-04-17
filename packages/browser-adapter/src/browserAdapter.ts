@@ -2888,6 +2888,7 @@ interface AskSnapshot {
 
 interface AskBaseline {
   assistantMessageCount: number;
+  conversationId: string | null;
   messageId: string | null;
   text: string;
 }
@@ -3020,22 +3021,30 @@ async function waitForSubmitReadyAfterUploads(
   page: Page,
   timeoutMs = SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
 ): Promise<void> {
-  const ready = await waitForPageAdapterCondition(
-    page,
-    "submitReady",
-    undefined,
-    timeoutMs,
-  )
-    .then(() => true)
-    .catch(() => false);
-  if (ready) {
-    return;
+  const deadline = Date.now() + timeoutMs;
+  let state: SubmitStateSnapshot | null = null;
+
+  while (Date.now() < deadline) {
+    state = await callPageAdapter<SubmitStateSnapshot>(
+      page,
+      "readSubmitState",
+    ).catch(() => null);
+    if (
+      state &&
+      !state.attachmentsProcessing &&
+      ((state.submitVisible && state.submitEnabled && !state.submitBusy) ||
+        (!state.submitVisible && state.keyboardReady))
+    ) {
+      return;
+    }
+    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
   }
 
-  const state = await callPageAdapter<SubmitStateSnapshot>(
-    page,
-    "readSubmitState",
-  ).catch(() => null);
+  state =
+    state ??
+    (await callPageAdapter<SubmitStateSnapshot>(page, "readSubmitState").catch(
+      () => null,
+    ));
   if (state?.attachmentsProcessing) {
     throw new Error(
       `submit failed: upload was acknowledged but attachments are still processing after ${timeoutMs}ms`,
@@ -3043,6 +3052,26 @@ async function waitForSubmitReadyAfterUploads(
   }
   throw new Error(
     `submit failed: upload was acknowledged but submit never became ready after ${timeoutMs}ms`,
+  );
+}
+
+async function waitForSubmitStarted(
+  page: Page,
+  baseline: SubmitStateSnapshot,
+  timeoutMs = SUBMIT_START_TIMEOUT_MS,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const started = await callPageAdapter<boolean>(page, "submitStarted", {
+      baseline,
+    }).catch(() => false);
+    if (started) {
+      return true;
+    }
+    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+  }
+  return callPageAdapter<boolean>(page, "submitStarted", { baseline }).catch(
+    () => false,
   );
 }
 
@@ -3230,10 +3259,19 @@ async function waitForVisibleLocator(
 async function findVisiblePopupChoicePoint(
   page: Page,
   token: string,
-): Promise<{ x: number; y: number; checked: string | null } | null> {
+): Promise<{ index: number; checked: string | null } | null> {
+  const popupChoiceSelector =
+    "[role='menuitemradio'], [role='menuitem'], [role='option']";
   const deadline = Date.now() + INTERACTION_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const point = await page.evaluate((expectedToken: string) => {
+    const point = await page.evaluate(
+      ({
+        expectedToken,
+        popupChoiceSelector,
+      }: {
+        expectedToken: string;
+        popupChoiceSelector: string;
+      }) => {
       const normalize = (value: string | null | undefined) =>
         (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
       const isVisible = (element: Element) => {
@@ -3248,26 +3286,26 @@ async function findVisiblePopupChoicePoint(
         );
       };
 
-      for (const element of Array.from(
-        document.querySelectorAll(
-          "[role='menuitemradio'], [role='menuitem'], [role='option']",
-        ),
-      )) {
+      const matches = Array.from(document.querySelectorAll(popupChoiceSelector));
+      for (const [index, element] of matches.entries()) {
         if (!isVisible(element)) {
           continue;
         }
         if (!normalize(element.textContent).includes(expectedToken)) {
           continue;
         }
-        const rect = element.getBoundingClientRect();
         return {
-          x: rect.left + rect.width / 2,
-          y: rect.top + rect.height / 2,
+          index,
           checked: element.getAttribute("aria-checked"),
         };
       }
       return null;
-    }, token);
+      },
+      {
+        expectedToken: token,
+        popupChoiceSelector,
+      },
+    );
     if (point) {
       return point;
     }
@@ -3305,7 +3343,10 @@ async function ensureConfiguredModelClass(
     );
   }
   if (option.checked !== "true") {
-    await page.mouse.click(option.x, option.y);
+    await page
+      .locator("[role='menuitemradio'], [role='menuitem'], [role='option']")
+      .nth(option.index)
+      .click();
   }
 }
 
@@ -3317,15 +3358,15 @@ async function ensureConfiguredEffort(
   if (effort === "none") {
     return;
   }
-  if (!report.matrix.thinking_effort_visible) {
-    throw new Error(`capability missing: thinking effort; requested=${effort}`);
-  }
 
   const trigger = await waitForVisibleLocator(
     page.locator("button.__composer-pill[aria-haspopup]"),
     INTERACTION_TIMEOUT_MS,
   );
   if (!trigger) {
+    if (!report.matrix.thinking_effort_visible) {
+      throw new Error(`capability missing: thinking effort; requested=${effort}`);
+    }
     throw new Error(
       `ui drift: could not find an effort trigger for effort=${effort}`,
     );
@@ -3339,7 +3380,10 @@ async function ensureConfiguredEffort(
     );
   }
   if (option.checked !== "true") {
-    await page.mouse.click(option.x, option.y);
+    await page
+      .locator("[role='menuitemradio'], [role='menuitem'], [role='option']")
+      .nth(option.index)
+      .click();
   }
 }
 
@@ -3449,16 +3493,14 @@ async function clickSubmit(page: Page): Promise<void> {
     "readSubmitState",
   );
   const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
+  if (clicked && (await waitForSubmitStarted(page, baseline))) {
+    return;
+  }
+
+  const clickedActiveComposerSubmit = await clickActiveComposerSubmit(page);
   if (
-    clicked &&
-    (await waitForPageAdapterCondition(
-      page,
-      "submitStarted",
-      { baseline },
-      SUBMIT_START_TIMEOUT_MS,
-    )
-      .then(() => true)
-      .catch(() => false))
+    clickedActiveComposerSubmit &&
+    (await waitForSubmitStarted(page, baseline))
   ) {
     return;
   }
@@ -3466,19 +3508,57 @@ async function clickSubmit(page: Page): Promise<void> {
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await focusComposer(page);
   await page.keyboard.press(`${modifier}+Enter`).catch(() => undefined);
-  const submitted = await waitForPageAdapterCondition(
-    page,
-    "submitStarted",
-    { baseline },
-    SUBMIT_START_TIMEOUT_MS,
-  )
-    .then(() => true)
-    .catch(() => false);
+  const submitted = await waitForSubmitStarted(page, baseline);
   if (!submitted) {
     throw new Error(
       "submit failed: prompt was not sent after clicking submit controls or using the keyboard shortcut",
     );
   }
+}
+
+async function clickActiveComposerSubmit(page: Page): Promise<boolean> {
+  const candidates = page.locator(
+    [
+      "[data-testid='composer-root'] [data-testid='send-button']",
+      "[data-testid='composer-root'] button[aria-label='Send prompt']",
+      "[data-testid='composer-root'] button[aria-label='Submit prompt']",
+      "[data-testid='composer-root'] input[type='submit']",
+      "#composer-submit-button",
+      "[data-testid='send-button']",
+      "button[aria-label='Send prompt']",
+      "button[aria-label='Submit prompt']",
+      "input[type='submit']",
+    ].join(", "),
+  );
+
+  const count = await candidates.count();
+  for (let index = 0; index < count; index += 1) {
+    const candidate = candidates.nth(index);
+    const visible = await candidate.isVisible().catch(() => false);
+    if (!visible) {
+      continue;
+    }
+    const actionable = await candidate
+      .evaluate((element) => {
+        const ariaDisabled = element.getAttribute("aria-disabled") === "true";
+        const dataDisabled = element.getAttribute("data-disabled") === "true";
+        const hasPopup = element.getAttribute("aria-haspopup") !== null;
+        const nativeDisabled =
+          "disabled" in element &&
+          Boolean((element as HTMLButtonElement | HTMLInputElement).disabled);
+        return !ariaDisabled && !dataDisabled && !nativeDisabled && !hasPopup;
+      })
+      .catch(() => false);
+    if (!actionable) {
+      continue;
+    }
+    const clicked = await candidate.click().then(() => true).catch(() => false);
+    if (clicked) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function readAskBaseline(page: Page): Promise<AskBaseline> {
@@ -3705,6 +3785,7 @@ function normalizeAskBaseline(baseline: AskBaseline): AskBaseline {
     assistantMessageCount: Number.isFinite(baseline.assistantMessageCount)
       ? Math.max(0, Math.floor(baseline.assistantMessageCount))
       : 0,
+    conversationId: normalizeOptionalString(baseline.conversationId),
     messageId: normalizeOptionalString(baseline.messageId),
     text: baseline.text ?? "",
   };
