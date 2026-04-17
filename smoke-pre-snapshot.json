@@ -1,0 +1,16 @@
+{
+  "url": "https://chatgpt.com/",
+  "baseline": {
+    "assistantMessageCount": 0,
+    "messageId": null,
+    "text": ""
+  },
+  "latest": {
+    "hasAssistantMessage": false,
+    "text": "",
+    "state": "idle",
+    "conversationId": null,
+    "messageId": null,
+    "currentUrl": "https://chatgpt.com/"
+  }
+}

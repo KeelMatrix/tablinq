@@ -904,6 +904,7 @@ export class BrowserAdapter {
       knownConversationId: command.conversationId ?? null,
       knownMessageId: null as string | null,
       askBaseline,
+      pendingTextReconciliation: false,
       lastProgressAt: Date.now(),
       recoveryAttempts: 0,
       lastStatusAt: 0,
@@ -956,6 +957,12 @@ export class BrowserAdapter {
       }
 
       this.rememberAskSnapshot(state, snapshot);
+      if (
+        state.pendingTextReconciliation &&
+        textRelation(state.emittedText, snapshot.text) !== "mismatch"
+      ) {
+        state.pendingTextReconciliation = false;
+      }
       const progressed = await this.applyAskSnapshot(
         command,
         state,
@@ -990,6 +997,15 @@ export class BrowserAdapter {
           state.lastProgressAt = Date.now();
         }
         if (snapshot.state === "done") {
+          if (
+            state.pendingTextReconciliation &&
+            !canFinalizeRecoveredAskText(state.emittedText, snapshot.text)
+          ) {
+            throw new Error(
+              "interrupted ask could not be reconciled against the live conversation",
+            );
+          }
+          state.pendingTextReconciliation = false;
           return this.finalizeAsk(command, page, state, snapshot, onChunk);
         }
         state.doneStreak = 0;
@@ -1379,6 +1395,7 @@ export class BrowserAdapter {
       knownConversationId: string | null;
       knownMessageId: string | null;
       askBaseline: AskBaseline | null;
+      pendingTextReconciliation: boolean;
       recoveryAttempts: number;
       lastStatusAt: number;
     },
@@ -1414,47 +1431,70 @@ export class BrowserAdapter {
     let snapshot: AskSnapshot | null = null;
     while (Date.now() < timeoutAt) {
       const candidate = await readAskSnapshot(recoveredPage, state.askBaseline);
-      this.rememberAskSnapshot(state, candidate);
       const relation = textRelation(state.emittedText, candidate.text);
       const relationIsUsable = relation === "same" || relation === "ahead";
       const commandConversationId = normalizeOptionalString(
         state.knownConversationId ?? command.conversationId,
       );
+      const commandMessageId = normalizeOptionalString(state.knownMessageId);
       const snapshotConversationId =
         normalizeOptionalString(candidate.conversationId) ??
         conversationIdFromUrl(candidate.currentUrl);
+      const snapshotMessageId = normalizeOptionalString(candidate.messageId);
       const normalizedConversationId =
         snapshotConversationId ?? commandConversationId;
       const conversationMatches =
         !commandConversationId ||
         !snapshotConversationId ||
         commandConversationId === snapshotConversationId;
+      const messageMatches =
+        commandMessageId !== null &&
+        snapshotMessageId !== null &&
+        commandMessageId === snapshotMessageId;
+      const messageMismatch =
+        commandMessageId !== null &&
+        snapshotMessageId !== null &&
+        commandMessageId !== snapshotMessageId;
       const hasAssistantSignal =
         candidate.hasAssistantMessage &&
         (candidate.messageId !== null || candidate.text.length > 0);
-      const canContinue =
+      const sameMessageDrift =
         conversationMatches &&
-        relationIsUsable &&
+        messageMatches &&
         (candidate.state === "running" || candidate.state === "done") &&
         hasAssistantSignal;
-      const hardMismatch =
-        !conversationMatches || relation === "mismatch";
+      const canContinue =
+        conversationMatches &&
+        !messageMismatch &&
+        (relationIsUsable || sameMessageDrift) &&
+        (candidate.state === "running" || candidate.state === "done") &&
+        hasAssistantSignal;
+      const hardMismatch = !conversationMatches || messageMismatch;
       logRecoveryDecision("ask", {
         commandConversationId,
+        commandMessageId,
         snapshotConversationId,
+        snapshotMessageId,
         snapshotCurrentUrl: candidate.currentUrl,
         normalizedConversationId,
         relation,
         conversationMatches,
+        messageMatches,
+        messageMismatch,
         hasAssistantSignal,
         snapshotState: candidate.state,
         emittedTextLength: state.emittedText.length,
         observedTextLength: candidate.text.length,
         hasAssistantMessage: candidate.hasAssistantMessage,
+        sameMessageDrift,
         hardMismatch,
         canContinue,
       });
       if (canContinue) {
+        this.rememberAskSnapshot(state, candidate);
+        if (relation === "mismatch" && sameMessageDrift) {
+          state.pendingTextReconciliation = true;
+        }
         snapshot = candidate;
         break;
       }
@@ -1513,6 +1553,15 @@ export class BrowserAdapter {
     }
     if (snapshot.state === "done") {
       state.doneStreak = STABLE_DONE_POLLS;
+      if (
+        state.pendingTextReconciliation &&
+        !canFinalizeRecoveredAskText(state.emittedText, snapshot.text)
+      ) {
+        throw new Error(
+          "interrupted ask could not be reconciled against the live conversation",
+        );
+      }
+      state.pendingTextReconciliation = false;
       return {
         page: recoveredPage,
         result: await this.finalizeAsk(
@@ -2777,6 +2826,54 @@ function sameAskCompletionSnapshot(
     left.conversationId === right.conversationId &&
     left.messageId === right.messageId &&
     left.currentUrl === right.currentUrl
+  );
+}
+
+function canFinalizeRecoveredAskText(
+  emittedText: string,
+  finalText: string,
+): boolean {
+  const relation = textRelation(emittedText, finalText);
+  if (relation !== "mismatch") {
+    return true;
+  }
+  return placeholderCompatibleText(emittedText, finalText);
+}
+
+function placeholderCompatibleText(left: string, right: string): boolean {
+  const leftChars = Array.from(left);
+  const rightChars = Array.from(right);
+  const sharedLength = Math.min(leftChars.length, rightChars.length);
+
+  for (let index = 0; index < sharedLength; index += 1) {
+    const leftChar = leftChars[index];
+    const rightChar = rightChars[index];
+    if (leftChar === rightChar) {
+      continue;
+    }
+    if (
+      isTransientPlaceholderChar(leftChar) ||
+      isTransientPlaceholderChar(rightChar)
+    ) {
+      continue;
+    }
+    return false;
+  }
+
+  return leftChars
+    .slice(sharedLength)
+    .concat(rightChars.slice(sharedLength))
+    .every((char) => isTransientPlaceholderChar(char));
+}
+
+function isTransientPlaceholderChar(char: string): boolean {
+  return (
+    char === "_" ||
+    char === "…" ||
+    char === "·" ||
+    char === "•" ||
+    char === "█" ||
+    char === "▌"
   );
 }
 
