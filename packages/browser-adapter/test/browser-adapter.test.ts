@@ -31,6 +31,7 @@ function withHarnessUrl(
       | "submit-never-ready"
       | "submit-upload-trap"
       | "submit-upload-trap-no-keyboard"
+      | "submit-upload-stale-recover"
       | "followup-rich-text"
       | "followup-stale"
       | "done-early"
@@ -1604,6 +1605,51 @@ describe("browser adapter", () => {
       lastSubmissionMethod: "keyboard",
       uploadChips: 1,
       plusPresent: true,
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers when upload acknowledgment leaves a stale visible send control ahead of the active composer", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "submit-upload-stale-recover",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-submit-upload-stale-recover",
+        prompt: "repeat attached file",
+        files: [fixture],
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+      staleSubmitClicks: document.body.dataset.staleSubmitClicks,
+      keyboardSubmitReady: document.body.dataset.keyboardSubmitReady,
+    }));
+
+    expect(result.output_text).toBe("Fake response for: repeat attached file");
+    expect(state).toEqual({
+      lastSubmissionMethod: "button",
+      staleSubmitClicks: "1",
+      keyboardSubmitReady: "false",
     });
 
     await adapter.shutdown();

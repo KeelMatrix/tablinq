@@ -12,6 +12,7 @@ const scenario = params.get("scenario") || "success";
 const usesComposerPlusTrap =
   scenario === "submit-upload-trap" ||
   scenario === "submit-upload-trap-no-keyboard";
+const usesStaleSubmitRecovery = scenario === "submit-upload-stale-recover";
 const hasDelayedUploadProcessing = scenario === "upload-processing-delay";
 const hasStuckUploadProcessing = scenario === "upload-processing-stuck";
 const hasBlockedSubmitAfterUpload = scenario === "submit-never-ready";
@@ -21,7 +22,8 @@ const usesDeepResearchLanding =
 const researchSubmissionFails = scenario === "research-deep-landing-submit-fail";
 const keyboardSubmitEnabled =
   scenario !== "submit-upload-trap-no-keyboard" &&
-  scenario !== "submit-never-ready";
+  scenario !== "submit-never-ready" &&
+  scenario !== "submit-upload-stale-recover";
 const requestedInitialModel = params.get("initial_model");
 const initialModel =
   requestedInitialModel === "instant" || requestedInitialModel === "thinking"
@@ -90,6 +92,7 @@ document.body.dataset.conversationId =
 document.body.dataset.lastMessageId = "";
 document.body.dataset.uploadPopoverOpen = "false";
 document.body.dataset.lastSubmissionMethod = "";
+document.body.dataset.staleSubmitClicks = "0";
 document.body.dataset.keyboardSubmitReady = keyboardSubmitEnabled
   ? "true"
   : "false";
@@ -376,6 +379,25 @@ function liveComposerActions() {
   `;
 }
 
+function liveDecoySubmitControl() {
+  if (!usesStaleSubmitRecovery) {
+    return "";
+  }
+  return `
+    <section class="stacked-toolbar" aria-label="decoy controls">
+      <button
+        type="button"
+        id="stale-send-button"
+        data-testid="send-button"
+        aria-label="Send prompt"
+        hidden
+      >
+        Send
+      </button>
+    </section>
+  `;
+}
+
 root.innerHTML =
   variant === "aria"
     ? `
@@ -423,6 +445,7 @@ root.innerHTML =
           ${liveModeControls()}
           ${liveUploadControl()}
         </section>
+        ${liveDecoySubmitControl()}
         <form data-testid="composer-root" class="stacked-composer">
           <textarea
             id="prompt-textarea"
@@ -543,8 +566,9 @@ const composer = document.querySelector(
   "#prompt-textarea, [data-slot='composer'], [role='textbox']",
 );
 const sendButton = document.querySelector(
-  "[data-action='submit'], [aria-label='Submit prompt'], [data-testid='send-button'], [aria-label='Send prompt']",
+  "[data-testid='composer-root'] [data-testid='send-button'], [data-testid='composer-root'] [aria-label='Send prompt'], [data-action='submit'], [aria-label='Submit prompt'], [aria-label='Send prompt']",
 );
+const staleSendButton = document.querySelector("#stale-send-button");
 const composerPlusButton = document.querySelector("#composer-plus-btn");
 const stopButton = document.querySelector("[data-testid='stop-button']");
 const uploadEntry = document.querySelector(
@@ -704,6 +728,9 @@ function syncSubmissionControls() {
   }
   if (composerPlusButton instanceof HTMLElement) {
     composerPlusButton.disabled = running;
+  }
+  if (staleSendButton instanceof HTMLElement) {
+    staleSendButton.hidden = uploadedFiles().length === 0 || running;
   }
   if (stopButton instanceof HTMLElement) {
     stopButton.hidden = !running;
@@ -1357,6 +1384,12 @@ composerPlusButton?.addEventListener("click", () => {
   if (uploadInput instanceof HTMLElement) {
     uploadInput.click();
   }
+});
+
+staleSendButton?.addEventListener("click", () => {
+  document.body.dataset.staleSubmitClicks = String(
+    Number.parseInt(document.body.dataset.staleSubmitClicks || "0", 10) + 1,
+  );
 });
 
 uploadInput?.addEventListener("change", () => {
