@@ -38,6 +38,7 @@ function withHarnessUrl(
       | "stall-recover"
       | "stall-recover-transient"
       | "recover-complete"
+      | "recover-message-successor"
       | "recover-done-transient"
       | "recover-running-transient"
       | "recover-mismatch"
@@ -2130,6 +2131,55 @@ describe("browser adapter", () => {
     const result = await request;
     expect(result.output_text).toBe(
       "Fake response for: Reply with exactly: ASK_OK",
+    );
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers when the assistant message id rotates to a later response in the same conversation", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          scenario: "recover-message-successor",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        scenario: "recover-message-successor",
+      }),
+      headless: true,
+    });
+
+    const states: string[] = [];
+    let closeTriggered = false;
+    const request = adapter.ask(
+      {
+        jobId: "job-ask-recover-message-successor",
+        prompt: "recover after assistant message rotation",
+        timeoutMs: 7000,
+      },
+      async (chunk) => {
+        if (!closeTriggered && chunk.kind === "delta") {
+          closeTriggered = true;
+          await adapter.getManagedPageForTest()!.context().browser()!.close();
+        }
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    const result = await request;
+    expect(result.output_text).toBe(
+      "Fake response for: recover after assistant message rotation",
     );
     expect(states).toContain("interrupted");
     expect(states).toContain("recovered");

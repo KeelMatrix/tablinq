@@ -1238,6 +1238,16 @@ function resumeStreamIfNeeded() {
     finishStream(state);
     return;
   }
+  if (scenario === "recover-message-successor") {
+    state.messageId = uniqueId("msg");
+    state.index = state.responseText.length;
+    writeConversationState(state.conversationId, state.messageId);
+    renderChunk(state);
+    setStreamState("done");
+    setStreamingControls(false);
+    persistState(state);
+    return;
+  }
   if (scenario === "recover-done-transient") {
     state.index = state.responseText.length;
     renderPlaceholderDrift(state);

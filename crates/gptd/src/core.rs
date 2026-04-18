@@ -127,7 +127,7 @@ impl CoreService {
                 }
                 Some(value)
             }
-            (false, None) => db.latest_conversation_id()?,
+            (false, None) => None,
         };
         let mut effective = command.clone();
         effective.conversation_id = conversation_id.clone();
@@ -361,7 +361,7 @@ impl CoreService {
                 }
                 Some(value)
             }
-            (false, None) => db.latest_conversation_id()?,
+            (false, None) => None,
         };
         let mut effective = command.clone();
         effective.conversation_id = conversation_id.clone();
@@ -1524,10 +1524,37 @@ fn unique_destination_path(destination_dir: &Path, file_name: &Path) -> PathBuf 
 #[cfg(test)]
 mod tests {
     use super::{
-        browser_session_identity, current_url_requires_login_or_challenge, recovery_guidance,
+        CoreService, browser_session_identity, current_url_requires_login_or_challenge,
+        recovery_guidance,
     };
-    use crate::AppConfig;
-    use shared_protocol::{AuthSource, BrowserConnectionMode, BrowserOwner, BrowserStatusSnapshot};
+    use crate::{AppConfig, Database};
+    use chrono::Utc;
+    use shared_protocol::{
+        AskCommand, AuthSource, BrowserConnectionMode, BrowserOwner, BrowserStatusSnapshot, Mode,
+        ResearchCommand,
+    };
+
+    fn seed_conversation(config: &AppConfig, conversation_id: &str) {
+        let db = Database::open(&config.paths.db_path).unwrap();
+        let now = Utc::now();
+        db.upsert_session(
+            "session-1",
+            "Browser session",
+            Some("https://chatgpt.com/c/seed"),
+            now,
+        )
+        .unwrap();
+        db.upsert_conversation(
+            conversation_id,
+            "session-1",
+            "Browser conversation",
+            Some(&format!("https://chatgpt.com/c/{conversation_id}")),
+            Some("seed prompt"),
+            Some("seed response"),
+            now,
+        )
+        .unwrap();
+    }
 
     #[test]
     fn attach_session_identity_uses_target_tab_id() {
@@ -1625,5 +1652,47 @@ mod tests {
         assert!(!current_url_requires_login_or_challenge(Some(
             "https://chatgpt.com/c/conv-1"
         )));
+    }
+
+    #[test]
+    fn prepare_ask_does_not_reuse_latest_conversation_without_explicit_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+        seed_conversation(&config, "conv-seeded");
+        let core = CoreService::new(config).unwrap();
+
+        let prepared = core
+            .prepare_ask(AskCommand {
+                prompt: "hello".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
+                mode: Mode::Normal,
+                model_class: None,
+                effort: None,
+                files: vec![],
+            })
+            .unwrap();
+
+        assert_eq!(prepared.command.conversation_id, None);
+    }
+
+    #[test]
+    fn prepare_research_does_not_reuse_latest_conversation_without_explicit_request() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+        seed_conversation(&config, "conv-seeded");
+        let core = CoreService::new(config).unwrap();
+
+        let prepared = core
+            .prepare_research(ResearchCommand {
+                query: "find sources".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
+                files: vec![],
+                output_dir: None,
+            })
+            .unwrap();
+
+        assert_eq!(prepared.command.conversation_id, None);
     }
 }
