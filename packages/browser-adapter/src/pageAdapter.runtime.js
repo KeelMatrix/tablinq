@@ -813,37 +813,337 @@ export function createTablinqPageAdapterRuntime() {
     );
   };
 
-  const collectText = (root) => {
+  const collapseInlineText = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+
+  const normalizeInlineOutput = (value) =>
+    (value ?? "")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n[ \t]+/g, "\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+
+  const findMessageContentRoot = (root) => {
     if (!(root instanceof HTMLElement)) {
+      return null;
+    }
+    return (
+      root.querySelector(".markdown, [data-message-content]") ??
+      root
+    );
+  };
+
+  const collectCodeBlockText = (element) => {
+    if (!(element instanceof HTMLElement)) {
       return "";
     }
-    const blockSelector = [
-      "[data-message-content]",
-      "p",
-      "pre",
-      "li",
-      "blockquote",
-      "h1",
-      "h2",
-      "h3",
-      "h4",
-      "h5",
-      "h6",
-    ].join(", ");
-    const leafBlocks = Array.from(root.querySelectorAll(blockSelector)).filter(
-      (node) =>
-        !Array.from(node.querySelectorAll(blockSelector)).some(
-          (child) => child !== node,
-        ),
-    );
-    const lines = uniqueCollapsed(leafBlocks.map((node) => node.textContent));
+    const explicitCode = element.querySelector("code");
+    if (explicitCode instanceof HTMLElement) {
+      return (explicitCode.innerText || explicitCode.textContent || "").trimEnd();
+    }
+    const editorContent = element.querySelector(".cm-content");
+    if (editorContent instanceof HTMLElement) {
+      return (editorContent.innerText || editorContent.textContent || "").trimEnd();
+    }
+    return (element.innerText || element.textContent || "").trimEnd();
+  };
 
-    if (lines.length > 0) {
-      return lines.join("\n\n");
+  const collectCodeBlockLanguage = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    const explicit =
+      element.getAttribute("data-language") ??
+      element.getAttribute("data-code-language") ??
+      element.dataset.language ??
+      element.dataset.codeLanguage;
+    if (explicit) {
+      return collapseInlineText(explicit).toLowerCase();
+    }
+
+    const candidates = Array.from(
+      element.querySelectorAll(
+        [
+          "[class*='language']",
+          "[class*='font-medium']",
+          "[data-language]",
+          "[data-code-language]",
+        ].join(", "),
+      ),
+    );
+    for (const candidate of candidates) {
+      if (!(candidate instanceof HTMLElement) || candidate.closest("button")) {
+        continue;
+      }
+      const label = collapseInlineText(candidate.textContent);
+      if (
+        label &&
+        !hasToken(label, ["copy", "run", "code", "table"]) &&
+        label.length <= 32
+      ) {
+        return label.toLowerCase();
+      }
+    }
+    return "";
+  };
+
+  const isIgnoredMessageChrome = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (
+      element.matches(
+        "[data-testid='artifact-download'], [data-slot='artifact-link']",
+      )
+    ) {
+      return true;
+    }
+    const ariaLabel = collapseInlineText(element.getAttribute("aria-label"));
+    const text = collapseInlineText(element.textContent);
+    return (
+      element.tagName.toLowerCase() === "a" &&
+      ((Boolean(ariaLabel) && hasToken(ariaLabel, ["download", "artifact"])) ||
+        (element.hasAttribute("download") &&
+          Boolean(text) &&
+          hasToken(text, ["artifact", "download"])))
+    );
+  };
+
+  const serializeInlineNode = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return (node.textContent ?? "").replace(/\s+/g, " ");
+    }
+    if (!(node instanceof HTMLElement)) {
+      return "";
+    }
+    if (isIgnoredMessageChrome(node)) {
+      return "";
+    }
+    const tag = node.tagName.toLowerCase();
+    if (tag === "button") {
+      return "";
+    }
+    if (tag === "br") {
+      return "\n";
+    }
+    if (tag === "code" && node.closest("pre") === null) {
+      return `\`${collapseInlineText(node.textContent)}\``;
+    }
+    if (tag === "strong") {
+      const content = serializeInlineChildren(node);
+      return content ? `**${content}**` : "";
+    }
+    if (tag === "em") {
+      const content = serializeInlineChildren(node);
+      return content ? `*${content}*` : "";
+    }
+    if (tag === "a") {
+      const text = serializeInlineChildren(node);
+      const href = collapseInlineText(node.getAttribute("href"));
+      if (text && href) {
+        return `[${text}](${href})`;
+      }
+      return text;
+    }
+    return serializeInlineChildren(node);
+  };
+
+  const serializeInlineChildren = (element) =>
+    normalizeInlineOutput(
+      Array.from(element.childNodes).map((node) => serializeInlineNode(node)).join(""),
+    );
+
+  const indentLines = (value, prefix, blankPrefix = prefix) =>
+    value
+      .split("\n")
+      .map((line) => (line ? `${prefix}${line}` : blankPrefix.trimEnd()))
+      .join("\n");
+
+  const serializeTable = (table) => {
+    if (!(table instanceof HTMLElement)) {
+      return "";
+    }
+    const rows = Array.from(table.querySelectorAll("tr")).map((row) =>
+      Array.from(row.children)
+        .filter((cell) => cell instanceof HTMLElement)
+        .map((cell) => serializeInlineChildren(cell)),
+    );
+    const header = rows[0] ?? [];
+    if (header.length === 0) {
+      return "";
+    }
+    const body = rows.slice(1);
+    const separator = header.map(() => "---");
+    return [
+      `| ${header.join(" | ")} |`,
+      `| ${separator.join(" | ")} |`,
+      ...body.map((row) => `| ${row.join(" | ")} |`),
+    ].join("\n");
+  };
+
+  const serializeListItem = (item, prefix, options = {}) => {
+    if (!(item instanceof HTMLElement)) {
+      return "";
+    }
+    const childElements = Array.from(item.children).filter(
+      (child) =>
+        child instanceof HTMLElement &&
+        child.tagName.toLowerCase() !== "button" &&
+        !isIgnoredMessageChrome(child),
+    );
+    const nestedLists = childElements.filter((child) =>
+      ["ul", "ol"].includes(child.tagName.toLowerCase()),
+    );
+    const contentElements = childElements.filter(
+      (child) => !["ul", "ol"].includes(child.tagName.toLowerCase()),
+    );
+    const content =
+      contentElements.length > 0
+        ? contentElements
+            .map((child, index) =>
+              serializeBlock(child, {
+                ...options,
+                isLastBlock:
+                  nestedLists.length === 0 &&
+                  index === contentElements.length - 1 &&
+                  options.isLastBlock,
+              }),
+            )
+            .filter(Boolean)
+            .join("\n\n")
+        : serializeInlineChildren(item);
+    const normalized = normalizeInlineOutput(content);
+    if (!normalized) {
+      return "";
+    }
+    const lines = normalized.split("\n");
+    const firstLine = `${prefix}${lines[0]}`;
+    const continuationPrefix = " ".repeat(prefix.length);
+    const rest = lines
+      .slice(1)
+      .map((line) => `${continuationPrefix}${line}`)
+      .join("\n");
+    const nested = nestedLists
+      .map((list, index) =>
+        serializeBlock(list, {
+          ...options,
+          isLastBlock: index === nestedLists.length - 1 && options.isLastBlock,
+        }),
+      )
+      .filter(Boolean)
+      .map((value) => indentLines(value, continuationPrefix, continuationPrefix))
+      .join("\n");
+    return [firstLine, rest, nested].filter(Boolean).join("\n");
+  };
+
+  const serializeBlock = (element, options = {}) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    if (isIgnoredMessageChrome(element)) {
+      return "";
+    }
+    const tag = element.tagName.toLowerCase();
+    if (tag === "button") {
+      return "";
+    }
+    if (tag === "h1" || tag === "h2" || tag === "h3" || tag === "h4" || tag === "h5" || tag === "h6") {
+      const level = Number(tag.slice(1));
+      return `${"#".repeat(level)} ${serializeInlineChildren(element)}`.trim();
+    }
+    if (tag === "p") {
+      return serializeInlineChildren(element);
+    }
+    if (tag === "blockquote") {
+      const content = serializeBlockChildren(element);
+      return content ? indentLines(content, "> ", ">") : "";
+    }
+    if (tag === "pre") {
+      const code = collectCodeBlockText(element);
+      if (!code) {
+        return "";
+      }
+      const language = collectCodeBlockLanguage(element);
+      if (options.streamRunning && options.isLastBlock) {
+        return `\`\`\`${language}\n${code}`;
+      }
+      return `\`\`\`${language}\n${code}\n\`\`\``;
+    }
+    if (tag === "ul") {
+      return Array.from(element.children)
+        .map((child, index, items) =>
+          serializeListItem(child, "- ", {
+            ...options,
+            isLastBlock: index === items.length - 1 && options.isLastBlock,
+          }),
+        )
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (tag === "ol") {
+      return Array.from(element.children)
+        .map((child, index, items) =>
+          serializeListItem(child, `${index + 1}. `, {
+            ...options,
+            isLastBlock: index === items.length - 1 && options.isLastBlock,
+          }),
+        )
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (tag === "table") {
+      return serializeTable(element);
+    }
+    return serializeBlockChildren(element, options);
+  };
+
+  const serializeBlockChildren = (element, options = {}) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    const blocks = Array.from(element.children)
+      .map((child, index, items) => ({
+        tag: child instanceof HTMLElement ? child.tagName.toLowerCase() : "",
+        text: serializeBlock(child, {
+          ...options,
+          isLastBlock: index === items.length - 1 && options.isLastBlock,
+        }),
+      }))
+      .filter((entry) => Boolean(entry.text));
+    if (blocks.length > 0) {
+      return blocks.reduce((output, entry, index) => {
+        if (index === 0) {
+          return entry.text;
+        }
+        const previousTag = blocks[index - 1]?.tag ?? "";
+        const joiner =
+          /^h[1-6]$/.test(previousTag) && /^h[1-6]$/.test(entry.tag)
+            ? "\n"
+            : "\n\n";
+        return `${output}${joiner}${entry.text}`;
+      }, "");
+    }
+    return serializeInlineChildren(element);
+  };
+
+  const collectText = (root) => {
+    const contentRoot = findMessageContentRoot(root);
+    if (!(contentRoot instanceof HTMLElement)) {
+      return "";
+    }
+    const streamRunning =
+      (root?.getAttribute?.("data-stream-state") ??
+        document.body.dataset.streamState ??
+        "idle") === "running";
+    const serialized = serializeBlockChildren(contentRoot, {
+      isLastBlock: true,
+      streamRunning,
+    });
+    if (serialized) {
+      return serialized;
     }
 
     const directText = uniqueCollapsed(
-      Array.from(root.childNodes)
+      Array.from(contentRoot.childNodes)
         .filter((node) => node.nodeType === Node.TEXT_NODE)
         .map((node) => node.textContent),
     );

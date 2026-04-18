@@ -999,7 +999,11 @@ export class BrowserAdapter {
         if (snapshot.state === "done") {
           if (
             state.pendingTextReconciliation &&
-            !canFinalizeRecoveredAskText(state.emittedText, snapshot.text)
+            !canFinalizeRecoveredAskSnapshot(
+              state.emittedText,
+              state.knownMessageId,
+              snapshot,
+            )
           ) {
             throw new Error(
               "interrupted ask could not be reconciled against the live conversation",
@@ -1561,7 +1565,11 @@ export class BrowserAdapter {
       state.doneStreak = STABLE_DONE_POLLS;
       if (
         state.pendingTextReconciliation &&
-        !canFinalizeRecoveredAskText(state.emittedText, snapshot.text)
+        !canFinalizeRecoveredAskSnapshot(
+          state.emittedText,
+          state.knownMessageId,
+          snapshot,
+        )
       ) {
         throw new Error(
           "interrupted ask could not be reconciled against the live conversation",
@@ -2844,6 +2852,60 @@ function canFinalizeRecoveredAskText(
     return true;
   }
   return placeholderCompatibleText(emittedText, finalText);
+}
+
+function canFinalizeRecoveredAskSnapshot(
+  emittedText: string,
+  knownMessageId: string | null,
+  snapshot: Pick<AskSnapshot, "messageId" | "text">,
+): boolean {
+  if (canFinalizeRecoveredAskText(emittedText, snapshot.text)) {
+    return true;
+  }
+  if (
+    !knownMessageId ||
+    !snapshot.messageId ||
+    snapshot.messageId !== knownMessageId
+  ) {
+    return false;
+  }
+  return markdownCompatibleRecoveredText(emittedText, snapshot.text);
+}
+
+function markdownCompatibleRecoveredText(
+  emittedText: string,
+  finalText: string,
+): boolean {
+  const normalizedEmitted = normalizeRecoveredAskText(emittedText);
+  const normalizedFinal = normalizeRecoveredAskText(finalText);
+  if (!normalizedEmitted || !normalizedFinal) {
+    return false;
+  }
+  const shorterLength = Math.min(
+    normalizedEmitted.length,
+    normalizedFinal.length,
+  );
+  if (shorterLength < 4) {
+    return false;
+  }
+  return textRelation(normalizedEmitted, normalizedFinal) !== "mismatch";
+}
+
+function normalizeRecoveredAskText(text: string): string {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/^```[^\n]*\n?/gm, "")
+    .replace(/^```$/gm, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^>\s?/gm, "")
+    .replace(/^(\s*)(?:[-*+]|\d+\.)\s+/gm, "$1")
+    .replace(/^\|?(?:\s*:?-+:?\s*\|)+\s*$/gm, "")
+    .replace(/`/g, "")
+    .replace(/[*_~]/g, "")
+    .replace(/^\s*\|\s*/gm, "")
+    .replace(/\s*\|\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function placeholderCompatibleText(left: string, right: string): boolean {
