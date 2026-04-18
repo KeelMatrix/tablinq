@@ -63,6 +63,9 @@ function conversationWorkspacePathname(pathname) {
   ) {
     return pathnameFromSegments(segments.slice(0, -2));
   }
+  if (segments[segments.length - 1]?.toLowerCase() === "deep-research") {
+    return pathnameFromSegments(segments.slice(0, -1));
+  }
   return pathnameFromSegments(segments);
 }
 
@@ -239,14 +242,28 @@ function menuModelControls() {
 }
 
 function liveModeControls() {
-  return [
-    hasControl("search")
-      ? `<button type="button" data-mode="search" aria-label="Search" aria-pressed="false">Search</button>`
-      : "",
-    hasControl("research")
-      ? `<button type="button" data-mode="research" aria-label="Deep research" aria-pressed="false">Deep research</button>`
-      : "",
-  ].join("");
+  return hasControl("search")
+    ? `<button type="button" data-mode="search" aria-label="Search" aria-pressed="false">Search</button>`
+    : "";
+}
+
+function liveSidebarNav() {
+  if (variant !== "live" && variant !== "menu") {
+    return "";
+  }
+  return `
+    <nav class="stacked-toolbar" aria-label="workspace navigation">
+      <a href="/apps" data-testid="apps-button">Apps</a>
+      ${
+        hasControl("research")
+          ? `<a href="${deepResearchPathname(window.location.pathname)}" data-testid="deep-research-sidebar-item" id="deep-research-nav">Deep research</a>`
+          : ""
+      }
+      <a href="/codex/cloud">Codex</a>
+      <a href="/gpts" data-testid="explore-gpts-button">GPTs</a>
+      <button type="button" id="projects-nav-button">Projects</button>
+    </nav>
+  `;
 }
 
 function liveEffortControls() {
@@ -449,6 +466,7 @@ root.innerHTML =
     : variant === "live"
     ? `
       <main aria-label="chatgpt workspace">
+        ${liveSidebarNav()}
         <section class="stacked-toolbar">
           ${liveModelControls()}
           ${liveModeControls()}
@@ -500,6 +518,7 @@ root.innerHTML =
       : variant === "menu"
         ? `
       <main aria-label="chatgpt workspace">
+        ${liveSidebarNav()}
         <section class="stacked-toolbar">
           ${menuModelControls()}
           ${liveModeControls()}
@@ -688,6 +707,10 @@ function enterDeepResearchLanding() {
   }
 }
 
+function onDeepResearchLanding() {
+  return pathnameSegments(window.location.pathname).includes("deep-research");
+}
+
 function setUploadPopoverOpen(open) {
   document.body.dataset.uploadPopoverOpen = open ? "true" : "false";
 }
@@ -796,7 +819,7 @@ function submitPrompt(method) {
     "value" in composer ? composer.value.trim() : composer.textContent.trim();
   if (
     document.body.dataset.selectedMode === "research" &&
-    (scenario.startsWith("research-") || usesDeepResearchLanding)
+    (scenario.startsWith("research-") || onDeepResearchLanding())
   ) {
     if (researchSubmissionFails) {
       return;
@@ -879,6 +902,16 @@ function syncSelectedState() {
     element.setAttribute("aria-pressed", selected ? "true" : "false");
     element.dataset.selected = selected ? "true" : "false";
   });
+  const deepResearchNav = document.querySelector("#deep-research-nav");
+  if (deepResearchNav instanceof HTMLElement) {
+    const selected = selectedMode === "research" || onDeepResearchLanding();
+    deepResearchNav.dataset.selected = selected ? "true" : "false";
+    if (selected) {
+      deepResearchNav.setAttribute("aria-current", "page");
+    } else {
+      deepResearchNav.removeAttribute("aria-current");
+    }
+  }
 
   syncModernMenuOption(
     "#model-option-instant",
@@ -1431,6 +1464,13 @@ document.querySelectorAll("[data-mode]").forEach((element) => {
     }
     syncSelectedState();
   });
+});
+
+document.querySelector("#deep-research-nav")?.addEventListener("click", (event) => {
+  event.preventDefault();
+  document.body.dataset.selectedMode = "research";
+  enterDeepResearchLanding();
+  syncSelectedState();
 });
 
 uploadEntry?.addEventListener("click", () => {
