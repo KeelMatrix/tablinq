@@ -1509,6 +1509,48 @@ export function createTablinqPageAdapterRuntime() {
     element.closest(popupRootSelector) !== null &&
     hasToken(accessibleName(element), ["standard", "extended"]);
 
+  const elementPathname = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    const href =
+      element.getAttribute("href") ??
+      (element instanceof HTMLAnchorElement ? element.href : "");
+    if (!href) {
+      return "";
+    }
+    try {
+      return new URL(href, window.location.href).pathname.toLowerCase();
+    } catch {
+      return "";
+    }
+  };
+
+  const pathnameHasSegment = (pathname, segment) =>
+    pathname.split("/").filter(Boolean).includes(segment);
+
+  const isSearchModeControl = (element) =>
+    element instanceof HTMLElement &&
+    (element.matches("[data-mode='search']") ||
+      element.matches("button[aria-label*='Search']") ||
+      element.matches("button[aria-label*='web']") ||
+      hasToken(accessibleName(element), ["search", "browse the web"]));
+
+  const isResearchModeControl = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (element.matches("[data-mode='research']")) {
+      return true;
+    }
+    const pathname = elementPathname(element);
+    return (
+      element.getAttribute("data-testid") === "deep-research-sidebar-item" ||
+      pathnameHasSegment(pathname, "deep-research") ||
+      hasToken(accessibleName(element), ["deep research"])
+    );
+  };
+
   const discoverVisibleAliases = ({ keys, exclude }) => {
     const discovered = {};
     for (const element of actionableElements()) {
@@ -1835,13 +1877,16 @@ export function createTablinqPageAdapterRuntime() {
               "button[aria-label*='web']",
             ]
           : [
+              "a[data-testid='deep-research-sidebar-item']",
+              "a[href='/deep-research']",
+              "a[href$='/deep-research']",
               "[data-mode='research']",
-              "button[aria-label*='Research']",
               "button[aria-label*='Deep research']",
             ],
       aliases,
       fallbackTokens:
-        mode === "search" ? ["search", "browse", "web"] : ["research", "deep"],
+        mode === "search" ? ["search", "browse", "web"] : ["deep research"],
+      include: mode === "search" ? isSearchModeControl : isResearchModeControl,
     });
     if (!control) {
       throwUiDrift(`could not find ${mode} mode control after probing it`);

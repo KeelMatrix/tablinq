@@ -1654,10 +1654,17 @@ export class BrowserAdapter {
         !commandConversationId ||
         !snapshotConversationId ||
         commandConversationId === snapshotConversationId;
+      const messageMatches =
+        !state.knownMessageId ||
+        !candidate.messageId ||
+        state.knownMessageId === candidate.messageId;
       const hasIdentity = Boolean(normalizedConversationId);
+      const compatibleText =
+        relation !== "mismatch" || (conversationMatches && messageMatches);
       const canContinue =
         conversationMatches &&
-        relation !== "mismatch" &&
+        messageMatches &&
+        compatibleText &&
         (candidate.status === "waiting_for_sources" ||
           candidate.status === "running" ||
           candidate.status === "done") &&
@@ -1666,6 +1673,7 @@ export class BrowserAdapter {
           candidate.reportText.length > 0);
       const awaitingLiveState =
         hasIdentity &&
+        messageMatches &&
         candidate.status === "running" &&
         candidate.reportText.length === 0;
       logRecoveryDecision("research", {
@@ -1675,10 +1683,12 @@ export class BrowserAdapter {
         normalizedConversationId,
         relation,
         conversationMatches,
+        messageMatches,
         hasIdentity,
         snapshotState: candidate.status,
         emittedTextLength: state.emittedText.length,
         observedTextLength: candidate.reportText.length,
+        compatibleText,
         awaitingLiveState,
         canContinue,
       });
@@ -1686,7 +1696,11 @@ export class BrowserAdapter {
         snapshot = candidate;
         break;
       }
-      if (!conversationMatches || relation === "mismatch" || !awaitingLiveState) {
+      if (
+        !conversationMatches ||
+        !messageMatches ||
+        (!compatibleText && !awaitingLiveState)
+      ) {
         throw new Error(
           "interrupted research job could not be reconciled against the live conversation",
         );
@@ -3472,15 +3486,49 @@ async function ensureConfiguredMode(
     page.locator(
       mode === "search"
         ? "[data-mode='search'], button[aria-label*='Search'], button[aria-label*='web']"
-        : "[data-mode='research'], button[aria-label*='Research'], button[aria-label*='Deep research']",
+        : [
+            "a[data-testid='deep-research-sidebar-item']",
+            "a[href='/deep-research']",
+            "a[href$='/deep-research']",
+            "[data-mode='research']",
+            "button[aria-label*='Deep research']",
+          ].join(", "),
     ),
     INTERACTION_TIMEOUT_MS,
   );
   if (!locator) {
     throw new Error(`ui drift: could not find ${mode} mode control after probing it`);
   }
-  if ((await locator.getAttribute("aria-pressed")) !== "true") {
+  const isActive =
+    mode === "research"
+      ? page.url().toLowerCase().includes("/deep-research")
+      : (await locator.getAttribute("aria-pressed")) === "true";
+  if (!isActive) {
+    await activateModeControl(locator);
+  }
+}
+
+async function activateModeControl(locator: Locator): Promise<void> {
+  try {
     await locator.click();
+    return;
+  } catch (error) {
+    if (!(error instanceof Error) || !/intercepts pointer events/i.test(error.message)) {
+      throw error;
+    }
+  }
+
+  try {
+    await locator.click({ force: true });
+    return;
+  } catch {
+    await locator.evaluate((element) => {
+      if (!(element instanceof HTMLElement)) {
+        throw new Error("mode control is not actionable");
+      }
+      element.focus();
+      element.click();
+    });
   }
 }
 
@@ -3493,7 +3541,20 @@ async function uploadAttachments(
     return;
   }
 
-  if (!report?.matrix.upload_control_visible) {
+  const uploadSurface = page.locator(
+    [
+      "input[type='file']",
+      "[data-slot='upload-entry']",
+      "[data-testid='upload-button']",
+      "button[aria-label*='Add photos']",
+      "button[aria-label*='Add files']",
+      "label[for]",
+    ].join(", "),
+  );
+  if (
+    !report?.matrix.upload_control_visible &&
+    (await uploadSurface.count().catch(() => 0)) === 0
+  ) {
     throw new Error(
       "upload failed: no upload control is available in the current browser session",
     );

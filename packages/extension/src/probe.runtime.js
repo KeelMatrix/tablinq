@@ -289,6 +289,48 @@ export function probeDocument(options = {}) {
     element.closest(popupRootSelector) !== null &&
     hasToken(accessibleName(element), ["standard", "extended"]);
 
+  const elementPathname = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    const href =
+      element.getAttribute("href") ??
+      (element instanceof HTMLAnchorElement ? element.href : "");
+    if (!href) {
+      return "";
+    }
+    try {
+      return new URL(href, window.location.href).pathname.toLowerCase();
+    } catch {
+      return "";
+    }
+  };
+
+  const pathnameHasSegment = (pathname, segment) =>
+    pathname.split("/").filter(Boolean).includes(segment);
+
+  const isSearchModeControl = (element) =>
+    element instanceof HTMLElement &&
+    (element.matches("[data-mode='search']") ||
+      element.matches("button[aria-label*='Search']") ||
+      element.matches("button[aria-label*='web']") ||
+      hasToken(accessibleName(element), ["search", "browse the web"]));
+
+  const isResearchModeControl = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (element.matches("[data-mode='research']")) {
+      return true;
+    }
+    const pathname = elementPathname(element);
+    return (
+      element.getAttribute("data-testid") === "deep-research-sidebar-item" ||
+      pathnameHasSegment(pathname, "deep-research") ||
+      hasToken(accessibleName(element), ["deep research"])
+    );
+  };
+
   const visiblePopupRootsFor = (include, trigger = null) => {
     const roots = [];
     if (trigger instanceof HTMLElement) {
@@ -617,12 +659,18 @@ export function probeDocument(options = {}) {
             firstVisibleBySelectors([
               "button[aria-label*='Search']",
               "button[aria-label*='web']",
-            ]) ?? findNamedControl(["search", "browse", "web"]),
+            ]) ??
+            findNamedControl(["search", "browse", "web"], {
+              include: isSearchModeControl,
+            }),
         },
         {
           id: "aria-search-toggle",
           score: 0.88,
-          find: () => findNamedControl(["search", "browse", "web"]),
+          find: () =>
+            findNamedControl(["search", "browse", "web"], {
+              include: isSearchModeControl,
+            }),
         },
       ],
     },
@@ -630,23 +678,38 @@ export function probeDocument(options = {}) {
       key: "research_mode_visible",
       strategies: [
         {
-          id: "data-mode-research",
+          id: "deep-research-anchor",
           score: 1,
-          find: () => firstVisibleBySelector("[data-mode='research']"),
+          find: () =>
+            firstVisibleBySelectors([
+              "a[data-testid='deep-research-sidebar-item']",
+              "a[href='/deep-research']",
+              "a[href$='/deep-research']",
+              "[data-mode='research']",
+            ]),
         },
         {
           id: "chatgpt-research-toggle",
           score: 0.92,
           find: () =>
             firstVisibleBySelectors([
+              "a[data-testid='deep-research-sidebar-item']",
+              "a[href='/deep-research']",
+              "a[href$='/deep-research']",
               "button[aria-label*='Research']",
               "button[aria-label*='Deep research']",
-            ]) ?? findNamedControl(["research", "deep research"]),
+            ]) ??
+            findNamedControl(["deep research"], {
+              include: isResearchModeControl,
+            }),
         },
         {
           id: "aria-research-toggle",
           score: 0.88,
-          find: () => findNamedControl(["research", "deep research"]),
+          find: () =>
+            findNamedControl(["deep research"], {
+              include: isResearchModeControl,
+            }),
         },
       ],
     },
@@ -802,6 +865,12 @@ export function probeDocument(options = {}) {
         pushName(name);
       }
     }
+    if (capability === "search_mode_visible" && isSearchModeControl(element)) {
+      pushName("search");
+    }
+    if (capability === "research_mode_visible" && isResearchModeControl(element)) {
+      pushName("deep research");
+    }
     return names;
   };
 
@@ -845,12 +914,16 @@ export function probeDocument(options = {}) {
     }
     if (capability === "search_mode_visible") {
       for (const name of names) {
-        addAlias("modes", "search", name);
+        if (hasToken(name, ["search", "browse the web"])) {
+          addAlias("modes", "search", name);
+        }
       }
     }
     if (capability === "research_mode_visible") {
       for (const name of names) {
-        addAlias("modes", "research", name);
+        if (hasToken(name, ["deep research"])) {
+          addAlias("modes", "research", name);
+        }
       }
     }
   };

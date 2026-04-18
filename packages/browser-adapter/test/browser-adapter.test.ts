@@ -368,6 +368,33 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("captures only Deep research aliases from the live sidebar nav cluster", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+
+    const snapshot = await adapter.open({ targetUrl, headless: true });
+    const researchAliases =
+      snapshot.capability_report?.aliases.modes.research ?? [];
+
+    expect(snapshot.capability_report?.matrix.research_mode_visible).toBe(true);
+    expect(researchAliases).toContain("deep research");
+    expect(researchAliases).not.toContain("apps");
+    expect(researchAliases).not.toContain("codex");
+    expect(researchAliases).not.toContain("gpts");
+    expect(researchAliases).not.toContain("projects");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("reuses the managed page on repeated open", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -1356,6 +1383,7 @@ describe("browser adapter", () => {
     const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
       currentUrl: window.location.href,
       composerReady: Boolean(document.querySelector("#prompt-textarea")),
+      researchLandingVisited: document.body.dataset.researchLandingVisited,
       sendHidden:
         document
           .querySelector("[data-testid='send-button']")
@@ -1374,10 +1402,11 @@ describe("browser adapter", () => {
         result.conversation_id,
       ),
       composerReady: true,
+      researchLandingVisited: "true",
       sendHidden: false,
       stopHidden: true,
     });
-    expect(result.output_text).toBe("Fake response for: configure live");
+    expect(result.output_text).toContain("Research report for: configure live");
     expect(result.artifacts).toHaveLength(1);
     expect(artifactBody).toContain("Mode: research");
     expect(artifactBody).toContain("Model: thinking");
@@ -2546,6 +2575,65 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("recovers a live research job after the client reconnects to an attached browser", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "research-success",
+    });
+    const attached = await startTrackedAttachableBrowser(targetUrl);
+
+    await withAttachedBrowser(attached.endpoint, async (browser) => {
+      const page = browser.contexts()[0]!.pages()[0]!;
+      await page.waitForLoadState("domcontentloaded");
+      await page.locator("[data-mode='research']").click();
+      await page
+        .locator("[data-slot='composer']")
+        .fill("reconnect to a running deep research job");
+      await page.locator("[data-action='submit']").click();
+      await page.waitForTimeout(250);
+    });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const states: string[] = [];
+    const updates: string[] = [];
+    const result = await adapter.recoverResearch(
+      {
+        jobId: "job-research-recover-attached-client",
+        query: "reconnect to a running deep research job",
+        timeoutMs: 7_000,
+      },
+      { emittedText: "", nextSeq: 0 },
+      (update) => {
+        updates.push(update.status);
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    expect(result.report_text).toContain(
+      "Research report for: reconnect to a running deep research job",
+    );
+    expect(updates).toContain("running");
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+    expect(result.current_url).toContain(`/c/${result.conversation_id}`);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("streams ask responses to completion in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
     const adapter = await createTrackedAdapterForMode("attach", server.url);
@@ -2606,7 +2694,9 @@ describe("browser adapter", () => {
       "utf8",
     );
 
-    expect(result.output_text).toBe("Fake response for: configure attach live");
+    expect(result.output_text).toContain(
+      "Research report for: configure attach live",
+    );
     expect(result.artifacts).toHaveLength(1);
     expect(artifactBody).toContain("Model: thinking");
     expect(artifactBody).toContain("Effort: extended");
