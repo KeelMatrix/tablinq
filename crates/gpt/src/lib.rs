@@ -767,6 +767,7 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
     let _interrupt_guard = install_execution_interrupt_sender(interrupt_tx)?;
 
     let mut stdout = io::stdout();
+    let stream_responses = stdout.is_terminal();
     let mut printed_any = false;
     let mut streamed_text = String::new();
     let green_responses = ansi_green_enabled_for_stdout();
@@ -810,13 +811,15 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
                         current_job_id = Some(chunk.job_id.clone());
                         if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
                             streamed_text.push_str(&chunk.text);
-                            write_response_chunk(
-                                &mut stdout,
-                                &chunk.text,
-                                green_responses,
-                                &mut response_color_active,
-                            )?;
-                            printed_any = true;
+                            if stream_responses {
+                                write_response_chunk(
+                                    &mut stdout,
+                                    &chunk.text,
+                                    green_responses,
+                                    &mut response_color_active,
+                                )?;
+                                printed_any = true;
+                            }
                         }
                     }
                     EventPayload::JobState(state) => {
@@ -869,6 +872,7 @@ fn execute_research_with_terminal_presentation(
     let _interrupt_guard = install_execution_interrupt_sender(interrupt_tx)?;
 
     let mut stdout = io::stdout();
+    let stream_responses = stdout.is_terminal();
     let mut stderr = io::stderr();
     let mut printed_any = false;
     let green_responses = ansi_green_enabled_for_stdout();
@@ -911,13 +915,15 @@ fn execute_research_with_terminal_presentation(
                 EventPayload::StreamChunk(chunk) => match chunk.kind {
                     StreamChunkKind::Delta if !chunk.text.is_empty() => {
                         current_job_id = Some(chunk.job_id.clone());
-                        write_response_chunk(
-                            &mut stdout,
-                            &chunk.text,
-                            green_responses,
-                            &mut response_color_active,
-                        )?;
-                        printed_any = true;
+                        if stream_responses {
+                            write_response_chunk(
+                                &mut stdout,
+                                &chunk.text,
+                                green_responses,
+                                &mut response_color_active,
+                            )?;
+                            printed_any = true;
+                        }
                     }
                     StreamChunkKind::Done if printed_any => {
                         finish_terminal_stream(

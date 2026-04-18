@@ -72,6 +72,15 @@ function conversationPathname(pathname, conversationId) {
   return pathnameFromSegments(segments);
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function deepResearchPathname(pathname) {
   const segments = pathnameSegments(conversationWorkspacePathname(pathname));
   segments.push("deep-research");
@@ -465,7 +474,8 @@ root.innerHTML =
               <p>Streaming output lands here.</p>
             </div>
             ${
-              scenario === "followup-rich-text"
+              scenario === "followup-rich-text" ||
+              scenario === "recover-rich-markdown"
                 ? ""
                 : `
             <a
@@ -959,6 +969,26 @@ function renderChunk(state) {
   messageArticle?.setAttribute("data-message-id", state.messageId);
 }
 
+function renderRichRecoveryChunk(state) {
+  if (!messageArticle || !(messageMarkdown instanceof HTMLElement)) {
+    renderChunk(state);
+    return;
+  }
+  const promptBody =
+    state.richRecoveryPrompt || "Draft a reusable release-notes prompt.";
+  const outlineItems = Array.isArray(state.richRecoveryOutline)
+    ? state.richRecoveryOutline
+    : ["Goal", "Inputs", "Output"];
+  messageMarkdown.innerHTML = `
+    <pre><code>${escapeHtml(promptBody)}</code></pre>
+    <p><strong>Outline</strong></p>
+    <ol>
+      ${outlineItems.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}
+    </ol>
+  `;
+  messageArticle.setAttribute("data-message-id", state.messageId);
+}
+
 function renderPlaceholderDrift(state) {
   if (!message) {
     return;
@@ -1187,16 +1217,28 @@ function startStream(promptText) {
           "I can explain concepts, write and edit, summarize, brainstorm, tutor, code, debug, analyze data, compare options, plan projects, draft emails/messages, and turn rough notes into polished documents.",
         ]
       : null;
+  const richRecoveryPrompt =
+    scenario === "recover-rich-markdown"
+      ? "Summarize release notes into a concise update with risks and actions."
+      : null;
+  const richRecoveryOutline =
+    scenario === "recover-rich-markdown"
+      ? ["Goal", "Inputs", "Constraints", "Output"]
+      : null;
   const state = {
     conversationId,
     messageId,
     promptText,
     responseText: responseBlocks
       ? responseBlocks.join("\n\n")
+      : richRecoveryPrompt
+        ? `${richRecoveryPrompt}\n\nOutline\n1. Goal\n2. Inputs\n3. Constraints\n4. Output`
       : promptText
         ? `Fake response for: ${promptText}`
         : "Fake response for an empty prompt.",
     responseBlocks,
+    richRecoveryPrompt,
+    richRecoveryOutline,
     index: 0,
     askNumber,
     didReload: false,
@@ -1255,6 +1297,14 @@ function resumeStreamIfNeeded() {
     setStreamingControls(false);
     persistState(state);
     activeTimer = setTimeout(() => finishStream(state), 180);
+    return;
+  }
+  if (scenario === "recover-rich-markdown") {
+    state.index = state.responseText.length;
+    renderRichRecoveryChunk(state);
+    setStreamState("done");
+    setStreamingControls(false);
+    persistState(state);
     return;
   }
   if (scenario === "recover-mismatch") {

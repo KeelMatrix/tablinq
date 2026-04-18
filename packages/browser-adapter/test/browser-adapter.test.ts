@@ -40,6 +40,7 @@ function withHarnessUrl(
       | "recover-complete"
       | "recover-message-successor"
       | "recover-done-transient"
+      | "recover-rich-markdown"
       | "recover-running-transient"
       | "recover-mismatch"
       | "recover-wrong-conversation"
@@ -982,6 +983,115 @@ describe("browser adapter", () => {
     );
 
     await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("serializes rich assistant markdown into terminal-safe markdown text", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.goto(withHarnessUrl(server.url, { variant: "live" }));
+
+    const runtimeSource = await readFile(
+      path.join(process.cwd(), "packages/browser-adapter/src/pageAdapter.runtime.js"),
+      "utf8",
+    );
+    const expected = [
+      "# Heading One",
+      "## Heading Two",
+      "",
+      "Plain text line.",
+      "",
+      "1. First numbered item",
+      "2. Second numbered item",
+      "",
+      "- Bullet one",
+      "- Bullet two",
+      "",
+      "> Blockquote line",
+      "",
+      "Inline `code` example.",
+      "",
+      "```python",
+      'def hello():',
+      '    return "world"',
+      "```",
+      "",
+      "**bold**",
+      "*italic*",
+      "***bold italic***",
+      "",
+      "| col1 | col2 |",
+      "| --- | --- |",
+      "| A | B |",
+      "",
+      "Final sentence.",
+    ].join("\n");
+
+    const snapshot = await page.evaluate(
+      ({ source }) => {
+        const article = document.querySelector(
+          "[data-slot='assistant-message'], [data-message-author-role='assistant']",
+        );
+        if (!(article instanceof HTMLElement)) {
+          throw new Error("assistant article not found");
+        }
+        article.hidden = false;
+        article.setAttribute("data-message-author-role", "assistant");
+        article.setAttribute("data-message-id", "msg-rich-markdown");
+        article.innerHTML = `
+          <div class="markdown prose dark:prose-invert w-full wrap-break-word light markdown-new-styling">
+            <h1>Heading One</h1>
+            <h2>Heading Two</h2>
+            <p>Plain text line.</p>
+            <ol>
+              <li><p>First numbered item</p></li>
+              <li><p>Second numbered item</p></li>
+            </ol>
+            <ul>
+              <li><p>Bullet one</p></li>
+              <li><p>Bullet two</p></li>
+            </ul>
+            <blockquote><p>Blockquote line</p></blockquote>
+            <p>Inline <code>code</code> example.</p>
+            <pre>
+              <div class="text-sm font-medium">Python</div>
+              <button aria-label="Copy"></button>
+              <button aria-label="Run code">Run</button>
+              <div class="cm-content">def hello():\n    return "world"</div>
+            </pre>
+            <p><strong>bold</strong><br><em>italic</em><br><em><strong>bold italic</strong></em></p>
+            <div class="table-container">
+              <table>
+                <thead>
+                  <tr><th>col1</th><th>col2</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td>A</td><td>B</td></tr>
+                </tbody>
+              </table>
+              <button aria-label="Copy table"></button>
+            </div>
+            <p>Final sentence.</p>
+          </div>
+        `;
+        document.body.dataset.conversationId = "conv-rich-markdown";
+        document.body.dataset.lastMessageId = "msg-rich-markdown";
+        document.body.dataset.streamState = "done";
+        const runtime = Function(
+          `${source.replace(
+            /^export\s+/gm,
+            "",
+          )}\nreturn createTablinqPageAdapterRuntime();`,
+        )();
+        return runtime.readAskSnapshot();
+      },
+      { source: runtimeSource },
+    );
+
+    expect(snapshot.text).toBe(expected);
+
+    await browser.close();
     await stopFakeChatGptServer(server.process);
   });
 
@@ -2235,6 +2345,65 @@ describe("browser adapter", () => {
       "Fake response for: recover after placeholder drift",
     );
     expect(chunks.join("")).toBe(result.output_text);
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers a same-message ask when the final live DOM becomes rich markdown", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "recover-rich-markdown",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({
+      targetUrl,
+      headless: true,
+    });
+
+    const states: string[] = [];
+    let closeTriggered = false;
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-recover-rich-markdown",
+        prompt: "recover copyable block after interruption",
+        timeoutMs: 7000,
+      },
+      async (chunk) => {
+        if (chunk.kind === "delta" && !closeTriggered) {
+          closeTriggered = true;
+          await adapter.getManagedPageForTest()!.context().browser()!.close();
+        }
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    expect(result.output_text).toBe(
+      [
+        "```",
+        "Summarize release notes into a concise update with risks and actions.",
+        "```",
+        "",
+        "**Outline**",
+        "",
+        "1. Goal",
+        "2. Inputs",
+        "3. Constraints",
+        "4. Output",
+      ].join("\n"),
+    );
     expect(states).toContain("interrupted");
     expect(states).toContain("recovered");
 
