@@ -1463,13 +1463,18 @@ export class BrowserAdapter {
         messageMatches &&
         (candidate.state === "running" || candidate.state === "done") &&
         hasAssistantSignal;
-      const canContinue =
+      const successorMessage =
         conversationMatches &&
-        !messageMismatch &&
-        (relationIsUsable || sameMessageDrift) &&
+        messageMismatch &&
+        relationIsUsable &&
         (candidate.state === "running" || candidate.state === "done") &&
         hasAssistantSignal;
-      const hardMismatch = !conversationMatches || messageMismatch;
+      const canContinue =
+        conversationMatches &&
+        (relationIsUsable || sameMessageDrift || successorMessage) &&
+        (candidate.state === "running" || candidate.state === "done") &&
+        hasAssistantSignal;
+      const hardMismatch = !conversationMatches;
       logRecoveryDecision("ask", {
         commandConversationId,
         commandMessageId,
@@ -1487,6 +1492,7 @@ export class BrowserAdapter {
         observedTextLength: candidate.text.length,
         hasAssistantMessage: candidate.hasAssistantMessage,
         sameMessageDrift,
+        successorMessage,
         hardMismatch,
         canContinue,
       });
