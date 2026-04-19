@@ -8,6 +8,7 @@ import {
   chromium,
   type BrowserContext,
   type Download,
+  type Frame,
   type Locator,
   type Page,
 } from "playwright-core";
@@ -104,6 +105,10 @@ const INTERACTION_TIMEOUT_MS = 7_500;
 const UPLOAD_ACK_TIMEOUT_MS = 10_000;
 const SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS = 60_000;
 const RESEARCH_SUBMISSION_START_TIMEOUT_MS = 7_500;
+const DEEP_RESEARCH_HANDOFF_TIMEOUT_MS = 60_000;
+const DEEP_RESEARCH_START_CONFIRM_TIMEOUT_MS = 15_000;
+const DEEP_RESEARCH_START_DELAY_MIN_MS = 4_000;
+const DEEP_RESEARCH_START_DELAY_JITTER_MS = 6_000;
 const SUBMIT_START_TIMEOUT_MS = 3_000;
 const DOWNLOAD_TIMEOUT_MS = 10_000;
 const SNAPSHOT_POLL_INTERVAL_MS = 75;
@@ -112,6 +117,14 @@ const STALL_DETECTION_MIN_MS = 500;
 const STALL_DETECTION_MAX_MS = 2_000;
 const ASK_STALL_RECOVERY_GRACE_MS = 5_000;
 const MAX_RECOVERY_ATTEMPTS = 3;
+
+export function deepResearchStartDelayMs(randomValue = Math.random()): number {
+  const jitter = Math.min(1, Math.max(0, randomValue));
+  return (
+    DEEP_RESEARCH_START_DELAY_MIN_MS +
+    Math.round(jitter * DEEP_RESEARCH_START_DELAY_JITTER_MS)
+  );
+}
 
 function loadProbeSource(): string {
   if (!probeSource) {
@@ -856,7 +869,7 @@ export class BrowserAdapter {
       askBaseline = await readAskBaseline(page);
       await this.refreshCapabilities(page);
       if (command.modelClass) {
-        await applyAskConfiguration(
+        page = await applyAskConfiguration(
           page,
           {
             ...command,
@@ -870,7 +883,7 @@ export class BrowserAdapter {
         }
       }
       if (!command.modelClass || command.effort || command.mode) {
-        await applyAskConfiguration(
+        page = await applyAskConfiguration(
           page,
           {
             ...command,
@@ -1061,7 +1074,7 @@ export class BrowserAdapter {
       recoveryReason: string | null;
     },
   ): Promise<ResearchResultSnapshot> {
-    const timeoutAt = Date.now() + (command.timeoutMs ?? RESEARCH_TIMEOUT_MS);
+    const executionTimeoutMs = command.timeoutMs ?? RESEARCH_TIMEOUT_MS;
     const stallTimeoutMs = computeStallTimeoutMs(
       command.timeoutMs,
       RESEARCH_TIMEOUT_MS,
@@ -1070,13 +1083,14 @@ export class BrowserAdapter {
       this.resolveConversationTarget(command.conversationId),
     );
     let submissionState: ResearchSubmissionStateSnapshot | null = null;
+    let initialSnapshot: ResearchSnapshot | null = null;
 
     if (options.submitPrompt) {
       if (!command.conversationId) {
         await resetConversationIdentity(page);
       }
       await this.refreshCapabilities(page);
-      await applyAskConfiguration(
+      page = await applyAskConfiguration(
         page,
         {
           jobId: command.jobId,
@@ -1094,29 +1108,26 @@ export class BrowserAdapter {
       await ensureResearchComposerFilled(
         page,
         command.query,
-        Math.min(
-          INTERACTION_TIMEOUT_MS,
-          Math.max(1, timeoutAt - Date.now()),
-        ),
+        INTERACTION_TIMEOUT_MS,
       );
       if ((command.files ?? []).length > 0) {
         await waitForSubmitReadyAfterUploads(
           page,
-          Math.min(
-            SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
-            Math.max(1, timeoutAt - Date.now()),
-          ),
+          SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
         );
       }
       submissionState = await submitResearch(
         page,
         command.query,
-        Math.min(
-          RESEARCH_SUBMISSION_START_TIMEOUT_MS,
-          Math.max(1, timeoutAt - Date.now()),
-        ),
+        RESEARCH_SUBMISSION_START_TIMEOUT_MS,
+      );
+      initialSnapshot = await beginDeepResearchRun(
+        page,
+        DEEP_RESEARCH_HANDOFF_TIMEOUT_MS,
       );
     }
+
+    const timeoutAt = Date.now() + executionTimeoutMs;
 
     const state = {
       emittedText: options.emittedText,
@@ -1134,19 +1145,22 @@ export class BrowserAdapter {
     };
 
     if (submissionState) {
-      this.rememberResearchSnapshot(state, submissionState);
+      this.rememberResearchSnapshot(
+        state,
+        researchSubmissionStateToSnapshot(submissionState),
+      );
     }
-
-    if (options.submitPrompt) {
-      await onUpdate({
-        status: "starting",
-        message: "starting research",
-        conversation_id: submissionState?.conversationId ?? null,
-        message_id: submissionState?.messageId ?? null,
-        current_url: submissionState?.currentUrl ?? page.url(),
-      });
-      state.announcedStart = true;
+    if (initialSnapshot) {
+      this.rememberResearchSnapshot(state, initialSnapshot);
+      const progressed = await this.applyResearchSnapshot(
+        state,
+        initialSnapshot,
+        onUpdate,
+      );
       state.submissionConfirmed = true;
+      if (progressed) {
+        state.lastProgressAt = Date.now();
+      }
     }
 
     if (!options.submitPrompt) {
@@ -1168,7 +1182,7 @@ export class BrowserAdapter {
     while (Date.now() < timeoutAt) {
       let snapshot: ResearchSnapshot;
       try {
-        snapshot = await readResearchSnapshot(page);
+        snapshot = await readLiveResearchSnapshot(page);
       } catch (error) {
         if (
           isTransientPageError(error) &&
@@ -1210,13 +1224,23 @@ export class BrowserAdapter {
       }
 
       if (snapshot.status === "done") {
-        state.doneStreak += 1;
-      } else {
-        state.doneStreak = 0;
-      }
-
-      if (snapshot.status === "done" && state.doneStreak >= STABLE_DONE_POLLS) {
-        return this.finalizeResearch(command, page, state, snapshot);
+        const stabilized = await this.stabilizeResearchCompletion(
+          page,
+          snapshot,
+          timeoutAt,
+        );
+        this.rememberResearchSnapshot(state, stabilized);
+        const stabilizedProgress = await this.applyResearchSnapshot(
+          state,
+          stabilized,
+          onUpdate,
+        );
+        if (stabilizedProgress) {
+          state.lastProgressAt = Date.now();
+        }
+        if (stabilized.status === "done") {
+          return this.finalizeResearch(command, page, state, stabilized);
+        }
       }
 
       if (
@@ -1639,7 +1663,7 @@ export class BrowserAdapter {
 
     let snapshot: ResearchSnapshot | null = null;
     while (Date.now() < timeoutAt) {
-      const candidate = await readResearchSnapshot(recoveredPage);
+      const candidate = await readLiveResearchSnapshot(recoveredPage);
       this.rememberResearchSnapshot(state, candidate);
       const relation = textRelation(state.emittedText, candidate.reportText);
       const commandConversationId = normalizeOptionalString(
@@ -1713,6 +1737,18 @@ export class BrowserAdapter {
       );
     }
 
+    if (snapshot.statusMessage === "awaiting start confirmation") {
+      snapshot =
+        (await beginDeepResearchRun(
+          recoveredPage,
+          Math.min(
+            DEEP_RESEARCH_HANDOFF_TIMEOUT_MS,
+            Math.max(1, timeoutAt - Date.now()),
+          ),
+        ).catch(() => snapshot)) ?? snapshot;
+      this.rememberResearchSnapshot(state, snapshot);
+    }
+
     await onState({
       state: "recovered",
       reason:
@@ -1737,14 +1773,18 @@ export class BrowserAdapter {
       state.doneStreak = 0;
     }
     if (snapshot.status === "done") {
-      state.doneStreak = STABLE_DONE_POLLS;
+      const stabilized = await this.stabilizeResearchCompletion(
+        recoveredPage,
+        snapshot,
+        timeoutAt,
+      );
       return {
         page: recoveredPage,
         result: await this.finalizeResearch(
           command,
           recoveredPage,
           state,
-          snapshot,
+          stabilized,
         ),
       };
     }
@@ -1767,6 +1807,31 @@ export class BrowserAdapter {
         return candidate;
       }
       if (sameAskCompletionSnapshot(stableSnapshot, candidate)) {
+        stableDonePolls += 1;
+        continue;
+      }
+      stableSnapshot = candidate;
+      stableDonePolls = 0;
+    }
+
+    return stableSnapshot;
+  }
+
+  private async stabilizeResearchCompletion(
+    page: Page,
+    snapshot: ResearchSnapshot,
+    timeoutAt: number,
+  ): Promise<ResearchSnapshot> {
+    let stableSnapshot = snapshot;
+    let stableDonePolls = 0;
+
+    while (Date.now() < timeoutAt && stableDonePolls < STABLE_DONE_POLLS) {
+      await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+      const candidate = await readLiveResearchSnapshot(page);
+      if (candidate.status !== "done") {
+        return candidate;
+      }
+      if (sameResearchCompletionSnapshot(stableSnapshot, candidate)) {
         stableDonePolls += 1;
         continue;
       }
@@ -2857,6 +2922,20 @@ function sameAskCompletionSnapshot(
   );
 }
 
+function sameResearchCompletionSnapshot(
+  left: ResearchSnapshot,
+  right: ResearchSnapshot,
+): boolean {
+  return (
+    left.status === right.status &&
+    left.reportText === right.reportText &&
+    left.statusMessage === right.statusMessage &&
+    left.conversationId === right.conversationId &&
+    left.messageId === right.messageId &&
+    left.currentUrl === right.currentUrl
+  );
+}
+
 function canFinalizeRecoveredAskText(
   emittedText: string,
   finalText: string,
@@ -3012,6 +3091,15 @@ interface ResearchSubmissionStateSnapshot {
   messageId: string | null;
   currentUrl: string;
   submitted: boolean;
+}
+
+interface DeepResearchFrameSnapshot {
+  phase: "planning" | "waiting_for_sources" | "running" | "done" | "failed";
+  statusMessage: string | null;
+  reportText: string;
+  frameUrl: string | null;
+  startVisible: boolean;
+  startEnabled: boolean;
 }
 
 async function callPageAdapter<T>(
@@ -3190,6 +3278,19 @@ async function readResearchSubmissionState(
   );
 }
 
+function researchSubmissionStateToSnapshot(
+  state: ResearchSubmissionStateSnapshot,
+): ResearchSnapshot {
+  return normalizeResearchSnapshot({
+    status: state.status,
+    statusMessage: state.statusMessage,
+    reportText: state.reportText,
+    conversationId: state.conversationId,
+    messageId: state.messageId,
+    currentUrl: state.currentUrl,
+  });
+}
+
 function normalizePromptText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -3273,6 +3374,70 @@ async function submitResearch(
   throw new Error("research submit failed: query was filled but research never started");
 }
 
+async function beginDeepResearchRun(
+  page: Page,
+  timeoutMs: number,
+): Promise<ResearchSnapshot | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frameSnapshot = await readDeepResearchFrameSnapshot(page);
+    if (frameSnapshot?.startVisible) {
+      if (!frameSnapshot.startEnabled) {
+        await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+        continue;
+      }
+      await sleep(
+        Math.min(
+          deepResearchStartDelayMs(),
+          Math.max(0, deadline - Date.now()),
+        ),
+      );
+      if (!(await clickDeepResearchStart(page))) {
+        throw new Error(
+          "research start failed: Deep Research Start control was present but not actionable",
+        );
+      }
+      const started = await waitForDeepResearchStartConfirmation(
+        page,
+        Math.min(
+          DEEP_RESEARCH_START_CONFIRM_TIMEOUT_MS,
+          Math.max(1, deadline - Date.now()),
+        ),
+      );
+      if (started) {
+        return started;
+      }
+      throw new Error(
+        "research start failed: Deep Research Start was clicked but the job never began",
+      );
+    }
+
+    const submission = await readResearchSubmissionState(page).catch(() => null);
+    if (
+      submission &&
+      !submission.onDeepResearchLanding &&
+      submission.status !== "idle"
+    ) {
+      return researchSubmissionStateToSnapshot(submission);
+    }
+
+    const merged = await readLiveResearchSnapshot(page).catch(() => null);
+    if (
+      merged &&
+      merged.status !== "idle" &&
+      merged.statusMessage !== "awaiting start confirmation"
+    ) {
+      return merged;
+    }
+
+    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+  }
+
+  throw new Error(
+    "research start failed: Deep Research planner never became actionable",
+  );
+}
+
 async function focusComposer(page: Page): Promise<void> {
   const composer = page.locator(
     [
@@ -3298,13 +3463,13 @@ async function applyAskConfiguration(
   page: Page,
   command: AskExecutionCommand,
   report: CapabilityReportPayload | null,
-): Promise<void> {
+): Promise<Page> {
   if (
     !command.modelClass &&
     !command.effort &&
     (!command.mode || command.mode === "normal")
   ) {
-    return;
+    return page;
   }
 
   if (!report) {
@@ -3321,8 +3486,9 @@ async function applyAskConfiguration(
     await ensureConfiguredEffort(page, report, command.effort);
   }
   if (command.mode && command.mode !== "normal") {
-    await ensureConfiguredMode(page, report, command.mode);
+    page = await ensureConfiguredMode(page, report, command.mode);
   }
+  return page;
 }
 
 async function waitForVisibleLocator(
@@ -3473,12 +3639,15 @@ async function ensureConfiguredMode(
   page: Page,
   report: CapabilityReportPayload,
   mode: "search" | "research",
-): Promise<void> {
+): Promise<Page> {
   const visible =
     mode === "search"
       ? report.matrix.search_mode_visible
       : report.matrix.research_mode_visible;
   if (!visible) {
+    if (mode === "research") {
+      return await navigateDirectlyToDeepResearch(page, INTERACTION_TIMEOUT_MS);
+    }
     throw new Error(`capability missing: ${mode} mode; requested=${mode}`);
   }
 
@@ -3490,8 +3659,6 @@ async function ensureConfiguredMode(
             "a[data-testid='deep-research-sidebar-item']",
             "a[href='/deep-research']",
             "a[href$='/deep-research']",
-            "[data-mode='research']",
-            "button[aria-label*='Deep research']",
           ].join(", "),
     ),
     INTERACTION_TIMEOUT_MS,
@@ -3503,9 +3670,78 @@ async function ensureConfiguredMode(
     mode === "research"
       ? page.url().toLowerCase().includes("/deep-research")
       : (await locator.getAttribute("aria-pressed")) === "true";
+  const controlHref =
+    mode === "research" ? await locator.getAttribute("href").catch(() => null) : null;
+  const requiresDeepResearchLandingWait =
+    mode === "research" &&
+    (await locator
+      .evaluate((element) => {
+        if (!(element instanceof HTMLElement)) {
+          return false;
+        }
+        const href = element.getAttribute("href") ?? "";
+        return (
+          element.tagName.toLowerCase() === "a" ||
+          element.getAttribute("data-testid") === "deep-research-sidebar-item" ||
+          href.toLowerCase().includes("deep-research")
+        );
+      })
+      .catch(() => false));
   if (!isActive) {
-    await activateModeControl(locator);
+    if (requiresDeepResearchLandingWait) {
+      await activateModeControl(locator);
+      const activatedPage = await waitForDeepResearchLanding(
+        page,
+        INTERACTION_TIMEOUT_MS,
+        {
+          throwOnTimeout: false,
+        },
+      );
+      if (activatedPage) {
+        return activatedPage;
+      }
+      if (!controlHref) {
+        throw new Error(
+          "research mode activation failed: Deep Research control did not expose a href",
+        );
+      }
+      const resolvedHref = new URL(controlHref, page.url()).toString();
+      await page.evaluate((href) => {
+        window.location.assign(href);
+      }, resolvedHref);
+    } else {
+      await activateModeControl(locator);
+    }
   }
+  if (requiresDeepResearchLandingWait) {
+    const landingPage = await waitForDeepResearchLanding(
+      page,
+      INTERACTION_TIMEOUT_MS,
+    );
+    if (!landingPage) {
+      throw new Error(
+        "research mode activation failed: Deep Research landing never became active",
+      );
+    }
+    return landingPage;
+  }
+  return page;
+}
+
+async function navigateDirectlyToDeepResearch(
+  page: Page,
+  timeoutMs: number,
+): Promise<Page> {
+  const url = new URL(page.url());
+  url.pathname = deepResearchPathname(url.pathname);
+  await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
+  const landingPage = await waitForDeepResearchLanding(page, timeoutMs);
+  if (!landingPage) {
+    throw new Error(
+      "research mode activation failed: Deep Research landing never became active",
+    );
+  }
+  return landingPage;
 }
 
 async function activateModeControl(locator: Locator): Promise<void> {
@@ -3530,6 +3766,68 @@ async function activateModeControl(locator: Locator): Promise<void> {
       element.click();
     });
   }
+}
+
+async function candidateDeepResearchPages(page: Page): Promise<Page[]> {
+  return [page, ...page.context().pages().filter((candidate) => candidate !== page).reverse()]
+    .filter((candidate, index, all) => all.indexOf(candidate) === index)
+    .filter((candidate) =>
+      (safePageUrl(candidate)?.toLowerCase() ?? "").includes("/deep-research"),
+    );
+}
+
+async function deepResearchComposerVisible(page: Page): Promise<boolean> {
+  return await page
+    .evaluate((selectors: string[]) => {
+      const isVisible = (element: Element | null) => {
+        if (!(element instanceof HTMLElement) || element.hidden) {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0"
+        );
+      };
+
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        if (isVisible(element)) {
+          return true;
+        }
+      }
+      return false;
+    }, [
+      "#prompt-textarea",
+      "#prompt-textarea[role='textbox']",
+      "[role='textbox'][aria-label*='Chat with ChatGPT']",
+      "textarea[placeholder='Get a detailed report']",
+    ])
+    .catch(() => false);
+}
+
+async function waitForDeepResearchLanding(
+  page: Page,
+  timeoutMs: number,
+  options: { throwOnTimeout?: boolean } = {},
+): Promise<Page | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const candidate of await candidateDeepResearchPages(page)) {
+      await candidate.waitForLoadState("domcontentloaded").catch(() => undefined);
+      if (await deepResearchComposerVisible(candidate)) {
+        return candidate;
+      }
+    }
+    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+  }
+  if (options.throwOnTimeout === false) {
+    return null;
+  }
+  throw new Error(
+    "research mode activation failed: Deep Research landing never became active",
+  );
 }
 
 async function uploadAttachments(
@@ -3707,10 +4005,268 @@ async function readAskSnapshot(
   );
 }
 
-async function readResearchSnapshot(page: Page): Promise<ResearchSnapshot> {
-  return normalizeResearchSnapshot(
-    await callPageAdapter<ResearchSnapshot>(page, "readResearchSnapshot"),
+async function readLiveResearchSnapshot(page: Page): Promise<ResearchSnapshot> {
+  const submission = await readResearchSubmissionState(page).catch(() => null);
+  const domSnapshot = submission
+    ? researchSubmissionStateToSnapshot(submission)
+    : normalizeResearchSnapshot(
+        await callPageAdapter<ResearchSnapshot>(page, "readResearchSnapshot"),
+      );
+  const frameSnapshot = await readDeepResearchFrameSnapshot(page);
+  return mergeResearchSnapshots(domSnapshot, submission, frameSnapshot);
+}
+
+async function waitForDeepResearchStartConfirmation(
+  page: Page,
+  timeoutMs: number,
+): Promise<ResearchSnapshot | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frameSnapshot = await readDeepResearchFrameSnapshot(page);
+    if (frameSnapshot?.startVisible) {
+      await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+      continue;
+    }
+    const snapshot = await readLiveResearchSnapshot(page).catch(() => null);
+    if (
+      snapshot &&
+      snapshot.status !== "idle" &&
+      snapshot.statusMessage !== "awaiting start confirmation"
+    ) {
+      return snapshot;
+    }
+    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+  }
+  return null;
+}
+
+async function clickDeepResearchStart(page: Page): Promise<boolean> {
+  for (const frame of deepResearchCandidateFrames(page)) {
+    const button = frame.getByRole("button", { name: /^Start$/i }).first();
+    const visible = await button.isVisible().catch(() => false);
+    if (!visible) {
+      continue;
+    }
+    const enabled = await button.isEnabled().catch(() => false);
+    if (!enabled) {
+      continue;
+    }
+    const clicked = await button
+      .click({ force: true, timeout: INTERACTION_TIMEOUT_MS })
+      .then(() => true)
+      .catch(() => false);
+    if (clicked) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function deepResearchCandidateFrames(page: Page): Frame[] {
+  return page.frames().filter((frame) => frame !== page.mainFrame());
+}
+
+async function readDeepResearchFrameSnapshot(
+  page: Page,
+): Promise<DeepResearchFrameSnapshot | null> {
+  const snapshots: DeepResearchFrameSnapshot[] = [];
+  for (const frame of deepResearchCandidateFrames(page)) {
+    const snapshot = await inspectDeepResearchFrame(frame);
+    if (snapshot) {
+      snapshots.push(snapshot);
+    }
+  }
+  if (snapshots.length === 0) {
+    return null;
+  }
+  snapshots.sort(
+    (left, right) =>
+      scoreDeepResearchFrame(right) - scoreDeepResearchFrame(left),
   );
+  return snapshots[0] ?? null;
+}
+
+async function inspectDeepResearchFrame(
+  frame: Frame,
+): Promise<DeepResearchFrameSnapshot | null> {
+  try {
+    const snapshot = await frame.evaluate(() => {
+      const normalize = (value: string | null | undefined): string =>
+        String(value ?? "")
+          .replace(/\u00a0/g, " ")
+          .replace(/\r/g, "")
+          .trim();
+      const isVisible = (element: Element): boolean => {
+        if (!(element instanceof HTMLElement) || element.hidden) {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0"
+        );
+      };
+      const buttonName = (element: Element): string =>
+        normalize(
+          element.getAttribute("aria-label") ??
+            element.textContent ??
+            element.getAttribute("title"),
+        );
+      const buttons = Array.from(
+        document.querySelectorAll("button, [role='button']"),
+      ).filter(isVisible);
+      const startButton =
+        buttons.find((element) => /^start$/i.test(buttonName(element))) ?? null;
+      const startVisible = Boolean(startButton);
+      const startEnabled = startButton
+        ? !(
+            startButton.getAttribute("aria-disabled") === "true" ||
+            startButton.getAttribute("data-disabled") === "true" ||
+            ("disabled" in startButton &&
+              Boolean(
+                (
+                  startButton as HTMLButtonElement | HTMLInputElement
+                ).disabled,
+              ))
+          )
+        : false;
+      const reportRoot = document.querySelector("[data-deep-research-text]");
+      const statusRoot = document.querySelector("[data-deep-research-status]");
+      const bodyText = normalize(
+        reportRoot instanceof HTMLElement
+          ? reportRoot.innerText
+          : document.body?.innerText ?? "",
+      );
+      const statusText = normalize(
+        statusRoot instanceof HTMLElement ? statusRoot.innerText : "",
+      );
+      const lowerUrl = window.location.href.toLowerCase();
+      const lowerText = `${statusText}\n${bodyText}`.trim().toLowerCase();
+      const candidate =
+        startVisible ||
+        lowerUrl.includes("deep_research") ||
+        lowerUrl.includes("oaiusercontent") ||
+        lowerText.includes("deep research") ||
+        lowerText.includes("gathering sources") ||
+        lowerText.includes("drafting report") ||
+        lowerText.includes("edit") ||
+        lowerText.includes("cancel");
+      if (!candidate) {
+        return null;
+      }
+      const lines = bodyText
+        .split(/\n+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const waiting =
+        lowerText.includes("gathering sources") ||
+        lowerText.includes("collecting sources") ||
+        lowerText.includes("searching") ||
+        lowerText.includes("reviewing sources") ||
+        lowerText.includes("forming a plan");
+      const running =
+        lowerText.includes("drafting report") ||
+        lowerText.includes("writing report") ||
+        lowerText.includes("analyzing") ||
+        lowerText.includes("working");
+      const failed =
+        lowerText.includes("failed") ||
+        lowerText.includes("error") ||
+        lowerText.includes("retry");
+      const phase: DeepResearchFrameSnapshot["phase"] = startVisible
+        ? "planning"
+        : failed
+          ? "failed"
+          : waiting
+            ? "waiting_for_sources"
+            : running
+              ? "running"
+              : bodyText
+                ? "done"
+                : "running";
+      return {
+        phase,
+        statusMessage: startVisible
+          ? "awaiting start confirmation"
+          : (statusText || lines[0] || null),
+        reportText: startVisible ? "" : bodyText,
+        frameUrl: window.location.href,
+        startVisible,
+        startEnabled,
+      };
+    });
+    return snapshot ? normalizeDeepResearchFrameSnapshot(snapshot) : null;
+  } catch {
+    return null;
+  }
+}
+
+function scoreDeepResearchFrame(snapshot: DeepResearchFrameSnapshot): number {
+  return (
+    (snapshot.startVisible ? 1_000 : 0) +
+    (snapshot.phase === "done" ? 300 : 0) +
+    (snapshot.phase === "running" ? 200 : 0) +
+    (snapshot.phase === "waiting_for_sources" ? 100 : 0) +
+    snapshot.reportText.length
+  );
+}
+
+function mergeResearchSnapshots(
+  domSnapshot: ResearchSnapshot,
+  submission: ResearchSubmissionStateSnapshot | null,
+  frameSnapshot: DeepResearchFrameSnapshot | null,
+): ResearchSnapshot {
+  if (!frameSnapshot) {
+    return domSnapshot;
+  }
+
+  if (frameSnapshot.phase === "planning") {
+    return normalizeResearchSnapshot({
+      ...domSnapshot,
+      status: "waiting_for_sources",
+      statusMessage: frameSnapshot.statusMessage ?? domSnapshot.statusMessage,
+      reportText: "",
+    });
+  }
+
+  const reportText =
+    frameSnapshot.reportText.length > domSnapshot.reportText.length
+      ? frameSnapshot.reportText
+      : domSnapshot.reportText;
+  let status = domSnapshot.status;
+  if (frameSnapshot.phase === "failed") {
+    status = "failed";
+  } else if (status === "idle") {
+    status =
+      submission &&
+      submission.submitVisible &&
+      submission.submitEnabled &&
+      !submission.submitBusy &&
+      reportText
+        ? "done"
+        : frameSnapshot.phase;
+  } else if (
+    status !== "failed" &&
+    status !== "done" &&
+    reportText &&
+    submission &&
+    submission.submitVisible &&
+    submission.submitEnabled &&
+    !submission.submitBusy
+  ) {
+    status = "done";
+  } else if (status === "waiting_for_sources" && reportText) {
+    status = frameSnapshot.phase === "waiting_for_sources" ? status : "running";
+  }
+
+  return normalizeResearchSnapshot({
+    ...domSnapshot,
+    status,
+    statusMessage:
+      domSnapshot.statusMessage ?? frameSnapshot.statusMessage ?? null,
+    reportText,
+  });
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -3946,6 +4502,19 @@ function normalizeResearchSubmissionState(
   };
 }
 
+function normalizeDeepResearchFrameSnapshot(
+  snapshot: DeepResearchFrameSnapshot,
+): DeepResearchFrameSnapshot {
+  return {
+    ...snapshot,
+    statusMessage: normalizeOptionalString(snapshot.statusMessage),
+    reportText: snapshot.reportText ?? "",
+    frameUrl: normalizeOptionalString(snapshot.frameUrl),
+    startVisible: Boolean(snapshot.startVisible),
+    startEnabled: Boolean(snapshot.startEnabled),
+  };
+}
+
 function normalizeOptionalString(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -3988,6 +4557,15 @@ function conversationPathname(
 ): string {
   const segments = conversationWorkspaceSegments(workspacePathname);
   segments.push("c", encodeURIComponent(conversationId));
+  return pathnameFromSegments(segments);
+}
+
+function deepResearchPathname(pathname: string): string {
+  const segments = conversationWorkspaceSegments(pathname);
+  if (segments[segments.length - 1]?.toLowerCase() === "deep-research") {
+    return pathnameFromSegments(segments);
+  }
+  segments.push("deep-research");
   return pathnameFromSegments(segments);
 }
 
