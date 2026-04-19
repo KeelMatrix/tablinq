@@ -17,7 +17,6 @@ pub struct GatewayFileConfig {
     pub queue_length: Option<u32>,
     pub queue_timeout_ms: Option<u64>,
     pub per_client_limit: Option<u32>,
-    pub request_timeout_ms: Option<u64>,
     pub ask_timeout_ms: Option<u64>,
     pub extended_thinking_timeout_ms: Option<u64>,
     pub research_timeout_ms: Option<u64>,
@@ -222,7 +221,7 @@ impl AppConfig {
             .gateway
             .as_ref()
             .and_then(|value| value.queue_timeout_ms)
-            .unwrap_or(30_000)
+            .unwrap_or(4_800_000)
     }
 
     pub fn gateway_per_client_limit(&self) -> u32 {
@@ -234,11 +233,9 @@ impl AppConfig {
     }
 
     pub fn gateway_request_timeout_ms(&self) -> u64 {
-        self.file
-            .gateway
-            .as_ref()
-            .and_then(|value| value.request_timeout_ms)
-            .unwrap_or(30_000)
+        self.ask_timeout_ms()
+            .max(self.extended_thinking_timeout_ms())
+            .max(self.research_timeout_ms())
     }
 
     pub fn ask_timeout_ms(&self) -> u64 {
@@ -364,13 +361,10 @@ fn upgrade_file_config(mut file: FileConfig) -> FileConfig {
         gateway.queue_length = Some(32);
     }
     if gateway.queue_timeout_ms.is_none() {
-        gateway.queue_timeout_ms = Some(300_000);
+        gateway.queue_timeout_ms = Some(4_800_000);
     }
     if gateway.per_client_limit.is_none() {
         gateway.per_client_limit = Some(8);
-    }
-    if gateway.request_timeout_ms.is_none() {
-        gateway.request_timeout_ms = Some(1_500_000);
     }
     if gateway.ask_timeout_ms.is_none() {
         gateway.ask_timeout_ms = Some(360_000);
@@ -440,9 +434,9 @@ mod tests {
         assert_eq!(config.gateway_port(), 3847);
         assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
         assert_eq!(config.gateway_queue_length(), 32);
-        assert_eq!(config.gateway_queue_timeout_ms(), 300_000);
+        assert_eq!(config.gateway_queue_timeout_ms(), 4_800_000);
         assert_eq!(config.gateway_per_client_limit(), 8);
-        assert_eq!(config.gateway_request_timeout_ms(), 1_500_000);
+        assert_eq!(config.gateway_request_timeout_ms(), 4_800_000);
         assert_eq!(config.ask_timeout_ms(), 360_000);
         assert_eq!(config.extended_thinking_timeout_ms(), 1_500_000);
         assert_eq!(config.research_timeout_ms(), 4_800_000);
@@ -481,7 +475,7 @@ mod tests {
                 .gateway
                 .as_ref()
                 .and_then(|value| value.queue_timeout_ms),
-            Some(300_000)
+            Some(4_800_000)
         );
         assert_eq!(
             parsed
