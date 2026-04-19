@@ -1740,6 +1740,181 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("clears blocking composer chips until the model picker returns before a normal ask", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+      }),
+      headless: true,
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const trigger = document.querySelector("#model-switcher-trigger");
+      const composer = document.querySelector("[data-testid='composer-root']");
+      if (!(trigger instanceof HTMLElement) || !(composer instanceof HTMLElement)) {
+        throw new Error("composer setup missing");
+      }
+
+      trigger.hidden = true;
+      const syncState = (
+        window as Window & { syncSelectedState?: () => void }
+      ).syncSelectedState;
+      const maybeRestoreTrigger = () => {
+        if (
+          composer.querySelectorAll("button[aria-label*='remove']").length === 0
+        ) {
+          trigger.hidden = false;
+          if (typeof syncState === "function") {
+            syncState();
+          }
+        }
+      };
+
+      for (const label of ["Deep research", "Web search", "Canvas"]) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.textContent = label;
+        chip.className = "__composer-pill";
+        chip.setAttribute("aria-label", `${label}, click to remove`);
+        chip.addEventListener("click", () => {
+          chip.remove();
+          maybeRestoreTrigger();
+        });
+        composer.appendChild(chip);
+      }
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-clears-blocking-composer-chips",
+        prompt: "reply after clearing blocking composer chips",
+        modelClass: "thinking",
+        effort: "standard",
+        timeoutMs: 7_000,
+      },
+      () => {},
+    );
+
+    expect(result.output_text).toContain(
+      "Fake response for: reply after clearing blocking composer chips",
+    );
+
+    const pageState = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      remainingChips: document.querySelectorAll(
+        "[data-testid='composer-root'] button[aria-label*='remove']",
+      ).length,
+      modelTriggerVisible:
+        document.querySelector("#model-switcher-trigger") instanceof HTMLElement &&
+        !(document.querySelector("#model-switcher-trigger") as HTMLElement).hidden,
+    }));
+
+    expect(pageState.remainingChips).toBe(0);
+    expect(pageState.modelTriggerVisible).toBe(true);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("keeps the selected thinking state while applying effort when the model picker hides", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+      }),
+      headless: true,
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const trigger = document.querySelector("#model-switcher-trigger");
+      const syncState = (
+        window as Window & { syncSelectedState?: () => void }
+      ).syncSelectedState;
+      if (!(trigger instanceof HTMLElement) || typeof syncState !== "function") {
+        throw new Error("live model controls missing");
+      }
+
+      (
+        window as Window & {
+          syncSelectedState?: () => void;
+          __tablinqOriginalSyncSelectedState__?: () => void;
+        }
+      ).__tablinqOriginalSyncSelectedState__ = syncState;
+
+      (
+        window as Window & {
+          syncSelectedState?: () => void;
+          __tablinqOriginalSyncSelectedState__?: () => void;
+        }
+      ).syncSelectedState = () => {
+        (
+          window as Window & {
+            __tablinqOriginalSyncSelectedState__?: () => void;
+          }
+        ).__tablinqOriginalSyncSelectedState__?.();
+        trigger.hidden = document.body.dataset.selectedModel === "thinking";
+      };
+
+      (
+        window as Window & {
+          syncSelectedState?: () => void;
+        }
+      ).syncSelectedState?.();
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-thinking-effort-hidden-model-picker",
+        prompt: "reply after selecting thinking with a hidden model picker",
+        modelClass: "thinking",
+        effort: "standard",
+        timeoutMs: 7_000,
+      },
+      () => {},
+    );
+
+    expect(result.output_text).toContain(
+      "Fake response for: reply after selecting thinking with a hidden model picker",
+    );
+
+    const pageState = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      selectedModel: document.body.dataset.selectedModel,
+      selectedEffort: document.body.dataset.selectedEffort,
+      thinkingChipVisible:
+        document.querySelector("#thinking-effort-trigger") instanceof HTMLElement &&
+        !(
+          document.querySelector("#thinking-effort-trigger") as HTMLElement
+        ).hidden,
+    }));
+
+    expect(pageState.selectedModel).toBe("thinking");
+    expect(pageState.selectedEffort).toBe("standard");
+    expect(pageState.thinkingChipVisible).toBe(true);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("fails clearly when /deep-research landing submission never starts and does not emit recovery loops", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));

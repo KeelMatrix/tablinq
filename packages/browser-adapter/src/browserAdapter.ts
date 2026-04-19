@@ -868,29 +868,17 @@ export class BrowserAdapter {
       }
       askBaseline = await readAskBaseline(page);
       await this.refreshCapabilities(page);
-      if (command.modelClass) {
+      if (
+        command.modelClass ||
+        command.effort ||
+        (command.mode && command.mode !== "normal")
+      ) {
         page = await applyAskConfiguration(
           page,
-          {
-            ...command,
-            effort: undefined,
-            mode: undefined,
-          },
+          command,
           this.lastCapabilityReport,
         );
-        if (command.effort || (command.mode && command.mode !== "normal")) {
-          await this.refreshCapabilities(page);
-        }
-      }
-      if (!command.modelClass || command.effort || command.mode) {
-        page = await applyAskConfiguration(
-          page,
-          {
-            ...command,
-            modelClass: undefined,
-          },
-          this.lastCapabilityReport,
-        );
+        await this.refreshCapabilities(page);
       }
       await uploadAttachments(
         page,
@@ -3745,7 +3733,7 @@ async function applyAskConfiguration(
 ): Promise<Page> {
   await waitForInteractionSurface(page);
   if (!command.mode || command.mode === "normal" || command.mode === "search") {
-    await clearComposerResearchModeIfActive(page);
+    await ensureComposerModelPickerAvailable(page);
   }
   if (
     !command.modelClass &&
@@ -3773,24 +3761,56 @@ async function applyAskConfiguration(
   return page;
 }
 
-async function clearComposerResearchModeIfActive(page: Page): Promise<void> {
-  const selector = "button[aria-label*='research' i][aria-label*='remove' i]";
-  const chip = await waitForVisibleLocator(page.locator(selector), 1_000);
-  if (!chip) {
+async function ensureComposerModelPickerAvailable(page: Page): Promise<void> {
+  let clearedAny = false;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const chip = await findVisibleComposerChipRemoveButton(page, 1_000);
+    if (!chip) {
+      break;
+    }
+    clearedAny = true;
+    await chip.click();
+    await page.waitForTimeout(150);
+  }
+
+  if (await findVisibleModelPickerTrigger(page, 1_000)) {
     return;
   }
 
-  await chip.click();
-  try {
-    await page.locator(selector).first().waitFor({
-      state: "hidden",
-      timeout: INTERACTION_TIMEOUT_MS,
-    });
-  } catch {
+  if (clearedAny) {
     throw new Error(
-      "ui drift: could not exit the active Deep Research composer before ask submission",
+      "ui drift: could not restore the normal composer after clearing active chips before ask submission",
     );
   }
+}
+
+async function findVisibleModelPickerTrigger(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  return waitForVisibleLocator(
+    page.locator(
+      "button[aria-label='Model selector'], button[aria-label='Switch model'], button[data-testid='model-switcher-dropdown-button']",
+    ),
+    timeoutMs,
+  );
+}
+
+async function findVisibleComposerChipRemoveButton(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  return waitForVisibleLocator(
+    page.locator(
+      [
+        "[data-testid='composer-root'] button[aria-label*='click to remove' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i]",
+        "form button[aria-label*='click to remove' i]",
+        "form button[aria-label*='remove' i]",
+      ].join(", "),
+    ),
+    timeoutMs,
+  );
 }
 
 async function waitForVisibleLocator(
@@ -3809,55 +3829,27 @@ async function waitForVisibleLocator(
 async function findVisiblePopupChoicePoint(
   page: Page,
   token: string,
-): Promise<{ index: number; checked: string | null } | null> {
-  const popupChoiceSelector =
-    "[role='menuitemradio'], [role='menuitem'], [role='option']";
+): Promise<{ locator: Locator; checked: string | null } | null> {
+  const popupChoices = page.locator(
+    "[role='menuitemradio']:visible, [role='menuitem']:visible, [role='option']:visible",
+  );
   const deadline = Date.now() + INTERACTION_TIMEOUT_MS;
+  const expectedToken = token.toLowerCase();
   while (Date.now() < deadline) {
-    const point = await page.evaluate(
-      ({
-        expectedToken,
-        popupChoiceSelector,
-      }: {
-        expectedToken: string;
-        popupChoiceSelector: string;
-      }) => {
-      const normalize = (value: string | null | undefined) =>
-        (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-      const isVisible = (element: Element) => {
-        if (!(element instanceof HTMLElement) || element.hidden) {
-          return false;
-        }
-        const style = window.getComputedStyle(element);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          style.opacity !== "0"
-        );
-      };
-
-      const matches = Array.from(document.querySelectorAll(popupChoiceSelector));
-      for (const [index, element] of matches.entries()) {
-        if (!isVisible(element)) {
-          continue;
-        }
-        if (!normalize(element.textContent).includes(expectedToken)) {
-          continue;
-        }
-        return {
-          index,
-          checked: element.getAttribute("aria-checked"),
-        };
+    const count = await popupChoices.count();
+    for (let index = 0; index < count; index += 1) {
+      const locator = popupChoices.nth(index);
+      const text = ((await locator.textContent()) ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      if (!text.includes(expectedToken)) {
+        continue;
       }
-      return null;
-      },
-      {
-        expectedToken: token,
-        popupChoiceSelector,
-      },
-    );
-    if (point) {
-      return point;
+      return {
+        locator,
+        checked: await locator.getAttribute("aria-checked"),
+      };
     }
     await page.waitForTimeout(100);
   }
@@ -3869,12 +3861,7 @@ async function ensureConfiguredModelClass(
   report: CapabilityReportPayload,
   modelClass: "instant" | "thinking",
 ): Promise<void> {
-  const trigger = await waitForVisibleLocator(
-    page.locator(
-      "button[aria-label='Model selector'], button[aria-label='Switch model'], button[data-testid='model-switcher-dropdown-button']",
-    ),
-    INTERACTION_TIMEOUT_MS,
-  );
+  const trigger = await findVisibleModelPickerTrigger(page, INTERACTION_TIMEOUT_MS);
   if (!trigger) {
     if (!report.matrix.model_picker_visible) {
       throw new Error(
@@ -3887,17 +3874,33 @@ async function ensureConfiguredModelClass(
   }
 
   await trigger.click();
-  const option = await findVisiblePopupChoicePoint(page, modelClass);
+  const preferredTestId =
+    modelClass === "instant"
+      ? "model-switcher-gpt-5-3"
+      : "model-switcher-gpt-5-4-thinking";
+  const preferredOption = await waitForVisibleLocator(
+    page.locator(`[data-testid='${preferredTestId}']`),
+    1_000,
+  );
+  const option =
+    preferredOption !== null
+      ? {
+          locator: preferredOption,
+          checked: await preferredOption.getAttribute("aria-checked"),
+        }
+      : await findVisiblePopupChoicePoint(page, modelClass);
   if (!option) {
     throw new Error(
       `ui drift: could not find a concrete control for model=${modelClass} after alias discovery`,
     );
   }
   if (option.checked !== "true") {
-    await page
-      .locator("[role='menuitemradio'], [role='menuitem'], [role='option']")
-      .nth(option.index)
-      .click();
+    await option.locator.click({ force: true });
+    if (modelClass === "thinking") {
+      await findVisibleEffortTrigger(page, 2_500);
+    } else {
+      await page.waitForTimeout(300);
+    }
   }
 }
 
@@ -3910,10 +3913,7 @@ async function ensureConfiguredEffort(
     return;
   }
 
-  const trigger = await waitForVisibleLocator(
-    page.locator("button.__composer-pill[aria-haspopup]"),
-    INTERACTION_TIMEOUT_MS,
-  );
+  const trigger = await findVisibleEffortTrigger(page, INTERACTION_TIMEOUT_MS);
   if (!trigger) {
     if (!report.matrix.thinking_effort_visible) {
       throw new Error(`capability missing: thinking effort; requested=${effort}`);
@@ -3931,11 +3931,24 @@ async function ensureConfiguredEffort(
     );
   }
   if (option.checked !== "true") {
-    await page
-      .locator("[role='menuitemradio'], [role='menuitem'], [role='option']")
-      .nth(option.index)
-      .click();
+    await option.locator.click({ force: true });
   }
+}
+
+async function findVisibleEffortTrigger(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  return waitForVisibleLocator(
+    page.locator(
+      [
+        "button.__composer-pill[aria-haspopup]",
+        "button[aria-controls*='effort']",
+        "button[aria-label*='thinking'][aria-haspopup]",
+      ].join(", "),
+    ),
+    timeoutMs,
+  );
 }
 
 async function ensureConfiguredMode(
