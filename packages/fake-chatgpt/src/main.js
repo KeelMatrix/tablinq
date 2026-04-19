@@ -25,6 +25,7 @@ const usesDeepResearchFrame =
   variant === "live" &&
   (scenario === "research-success" ||
     scenario === "research-failure" ||
+    scenario === "research-reload" ||
     usesDeepResearchStartingShell);
 const keyboardSubmitEnabled =
   scenario !== "submit-upload-trap-no-keyboard" &&
@@ -1243,6 +1244,13 @@ function tickResearch(state) {
   setResearchState("running", "drafting report");
   state.index = Math.min(state.reportText.length, state.index + 12);
   renderResearchChunk(state);
+
+  if (scenario === "research-reload" && !state.didReload && state.index >= 24) {
+    state.didReload = true;
+    persistResearchState(state);
+    window.location.reload();
+    return;
+  }
 
   if (scenario === "research-failure" && state.index >= 24) {
     setResearchState("failed", "temporary upstream issue; retryable");

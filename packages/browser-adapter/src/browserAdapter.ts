@@ -1650,10 +1650,15 @@ export class BrowserAdapter {
       state.lastStatusAt = Date.now();
     }
 
-    const recoveredPage = await this.openExecutionPage(
+    let recoveredPage = await this.openExecutionPage(
       this.resolveConversationTarget(
         state.knownConversationId ?? command.conversationId,
       ),
+    );
+    recoveredPage = await this.recoverResearchExecutionPage(
+      recoveredPage,
+      state.knownConversationId ?? command.conversationId ?? null,
+      timeoutAt,
     );
     if (Date.now() >= timeoutAt) {
       throw new Error(
@@ -1789,6 +1794,117 @@ export class BrowserAdapter {
       };
     }
     return { page: recoveredPage };
+  }
+
+  private async recoverResearchExecutionPage(
+    page: Page,
+    knownConversationId: string | null,
+    timeoutAt: number,
+  ): Promise<Page> {
+    let candidate = await this.findRecoverableResearchPage(
+      page,
+      knownConversationId,
+    );
+    if (!candidate.isClosed()) {
+      await candidate.bringToFront().catch(() => undefined);
+    }
+    candidate = await this.reloadResearchPageIfStale(
+      candidate,
+      knownConversationId,
+      timeoutAt,
+    );
+    if (candidate !== this.managedPage) {
+      this.context = candidate.context();
+      this.observeContext(this.context);
+      this.attachPage(candidate, true);
+      this.targetPageCreatedByAdapter = false;
+    }
+    return candidate;
+  }
+
+  private async findRecoverableResearchPage(
+    page: Page,
+    knownConversationId: string | null,
+  ): Promise<Page> {
+    const expectedConversationId = normalizeOptionalString(knownConversationId);
+    const candidates = uniquePages([
+      page,
+      ...page.context().pages().filter((candidate) => !candidate.isClosed()),
+    ]);
+
+    let best = page;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const candidate of candidates) {
+      const locationScore = researchRecoveryLocationScore(
+        safePageUrl(candidate),
+        this.currentTargetUrl,
+        expectedConversationId,
+      );
+      if (locationScore < 0) {
+        continue;
+      }
+      const snapshot = await readLiveResearchSnapshot(candidate).catch(() => null);
+      const snapshotConversationId =
+        normalizeOptionalString(snapshot?.conversationId) ??
+        conversationIdFromUrl(snapshot?.currentUrl) ??
+        conversationIdFromUrl(safePageUrl(candidate));
+      const conversationMatches =
+        !expectedConversationId ||
+        !snapshotConversationId ||
+        snapshotConversationId === expectedConversationId;
+      const active =
+        snapshot &&
+        (snapshot.status === "waiting_for_sources" ||
+          snapshot.status === "running" ||
+          snapshot.status === "done" ||
+          snapshot.statusMessage === "awaiting start confirmation");
+      const score =
+        locationScore +
+        (conversationMatches ? 10 : 0) +
+        (active ? 20 : 0) +
+        ((snapshot?.reportText.length ?? 0) > 0 ? 5 : 0);
+      if (score > bestScore) {
+        best = candidate;
+        bestScore = score;
+      }
+    }
+
+    return best;
+  }
+
+  private async reloadResearchPageIfStale(
+    page: Page,
+    knownConversationId: string | null,
+    timeoutAt: number,
+  ): Promise<Page> {
+    const expectedConversationId = normalizeOptionalString(knownConversationId);
+    const snapshot = await readLiveResearchSnapshot(page).catch(() => null);
+    const snapshotConversationId =
+      normalizeOptionalString(snapshot?.conversationId) ??
+      conversationIdFromUrl(snapshot?.currentUrl) ??
+      conversationIdFromUrl(safePageUrl(page));
+    const exactConversation =
+      !!expectedConversationId && snapshotConversationId === expectedConversationId;
+    const stale =
+      !snapshot ||
+      ((snapshot.status === "idle" || snapshot.status === "failed") &&
+        !snapshot.reportText);
+    if (!stale || Date.now() >= timeoutAt) {
+      return page;
+    }
+    if (!exactConversation && expectedConversationId) {
+      return page;
+    }
+    await page
+      .reload({
+        waitUntil: "domcontentloaded",
+        timeout: Math.min(
+          NAVIGATION_TIMEOUT_MS,
+          Math.max(1, timeoutAt - Date.now()),
+        ),
+      })
+      .catch(() => undefined);
+    return page;
   }
 
   private async stabilizeAskCompletion(
@@ -2221,7 +2337,7 @@ export class BrowserAdapter {
     page: Page,
     targetUrl: string,
   ): Promise<void> {
-    if (this.cdpAttached && matchesTargetWorkspace(page.url(), targetUrl)) {
+    if (this.cdpAttached && matchesTargetLocation(page.url(), targetUrl)) {
       await page.waitForLoadState("domcontentloaded", {
         timeout: NAVIGATION_TIMEOUT_MS,
       });
@@ -2253,7 +2369,7 @@ export class BrowserAdapter {
       .flatMap((context) => context.pages())
       .filter(
         (page) =>
-          !page.isClosed() && matchesTargetWorkspace(page.url(), targetUrl),
+          !page.isClosed() && matchesTargetLocation(page.url(), targetUrl),
       );
 
     if (
@@ -4698,6 +4814,39 @@ function matchesTargetWorkspace(pageUrl: string, targetUrl: string): boolean {
   } catch {
     return false;
   }
+}
+
+function matchesTargetLocation(pageUrl: string, targetUrl: string): boolean {
+  const targetConversationId = conversationIdFromUrl(targetUrl);
+  if (targetConversationId) {
+    return conversationIdFromUrl(pageUrl) === targetConversationId;
+  }
+  return matchesTargetWorkspace(pageUrl, targetUrl);
+}
+
+function researchRecoveryLocationScore(
+  pageUrl: string | null,
+  targetUrl: string,
+  expectedConversationId: string | null,
+): number {
+  if (!pageUrl) {
+    return -1;
+  }
+  const pageConversationId = conversationIdFromUrl(pageUrl);
+  if (expectedConversationId) {
+    if (pageConversationId === expectedConversationId) {
+      return 100;
+    }
+    if (matchesTargetWorkspace(pageUrl, resolveConversationUrl(targetUrl, expectedConversationId))) {
+      return 10;
+    }
+    return -1;
+  }
+  return matchesTargetWorkspace(pageUrl, targetUrl) ? 0 : -1;
+}
+
+function uniquePages(pages: Page[]): Page[] {
+  return pages.filter((page, index, all) => all.indexOf(page) === index);
 }
 
 function logRecoveryDecision(

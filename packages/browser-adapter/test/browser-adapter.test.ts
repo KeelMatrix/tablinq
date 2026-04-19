@@ -2724,6 +2724,141 @@ describe("browser adapter", () => {
     30_000,
   );
 
+  it(
+    "recovers a running deep research job from the active conversation tab when another attached tab is selected",
+    async () => {
+      const server = await startTrackedFakeChatGptServer();
+      const targetUrl = withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-success",
+      });
+      const attached = await startTrackedAttachableBrowser(targetUrl);
+
+      await withAttachedBrowser(attached.endpoint, async (browser) => {
+        const context = browser.contexts()[0]!;
+        const rootPage = context.pages()[0]!;
+        await rootPage.waitForLoadState("domcontentloaded");
+        const researchPage = await context.newPage();
+        await researchPage.goto(targetUrl, { waitUntil: "domcontentloaded" });
+        await researchPage.locator("#deep-research-nav").click();
+        await researchPage
+          .locator("#prompt-textarea")
+          .fill("recover the active research tab after a client reconnect");
+        await researchPage.locator("[data-testid='send-button']").click();
+        await researchPage
+          .frameLocator("#deep-research-sandbox")
+          .getByRole("button", { name: "Start" })
+          .click();
+        await rootPage.bringToFront();
+        await researchPage.waitForTimeout(250);
+      });
+
+      const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+      const adapter = trackAdapter(
+        new BrowserAdapter({
+          profileDir: path.join(root, "profile"),
+          downloadsDir: path.join(root, "downloads"),
+          defaultTargetUrl: targetUrl,
+          connectionMode: "attach_first",
+          debugEndpoint: attached.endpoint,
+        }),
+      );
+      await adapter.open({ targetUrl, headless: true });
+
+      const states: string[] = [];
+      const result = await adapter.recoverResearch(
+        {
+          jobId: "job-research-recover-active-tab",
+          query: "recover the active research tab after a client reconnect",
+          timeoutMs: 7_000,
+        },
+        { emittedText: "", nextSeq: 0 },
+        () => {},
+        (update) => {
+          states.push(update.state);
+        },
+      );
+
+      expect(result.report_text).toContain(
+        "Research report for: recover the active research tab after a client reconnect",
+      );
+      expect(result.current_url).toContain(`/c/${result.conversation_id}`);
+      expect(states).toContain("interrupted");
+      expect(states).toContain("recovered");
+
+      await adapter.shutdown();
+      await stopFakeChatGptServer(server.process);
+    },
+    30_000,
+  );
+
+  it(
+    "recovers a running deep research job after the attached research tab reloads",
+    async () => {
+      const server = await startTrackedFakeChatGptServer();
+      const targetUrl = withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-reload",
+      });
+      const attached = await startTrackedAttachableBrowser(targetUrl);
+
+      await withAttachedBrowser(attached.endpoint, async (browser) => {
+        const page = browser.contexts()[0]!.pages()[0]!;
+        await page.waitForLoadState("domcontentloaded");
+        await page.locator("#deep-research-nav").click();
+        await page
+          .locator("#prompt-textarea")
+          .fill("recover a deep research run after a tab reload");
+        await page.locator("[data-testid='send-button']").click();
+        await page
+          .frameLocator("#deep-research-sandbox")
+          .getByRole("button", { name: "Start" })
+          .click();
+        await page.waitForTimeout(250);
+      });
+
+      const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+      const adapter = trackAdapter(
+        new BrowserAdapter({
+          profileDir: path.join(root, "profile"),
+          downloadsDir: path.join(root, "downloads"),
+          defaultTargetUrl: targetUrl,
+          connectionMode: "attach_first",
+          debugEndpoint: attached.endpoint,
+        }),
+      );
+      await adapter.open({ targetUrl, headless: true });
+
+      const updates: string[] = [];
+      const states: string[] = [];
+      const result = await adapter.recoverResearch(
+        {
+          jobId: "job-research-recover-reload",
+          query: "recover a deep research run after a tab reload",
+          timeoutMs: 7_000,
+        },
+        { emittedText: "", nextSeq: 0 },
+        (update) => {
+          updates.push(update.status);
+        },
+        (update) => {
+          states.push(update.state);
+        },
+      );
+
+      expect(result.report_text).toContain(
+        "Research report for: recover a deep research run after a tab reload",
+      );
+      expect(updates).toContain("running");
+      expect(states).toContain("interrupted");
+      expect(states).toContain("recovered");
+
+      await adapter.shutdown();
+      await stopFakeChatGptServer(server.process);
+    },
+    30_000,
+  );
+
   it("streams ask responses to completion in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
     const adapter = await createTrackedAdapterForMode("attach", server.url);
