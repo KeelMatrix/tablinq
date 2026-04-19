@@ -7,6 +7,7 @@ import {
   BrowserAdapter,
   chooseUniqueArtifactPath,
   conversationIdFromUrl,
+  deepResearchStartDelayMs,
   detectBrowserExecutable,
   resolveConversationUrl,
   resolveBrowserLaunchConfig,
@@ -51,6 +52,7 @@ function withHarnessUrl(
     missing?: string[];
     conversationStyle?: "query" | "path";
     initialModel?: "instant" | "thinking";
+    initialEffort?: "standard" | "extended";
   } = {},
 ): string {
   const url = new URL(baseUrl);
@@ -68,6 +70,9 @@ function withHarnessUrl(
   }
   if (options.initialModel) {
     url.searchParams.set("initial_model", options.initialModel);
+  }
+  if (options.initialEffort) {
+    url.searchParams.set("initial_effort", options.initialEffort);
   }
   return url.toString();
 }
@@ -393,6 +398,12 @@ describe("browser adapter", () => {
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
+  });
+
+  it("bounds the Deep Research start delay jitter to the real user range", () => {
+    expect(deepResearchStartDelayMs(0)).toBe(4_000);
+    expect(deepResearchStartDelayMs(0.5)).toBe(7_000);
+    expect(deepResearchStartDelayMs(1)).toBe(10_000);
   });
 
   it("reuses the managed page on repeated open", async () => {
@@ -1308,11 +1319,19 @@ describe("browser adapter", () => {
       new BrowserAdapter({
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: withHarnessUrl(server.url, { variant: "live" }),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
+          initialModel: "thinking",
+          initialEffort: "extended",
+        }),
       }),
     );
     await adapter.open({
-      targetUrl: withHarnessUrl(server.url, { variant: "live" }),
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+        initialModel: "thinking",
+        initialEffort: "extended",
+      }),
       headless: true,
     });
 
@@ -1501,12 +1520,16 @@ describe("browser adapter", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
           scenario: "research-success",
         }),
       }),
     );
     await adapter.open({
-      targetUrl: withHarnessUrl(server.url, { scenario: "research-success" }),
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-success",
+      }),
       headless: true,
     });
 
@@ -1649,12 +1672,16 @@ describe("browser adapter", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
           scenario: "research-failure",
         }),
       }),
     );
     await adapter.open({
-      targetUrl: withHarnessUrl(server.url, { scenario: "research-failure" }),
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-failure",
+      }),
       headless: true,
     });
 
@@ -2528,12 +2555,16 @@ describe("browser adapter", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
           scenario: "research-success",
         }),
       }),
     );
     await adapter.open({
-      targetUrl: withHarnessUrl(server.url, { scenario: "research-success" }),
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-success",
+      }),
       headless: true,
     });
 
@@ -2575,9 +2606,12 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
-  it("recovers a live research job after the client reconnects to an attached browser", async () => {
+  it(
+    "recovers a live research job after the client reconnects to an attached browser",
+    async () => {
     const server = await startTrackedFakeChatGptServer();
     const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
       scenario: "research-success",
     });
     const attached = await startTrackedAttachableBrowser(targetUrl);
@@ -2585,11 +2619,15 @@ describe("browser adapter", () => {
     await withAttachedBrowser(attached.endpoint, async (browser) => {
       const page = browser.contexts()[0]!.pages()[0]!;
       await page.waitForLoadState("domcontentloaded");
-      await page.locator("[data-mode='research']").click();
+      await page.locator("#deep-research-nav").click();
       await page
-        .locator("[data-slot='composer']")
+        .locator("#prompt-textarea")
         .fill("reconnect to a running deep research job");
-      await page.locator("[data-action='submit']").click();
+      await page.locator("[data-testid='send-button']").click();
+      await page
+        .frameLocator("#deep-research-sandbox")
+        .getByRole("button", { name: "Start" })
+        .click();
       await page.waitForTimeout(250);
     });
 
@@ -2632,7 +2670,9 @@ describe("browser adapter", () => {
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
-  });
+    },
+    30_000,
+  );
 
   it("streams ask responses to completion in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
@@ -2669,7 +2709,11 @@ describe("browser adapter", () => {
 
   it("drives the live-like harness through ask and artifact persistence in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
-    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      initialModel: "thinking",
+      initialEffort: "extended",
+    });
     const adapter = await createTrackedAdapterForMode("attach", targetUrl);
     const fixtureRoot = await mkdtemp(
       path.join(os.tmpdir(), "tablinq-browser-"),
@@ -2862,6 +2906,7 @@ describe("browser adapter", () => {
   it("runs research jobs with progress updates in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
     const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
       scenario: "research-success",
     });
     const adapter = await createTrackedAdapterForMode("attach", targetUrl);
@@ -2895,11 +2940,12 @@ describe("browser adapter", () => {
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
-  });
+  }, 30_000);
 
   it("fails research jobs with a research-specific error in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
     const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
       scenario: "research-failure",
     });
     const adapter = await createTrackedAdapterForMode("attach", targetUrl);
@@ -2918,7 +2964,7 @@ describe("browser adapter", () => {
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
-  });
+  }, 30_000);
 });
 
 describe("browser launch config", () => {

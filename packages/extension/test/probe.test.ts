@@ -55,20 +55,18 @@ describe("extension capability probe", () => {
     expect(message.report.matrix).toEqual({
       composer_ready: true,
       submit_available: true,
-      model_picker_visible: true,
-      thinking_effort_visible: true,
+      model_picker_visible: false,
+      thinking_effort_visible: false,
       search_mode_visible: true,
-      research_mode_visible: true,
+      research_mode_visible: false,
       upload_control_visible: true,
       downloadable_artifacts_observable: true,
     });
     expect(message.runtime.strategy_matches.composer_ready).toBe(
       "data-slot-composer",
     );
-    expect(message.report.aliases.model_classes.instant).toContain(
-      "gpt-5.3 instant",
-    );
-    expect(message.report.aliases.efforts.extended).toContain("extended");
+    expect(message.report.aliases.model_classes.instant).toBeUndefined();
+    expect(message.report.aliases.efforts.extended).toBeUndefined();
     expect(message.runtime.dom_neighborhoods.length).toBeGreaterThan(3);
     expect(validateCapabilityReport(message.report)).toBe(true);
     expect(validateCapabilityReport.errors).toBeNull();
@@ -117,10 +115,10 @@ describe("extension capability probe", () => {
     expect(message.report.matrix).toEqual({
       composer_ready: true,
       submit_available: true,
-      model_picker_visible: true,
-      thinking_effort_visible: true,
+      model_picker_visible: false,
+      thinking_effort_visible: false,
       search_mode_visible: true,
-      research_mode_visible: true,
+      research_mode_visible: false,
       upload_control_visible: true,
       downloadable_artifacts_observable: true,
     });
@@ -130,10 +128,8 @@ describe("extension capability probe", () => {
     expect(message.runtime.strategy_matches.search_mode_visible).toBe(
       "chatgpt-search-toggle",
     );
-    expect(message.report.aliases.model_classes.instant).toContain(
-      "instant answers",
-    );
     expect(message.report.aliases.modes.search).toContain("browse the web");
+    expect(message.report.aliases.model_classes.instant).toBeUndefined();
     expect(message.runtime.ui_signature).toContain("aria");
     expect(validateCapabilityReport(message.report)).toBe(true);
   });
@@ -145,15 +141,21 @@ describe("extension capability probe", () => {
         <section class="topbar">
           <button
             type="button"
-            data-slot="model-picker"
-            aria-label="ChatGPT"
+            data-testid="model-switcher-dropdown-button"
+            aria-label="Model selector"
             aria-haspopup="menu"
             aria-expanded="false"
           >
             ChatGPT
           </button>
           <button type="button" data-mode="search" aria-label="Search">Search</button>
-          <button type="button" data-mode="research" aria-label="Deep research">Deep research</button>
+          <nav aria-label="workspace navigation">
+            <a href="/apps" data-testid="apps-button">Apps</a>
+            <a href="/deep-research" data-testid="deep-research-sidebar-item">Deep research</a>
+            <a href="/codex/cloud">Codex</a>
+            <a href="/gpts">GPTs</a>
+            <button type="button">Projects</button>
+          </nav>
           <button type="button" data-testid="upload-button" aria-label="Add photos and files">Add files</button>
           <input id="live-upload-input" type="file" hidden multiple />
         </section>
@@ -162,26 +164,25 @@ describe("extension capability probe", () => {
           <div class="composer-actions">
             <button
               type="button"
-              data-slot="effort-toggle"
-              aria-label="Thinking effort"
+              class="__composer-pill"
+              aria-label="Thinking"
               aria-haspopup="menu"
               aria-expanded="false"
             >
-              Standard
+              Thinking
             </button>
           </div>
           <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
         </form>
         <div data-slot="portal-root">
-          <div data-slot="model-menu" role="menu" hidden>
-            <button type="button" role="menuitemradio" data-model="latest" hidden>Latest</button>
-            <button type="button" role="menuitemradio" data-model="instant" hidden>Instant</button>
-            <button type="button" role="menuitemradio" data-model="thinking" hidden>Thinking</button>
-            <button type="button" role="menuitemradio" data-model="pro" hidden>Pro</button>
+          <div id="tablinq-model-menu" role="menu" hidden>
+            <div role="menuitemradio" data-testid="model-switcher-gpt-5-3" hidden>Instant</div>
+            <div role="menuitemradio" data-testid="model-switcher-gpt-5-4-thinking" hidden>Thinking</div>
+            <div role="menuitemradio" data-testid="model-switcher-gpt-5-4-pro" hidden>Pro</div>
           </div>
-          <div data-slot="effort-menu" role="menu" hidden>
-            <button type="button" role="menuitemradio" data-effort="standard" hidden>Standard</button>
-            <button type="button" role="menuitemradio" data-effort="extended" hidden>Extended thinking</button>
+          <div id="tablinq-effort-menu" role="menu" hidden>
+            <div role="menuitemradio" hidden>Standard</div>
+            <div role="menuitemradio" hidden>Extended</div>
           </div>
         </div>
         <article data-message-author-role="assistant">
@@ -216,9 +217,7 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.model_classes.instant).toContain("instant");
     expect(message.report.aliases.model_classes.thinking).toContain("thinking");
     expect(message.report.aliases.modes.research).toContain("deep research");
-    expect(message.report.aliases.efforts.extended).toContain(
-      "extended thinking",
-    );
+    expect(message.report.aliases.efforts.extended).toContain("extended");
   });
 
   it("reports missing controls without inventing aliases", () => {

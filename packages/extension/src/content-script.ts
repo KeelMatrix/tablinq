@@ -1,5 +1,7 @@
 interface ChromeRuntimeLike {
-  sendMessage?: (message: CapabilityBridgeMessage) => void;
+  sendMessage?: (
+    message: CapabilityBridgeMessage,
+  ) => void | Promise<unknown>;
   id?: string;
 }
 
@@ -101,8 +103,26 @@ function installContentScript(
 function sendMessage(message: CapabilityBridgeMessage): void {
   const runtime = (globalThis as { chrome?: ChromeLike }).chrome?.runtime;
   if (runtime?.sendMessage) {
-    runtime.sendMessage(message);
-    return;
+    try {
+      const pending = runtime.sendMessage(message);
+      if (pending && typeof (pending as Promise<unknown>).catch === "function") {
+        void (pending as Promise<unknown>).catch(() => {
+          window.postMessage(
+            {
+              source: "tablinq-content-script",
+              ...message,
+            },
+            "*",
+          );
+        });
+        return;
+      }
+      return;
+    } catch {
+      // The extension may be unloading while Chrome keeps the old content
+      // script alive briefly. Fall through to the page bridge instead of
+      // surfacing an uncaught exception in chrome://extensions.
+    }
   }
 
   window.postMessage(

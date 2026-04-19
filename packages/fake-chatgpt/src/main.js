@@ -20,6 +20,9 @@ const usesDeepResearchLanding =
   scenario === "research-deep-landing" ||
   scenario === "research-deep-landing-submit-fail";
 const researchSubmissionFails = scenario === "research-deep-landing-submit-fail";
+const usesDeepResearchFrame =
+  variant === "live" &&
+  (scenario === "research-success" || scenario === "research-failure");
 const keyboardSubmitEnabled =
   scenario !== "submit-upload-trap-no-keyboard" &&
   scenario !== "submit-never-ready" &&
@@ -29,6 +32,11 @@ const initialModel =
   requestedInitialModel === "instant" || requestedInitialModel === "thinking"
     ? requestedInitialModel
     : "instant";
+const requestedInitialEffort = params.get("initial_effort");
+const initialEffort =
+  requestedInitialEffort === "standard" || requestedInitialEffort === "extended"
+    ? requestedInitialEffort
+    : "standard";
 const missingControls = new Set(
   (params.get("missing") || "")
     .split(",")
@@ -93,7 +101,7 @@ function deepResearchPathname(pathname) {
 document.body.dataset.uiVariant = variant;
 document.body.dataset.streamState = "idle";
 document.body.dataset.selectedModel = initialModel;
-document.body.dataset.selectedEffort = "standard";
+document.body.dataset.selectedEffort = initialEffort;
 document.body.dataset.selectedMode = "normal";
 document.body.dataset.uploadedFiles = "";
 document.body.dataset.uploadProcessing = "false";
@@ -139,14 +147,9 @@ function classicModelControls() {
 }
 
 function classicModeControls() {
-  return [
-    hasControl("search")
-      ? `<button type="button" data-mode="search" aria-pressed="false">Search</button>`
-      : "",
-    hasControl("research")
-      ? `<button type="button" data-mode="research" aria-pressed="false">Research</button>`
-      : "",
-  ].join("");
+  return hasControl("search")
+    ? `<button type="button" data-mode="search" aria-pressed="false">Search</button>`
+    : "";
 }
 
 function classicEffortControls() {
@@ -184,14 +187,9 @@ function ariaModelControls() {
 }
 
 function ariaModeControls() {
-  return [
-    hasControl("search")
-      ? `<button type="button" data-mode="search" aria-pressed="false">Browse the web</button>`
-      : "",
-    hasControl("research")
-      ? `<button type="button" data-mode="research" aria-pressed="false">Deep research</button>`
-      : "",
-  ].join("");
+  return hasControl("search")
+    ? `<button type="button" data-mode="search" aria-pressed="false">Browse the web</button>`
+    : "";
 }
 
 function ariaEffortControls() {
@@ -256,7 +254,7 @@ function liveSidebarNav() {
       <a href="/apps" data-testid="apps-button">Apps</a>
       ${
         hasControl("research")
-          ? `<a href="${deepResearchPathname(window.location.pathname)}" data-testid="deep-research-sidebar-item" id="deep-research-nav">Deep research</a>`
+          ? `<a href="${deepResearchPathname(window.location.pathname)}${window.location.search}" data-testid="deep-research-sidebar-item" id="deep-research-nav">Deep research</a>`
           : ""
       }
       <a href="/codex/cloud">Codex</a>
@@ -512,6 +510,16 @@ root.innerHTML =
             <p>Workspace notices appear here while ChatGPT is thinking.</p>
           </article>
         </section>
+        ${
+          usesDeepResearchFrame
+            ? `
+        <iframe
+          id="deep-research-sandbox"
+          title="internal://deep-research"
+        ></iframe>
+        `
+            : ""
+        }
         ${currentPortalMenus()}
       </main>
     `
@@ -617,6 +625,7 @@ const message = document.querySelector(
 const artifactLink = document.querySelector(
   "[data-slot='artifact-link'], [data-testid='artifact-download']",
 );
+const deepResearchFrame = document.querySelector("#deep-research-sandbox");
 let activeTimer = null;
 let uploadProcessingTimer = null;
 
@@ -670,6 +679,93 @@ function setResearchState(state, statusMessage = "") {
   document.body.dataset.researchStatusMessage = statusMessage;
 }
 
+function deepResearchFrameDocument() {
+  if (!(deepResearchFrame instanceof HTMLIFrameElement)) {
+    return null;
+  }
+  const doc = deepResearchFrame.contentDocument;
+  if (!doc) {
+    return null;
+  }
+  if (doc.body?.dataset.tablinqFrame === "true") {
+    return doc;
+  }
+  doc.open();
+  doc.write(`<!doctype html><html><body data-tablinq-frame="true"></body></html>`);
+  doc.close();
+  return deepResearchFrame.contentDocument;
+}
+
+function renderDeepResearchFrameIdle() {
+  const doc = deepResearchFrameDocument();
+  if (!doc?.body) {
+    return;
+  }
+  doc.body.innerHTML = "";
+}
+
+function renderDeepResearchPlanner(state) {
+  const doc = deepResearchFrameDocument();
+  if (!doc?.body) {
+    return;
+  }
+  doc.body.innerHTML = `
+    <main data-deep-research-root="true">
+      <h1>Deep research</h1>
+      <p>Review the proposed research plan before continuing.</p>
+      <section data-plan>${escapeHtml(state.promptText)}</section>
+      <div>
+        <button type="button" data-action="edit">Edit</button>
+        <button type="button" data-action="cancel">Cancel</button>
+        <button type="button" data-action="start">Start</button>
+      </div>
+    </main>
+  `;
+  doc
+    .querySelector("[data-action='cancel']")
+    ?.addEventListener("click", () => {
+      setStreamState("idle");
+      setResearchState("failed", "research cancelled");
+      setStreamingControls(false);
+      clearResearchState(state.conversationId);
+      renderDeepResearchFrameIdle();
+    });
+  doc
+    .querySelector("[data-action='start']")
+    ?.addEventListener("click", () => {
+      launchDeepResearch(state);
+    });
+}
+
+function renderDeepResearchFrameReport(state) {
+  const doc = deepResearchFrameDocument();
+  if (!doc?.body) {
+    return;
+  }
+  const text = state.reportText.slice(0, state.index);
+  const statusText =
+    state.phase === "waiting" ? "gathering sources" : "drafting report";
+  doc.body.innerHTML = `
+    <main data-deep-research-root="true">
+      <h1>Deep research</h1>
+      <p data-deep-research-status="true">${escapeHtml(statusText)}</p>
+      <pre data-deep-research-text="true">${escapeHtml(text)}</pre>
+    </main>
+  `;
+}
+
+function launchDeepResearch(state) {
+  setStreamState("running");
+  setResearchState("waiting_for_sources", "gathering sources");
+  setStreamingControls(true);
+  state.phase = "waiting";
+  state.waitTicks = 0;
+  state.index = 0;
+  renderDeepResearchFrameReport(state);
+  persistResearchState(state);
+  activeTimer = setTimeout(() => tickResearch(state), 80);
+}
+
 function clearComposer() {
   if (!composer) {
     return;
@@ -705,6 +801,7 @@ function enterDeepResearchLanding() {
   if (message) {
     message.textContent = "";
   }
+  renderDeepResearchFrameIdle();
 }
 
 function onDeepResearchLanding() {
@@ -794,14 +891,13 @@ function resetArtifactLink() {
     return;
   }
   if (variant === "live") {
-    artifactLink.setAttribute("href", "#");
+    artifactLink.removeAttribute("href");
     artifactLink.removeAttribute("download");
-    artifactLink.removeAttribute("data-artifact-ready");
   } else {
     artifactLink.setAttribute("href", "/artifact.txt");
     artifactLink.setAttribute("download", "artifact.txt");
-    artifactLink.setAttribute("data-artifact-ready", "false");
   }
+  artifactLink.setAttribute("data-artifact-ready", "false");
 }
 
 function submitPrompt(method) {
@@ -819,7 +915,7 @@ function submitPrompt(method) {
     "value" in composer ? composer.value.trim() : composer.textContent.trim();
   if (
     document.body.dataset.selectedMode === "research" &&
-    (scenario.startsWith("research-") || onDeepResearchLanding())
+    onDeepResearchLanding()
   ) {
     if (researchSubmissionFails) {
       return;
@@ -869,9 +965,7 @@ function prepareArtifact(promptText) {
     "download",
     `${safeStem || "artifact"}-summary.txt`,
   );
-  if (variant !== "live") {
-    artifactLink.setAttribute("data-artifact-ready", "true");
-  }
+  artifactLink.setAttribute("data-artifact-ready", "true");
 }
 
 function applyPressedState(selector, selectedValue) {
@@ -1078,6 +1172,10 @@ function finishStream(state) {
 }
 
 function renderResearchChunk(state) {
+  if (usesDeepResearchFrame) {
+    renderDeepResearchFrameReport(state);
+    return;
+  }
   if (!message) {
     return;
   }
@@ -1133,7 +1231,9 @@ function tickResearch(state) {
 
 function startResearch(promptText) {
   if (!message || !messageArticle) {
-    return;
+    if (!usesDeepResearchFrame) {
+      return;
+    }
   }
 
   const conversationId = currentConversationId();
@@ -1146,21 +1246,25 @@ function startResearch(promptText) {
       ? `Research report for: ${promptText}\n\nSources were reviewed and summarized.\nUploads: ${uploadedFiles().length ? uploadedFiles().join(", ") : "none"}`
       : "Research report for an empty query.",
     index: 0,
-    phase: "waiting",
+    phase: usesDeepResearchFrame ? "planning" : "waiting",
     waitTicks: 0,
   };
 
   document.body.dataset.researchSubmitted = "true";
-  messageArticle.hidden = false;
-  messageArticle.setAttribute("data-message-author-role", "assistant");
   writeConversationState(conversationId, messageId);
-  setStreamState("running");
-  setResearchState("waiting_for_sources", "gathering sources");
-  setStreamingControls(true);
-  message.textContent = "";
-  renderResearchChunk(state);
+  if (messageArticle instanceof HTMLElement) {
+    messageArticle.hidden = false;
+    messageArticle.setAttribute("data-message-author-role", "assistant");
+    messageArticle.setAttribute("data-message-id", messageId);
+  }
+  if (message) {
+    message.textContent = "";
+  }
+  setStreamState("idle");
+  setResearchState("idle", "");
+  setStreamingControls(false);
+  renderDeepResearchPlanner(state);
   persistResearchState(state);
-  activeTimer = setTimeout(() => tickResearch(state), 80);
 }
 
 function tickStream(state) {
@@ -1399,6 +1503,13 @@ function resumeResearchIfNeeded() {
 
   const state = JSON.parse(raw);
   writeConversationState(state.conversationId, state.messageId);
+  if (usesDeepResearchFrame && state.phase === "planning") {
+    setStreamState("idle");
+    setResearchState("idle", "");
+    setStreamingControls(false);
+    renderDeepResearchPlanner(state);
+    return;
+  }
   setStreamState("running");
   setResearchState(
     state.phase === "waiting" ? "waiting_for_sources" : "running",
@@ -1543,9 +1654,15 @@ stopButton?.addEventListener("click", () => {
   window.__tablinqCancelStream();
 });
 
+if (onDeepResearchLanding()) {
+  document.body.dataset.selectedMode = "research";
+  enterDeepResearchLanding();
+}
+
 syncSelectedState();
 renderUploadedFiles(uploadedFiles());
 resetArtifactLink();
 syncSubmissionControls();
+renderDeepResearchFrameIdle();
 resumeResearchIfNeeded();
 resumeStreamIfNeeded();

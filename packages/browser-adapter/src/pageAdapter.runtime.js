@@ -1540,14 +1540,11 @@ export function createTablinqPageAdapterRuntime() {
     if (!(element instanceof HTMLElement)) {
       return false;
     }
-    if (element.matches("[data-mode='research']")) {
-      return true;
-    }
     const pathname = elementPathname(element);
     return (
       element.getAttribute("data-testid") === "deep-research-sidebar-item" ||
-      pathnameHasSegment(pathname, "deep-research") ||
-      hasToken(accessibleName(element), ["deep research"])
+      (element.tagName.toLowerCase() === "a" &&
+        pathnameHasSegment(pathname, "deep-research"))
     );
   };
 
@@ -1880,8 +1877,6 @@ export function createTablinqPageAdapterRuntime() {
               "a[data-testid='deep-research-sidebar-item']",
               "a[href='/deep-research']",
               "a[href$='/deep-research']",
-              "[data-mode='research']",
-              "button[aria-label*='Deep research']",
             ],
       aliases,
       fallbackTokens:

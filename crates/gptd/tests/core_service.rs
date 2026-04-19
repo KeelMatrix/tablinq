@@ -197,7 +197,9 @@ fn core_service_runs_research_jobs_without_cli() {
     config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
     let core = CoreService::new(config).unwrap();
     core.browser_open(BrowserOpenRequest {
-        target_url: Some(format!("{fake_url}/?scenario=research-success")),
+        target_url: Some(format!(
+            "{fake_url}/?variant=live&scenario=research-success"
+        )),
         browser_path: None,
         headless: Some(true),
     })
