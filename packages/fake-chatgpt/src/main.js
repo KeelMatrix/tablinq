@@ -16,13 +16,16 @@ const usesStaleSubmitRecovery = scenario === "submit-upload-stale-recover";
 const hasDelayedUploadProcessing = scenario === "upload-processing-delay";
 const hasStuckUploadProcessing = scenario === "upload-processing-stuck";
 const hasBlockedSubmitAfterUpload = scenario === "submit-never-ready";
+const usesDeepResearchStartingShell = scenario === "research-starting-shell";
 const usesDeepResearchLanding =
   scenario === "research-deep-landing" ||
   scenario === "research-deep-landing-submit-fail";
 const researchSubmissionFails = scenario === "research-deep-landing-submit-fail";
 const usesDeepResearchFrame =
   variant === "live" &&
-  (scenario === "research-success" || scenario === "research-failure");
+  (scenario === "research-success" ||
+    scenario === "research-failure" ||
+    usesDeepResearchStartingShell);
 const keyboardSubmitEnabled =
   scenario !== "submit-upload-trap-no-keyboard" &&
   scenario !== "submit-never-ready" &&
@@ -754,6 +757,31 @@ function renderDeepResearchFrameReport(state) {
   `;
 }
 
+function renderDeepResearchStartingShell(state) {
+  const doc = deepResearchFrameDocument();
+  if (!doc?.body) {
+    return;
+  }
+  doc.body.innerHTML = `
+    <main data-deep-research-root="true">
+      <h1>Deep research</h1>
+      <p>Providing a comprehensive report for the user...</p>
+      <section>
+        <p>Browser vs Hosted AI for Enterprise</p>
+        <p>Update</p>
+        <ul>
+          <li>Collect vendor documentation for browser-backed AI and hosted API providers.</li>
+          <li>Survey enterprise security and compliance guidance on authentication reuse and data residency.</li>
+          <li>Synthesize comparisons into a concise matrix highlighting tradeoffs and recommendations.</li>
+        </ul>
+      </section>
+      <div>
+        <button type="button">Stop research</button>
+      </div>
+    </main>
+  `;
+}
+
 function launchDeepResearch(state) {
   setStreamState("running");
   setResearchState("waiting_for_sources", "gathering sources");
@@ -761,7 +789,11 @@ function launchDeepResearch(state) {
   state.phase = "waiting";
   state.waitTicks = 0;
   state.index = 0;
-  renderDeepResearchFrameReport(state);
+  if (usesDeepResearchStartingShell) {
+    renderDeepResearchStartingShell(state);
+  } else {
+    renderDeepResearchFrameReport(state);
+  }
   persistResearchState(state);
   activeTimer = setTimeout(() => tickResearch(state), 80);
 }

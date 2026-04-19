@@ -4096,11 +4096,23 @@ async function inspectDeepResearchFrame(
           .replace(/\u00a0/g, " ")
           .replace(/\r/g, "")
           .trim();
+      const nestedRootFrame = document.querySelector("iframe#root");
+      const nestedRootDocument =
+        nestedRootFrame instanceof HTMLIFrameElement
+          ? nestedRootFrame.contentDocument
+          : null;
+      const activeDocument =
+        nestedRootDocument?.body && nestedRootDocument.body.childElementCount > 0
+          ? nestedRootDocument
+          : document;
+      const activeWindow = activeDocument.defaultView ?? window;
+      const HTMLElementCtor =
+        activeWindow.HTMLElement ?? window.HTMLElement ?? HTMLElement;
       const isVisible = (element: Element): boolean => {
-        if (!(element instanceof HTMLElement) || element.hidden) {
+        if (!(element instanceof HTMLElementCtor) || element.hidden) {
           return false;
         }
-        const style = window.getComputedStyle(element);
+        const style = activeWindow.getComputedStyle(element);
         return (
           style.display !== "none" &&
           style.visibility !== "hidden" &&
@@ -4114,8 +4126,11 @@ async function inspectDeepResearchFrame(
             element.getAttribute("title"),
         );
       const buttons = Array.from(
-        document.querySelectorAll("button, [role='button']"),
+        activeDocument.querySelectorAll("button, [role='button']"),
       ).filter(isVisible);
+      const buttonNames = buttons.map((element) =>
+        buttonName(element).toLowerCase(),
+      );
       const startButton =
         buttons.find((element) => /^start$/i.test(buttonName(element))) ?? null;
       const startVisible = Boolean(startButton);
@@ -4131,23 +4146,50 @@ async function inspectDeepResearchFrame(
               ))
           )
         : false;
-      const reportRoot = document.querySelector("[data-deep-research-text]");
-      const statusRoot = document.querySelector("[data-deep-research-status]");
+      const hasPlannerControls =
+        buttonNames.includes("edit") || buttonNames.includes("cancel");
+      const stopResearchVisible = buttonNames.some(
+        (name) => name === "stop" || name === "stop research",
+      );
+      const explicitReportRoot =
+        activeDocument.querySelector("[data-deep-research-text]") ??
+        activeDocument.querySelector("[class*='reportPage']") ??
+        activeDocument.querySelector("article") ??
+        activeDocument.querySelector("[role='article']") ??
+        activeDocument.querySelector("[role='document']") ??
+        activeDocument.querySelector("pre");
+      const reportRoot =
+        explicitReportRoot ?? activeDocument.querySelector("main");
+      const statusRoot =
+        activeDocument.querySelector("[data-deep-research-status]") ??
+        activeDocument.querySelector("[class*='text-token-text-secondary']");
       const bodyText = normalize(
-        reportRoot instanceof HTMLElement
+        reportRoot instanceof HTMLElementCtor
           ? reportRoot.innerText
-          : document.body?.innerText ?? "",
+          : activeDocument.body?.innerText ?? "",
       );
       const statusText = normalize(
-        statusRoot instanceof HTMLElement ? statusRoot.innerText : "",
+        statusRoot instanceof HTMLElementCtor ? statusRoot.innerText : "",
       );
       const lowerUrl = window.location.href.toLowerCase();
       const lowerText = `${statusText}\n${bodyText}`.trim().toLowerCase();
+      const starting =
+        lowerText.includes("starting") ||
+        lowerText.includes("getting ready") ||
+        lowerText.includes("preparing");
+      const generatingReport =
+        lowerText.includes("providing a comprehensive report for the user");
+      const plannerShell =
+        hasPlannerControls ||
+        lowerText.includes("proposed research plan") ||
+        lowerText.includes("review the proposed research plan") ||
+        lowerText.includes("review the research plan");
       const candidate =
         startVisible ||
         lowerUrl.includes("deep_research") ||
         lowerUrl.includes("oaiusercontent") ||
         lowerText.includes("deep research") ||
+        stopResearchVisible ||
         lowerText.includes("gathering sources") ||
         lowerText.includes("drafting report") ||
         lowerText.includes("edit") ||
@@ -4169,28 +4211,48 @@ async function inspectDeepResearchFrame(
         lowerText.includes("drafting report") ||
         lowerText.includes("writing report") ||
         lowerText.includes("analyzing") ||
-        lowerText.includes("working");
+        lowerText.includes("working") ||
+        generatingReport ||
+        stopResearchVisible;
       const failed =
         lowerText.includes("failed") ||
         lowerText.includes("error") ||
         lowerText.includes("retry");
+      const provisionalShell =
+        !explicitReportRoot &&
+        (plannerShell ||
+          starting ||
+          waiting ||
+          generatingReport ||
+          stopResearchVisible);
+      const reportText = startVisible || provisionalShell ? "" : bodyText;
+      const completed =
+        statusText.toLowerCase().includes("research completed") ||
+        lowerText.includes("research completed");
       const phase: DeepResearchFrameSnapshot["phase"] = startVisible
         ? "planning"
+        : plannerShell
+          ? "planning"
         : failed
           ? "failed"
-          : waiting
-            ? "waiting_for_sources"
-            : running
-              ? "running"
-              : bodyText
-                ? "done"
-                : "running";
+        : completed
+          ? "done"
+        : waiting
+          ? "waiting_for_sources"
+        : starting
+          ? "running"
+        : running
+          ? "running"
+        : reportText
+          ? "done"
+        : "running";
       return {
         phase,
         statusMessage: startVisible
           ? "awaiting start confirmation"
-          : (statusText || lines[0] || null),
-        reportText: startVisible ? "" : bodyText,
+          : (statusText ||
+              (starting ? "starting research" : lines[0] || null)),
+        reportText,
         frameUrl: window.location.href,
         startVisible,
         startEnabled,
