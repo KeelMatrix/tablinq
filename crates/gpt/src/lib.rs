@@ -759,7 +759,8 @@ fn execute_ask_with_terminal_presentation(state_root: Option<&Path>, args: &AskA
     let config = gptd::AppConfig::load_or_create(state_root)?;
     let paths = build_state_paths(resolve_state_root(state_root));
     let command = build_ask_command(args);
-    let timeout = Duration::from_millis(config.ask_timeout_ms()) + IPC_TIMEOUT_BUFFER;
+    let timeout =
+        Duration::from_millis(resolve_ask_timeout_ms(&config, command.effort)) + IPC_TIMEOUT_BUFFER;
     let endpoint = paths.ipc_endpoint.clone();
     let worker_endpoint = endpoint.clone();
     let (tx, rx) = mpsc::channel();
@@ -1762,6 +1763,13 @@ fn map_effort(value: CliEffort) -> Effort {
         CliEffort::None => Effort::None,
         CliEffort::Standard => Effort::Standard,
         CliEffort::Extended => Effort::Extended,
+    }
+}
+
+fn resolve_ask_timeout_ms(config: &gptd::AppConfig, effort: Option<Effort>) -> u64 {
+    match effort {
+        Some(Effort::Extended) => config.extended_thinking_timeout_ms(),
+        _ => config.ask_timeout_ms(),
     }
 }
 

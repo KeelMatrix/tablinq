@@ -709,6 +709,7 @@ pub struct GatewayConfigSnapshot {
     pub per_client_limit: u32,
     pub request_timeout_ms: u64,
     pub ask_timeout_ms: u64,
+    pub extended_thinking_timeout_ms: u64,
     pub research_timeout_ms: u64,
     pub safe_mode_behavior: String,
 }

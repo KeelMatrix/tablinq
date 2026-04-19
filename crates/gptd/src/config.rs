@@ -19,6 +19,7 @@ pub struct GatewayFileConfig {
     pub per_client_limit: Option<u32>,
     pub request_timeout_ms: Option<u64>,
     pub ask_timeout_ms: Option<u64>,
+    pub extended_thinking_timeout_ms: Option<u64>,
     pub research_timeout_ms: Option<u64>,
     pub safe_mode_behavior: Option<String>,
 }
@@ -94,6 +95,7 @@ impl AppConfig {
                 per_client_limit: self.gateway_per_client_limit(),
                 request_timeout_ms: self.gateway_request_timeout_ms(),
                 ask_timeout_ms: self.ask_timeout_ms(),
+                extended_thinking_timeout_ms: self.extended_thinking_timeout_ms(),
                 research_timeout_ms: self.research_timeout_ms(),
                 safe_mode_behavior: self.gateway_safe_mode_behavior().to_owned(),
             },
@@ -247,6 +249,14 @@ impl AppConfig {
             .unwrap_or(15_000)
     }
 
+    pub fn extended_thinking_timeout_ms(&self) -> u64 {
+        self.file
+            .gateway
+            .as_ref()
+            .and_then(|value| value.extended_thinking_timeout_ms)
+            .unwrap_or(1_500_000)
+    }
+
     pub fn research_timeout_ms(&self) -> u64 {
         self.file
             .gateway
@@ -365,8 +375,11 @@ fn upgrade_file_config(mut file: FileConfig) -> FileConfig {
     if gateway.ask_timeout_ms.is_none() {
         gateway.ask_timeout_ms = Some(360_000);
     }
+    if gateway.extended_thinking_timeout_ms.is_none() {
+        gateway.extended_thinking_timeout_ms = Some(1_500_000);
+    }
     if gateway.research_timeout_ms.is_none() {
-        gateway.research_timeout_ms = Some(1_500_000);
+        gateway.research_timeout_ms = Some(4_800_000);
     }
     if gateway.safe_mode_behavior.is_none() {
         gateway.safe_mode_behavior = Some("reject_execution".to_owned());
@@ -431,7 +444,8 @@ mod tests {
         assert_eq!(config.gateway_per_client_limit(), 8);
         assert_eq!(config.gateway_request_timeout_ms(), 1_500_000);
         assert_eq!(config.ask_timeout_ms(), 360_000);
-        assert_eq!(config.research_timeout_ms(), 1_500_000);
+        assert_eq!(config.extended_thinking_timeout_ms(), 1_500_000);
+        assert_eq!(config.research_timeout_ms(), 4_800_000);
         assert_eq!(config.gateway_safe_mode_behavior(), "reject_execution");
         assert!(config.gateway_api_key().is_some());
     }
@@ -475,6 +489,20 @@ mod tests {
                 .as_ref()
                 .and_then(|value| value.per_client_limit),
             Some(8)
+        );
+        assert_eq!(
+            parsed
+                .gateway
+                .as_ref()
+                .and_then(|value| value.extended_thinking_timeout_ms),
+            Some(1_500_000)
+        );
+        assert_eq!(
+            parsed
+                .gateway
+                .as_ref()
+                .and_then(|value| value.research_timeout_ms),
+            Some(4_800_000)
         );
         assert!(
             parsed

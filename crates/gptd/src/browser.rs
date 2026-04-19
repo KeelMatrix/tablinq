@@ -184,7 +184,7 @@ impl BrowserManager {
             .ask(
                 job_id,
                 command,
-                self.config.ask_timeout_ms(),
+                resolve_ask_timeout_ms(&self.config, command),
                 &mut forwarding,
                 &mut on_state,
                 &mut should_cancel,
@@ -211,7 +211,7 @@ impl BrowserManager {
                         .recover_ask(
                             job_id,
                             command,
-                            self.config.ask_timeout_ms(),
+                            resolve_ask_timeout_ms(&self.config, command),
                             emitted_text.borrow().as_str(),
                             next_seq.get(),
                             &mut forwarding,
@@ -422,6 +422,13 @@ impl BrowserManager {
         if let Ok(logger) = JsonLogger::new(&self.config.paths.log_path) {
             let _ = logger.info(message, fields);
         }
+    }
+}
+
+fn resolve_ask_timeout_ms(config: &AppConfig, command: &AskCommand) -> u64 {
+    match command.effort {
+        Some(Effort::Extended) => config.extended_thinking_timeout_ms(),
+        _ => config.ask_timeout_ms(),
     }
 }
 
