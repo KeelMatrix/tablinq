@@ -1159,6 +1159,15 @@ function renderPlaceholderDrift(state) {
   messageArticle?.setAttribute("data-message-id", state.messageId);
 }
 
+function renderThinkingRewrite(state) {
+  if (!message) {
+    return;
+  }
+  message.innerHTML =
+    '<button type="button" disabled data-message-content="true">Thought for 7s</button>';
+  messageArticle?.setAttribute("data-message-id", state.messageId);
+}
+
 function persistState(state) {
   localStorage.setItem(
     streamStorageKey(state.conversationId),
@@ -1511,6 +1520,18 @@ function resumeStreamIfNeeded() {
     setStreamState("running");
     setStreamingControls(true);
     renderPlaceholderDrift(state);
+    persistState(state);
+    activeTimer = setTimeout(() => {
+      renderChunk(state);
+      persistState(state);
+      scheduleNextTick(state);
+    }, 180);
+    return;
+  }
+  if (scenario === "recover-same-message-rewrite") {
+    setStreamState("running");
+    setStreamingControls(true);
+    renderThinkingRewrite(state);
     persistState(state);
     activeTimer = setTimeout(() => {
       renderChunk(state);

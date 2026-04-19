@@ -914,7 +914,11 @@ export class BrowserAdapter {
       emittedText: options.emittedText,
       nextSeq: options.nextSeq,
       doneStreak: 0,
-      knownConversationId: command.conversationId ?? null,
+      knownConversationId:
+        command.conversationId ??
+        askBaseline?.conversationId ??
+        conversationIdFromUrl(safePageUrl(page)) ??
+        null,
       knownMessageId: null as string | null,
       askBaseline,
       pendingTextReconciliation: false,
@@ -1447,8 +1451,25 @@ export class BrowserAdapter {
       state.lastStatusAt = Date.now();
     }
 
+    const currentPageRecovery = await this.tryResumeAskFromPage(
+      page,
+      command,
+      state,
+      onChunk,
+      onState,
+      timeoutAt,
+    );
+    if (currentPageRecovery) {
+      return currentPageRecovery;
+    }
+
     const recoveredPage = await this.openExecutionPage(
-      this.resolveAskTarget(state.knownConversationId ?? command.conversationId),
+      this.resolveAskTarget(
+        state.knownConversationId ??
+          command.conversationId ??
+          state.askBaseline?.conversationId ??
+          conversationIdFromUrl(safePageUrl(page)),
+      ),
     );
     if (Date.now() >= timeoutAt) {
       throw new Error(
@@ -1458,81 +1479,20 @@ export class BrowserAdapter {
 
     let snapshot: AskSnapshot | null = null;
     while (Date.now() < timeoutAt) {
-      const candidate = await readAskSnapshot(recoveredPage, state.askBaseline);
-      const relation = textRelation(state.emittedText, candidate.text);
-      const relationIsUsable = relation === "same" || relation === "ahead";
-      const commandConversationId = normalizeOptionalString(
-        state.knownConversationId ?? command.conversationId,
+      const resolution = this.assessRecoveredAskSnapshot(
+        command,
+        state,
+        await readAskSnapshot(recoveredPage, state.askBaseline),
       );
-      const commandMessageId = normalizeOptionalString(state.knownMessageId);
-      const snapshotConversationId =
-        normalizeOptionalString(candidate.conversationId) ??
-        conversationIdFromUrl(candidate.currentUrl);
-      const snapshotMessageId = normalizeOptionalString(candidate.messageId);
-      const normalizedConversationId =
-        snapshotConversationId ?? commandConversationId;
-      const conversationMatches =
-        !commandConversationId ||
-        !snapshotConversationId ||
-        commandConversationId === snapshotConversationId;
-      const messageMatches =
-        commandMessageId !== null &&
-        snapshotMessageId !== null &&
-        commandMessageId === snapshotMessageId;
-      const messageMismatch =
-        commandMessageId !== null &&
-        snapshotMessageId !== null &&
-        commandMessageId !== snapshotMessageId;
-      const hasAssistantSignal =
-        candidate.hasAssistantMessage &&
-        (candidate.messageId !== null || candidate.text.length > 0);
-      const sameMessageDrift =
-        conversationMatches &&
-        messageMatches &&
-        (candidate.state === "running" || candidate.state === "done") &&
-        hasAssistantSignal;
-      const successorMessage =
-        conversationMatches &&
-        messageMismatch &&
-        relationIsUsable &&
-        (candidate.state === "running" || candidate.state === "done") &&
-        hasAssistantSignal;
-      const canContinue =
-        conversationMatches &&
-        (relationIsUsable || sameMessageDrift || successorMessage) &&
-        (candidate.state === "running" || candidate.state === "done") &&
-        hasAssistantSignal;
-      const hardMismatch = !conversationMatches;
-      logRecoveryDecision("ask", {
-        commandConversationId,
-        commandMessageId,
-        snapshotConversationId,
-        snapshotMessageId,
-        snapshotCurrentUrl: candidate.currentUrl,
-        normalizedConversationId,
-        relation,
-        conversationMatches,
-        messageMatches,
-        messageMismatch,
-        hasAssistantSignal,
-        snapshotState: candidate.state,
-        emittedTextLength: state.emittedText.length,
-        observedTextLength: candidate.text.length,
-        hasAssistantMessage: candidate.hasAssistantMessage,
-        sameMessageDrift,
-        successorMessage,
-        hardMismatch,
-        canContinue,
-      });
-      if (canContinue) {
-        this.rememberAskSnapshot(state, candidate);
-        if (relation === "mismatch" && sameMessageDrift) {
+      if (resolution.canContinue) {
+        this.rememberAskSnapshot(state, resolution.candidate);
+        if (resolution.relation === "mismatch" && resolution.sameMessageDrift) {
           state.pendingTextReconciliation = true;
         }
-        snapshot = candidate;
+        snapshot = resolution.candidate;
         break;
       }
-      if (hardMismatch) {
+      if (resolution.hardMismatch) {
         throw new Error(
           "interrupted ask could not be reconciled against the live conversation",
         );
@@ -1612,6 +1572,195 @@ export class BrowserAdapter {
       };
     }
     return { page: recoveredPage };
+  }
+
+  private assessRecoveredAskSnapshot(
+    command: AskExecutionCommand,
+    state: {
+      emittedText: string;
+      knownConversationId: string | null;
+      knownMessageId: string | null;
+    },
+    candidate: AskSnapshot,
+  ): {
+    candidate: AskSnapshot;
+    relation: ReturnType<typeof textRelation>;
+    sameMessageDrift: boolean;
+    hardMismatch: boolean;
+    canContinue: boolean;
+  } {
+    const relation = textRelation(state.emittedText, candidate.text);
+    const relationIsUsable = relation === "same" || relation === "ahead";
+    const transientOnlyOutput = isTransientAskStatusText(state.emittedText);
+    const commandConversationId = normalizeOptionalString(
+      state.knownConversationId ?? command.conversationId,
+    );
+    const commandMessageId = normalizeOptionalString(state.knownMessageId);
+    const snapshotConversationId =
+      normalizeOptionalString(candidate.conversationId) ??
+      conversationIdFromUrl(candidate.currentUrl);
+    const snapshotMessageId = normalizeOptionalString(candidate.messageId);
+    const normalizedConversationId =
+      snapshotConversationId ?? commandConversationId;
+    const conversationMatches =
+      !commandConversationId ||
+      !snapshotConversationId ||
+      commandConversationId === snapshotConversationId;
+    const messageMatches =
+      commandMessageId !== null &&
+      snapshotMessageId !== null &&
+      commandMessageId === snapshotMessageId;
+    const messageMismatch =
+      commandMessageId !== null &&
+      snapshotMessageId !== null &&
+      commandMessageId !== snapshotMessageId;
+    const hasAssistantSignal =
+      candidate.hasAssistantMessage &&
+      (candidate.messageId !== null || candidate.text.length > 0);
+    const sameMessageDrift =
+      conversationMatches &&
+      messageMatches &&
+      (candidate.state === "running" || candidate.state === "done") &&
+      hasAssistantSignal;
+    const successorMessage =
+      conversationMatches &&
+      messageMismatch &&
+      relationIsUsable &&
+      (candidate.state === "running" || candidate.state === "done") &&
+      hasAssistantSignal;
+    const canContinue =
+      conversationMatches &&
+      (relationIsUsable ||
+        transientOnlyOutput ||
+        sameMessageDrift ||
+        successorMessage) &&
+      (candidate.state === "running" || candidate.state === "done") &&
+      hasAssistantSignal;
+    const hardMismatch = !conversationMatches;
+    logRecoveryDecision("ask", {
+      commandConversationId,
+      commandMessageId,
+      snapshotConversationId,
+      snapshotMessageId,
+      snapshotCurrentUrl: candidate.currentUrl,
+      normalizedConversationId,
+      relation,
+      conversationMatches,
+      messageMatches,
+      messageMismatch,
+      hasAssistantSignal,
+      snapshotState: candidate.state,
+      emittedTextLength: state.emittedText.length,
+      observedTextLength: candidate.text.length,
+      hasAssistantMessage: candidate.hasAssistantMessage,
+      transientOnlyOutput,
+      sameMessageDrift,
+      successorMessage,
+      hardMismatch,
+      canContinue,
+    });
+    return {
+      candidate,
+      relation,
+      sameMessageDrift,
+      hardMismatch,
+      canContinue,
+    };
+  }
+
+  private async tryResumeAskFromPage(
+    page: Page,
+    command: AskExecutionCommand,
+    state: {
+      emittedText: string;
+      nextSeq: number;
+      doneStreak: number;
+      knownConversationId: string | null;
+      knownMessageId: string | null;
+      askBaseline: AskBaseline | null;
+      pendingTextReconciliation: boolean;
+      recoveryAttempts: number;
+      lastStatusAt: number;
+    },
+    onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void,
+    timeoutAt: number,
+  ): Promise<{ page: Page; result?: AskResultSnapshot } | null> {
+    let resolution:
+      | ReturnType<BrowserAdapter["assessRecoveredAskSnapshot"]>
+      | null = null;
+    try {
+      resolution = this.assessRecoveredAskSnapshot(
+        command,
+        state,
+        await readAskSnapshot(page, state.askBaseline),
+      );
+    } catch {
+      return null;
+    }
+    if (!resolution.canContinue) {
+      return null;
+    }
+
+    let snapshot = resolution.candidate;
+    this.rememberAskSnapshot(state, snapshot);
+    if (resolution.relation === "mismatch" && resolution.sameMessageDrift) {
+      state.pendingTextReconciliation = true;
+    }
+    await onState({
+      state: "recovered",
+      reason:
+        snapshot.state === "done"
+          ? "recovered the final assistant reply from the live conversation"
+          : "recovered the in-flight assistant reply from the live conversation",
+      at: new Date().toISOString(),
+      conversation_id: snapshot.conversationId,
+      message_id: snapshot.messageId,
+      current_url: snapshot.currentUrl,
+      streaming_safe: snapshot.state === "running",
+    });
+
+    const progressed = await this.applyAskSnapshot(command, state, snapshot, onChunk);
+    if (progressed) {
+      state.doneStreak = 0;
+    }
+    if (snapshot.state === "done") {
+      snapshot = await this.stabilizeAskCompletion(
+        page,
+        state.askBaseline,
+        snapshot,
+        timeoutAt,
+      );
+      this.rememberAskSnapshot(state, snapshot);
+      const stabilizedProgress = await this.applyAskSnapshot(
+        command,
+        state,
+        snapshot,
+        onChunk,
+      );
+      if (stabilizedProgress) {
+        state.doneStreak = 0;
+      }
+    }
+    if (snapshot.state !== "done") {
+      return { page };
+    }
+    state.doneStreak = STABLE_DONE_POLLS;
+    if (
+      state.pendingTextReconciliation &&
+      !canFinalizeRecoveredAskSnapshot(
+        state.emittedText,
+        state.knownMessageId,
+        snapshot,
+      )
+    ) {
+      return null;
+    }
+    state.pendingTextReconciliation = false;
+    return {
+      page,
+      result: await this.finalizeAsk(command, page, state, snapshot, onChunk),
+    };
   }
 
   private async reconcileResearchAfterInterruption(
@@ -3013,16 +3162,27 @@ function textRelation(
   emittedText: string,
   observedText: string,
 ): "same" | "ahead" | "behind" | "mismatch" {
-  if (observedText === emittedText) {
+  const normalizedEmitted = normalizeComparableAskText(emittedText);
+  const normalizedObserved = normalizeComparableAskText(observedText);
+  if (normalizedObserved === normalizedEmitted) {
     return "same";
   }
-  if (observedText.startsWith(emittedText)) {
+  if (normalizedObserved.startsWith(normalizedEmitted)) {
     return "ahead";
   }
-  if (emittedText.startsWith(observedText)) {
+  if (normalizedEmitted.startsWith(normalizedObserved)) {
     return "behind";
   }
   return "mismatch";
+}
+
+function normalizeComparableAskText(text: string): string {
+  const trimmed = text.trim();
+  return isTransientAskStatusText(trimmed) ? "" : trimmed;
+}
+
+function isTransientAskStatusText(text: string): boolean {
+  return /^thought for\b/i.test(text.trim());
 }
 
 function sameAskCompletionSnapshot(
@@ -3056,6 +3216,9 @@ function canFinalizeRecoveredAskText(
   emittedText: string,
   finalText: string,
 ): boolean {
+  if (isTransientAskStatusText(emittedText) && finalText.trim().length > 0) {
+    return true;
+  }
   const relation = textRelation(emittedText, finalText);
   if (relation !== "mismatch") {
     return true;
@@ -3078,7 +3241,7 @@ function canFinalizeRecoveredAskSnapshot(
   ) {
     return false;
   }
-  return markdownCompatibleRecoveredText(emittedText, snapshot.text);
+  return snapshot.text.trim().length > 0;
 }
 
 function markdownCompatibleRecoveredText(
@@ -3580,6 +3743,10 @@ async function applyAskConfiguration(
   command: AskExecutionCommand,
   report: CapabilityReportPayload | null,
 ): Promise<Page> {
+  await waitForInteractionSurface(page);
+  if (!command.mode || command.mode === "normal" || command.mode === "search") {
+    await clearComposerResearchModeIfActive(page);
+  }
   if (
     !command.modelClass &&
     !command.effort &&
@@ -3594,7 +3761,6 @@ async function applyAskConfiguration(
     );
   }
 
-  await waitForInteractionSurface(page);
   if (command.modelClass) {
     await ensureConfiguredModelClass(page, report, command.modelClass);
   }
@@ -3605,6 +3771,26 @@ async function applyAskConfiguration(
     page = await ensureConfiguredMode(page, report, command.mode);
   }
   return page;
+}
+
+async function clearComposerResearchModeIfActive(page: Page): Promise<void> {
+  const selector = "button[aria-label*='research' i][aria-label*='remove' i]";
+  const chip = await waitForVisibleLocator(page.locator(selector), 1_000);
+  if (!chip) {
+    return;
+  }
+
+  await chip.click();
+  try {
+    await page.locator(selector).first().waitFor({
+      state: "hidden",
+      timeout: INTERACTION_TIMEOUT_MS,
+    });
+  } catch {
+    throw new Error(
+      "ui drift: could not exit the active Deep Research composer before ask submission",
+    );
+  }
 }
 
 async function waitForVisibleLocator(
@@ -3683,17 +3869,18 @@ async function ensureConfiguredModelClass(
   report: CapabilityReportPayload,
   modelClass: "instant" | "thinking",
 ): Promise<void> {
-  if (!report.matrix.model_picker_visible) {
-    throw new Error(`capability missing: model picker; requested=${modelClass}`);
-  }
-
   const trigger = await waitForVisibleLocator(
     page.locator(
-      "button[aria-label='Model selector'], button[data-testid='model-switcher-dropdown-button']",
+      "button[aria-label='Model selector'], button[aria-label='Switch model'], button[data-testid='model-switcher-dropdown-button']",
     ),
     INTERACTION_TIMEOUT_MS,
   );
   if (!trigger) {
+    if (!report.matrix.model_picker_visible) {
+      throw new Error(
+        `capability missing: model picker; requested=${modelClass}`,
+      );
+    }
     throw new Error(
       `ui drift: could not find a model selector trigger for model=${modelClass}`,
     );

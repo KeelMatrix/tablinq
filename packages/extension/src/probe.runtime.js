@@ -260,6 +260,7 @@ export function probeDocument(options = {}) {
     element instanceof HTMLElement &&
     element.getAttribute("aria-haspopup") !== null &&
     (element.matches("button[aria-label='Model selector']") ||
+      element.matches("button[aria-label='Switch model']") ||
       element.matches("button[data-testid='model-switcher-dropdown-button']") ||
       hasToken(accessibleName(element), ["chatgpt", "model", "selector"]));
 
@@ -356,6 +357,7 @@ export function probeDocument(options = {}) {
   const findModelPickerTrigger = () =>
     firstVisibleBySelectors([
       "button[aria-label='Model selector']",
+      "button[aria-label='Switch model']",
       "button[data-testid='model-switcher-dropdown-button']",
     ]) ??
     findNamedControl(

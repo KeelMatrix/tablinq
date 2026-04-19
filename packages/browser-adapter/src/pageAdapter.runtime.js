@@ -822,14 +822,67 @@ export function createTablinqPageAdapterRuntime() {
       .replace(/[ \t]{2,}/g, " ")
       .trim();
 
+  const isTransientAskStatusText = (value) =>
+    /^thought for\b/i.test(collapseText(value));
+
+  const isTransientAskStatusElement = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    const text = collapseText(element.textContent);
+    if (!isTransientAskStatusText(text)) {
+      return false;
+    }
+    if (element.tagName.toLowerCase() === "button") {
+      return true;
+    }
+    const button = element.querySelector("button");
+    if (!(button instanceof HTMLElement)) {
+      return false;
+    }
+    return (
+      isTransientAskStatusText(button.textContent) &&
+      Array.from(
+        element.querySelectorAll(
+          [
+            ".markdown",
+            "p",
+            "pre",
+            "code",
+            "table",
+            "ol",
+            "ul",
+            "blockquote",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+          ].join(", "),
+        ),
+      ).every(
+        (candidate) => candidate === button || button.contains(candidate),
+      )
+    );
+  };
+
   const findMessageContentRoot = (root) => {
     if (!(root instanceof HTMLElement)) {
       return null;
     }
-    return (
-      root.querySelector(".markdown, [data-message-content]") ??
-      root
-    );
+    const candidates = Array.from(
+      root.querySelectorAll(".markdown, [data-message-content]"),
+    ).filter((candidate) => candidate instanceof HTMLElement);
+    for (const candidate of candidates) {
+      if (!isTransientAskStatusElement(candidate)) {
+        return candidate;
+      }
+    }
+    if (isTransientAskStatusElement(root)) {
+      return null;
+    }
+    return root;
   };
 
   const collectCodeBlockText = (element) => {
@@ -1130,6 +1183,9 @@ export function createTablinqPageAdapterRuntime() {
     if (!(contentRoot instanceof HTMLElement)) {
       return "";
     }
+    if (isTransientAskStatusElement(contentRoot)) {
+      return "";
+    }
     const streamRunning =
       (root?.getAttribute?.("data-stream-state") ??
         document.body.dataset.streamState ??
@@ -1138,7 +1194,7 @@ export function createTablinqPageAdapterRuntime() {
       isLastBlock: true,
       streamRunning,
     });
-    if (serialized) {
+    if (serialized && !isTransientAskStatusText(serialized)) {
       return serialized;
     }
 
@@ -1147,7 +1203,7 @@ export function createTablinqPageAdapterRuntime() {
         .filter((node) => node.nodeType === Node.TEXT_NODE)
         .map((node) => node.textContent),
     );
-    return directText.join("\n");
+    return directText.filter((value) => !isTransientAskStatusText(value)).join("\n");
   };
 
   const findAssistantMessages = () => {
@@ -1245,7 +1301,7 @@ export function createTablinqPageAdapterRuntime() {
     const explicitState =
       article?.getAttribute("data-stream-state") ??
       document.body.dataset.streamState;
-    if (explicitState) {
+    if (explicitState && explicitState !== "idle") {
       return explicitState;
     }
     if (stopButtonVisible()) {
@@ -1254,7 +1310,7 @@ export function createTablinqPageAdapterRuntime() {
     if (text) {
       return "done";
     }
-    return "idle";
+    return explicitState || "idle";
   };
 
   const readResearchStatusMessage = () =>
@@ -1480,6 +1536,7 @@ export function createTablinqPageAdapterRuntime() {
     element instanceof HTMLElement &&
     element.getAttribute("aria-haspopup") !== null &&
     (element.matches("button[aria-label='Model selector']") ||
+      element.matches("button[aria-label='Switch model']") ||
       element.matches("button[data-testid='model-switcher-dropdown-button']") ||
       hasToken(accessibleName(element), ["chatgpt", "model", "selector"]));
 
@@ -1635,6 +1692,7 @@ export function createTablinqPageAdapterRuntime() {
     findByAliases({
       selectors: [
         "button[aria-label='Model selector']",
+        "button[aria-label='Switch model']",
         "button[data-testid='model-switcher-dropdown-button']",
       ],
       aliases: unique(["chatgpt", ...aliases]),
