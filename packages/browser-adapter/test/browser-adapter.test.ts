@@ -46,6 +46,7 @@ function withHarnessUrl(
       | "recover-mismatch"
       | "recover-wrong-conversation"
       | "research-success"
+      | "research-starting-shell"
       | "research-failure"
       | "research-deep-landing"
       | "research-deep-landing-submit-fail";
@@ -1553,6 +1554,55 @@ describe("browser adapter", () => {
       "Research report for: investigate launch risks",
     );
     expect(result.artifacts).toHaveLength(1);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("does not finalize Deep Research early when a post-start shell shows provisional text", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
+          scenario: "research-starting-shell",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-starting-shell",
+      }),
+      headless: true,
+    });
+
+    const updates: string[] = [];
+    const result = await adapter.research(
+      {
+        jobId: "job-research-starting-shell",
+        query: "analyze browser-backed provider tradeoffs across latency, privacy, resilience, and deployment constraints",
+        timeoutMs: 8_000,
+      },
+      (update) => {
+        updates.push(update.status);
+      },
+    );
+
+    expect(updates).toContain("starting");
+    expect(updates).toContain("waiting_for_sources");
+    expect(updates).toContain("running");
+    expect(result.report_text).toContain(
+      "Research report for: analyze browser-backed provider tradeoffs across latency, privacy, resilience, and deployment constraints",
+    );
+    expect(result.report_text).not.toContain(
+      "Browser vs Hosted AI for Enterprise",
+    );
+    expect(result.report_text).not.toContain("Starting...");
+    expect(result.report_text).not.toContain("Stop research");
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
