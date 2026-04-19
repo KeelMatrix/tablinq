@@ -1663,6 +1663,83 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("runs a follow-up ask from a finished research conversation after clearing the active Deep research composer chip", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          variant: "live",
+          scenario: "research-success",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-success",
+      }),
+      headless: true,
+    });
+
+    await adapter.research(
+      {
+        jobId: "job-research-chip-followup",
+        query: "finish a research run before switching back to chat",
+        timeoutMs: 8_000,
+      },
+      () => {},
+    );
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const trigger = document.querySelector("#model-switcher-trigger");
+      if (!(trigger instanceof HTMLElement)) {
+        throw new Error("model trigger missing");
+      }
+      trigger.hidden = true;
+
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.textContent = "Deep research";
+      chip.className = "__composer-pill";
+      chip.setAttribute("aria-label", "Deep research, click to remove");
+      chip.addEventListener("click", () => {
+        chip.remove();
+        trigger.hidden = false;
+        document.body.dataset.selectedMode = "normal";
+        const syncState = (
+          window as Window & { syncSelectedState?: () => void }
+        ).syncSelectedState;
+        if (typeof syncState === "function") {
+          syncState();
+        }
+      });
+
+      const composer = document.querySelector("[data-testid='composer-root']");
+      composer?.appendChild(chip);
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-chip-followup",
+        prompt: "reply from a finished research thread",
+        modelClass: "thinking",
+        effort: "standard",
+        timeoutMs: 7_000,
+      },
+      () => {},
+    );
+
+    expect(result.output_text).toContain(
+      "Fake response for: reply from a finished research thread",
+    );
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("fails clearly when /deep-research landing submission never starts and does not emit recovery loops", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -2159,6 +2236,84 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("recovers a follow-up ask from the ask baseline conversation when the cached target URL is stale", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, { scenario: "followup-stale" });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const first = await adapter.ask(
+      {
+        jobId: "job-ask-followup-baseline-first",
+        prompt: "hello gpt",
+      },
+      () => {},
+    );
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      document.body.dataset.streamState = "done";
+      const latest = Array.from(
+        document.querySelectorAll("[data-message-author-role='assistant']"),
+      ).at(-1);
+      if (latest instanceof HTMLElement) {
+        latest.setAttribute("data-stream-state", "done");
+      }
+    });
+
+    const adapterWithInternals = adapter as unknown as BrowserAdapter & {
+      currentTargetUrl: string;
+      reconcileAskAfterInterruption: (...args: any[]) => Promise<any>;
+    };
+    adapterWithInternals.currentTargetUrl = server.url;
+
+    const chunks: string[] = [];
+    const result = await adapterWithInternals.reconcileAskAfterInterruption(
+      adapter.getManagedPageForTest()!,
+      {
+        jobId: "job-ask-followup-baseline-recover",
+        prompt: "hello gpt",
+        timeoutMs: 7_000,
+      },
+      {
+        emittedText: "",
+        nextSeq: 0,
+        doneStreak: 0,
+        knownConversationId: null,
+        knownMessageId: null,
+        askBaseline: {
+          assistantMessageCount: 0,
+          conversationId: first.conversation_id,
+          messageId: null,
+          text: "",
+        },
+        pendingTextReconciliation: false,
+        recoveryAttempts: 0,
+        lastStatusAt: 0,
+      },
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+      () => {},
+      "recovered the interrupted ask",
+      Date.now() + 7_000,
+    );
+
+    expect(result.result?.conversation_id).toBe(first.conversation_id);
+    expect(result.result?.output_text).toBe(first.output_text);
+    expect(chunks.join("")).toBe(first.output_text);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("recovers from a temporary streaming stall without replaying the prompt", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -2453,6 +2608,107 @@ describe("browser adapter", () => {
     expect(chunks.join("")).toBe(result.output_text);
     expect(states).toContain("interrupted");
     expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers when the same assistant message rewrites provisional thinking text into the final answer", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          scenario: "recover-same-message-rewrite",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        scenario: "recover-same-message-rewrite",
+      }),
+      headless: true,
+    });
+
+    const states: string[] = [];
+    const chunks: string[] = [];
+    let closeTriggered = false;
+    const request = adapter.ask(
+      {
+        jobId: "job-ask-recover-same-message-rewrite",
+        prompt: "recover after thinking rewrite",
+        timeoutMs: 7_000,
+      },
+      async (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.delta_text);
+        }
+        if (chunk.kind === "delta" && !closeTriggered) {
+          closeTriggered = true;
+          await adapter.getManagedPageForTest()!.context().browser()!.close();
+        }
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
+
+    const result = await request;
+    expect(result.output_text).toBe(
+      "Fake response for: recover after thinking rewrite",
+    );
+    expect(chunks.join("")).not.toContain("Thought for 7s");
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("recovers a finished ask when the saved emitted text is only transient thinking status", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+      }),
+    );
+    await adapter.open({
+      targetUrl: server.url,
+      headless: true,
+    });
+
+    const prompt = "recover after transient thinking status";
+    const initial = await adapter.ask(
+      {
+        jobId: "job-ask-transient-thinking-status-initial",
+        prompt,
+        timeoutMs: 7_000,
+      },
+      () => undefined,
+      () => undefined,
+    );
+
+    const recovered = await adapter.recoverAsk(
+      {
+        jobId: "job-ask-transient-thinking-status-recover",
+        prompt,
+        conversationId: initial.conversation_id,
+        timeoutMs: 7_000,
+      },
+      {
+        emittedText: "Thought for 7s",
+        nextSeq: 0,
+      },
+      () => undefined,
+      () => undefined,
+    );
+
+    expect(recovered.output_text).toBe(initial.output_text);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

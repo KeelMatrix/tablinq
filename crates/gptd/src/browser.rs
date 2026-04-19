@@ -166,6 +166,7 @@ impl BrowserManager {
         self.ensure_process()?;
         let emitted_text = RefCell::new(String::new());
         let next_seq = Cell::new(0u64);
+        let latest_state = RefCell::new(None::<RequestLifecycleUpdate>);
         let mut forwarding = |event: EventPayload| {
             if let EventPayload::StreamChunk(chunk) = &event
                 && chunk.kind == StreamChunkKind::Delta
@@ -175,6 +176,10 @@ impl BrowserManager {
                 next_seq.set(chunk.seq + 1);
             }
             on_event(event)
+        };
+        let mut state_forwarding = |update: RequestLifecycleUpdate| {
+            latest_state.replace(Some(update.clone()));
+            on_state(update)
         };
 
         match self
@@ -186,7 +191,7 @@ impl BrowserManager {
                 command,
                 resolve_ask_timeout_ms(&self.config, command),
                 &mut forwarding,
-                &mut on_state,
+                &mut state_forwarding,
                 &mut should_cancel,
             ) {
             Ok((snapshot, result)) => {
@@ -195,12 +200,30 @@ impl BrowserManager {
             }
             Err(err) => {
                 if is_recoverable_adapter_error(&err.to_string()) {
-                    on_state(RequestLifecycleUpdate {
+                    let recovery_conversation_id = derive_recovery_conversation_id(
+                        command.conversation_id.as_deref(),
+                        latest_state.borrow().as_ref(),
+                        self.last_snapshot.current_url.as_deref(),
+                    );
+                    let recovery_current_url = latest_state
+                        .borrow()
+                        .as_ref()
+                        .and_then(|update| update.current_url.clone())
+                        .or_else(|| self.last_snapshot.current_url.clone());
+                    let mut recovery_command = command.clone();
+                    if recovery_command.conversation_id.is_none() {
+                        recovery_command.conversation_id =
+                            recovery_conversation_id.clone();
+                    }
+                    if recovery_command.conversation_id.is_some() {
+                        recovery_command.new_conversation = false;
+                    }
+                    state_forwarding(RequestLifecycleUpdate {
                         status: JobStatus::Interrupted,
                         message: format!("ask interrupted: {err:#}"),
-                        conversation_id: command.conversation_id.clone(),
+                        conversation_id: recovery_conversation_id,
                         message_id: None,
-                        current_url: self.last_snapshot.current_url.clone(),
+                        current_url: recovery_current_url,
                         streaming_safe: false,
                     })?;
                     self.relaunch_for_recovery()?;
@@ -210,12 +233,12 @@ impl BrowserManager {
                         .expect("browser adapter process missing")
                         .recover_ask(
                             job_id,
-                            command,
-                            resolve_ask_timeout_ms(&self.config, command),
+                            &recovery_command,
+                            resolve_ask_timeout_ms(&self.config, &recovery_command),
                             emitted_text.borrow().as_str(),
                             next_seq.get(),
                             &mut forwarding,
-                            &mut on_state,
+                            &mut state_forwarding,
                             &mut should_cancel,
                         )?;
                     self.last_snapshot = snapshot;
@@ -250,6 +273,7 @@ impl BrowserManager {
         self.ensure_process()?;
         let emitted_text = RefCell::new(String::new());
         let next_seq = Cell::new(0u64);
+        let latest_state = RefCell::new(None::<RequestLifecycleUpdate>);
         let mut forwarding = |update: ResearchUpdate| {
             if let Some(chunk_text) = &update.chunk_text
                 && update.chunk_kind.unwrap_or(StreamChunkKind::Delta) == StreamChunkKind::Delta
@@ -259,6 +283,10 @@ impl BrowserManager {
                 next_seq.set(next_seq.get() + 1);
             }
             on_update(update)
+        };
+        let mut state_forwarding = |update: RequestLifecycleUpdate| {
+            latest_state.replace(Some(update.clone()));
+            on_state(update)
         };
 
         match self
@@ -270,7 +298,7 @@ impl BrowserManager {
                 command,
                 self.config.research_timeout_ms(),
                 &mut forwarding,
-                &mut on_state,
+                &mut state_forwarding,
                 &mut should_cancel,
             ) {
             Ok((snapshot, result)) => {
@@ -279,12 +307,30 @@ impl BrowserManager {
             }
             Err(err) => {
                 if is_recoverable_adapter_error(&err.to_string()) {
-                    on_state(RequestLifecycleUpdate {
+                    let recovery_conversation_id = derive_recovery_conversation_id(
+                        command.conversation_id.as_deref(),
+                        latest_state.borrow().as_ref(),
+                        self.last_snapshot.current_url.as_deref(),
+                    );
+                    let recovery_current_url = latest_state
+                        .borrow()
+                        .as_ref()
+                        .and_then(|update| update.current_url.clone())
+                        .or_else(|| self.last_snapshot.current_url.clone());
+                    let mut recovery_command = command.clone();
+                    if recovery_command.conversation_id.is_none() {
+                        recovery_command.conversation_id =
+                            recovery_conversation_id.clone();
+                    }
+                    if recovery_command.conversation_id.is_some() {
+                        recovery_command.new_conversation = false;
+                    }
+                    state_forwarding(RequestLifecycleUpdate {
                         status: JobStatus::Interrupted,
                         message: format!("research interrupted: {err:#}"),
-                        conversation_id: command.conversation_id.clone(),
+                        conversation_id: recovery_conversation_id,
                         message_id: None,
-                        current_url: self.last_snapshot.current_url.clone(),
+                        current_url: recovery_current_url,
                         streaming_safe: false,
                     })?;
                     self.relaunch_for_recovery()?;
@@ -294,12 +340,12 @@ impl BrowserManager {
                         .expect("browser adapter process missing")
                         .recover_research(
                             job_id,
-                            command,
+                            &recovery_command,
                             self.config.research_timeout_ms(),
                             emitted_text.borrow().as_str(),
                             next_seq.get(),
                             &mut forwarding,
-                            &mut on_state,
+                            &mut state_forwarding,
                             &mut should_cancel,
                         )?;
                     self.last_snapshot = snapshot;
@@ -1088,6 +1134,41 @@ fn is_recoverable_adapter_error(message: &str) -> bool {
         || message.contains("browser adapter closed without")
 }
 
+fn derive_recovery_conversation_id(
+    command_conversation_id: Option<&str>,
+    latest_update: Option<&RequestLifecycleUpdate>,
+    current_url: Option<&str>,
+) -> Option<String> {
+    command_conversation_id
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            latest_update
+                .and_then(|update| update.conversation_id.as_deref())
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            latest_update
+                .and_then(|update| update.current_url.as_deref())
+                .and_then(conversation_id_from_url)
+        })
+        .or_else(|| current_url.and_then(conversation_id_from_url))
+}
+
+fn conversation_id_from_url(raw_url: &str) -> Option<String> {
+    let marker = "/c/";
+    let start = raw_url.find(marker)? + marker.len();
+    let rest = &raw_url[start..];
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let value = rest[..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_owned())
+    }
+}
+
 fn should_reset_after_failure(message: &str) -> bool {
     message.contains("cancelled")
         || message.contains("target page is not open")
@@ -1135,6 +1216,39 @@ fn idle_snapshot(
             last_capability_report_at: None,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        JobStatus, RequestLifecycleUpdate, conversation_id_from_url,
+        derive_recovery_conversation_id,
+    };
+
+    #[test]
+    fn derives_recovery_conversation_id_from_latest_update_url() {
+        let update = RequestLifecycleUpdate {
+            status: JobStatus::Interrupted,
+            message: "stalled".to_owned(),
+            conversation_id: None,
+            message_id: None,
+            current_url: Some("https://chatgpt.com/c/abc-123?foo=bar".to_owned()),
+            streaming_safe: false,
+        };
+
+        let derived = derive_recovery_conversation_id(None, Some(&update), None);
+
+        assert_eq!(derived.as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn extracts_conversation_id_from_chatgpt_url() {
+        assert_eq!(
+            conversation_id_from_url("https://chatgpt.com/c/69e4dd56-83d0-8320-a7f9-af910cb31fd1"),
+            Some("69e4dd56-83d0-8320-a7f9-af910cb31fd1".to_owned())
+        );
+        assert_eq!(conversation_id_from_url("https://chatgpt.com/"), None);
+    }
 }
 
 fn normalize_snapshot(

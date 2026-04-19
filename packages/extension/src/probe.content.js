@@ -255,17 +255,18 @@
       !element.hasAttribute("data-model") &&
       (element.matches("[data-slot='model-picker']") ||
         element.getAttribute("aria-haspopup") !== null) &&
-      hasToken(accessibleName(element), [
-        "chatgpt",
-        "model",
-        "selector",
-        "engine",
-        "gpt",
-        "latest",
-        "instant",
-        "thinking",
-        "pro",
-      ]);
+      (element.matches("button[aria-label='Switch model']") ||
+        hasToken(accessibleName(element), [
+          "chatgpt",
+          "model",
+          "selector",
+          "engine",
+          "gpt",
+          "latest",
+          "instant",
+          "thinking",
+          "pro",
+        ]));
 
     const isEffortPickerTrigger = (element) =>
       element instanceof HTMLElement &&
@@ -310,6 +311,7 @@
     const findModelPickerTrigger = () =>
       firstVisibleBySelectors([
         "[data-slot='model-picker']",
+        "button[aria-label='Switch model']",
         "button[aria-haspopup][aria-label*='ChatGPT']",
         "button[aria-haspopup][aria-label*='chatgpt']",
       ]) ??
