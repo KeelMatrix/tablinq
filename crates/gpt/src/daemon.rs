@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 static EXECUTION_INTERRUPT_HANDLER: OnceLock<()> = OnceLock::new();
 static EXECUTION_INTERRUPT_SENDER: OnceLock<Mutex<Option<mpsc::Sender<()>>>> = OnceLock::new();
 
-pub(crate) fn send_daemon_request(state_root: Option<&Path>, request: DaemonRequest) -> Result<Value> {
+pub(crate) fn send_daemon_request(
+    state_root: Option<&Path>,
+    request: DaemonRequest,
+) -> Result<Value> {
     let config = gptd::AppConfig::load_or_create(state_root)?;
     let paths = build_state_paths(resolve_state_root(state_root));
     let timeout = Duration::from_millis(config.gateway_request_timeout_ms());

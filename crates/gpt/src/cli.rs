@@ -1,5 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use shared_protocol::{AskCommand, Effort, Mode, ModelClass, ResearchCommand};
+use shared_protocol::{
+    AskCommand, ConversationSelectCommand, Effort, Mode, ModelClass, ResearchCommand,
+};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser, PartialEq, Eq)]
@@ -35,6 +37,10 @@ pub enum Command {
         #[command(subcommand)]
         command: SessionsCommand,
     },
+    Conversations {
+        #[command(subcommand)]
+        command: ConversationsCommand,
+    },
     Jobs {
         #[command(subcommand)]
         command: JobsCommand,
@@ -68,6 +74,8 @@ pub struct AskArgs {
     pub files: Vec<PathBuf>,
     #[arg(long)]
     pub conversation: Option<String>,
+    #[arg(long, conflicts_with = "conversation")]
+    pub new_conversation: bool,
 }
 
 #[derive(Debug, Args, PartialEq, Eq)]
@@ -101,6 +109,13 @@ pub enum ConfigCommand {
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum SessionsCommand {
     List,
+}
+
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum ConversationsCommand {
+    List,
+    Switch { conversation_id: String },
+    New,
 }
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
@@ -179,7 +194,7 @@ pub(crate) fn build_ask_command(args: &AskArgs) -> AskCommand {
     AskCommand {
         prompt: args.prompt.clone(),
         conversation_id: args.conversation.clone(),
-        new_conversation: false,
+        new_conversation: args.new_conversation,
         mode: map_mode(args.mode),
         model_class: Some(
             args.model_class
@@ -209,6 +224,22 @@ pub(crate) fn build_research_command(args: &ResearchArgs) -> ResearchCommand {
             .output_dir
             .as_ref()
             .map(|path| path.display().to_string()),
+    }
+}
+
+pub(crate) fn build_conversation_select_command(
+    command: &ConversationsCommand,
+) -> Option<ConversationSelectCommand> {
+    match command {
+        ConversationsCommand::List => None,
+        ConversationsCommand::Switch { conversation_id } => Some(ConversationSelectCommand {
+            conversation_id: Some(conversation_id.clone()),
+            new_conversation: false,
+        }),
+        ConversationsCommand::New => Some(ConversationSelectCommand {
+            conversation_id: None,
+            new_conversation: true,
+        }),
     }
 }
 
@@ -336,6 +367,64 @@ mod tests {
     }
 
     #[test]
+    fn conversations_list_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "conversations", "list"]);
+        assert!(matches!(
+            cli.command,
+            Command::Conversations {
+                command: ConversationsCommand::List
+            }
+        ));
+    }
+
+    #[test]
+    fn conversations_switch_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "conversations", "switch", "conv-123"]);
+        assert!(matches!(
+            cli.command,
+            Command::Conversations {
+                command: ConversationsCommand::Switch { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn conversations_new_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "conversations", "new"]);
+        assert!(matches!(
+            cli.command,
+            Command::Conversations {
+                command: ConversationsCommand::New
+            }
+        ));
+    }
+
+    #[test]
+    fn ask_command_accepts_new_conversation_flag() {
+        let cli = parse(&["gpt", "ask", "hello world", "--new-conversation"]);
+        assert!(matches!(
+            cli.command,
+            Command::Ask(AskArgs {
+                new_conversation: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn ask_command_rejects_conflicting_conversation_flags() {
+        let result = Cli::try_parse_from([
+            "gpt",
+            "ask",
+            "hello world",
+            "--conversation",
+            "conv-123",
+            "--new-conversation",
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn jobs_show_command_matches_golden_shape() {
         let cli = parse(&["gpt", "jobs", "show", "job-123"]);
         assert!(matches!(cli.command, Command::Jobs { .. }));
@@ -417,6 +506,7 @@ mod tests {
             effort: Some(CliEffort::Extended),
             files: vec![PathBuf::from("notes.txt")],
             conversation: Some("conv-7".to_owned()),
+            new_conversation: false,
         };
 
         let command = build_ask_command(&args);
@@ -425,6 +515,7 @@ mod tests {
         assert_eq!(command.effort, Some(Effort::Extended));
         assert_eq!(command.files, vec!["notes.txt".to_owned()]);
         assert_eq!(command.conversation_id.as_deref(), Some("conv-7"));
+        assert!(!command.new_conversation);
     }
 
     #[test]
@@ -436,9 +527,41 @@ mod tests {
             effort: None,
             files: vec![],
             conversation: None,
+            new_conversation: false,
         };
 
         let command = build_ask_command(&args);
         assert_eq!(command.model_class, Some(ModelClass::Instant));
+    }
+
+    #[test]
+    fn build_ask_command_maps_new_conversation_flag() {
+        let args = AskArgs {
+            prompt: "hello".to_owned(),
+            mode: CliMode::Normal,
+            model_class: None,
+            effort: None,
+            files: vec![],
+            conversation: None,
+            new_conversation: true,
+        };
+
+        let command = build_ask_command(&args);
+        assert!(command.new_conversation);
+        assert_eq!(command.conversation_id, None);
+    }
+
+    #[test]
+    fn build_conversation_select_command_maps_switch_and_new() {
+        let switch = build_conversation_select_command(&ConversationsCommand::Switch {
+            conversation_id: "conv-9".to_owned(),
+        })
+        .unwrap();
+        assert_eq!(switch.conversation_id.as_deref(), Some("conv-9"));
+        assert!(!switch.new_conversation);
+
+        let fresh = build_conversation_select_command(&ConversationsCommand::New).unwrap();
+        assert_eq!(fresh.conversation_id, None);
+        assert!(fresh.new_conversation);
     }
 }

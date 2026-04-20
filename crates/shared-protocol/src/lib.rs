@@ -241,6 +241,31 @@ impl ResearchCommand {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct ConversationSelectCommand {
+    pub conversation_id: Option<String>,
+    #[serde(default)]
+    pub new_conversation: bool,
+}
+
+impl ConversationSelectCommand {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_optional("conversation_id", self.conversation_id.as_deref())?;
+        match (self.conversation_id.is_some(), self.new_conversation) {
+            (true, false) | (false, true) => Ok(()),
+            (true, true) => Err(ValidationError::InvalidFieldCombination {
+                field: "conversation_id".to_owned(),
+                message: "conversation_id cannot be combined with new_conversation".to_owned(),
+            }),
+            (false, false) => Err(ValidationError::InvalidFieldCombination {
+                field: "conversation_id".to_owned(),
+                message: "conversation_id or new_conversation is required".to_owned(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct CancelJobCommand {
     pub job_id: String,
 }
@@ -645,6 +670,8 @@ pub enum DaemonRequest {
     Capabilities,
     ConfigShow,
     SessionsList,
+    ConversationsList,
+    ConversationSelect(ConversationSelectCommand),
     JobsList,
     JobsShow(String),
     JobsCancel(CancelJobCommand),
@@ -670,6 +697,8 @@ pub enum DaemonResponse {
     Capabilities(CapabilitySnapshot),
     Config(ConfigSnapshot),
     Sessions(SessionList),
+    Conversations(ConversationList),
+    ConversationSelection(ConversationSelection),
     Jobs(JobList),
     Job(JobDetail),
     Artifacts(ArtifactList),
@@ -815,6 +844,12 @@ pub struct SessionList {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+pub struct ConversationList {
+    pub conversations: Vec<ConversationSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ConversationSummary {
     pub conversation_id: String,
     pub session_id: String,
@@ -823,6 +858,15 @@ pub struct ConversationSummary {
     pub last_prompt: Option<String>,
     pub last_response: Option<String>,
     pub last_seen_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationSelection {
+    pub conversation_id: Option<String>,
+    pub session_id: Option<String>,
+    pub current_url: Option<String>,
+    pub browser: BrowserStatusSnapshot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1393,6 +1437,62 @@ mod tests {
         };
 
         command.validate().unwrap();
+    }
+
+    #[test]
+    fn conversation_select_command_accepts_known_conversation_id() {
+        ConversationSelectCommand {
+            conversation_id: Some("conv-1".to_owned()),
+            new_conversation: false,
+        }
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn conversation_select_command_accepts_new_conversation() {
+        ConversationSelectCommand {
+            conversation_id: None,
+            new_conversation: true,
+        }
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn conversation_select_command_rejects_missing_target() {
+        let err = ConversationSelectCommand {
+            conversation_id: None,
+            new_conversation: false,
+        }
+        .validate()
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ValidationError::InvalidFieldCombination {
+                field: "conversation_id".to_owned(),
+                message: "conversation_id or new_conversation is required".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn conversation_select_command_rejects_conflicting_target_flags() {
+        let err = ConversationSelectCommand {
+            conversation_id: Some("conv-1".to_owned()),
+            new_conversation: true,
+        }
+        .validate()
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            ValidationError::InvalidFieldCombination {
+                field: "conversation_id".to_owned(),
+                message: "conversation_id cannot be combined with new_conversation".to_owned(),
+            }
+        );
     }
 
     #[test]

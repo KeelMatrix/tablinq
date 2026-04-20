@@ -67,7 +67,6 @@ fn paperclip_like_queue_pressure_returns_retry_metadata() {
     let _ = fake_server.wait();
 }
 
-
 #[test]
 fn chat_completions_run_queued_requests_in_fifo_order() {
     let _guard = integration_lock();
@@ -645,7 +644,6 @@ fn chat_completions_return_queue_timeout_when_wait_expires() {
     let _ = fake_server.wait();
 }
 
-
 #[test]
 fn queue_reports_a_single_running_upstream_job_and_serializes_follow_up_work() {
     let _guard = integration_lock();
@@ -978,5 +976,3 @@ fn queue_rejects_requests_when_the_queue_is_full() {
     let _ = fake_server.kill();
     let _ = fake_server.wait();
 }
-
-

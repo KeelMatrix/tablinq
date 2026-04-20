@@ -1,7 +1,7 @@
 use chrono::{Duration, Utc};
 use gptd::{AppConfig, Database, daemon_is_responsive, send_request, send_request_stream};
-use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use interprocess::local_socket::traits::Stream as LocalSocketStreamTrait;
+use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use shared_protocol::{
     AskCommand, BrowserOpenRequest, DaemonRequest, DaemonResponse, Effort, ErrorCode, EventPayload,
     HealthStatus, JobStatus, Mode, ModelClass, PullArtifactCommand, ResearchCommand,

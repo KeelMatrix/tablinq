@@ -16,8 +16,8 @@ use serde::Deserialize;
 use serde_json::json;
 use shared_protocol::{
     AskCommand, AskResult, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport,
-    EventPayload, JobStatus, ResearchCommand, ResearchResult, SelectorPackSummary,
-    StrategyAttempt, StrategyTelemetryEntry, StreamChunkKind,
+    EventPayload, JobStatus, ResearchCommand, ResearchResult, SelectorPackSummary, StrategyAttempt,
+    StrategyTelemetryEntry, StreamChunkKind,
 };
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -219,8 +219,7 @@ impl BrowserManager {
                         .or_else(|| self.last_snapshot.current_url.clone());
                     let mut recovery_command = command.clone();
                     if recovery_command.conversation_id.is_none() {
-                        recovery_command.conversation_id =
-                            recovery_conversation_id.clone();
+                        recovery_command.conversation_id = recovery_conversation_id.clone();
                     }
                     if recovery_command.conversation_id.is_some() {
                         recovery_command.new_conversation = false;
@@ -326,8 +325,7 @@ impl BrowserManager {
                         .or_else(|| self.last_snapshot.current_url.clone());
                     let mut recovery_command = command.clone();
                     if recovery_command.conversation_id.is_none() {
-                        recovery_command.conversation_id =
-                            recovery_conversation_id.clone();
+                        recovery_command.conversation_id = recovery_conversation_id.clone();
                     }
                     if recovery_command.conversation_id.is_some() {
                         recovery_command.new_conversation = false;

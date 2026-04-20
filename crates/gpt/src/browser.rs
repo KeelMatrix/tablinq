@@ -10,7 +10,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 
-pub(crate) fn run_browser_command(state_root: Option<&Path>, command: &BrowserCommand) -> Result<Value> {
+pub(crate) fn run_browser_command(
+    state_root: Option<&Path>,
+    command: &BrowserCommand,
+) -> Result<Value> {
     let config = gptd::AppConfig::load_or_create(state_root)?;
     match command {
         BrowserCommand::Open {

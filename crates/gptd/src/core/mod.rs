@@ -1,25 +1,23 @@
 mod operations;
 mod support;
 
-use crate::browser::{
-    BrowserManager,
-};
+use crate::browser::BrowserManager;
 use crate::config::AppConfig;
 use crate::db::Database;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-pub use support::error_code_for_message;
 use shared_protocol::{
     AskCommand, AskResult, BrowserOpenRequest, EventPayload, JobKind, JobState, JobStatus,
     ResearchCommand, ResearchResult,
 };
+use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+pub use support::error_code_for_message;
 use support::{
     apply_research_update, browser_session_identity, is_cancelled_message, lock_browser,
     lock_cancel_registry, maybe_write_research_output,
 };
-use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 
 const ARTIFACT_RETENTION_LIMIT: usize = 100;
 
@@ -599,5 +597,4 @@ impl CoreService {
             }
         }
     }
-
 }

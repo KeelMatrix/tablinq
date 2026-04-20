@@ -531,9 +531,7 @@ mod tests {
 
     fn aliases_with_mode(key: &str, alias: &str) -> RuntimeAliases {
         let mut aliases = RuntimeAliases::default();
-        aliases
-            .modes
-            .insert(key.to_owned(), vec![alias.to_owned()]);
+        aliases.modes.insert(key.to_owned(), vec![alias.to_owned()]);
         aliases
     }
 
@@ -605,7 +603,10 @@ mod tests {
         );
 
         let provider = provider_capability_catalog(Some(&report), "live");
-        assert_eq!(provider["capabilities"]["search"]["availability"], "unavailable");
+        assert_eq!(
+            provider["capabilities"]["search"]["availability"],
+            "unavailable"
+        );
         assert_eq!(
             provider["capabilities"]["research"]["availability"],
             "unavailable"

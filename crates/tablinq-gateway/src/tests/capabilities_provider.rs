@@ -224,8 +224,7 @@ fn openclaude_primary_streaming_requests_keep_sse_shape() {
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
-    let body =
-        openclaude_request_body("tablinq-search", "latest roadmap", "primary", true, None);
+    let body = openclaude_request_body("tablinq-search", "latest roadmap", "primary", true, None);
     let response = http_request(
         &snapshot.host,
         snapshot.port,
@@ -504,8 +503,7 @@ fn capabilities_endpoint_marks_missing_features_unavailable() {
     require_browser_integration_prereqs!();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let (_dir, mut config) = test_config();
-    config.file.browser_target_url =
-        Some(format!("{fake_url}/?missing=effort,search,research"));
+    config.file.browser_target_url = Some(format!("{fake_url}/?missing=effort,search,research"));
     let state_root = config.paths.state_root.clone();
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
@@ -562,7 +560,6 @@ fn capabilities_endpoint_marks_missing_features_unavailable() {
     let _ = fake_server.wait();
 }
 
-
 #[test]
 fn capability_cache_returns_cached_catalog_for_profile_workspace_key() {
     let _guard = integration_lock();
@@ -616,4 +613,3 @@ fn capability_cache_returns_cached_catalog_for_profile_workspace_key() {
         vec!["Deep thinking".to_owned()]
     );
 }
-

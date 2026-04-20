@@ -220,8 +220,7 @@ fn sanitize_upload_file_name(file_name: &str) -> String {
     let mut sanitized = candidate
         .chars()
         .map(|ch| {
-            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
-                || ch.is_control()
+            if matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control()
             {
                 '_'
             } else {
