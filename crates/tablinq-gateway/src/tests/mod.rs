@@ -133,8 +133,7 @@ fn stop_daemon(state_root: &Path, handle: thread::JoinHandle<Result<()>>) {
 fn test_config() -> (TempDir, AppConfig) {
     let dir = tempdir().unwrap();
     let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
-    config.file.browser_connection_mode =
-        Some(shared_protocol::BrowserConnectionMode::ManagedOnly);
+    config.file.browser_connection_mode = Some(shared_protocol::BrowserConnectionMode::ManagedOnly);
     if let Some(gateway) = config.file.gateway.as_mut() {
         gateway.port = Some(0);
         gateway.ask_timeout_ms = Some(15_000);
@@ -217,12 +216,7 @@ fn openclaude_request_body(
     .unwrap()
 }
 
-fn paperclip_request_body(
-    model: &str,
-    prompt: &str,
-    stream: bool,
-    file_ids: &[&str],
-) -> Vec<u8> {
+fn paperclip_request_body(model: &str, prompt: &str, stream: bool, file_ids: &[&str]) -> Vec<u8> {
     serde_json::to_vec(&json!({
         "model": model,
         "stream": stream,
@@ -233,7 +227,6 @@ fn paperclip_request_body(
     }))
     .unwrap()
 }
-
 
 mod capabilities_provider;
 
@@ -246,4 +239,3 @@ mod gateway_process;
 mod scheduler_process_control;
 
 mod uploads_artifacts;
-

@@ -6,6 +6,7 @@ mod process_control;
 mod scheduler;
 mod uploads;
 
+use crate::capabilities::{CapabilityCatalog, CapabilityCatalogCache};
 use crate::chat::{
     PreparedChatRequest, RequestOutcome, RequestOutcomeKind, build_request_summary,
     execute_chat_completions_request, outcome_from_error, prepare_chat_completions_request,
@@ -14,7 +15,6 @@ use crate::openai::{
     PROVIDER_MODELS, RequestRole, model_object, openai_error, provider_capability_catalog,
     request_role_name,
 };
-use crate::capabilities::{CapabilityCatalog, CapabilityCatalogCache};
 use crate::process_control::{
     GatewayRuntimeGuard, acquire_gateway_lock, gateway_log_path, gateway_status_path,
     write_status_snapshot,
@@ -29,15 +29,15 @@ use gptd::{AppConfig, CoreService};
 use serde_json::{Value, json};
 use shared_protocol::{
     ArtifactSummary, AuthSource, BrowserConnectionMode, BrowserOpenRequest, BrowserOwner,
-    BrowserStatusSnapshot, DaemonRequest, DaemonResponse, DoctorReport, ErrorCode,
-    GatewayRequestContext, HealthCheck,
+    BrowserStatusSnapshot, ConversationSelectCommand, DaemonRequest, DaemonResponse, DoctorReport,
+    ErrorCode, GatewayRequestContext, HealthCheck,
 };
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -66,6 +66,8 @@ const V1_FILES_PATH: &str = "/v1/files";
 const V1_ARTIFACTS_PATH: &str = "/v1/artifacts";
 const V1_PROVIDER_PATH: &str = "/v1/provider";
 const V1_SESSIONS_PATH: &str = "/v1/sessions";
+const V1_CONVERSATIONS_PATH: &str = "/v1/conversations";
+const V1_CONVERSATIONS_SELECT_PATH: &str = "/v1/conversations/select";
 const V1_USAGE_PATH: &str = "/v1/usage";
 const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 const STAGED_UPLOAD_RETENTION_SECS: i64 = 24 * 60 * 60;
@@ -100,8 +102,6 @@ struct SimpleHttpResponse {
     headers: BTreeMap<String, String>,
     body: Vec<u8>,
 }
-
-
 
 fn daemon_health_snapshot(config: &AppConfig) -> Option<HealthCheck> {
     if !gptd::daemon_is_responsive(&config.paths.ipc_endpoint) {
@@ -446,6 +446,12 @@ fn handle_connection(
             Ok(()) => handle_sessions_request(core, &context.request_id)?,
             Err(response) => response,
         },
+        ("GET", V1_CONVERSATIONS_PATH) => {
+            match authorize_request(config, &context.request, false) {
+                Ok(()) => handle_conversations_request(core, &context.request_id)?,
+                Err(response) => response,
+            }
+        }
         ("GET", _) if request_id_from_path(&context.request.path).is_some() => {
             match authorize_request(config, &context.request, false) {
                 Ok(()) => handle_request_summary_request(core, &context)?,
@@ -491,6 +497,13 @@ fn handle_connection(
                 response
             } else {
                 handle_cancel_request(core, scheduler, &context)?
+            }
+        }
+        ("POST", V1_CONVERSATIONS_SELECT_PATH) => {
+            if let Err(response) = authorize_request(config, &context.request, false) {
+                response
+            } else {
+                handle_conversation_select_request(core, &context)?
             }
         }
         ("POST", V1_CHAT_COMPLETIONS_PATH) => {
@@ -840,6 +853,77 @@ fn handle_sessions_request(core: &CoreService, request_id: &str) -> Result<HttpR
             "data": sessions.sessions,
         }),
     ))
+}
+
+fn handle_conversations_request(core: &CoreService, request_id: &str) -> Result<HttpResponse> {
+    let conversations = core.list_conversations()?;
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.conversation_list",
+            "request_id": request_id,
+            "data": conversations.conversations,
+        }),
+    ))
+}
+
+fn handle_conversation_select_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let command = match serde_json::from_slice::<ConversationSelectCommand>(&context.request.body) {
+        Ok(command) => command,
+        Err(err) => {
+            return Ok(json_response(
+                400,
+                json!({
+                    "request_id": context.request_id,
+                    "error": "invalid_request",
+                    "message": format!("invalid JSON body: {err}"),
+                }),
+            ));
+        }
+    };
+    if let Some(conversation_id) = command.conversation_id.as_deref() {
+        if core.find_conversation(conversation_id)?.is_none() {
+            return Ok(json_response(
+                404,
+                json!({
+                    "request_id": context.request_id,
+                    "error": "conversation_not_found",
+                    "message": format!("conversation {conversation_id} was not found"),
+                }),
+            ));
+        }
+    }
+
+    match core.select_conversation(command) {
+        Ok(selection) => Ok(json_response(
+            200,
+            json!({
+                "object": "tablinq.conversation_selection",
+                "request_id": context.request_id,
+                "data": selection,
+            }),
+        )),
+        Err(err) => {
+            let message = format!("{err:#}");
+            let (status, error) =
+                if message.contains("was not found") && message.contains("conversation") {
+                    (404, "conversation_not_found")
+                } else {
+                    (400, "invalid_request")
+                };
+            Ok(json_response(
+                status,
+                json!({
+                    "request_id": context.request_id,
+                    "error": error,
+                    "message": message,
+                }),
+            ))
+        }
+    }
 }
 
 fn handle_request_summary_request(

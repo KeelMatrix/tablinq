@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use shared_protocol::{
-    ArtifactList, ArtifactMetadata, ArtifactSummary, ConversationSummary, FailureBundle, JobDetail,
-    JobKind, JobList, JobStatus, JobSummary, RequestExecutionKind, RequestHistory, RequestSummary,
-    RequestUsage, SessionList, SessionSummary,
+    ArtifactList, ArtifactMetadata, ArtifactSummary, ConversationList, ConversationSummary,
+    FailureBundle, JobDetail, JobKind, JobList, JobStatus, JobSummary, RequestExecutionKind,
+    RequestHistory, RequestSummary, RequestUsage, SessionList, SessionSummary,
 };
 use std::fs;
 use std::path::Path;
@@ -225,6 +225,20 @@ impl Database {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn list_conversations(&self) -> Result<ConversationList> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT conversation_id, session_id, label, tab_url, last_prompt, last_response,
+                   last_seen_at
+            FROM conversations
+            ORDER BY last_seen_at DESC
+            "#,
+        )?;
+        let rows = statement.query_map([], map_conversation_row)?;
+        let conversations = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(ConversationList { conversations })
     }
 
     pub fn list_jobs(&self) -> Result<JobList> {
@@ -1335,5 +1349,46 @@ mod tests {
             sessions.sessions[0].recent_conversations[0].conversation_id,
             "conv-2"
         );
+    }
+
+    #[test]
+    fn list_conversations_returns_newest_first() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tablinq.sqlite3");
+        let now = Utc::now();
+        let db = Database::open(&path).unwrap();
+
+        db.upsert_session(
+            "session-1",
+            "Browser session",
+            Some("https://chatgpt.com/"),
+            now,
+        )
+        .unwrap();
+        db.upsert_conversation(
+            "conv-1",
+            "session-1",
+            "Conversation 1",
+            Some("https://chatgpt.com/c/conv-1"),
+            Some("prompt 1"),
+            Some("response 1"),
+            now,
+        )
+        .unwrap();
+        db.upsert_conversation(
+            "conv-2",
+            "session-1",
+            "Conversation 2",
+            Some("https://chatgpt.com/c/conv-2"),
+            Some("prompt 2"),
+            Some("response 2"),
+            now + Duration::seconds(1),
+        )
+        .unwrap();
+
+        let conversations = db.list_conversations().unwrap();
+        assert_eq!(conversations.conversations.len(), 2);
+        assert_eq!(conversations.conversations[0].conversation_id, "conv-2");
+        assert_eq!(conversations.conversations[1].conversation_id, "conv-1");
     }
 }

@@ -39,7 +39,6 @@ fn upload_store_rejects_files_larger_than_twenty_mib() {
     assert!(format!("{err:#}").contains("20 MiB"));
 }
 
-
 #[test]
 fn files_upload_endpoint_stages_files_and_research_accepts_file_ids() {
     let _guard = integration_lock();
@@ -233,14 +232,9 @@ fn paperclip_like_http_flow_supports_files_and_artifacts() {
     assert_eq!(response.status_code, 200);
     let body: Value = serde_json::from_slice(&response.body).unwrap();
     let job_id = body["tablinq_job_id"].as_str().unwrap().to_owned();
-    assert!(
-        body["warnings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|value| value.as_str()
-                == Some("usage is unavailable for the browser-backed provider"))
-    );
+    assert!(body["warnings"].as_array().unwrap().iter().any(
+        |value| value.as_str() == Some("usage is unavailable for the browser-backed provider")
+    ));
 
     let artifacts = http_request(
         &snapshot.host,
@@ -349,8 +343,7 @@ fn provider_smoke_covers_chat_files_artifacts_and_cancel_flow() {
     )
     .unwrap();
     assert_eq!(artifact_response.status_code, 200);
-    let artifact_response_body: Value =
-        serde_json::from_slice(&artifact_response.body).unwrap();
+    let artifact_response_body: Value = serde_json::from_slice(&artifact_response.body).unwrap();
     let request_id = artifact_response_body["request_id"]
         .as_str()
         .unwrap()
@@ -661,5 +654,3 @@ fn files_endpoint_keeps_duplicate_original_names_as_separate_staged_ids() {
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
 }
-
-

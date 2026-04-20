@@ -224,7 +224,6 @@ fn request_summary_endpoint_records_failed_requests_with_latency() {
     let _ = fake_server.wait();
 }
 
-
 #[test]
 fn chat_completions_maps_capability_errors_to_openai_shape() {
     let _guard = integration_lock();
@@ -295,7 +294,6 @@ fn openai_auth_errors_include_refusal_guidance() {
     );
 }
 
-
 #[test]
 fn gateway_rejects_missing_and_wrong_bearer_tokens_for_openai_routes() {
     let _guard = integration_lock();
@@ -356,7 +354,6 @@ fn chat_completions_return_auth_required_when_browser_session_is_signed_out() {
     assert_eq!(body["tablinq_refusal_reason"], "auth_required");
     assert_eq!(body["tablinq_failure_bundle_id"], "bundle-auth-1");
 }
-
 
 #[test]
 fn request_role_fields_flow_into_failure_bundles_and_request_summaries() {
@@ -426,5 +423,3 @@ fn request_role_fields_flow_into_failure_bundles_and_request_summaries() {
     let _ = fake_server.kill();
     let _ = fake_server.wait();
 }
-
-

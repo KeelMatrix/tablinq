@@ -70,7 +70,8 @@ pub fn run_service(config: AppConfig) -> Result<()> {
                                     &DaemonFrame::Event(EventPayload::Failure(bundle)),
                                 );
                             }
-                            let _ = ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
+                            let _ =
+                                ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
                         }
                         if let Some(logger) = logger {
                             let _ = logger.warn(
@@ -103,7 +104,8 @@ pub fn run_service(config: AppConfig) -> Result<()> {
                                     &DaemonFrame::Event(EventPayload::Failure(bundle)),
                                 );
                             }
-                            let _ = ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
+                            let _ =
+                                ipc::write_frame(&stream, &DaemonFrame::Response(map_error(err)));
                         }
                         if let Some(logger) = logger {
                             let _ = logger.warn(
@@ -206,7 +208,10 @@ fn handle_research_request(
     let result = core.execute_prepared_research(&prepared, |event| {
         write_research_event(core, stream, &prepared.job_id, event.clone())
     })?;
-    match ipc::write_frame(stream, &DaemonFrame::Response(DaemonResponse::Research(result))) {
+    match ipc::write_frame(
+        stream,
+        &DaemonFrame::Response(DaemonResponse::Research(result)),
+    ) {
         Ok(()) => Ok(()),
         Err(err) => {
             if is_stream_closed_error(&err) {
@@ -234,6 +239,12 @@ fn handle_request(core: &CoreService, request: DaemonRequest) -> Result<DaemonRe
         DaemonRequest::Capabilities => DaemonResponse::Capabilities(core.capabilities()?),
         DaemonRequest::ConfigShow => DaemonResponse::Config(core.config_snapshot()),
         DaemonRequest::SessionsList => DaemonResponse::Sessions(core.list_sessions()?),
+        DaemonRequest::ConversationsList => {
+            DaemonResponse::Conversations(core.list_conversations()?)
+        }
+        DaemonRequest::ConversationSelect(command) => {
+            DaemonResponse::ConversationSelection(core.select_conversation(command)?)
+        }
         DaemonRequest::JobsList => DaemonResponse::Jobs(core.list_jobs()?),
         DaemonRequest::JobsShow(job_id) => DaemonResponse::Job(core.job_detail(&job_id)?),
         DaemonRequest::JobsCancel(command) => DaemonResponse::Ack(core.cancel_job(command)?),

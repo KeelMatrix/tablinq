@@ -315,9 +315,9 @@ fn ensure_directories(paths: &StatePaths) -> Result<()> {
 fn ensure_current_config_version(file: &FileConfig) -> Result<()> {
     match file.version {
         Some(CONFIG_VERSION) => Ok(()),
-        Some(version) => bail!(
-            "config.toml version {version} is unsupported; expected version {CONFIG_VERSION}"
-        ),
+        Some(version) => {
+            bail!("config.toml version {version} is unsupported; expected version {CONFIG_VERSION}")
+        }
         None => bail!(
             "config.toml must declare version = {CONFIG_VERSION}; older config layouts are unsupported"
         ),
@@ -523,10 +523,9 @@ mod tests {
     #[test]
     fn parse_file_config_rejects_missing_version() {
         let err = parse_file_config("warm_mode = true").unwrap_err();
-        assert!(
-            format!("{err:#}")
-                .contains(&format!("config.toml must declare version = {CONFIG_VERSION}"))
-        );
+        assert!(format!("{err:#}").contains(&format!(
+            "config.toml must declare version = {CONFIG_VERSION}"
+        )));
     }
 
     #[test]

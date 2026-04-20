@@ -16,6 +16,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
+use url::Url;
 
 impl CoreService {
     pub(super) fn open_db(&self) -> Result<Database> {
@@ -149,6 +150,40 @@ pub(super) fn is_cancelled_message(message: &str) -> bool {
 
 pub(super) fn browser_busy_message() -> &'static str {
     "browser busy: another ask or research request is already using the browser session"
+}
+
+pub(super) fn resolve_conversation_target_url(base_url: &str, conversation_id: &str) -> String {
+    let normalized_conversation_id = conversation_id.trim();
+    if normalized_conversation_id.is_empty() {
+        return base_url.to_owned();
+    }
+
+    let Ok(mut url) = Url::parse(base_url) else {
+        return base_url.to_owned();
+    };
+    let mut segments = url
+        .path_segments()
+        .map(|parts| parts.map(str::to_owned).collect::<Vec<_>>())
+        .unwrap_or_default();
+    if segments.len() >= 2
+        && segments[segments.len() - 2].eq_ignore_ascii_case("c")
+        && !segments[segments.len() - 1].is_empty()
+    {
+        segments.truncate(segments.len() - 2);
+    }
+
+    let Ok(mut path_segments) = url.path_segments_mut() else {
+        return base_url.to_owned();
+    };
+    path_segments.clear();
+    for segment in &segments {
+        path_segments.push(segment);
+    }
+    path_segments.push("c");
+    path_segments.push(normalized_conversation_id);
+    drop(path_segments);
+
+    url.to_string()
 }
 
 pub(super) fn busy_health_snapshot() -> HealthCheck {
@@ -544,6 +579,7 @@ pub(super) fn unique_destination_path(destination_dir: &Path, file_name: &Path) 
 mod tests {
     use super::{
         browser_session_identity, current_url_requires_login_or_challenge, recovery_guidance,
+        resolve_conversation_target_url,
     };
     use crate::{AppConfig, Database, core::CoreService};
     use chrono::Utc;
@@ -664,6 +700,27 @@ mod tests {
         assert!(!current_url_requires_login_or_challenge(Some(
             "https://chatgpt.com/c/123"
         )));
+    }
+
+    #[test]
+    fn resolve_conversation_target_url_preserves_workspace_path_and_query() {
+        let url = resolve_conversation_target_url(
+            "https://chatgpt.com/g/acme-team?model=gpt-5",
+            "conv-123",
+        );
+        assert_eq!(
+            url,
+            "https://chatgpt.com/g/acme-team/c/conv-123?model=gpt-5"
+        );
+
+        let existing = resolve_conversation_target_url(
+            "https://chatgpt.com/g/acme-team/c/conv-old?model=gpt-5",
+            "conv-456",
+        );
+        assert_eq!(
+            existing,
+            "https://chatgpt.com/g/acme-team/c/conv-456?model=gpt-5"
+        );
     }
 
     #[test]

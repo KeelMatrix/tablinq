@@ -19,8 +19,8 @@ use crate::terminal::{
 
 pub use crate::cli::{
     ArtifactsCommand, AskArgs, BrowserCommand, Cli, CliEffort, CliMode, CliModelClass, Command,
-    ConfigCommand, DaemonCommand, GatewayCommand, JobsCommand, ResearchArgs, SessionsCommand,
-    VersionArgs,
+    ConfigCommand, ConversationsCommand, DaemonCommand, GatewayCommand, JobsCommand, ResearchArgs,
+    SessionsCommand, VersionArgs,
 };
 pub use crate::terminal::format_cli_error;
 
@@ -75,6 +75,19 @@ fn execute(cli: &Cli) -> Result<CliExecution> {
             SessionsCommand::List => Ok(CliExecution::Json(send_daemon_request(
                 cli.state_root.as_deref(),
                 DaemonRequest::SessionsList,
+            )?)),
+        },
+        Command::Conversations { command } => match command {
+            ConversationsCommand::List => Ok(CliExecution::Json(send_daemon_request(
+                cli.state_root.as_deref(),
+                DaemonRequest::ConversationsList,
+            )?)),
+            _ => Ok(CliExecution::Json(send_daemon_request(
+                cli.state_root.as_deref(),
+                DaemonRequest::ConversationSelect(
+                    crate::cli::build_conversation_select_command(command)
+                        .expect("non-list conversation command"),
+                ),
             )?)),
         },
         Command::Jobs { command } => match command {

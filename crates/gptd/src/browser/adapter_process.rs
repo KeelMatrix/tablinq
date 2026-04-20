@@ -84,10 +84,7 @@ impl AdapterProcess {
         })
     }
 
-    pub(super) fn request(
-        &mut self,
-        request: AdapterRequest,
-    ) -> Result<BrowserStatusSnapshot> {
+    pub(super) fn request(&mut self, request: AdapterRequest) -> Result<BrowserStatusSnapshot> {
         self.write_request(&request, "encode adapter request", "write adapter request")?;
 
         let response = self.next_frame_blocking("response")?;

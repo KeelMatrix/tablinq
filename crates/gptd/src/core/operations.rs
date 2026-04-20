@@ -1,7 +1,7 @@
 use super::support::{
     browser_busy_message, browser_session_identity, default_selector_pack_summary, health_snapshot,
     is_attach_primary_mode, lock_browser, lock_cancel_registry, recovery_guidance,
-    supports_managed_profile_reset, try_lock_browser,
+    resolve_conversation_target_url, supports_managed_profile_reset, try_lock_browser,
 };
 use super::{ARTIFACT_RETENTION_LIMIT, CoreService, error_code_for_message};
 use crate::browser::BrowserDiagnosticsSnapshot;
@@ -9,9 +9,10 @@ use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use shared_protocol::{
     AckEvent, ArtifactList, ArtifactPullResult, BrowserDoctor, BrowserOpenRequest,
-    BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot, ConfigSnapshot,
-    ConversationSummary, DoctorReport, FailureBundle, GatewayRequestContext, JobDetail, JobList,
-    JobStatus, PullArtifactCommand, RequestHistory, RequestSummary, SessionList,
+    BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot, ConfigSnapshot, ConversationList,
+    ConversationSelectCommand, ConversationSelection, ConversationSummary, DoctorReport,
+    FailureBundle, GatewayRequestContext, JobDetail, JobList, JobStatus, PullArtifactCommand,
+    RequestHistory, RequestSummary, SessionList,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,8 +39,8 @@ impl CoreService {
 
     pub fn doctor_report(&self) -> Result<DoctorReport> {
         let db = self.open_db()?;
-        let mut browser = try_lock_browser(&self.browser)?
-            .ok_or_else(|| anyhow!(browser_busy_message()))?;
+        let mut browser =
+            try_lock_browser(&self.browser)?.ok_or_else(|| anyhow!(browser_busy_message()))?;
         let browser_snapshot = browser.profile_info()?;
         let diagnostics = browser.diagnostics(None).ok();
         let browser_detection = diagnostics
@@ -101,11 +102,62 @@ impl CoreService {
         self.open_db()?.list_sessions()
     }
 
-    pub fn find_conversation(
-        &self,
-        conversation_id: &str,
-    ) -> Result<Option<ConversationSummary>> {
+    pub fn find_conversation(&self, conversation_id: &str) -> Result<Option<ConversationSummary>> {
         self.open_db()?.find_conversation(conversation_id)
+    }
+
+    pub fn list_conversations(&self) -> Result<ConversationList> {
+        self.open_db()?.list_conversations()
+    }
+
+    pub fn select_conversation(
+        &self,
+        command: ConversationSelectCommand,
+    ) -> Result<ConversationSelection> {
+        command
+            .validate()
+            .context("validate conversation select command")?;
+
+        let target_conversation = if let Some(conversation_id) = command.conversation_id.as_deref()
+        {
+            Some(
+                self.open_db()?
+                    .find_conversation(conversation_id)?
+                    .with_context(|| format!("conversation {conversation_id} was not found"))?,
+            )
+        } else {
+            None
+        };
+
+        let target_url = if let Some(conversation) = target_conversation.as_ref() {
+            conversation
+                .tab_url
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    resolve_conversation_target_url(
+                        self.config.browser_target_url(),
+                        &conversation.conversation_id,
+                    )
+                })
+        } else {
+            self.config.browser_target_url().to_owned()
+        };
+
+        let snapshot = self.browser_open(BrowserOpenRequest {
+            target_url: Some(target_url),
+            browser_path: None,
+            headless: None,
+        })?;
+        let (session_id, _) = browser_session_identity(&snapshot);
+
+        Ok(ConversationSelection {
+            conversation_id: target_conversation.map(|conversation| conversation.conversation_id),
+            session_id: Some(session_id),
+            current_url: snapshot.current_url.clone(),
+            browser: snapshot,
+        })
     }
 
     pub fn list_jobs(&self) -> Result<JobList> {
@@ -282,8 +334,10 @@ impl CoreService {
         let destination_dir = PathBuf::from(&command.destination_dir);
         fs::create_dir_all(&destination_dir)
             .with_context(|| format!("create {}", destination_dir.display()))?;
-        let destination_path =
-            super::support::unique_destination_path(&destination_dir, Path::new(&artifact.file_name));
+        let destination_path = super::support::unique_destination_path(
+            &destination_dir,
+            Path::new(&artifact.file_name),
+        );
         fs::copy(&artifact.storage_path, &destination_path).with_context(|| {
             format!(
                 "copy managed artifact {} to {}",
@@ -320,8 +374,8 @@ impl CoreService {
 
     pub fn browser_logout(&self) -> Result<BrowserStatusSnapshot> {
         let snapshot = if is_attach_primary_mode(self.config.browser_connection_mode()) {
-            let mut browser = try_lock_browser(&self.browser)?
-                .ok_or_else(|| anyhow!(browser_busy_message()))?;
+            let mut browser =
+                try_lock_browser(&self.browser)?.ok_or_else(|| anyhow!(browser_busy_message()))?;
             let current = browser.health()?;
             browser.open(BrowserOpenRequest {
                 target_url: Some(current.target_url),

@@ -190,7 +190,10 @@ pub(crate) fn execute_research_with_terminal_presentation(
 
         let Some(remaining) = timeout.checked_sub(started_at.elapsed()) else {
             finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
-            anyhow::bail!("research request timed out after {} ms", timeout.as_millis());
+            anyhow::bail!(
+                "research request timed out after {} ms",
+                timeout.as_millis()
+            );
         };
         match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
             Ok(CliStreamMessage::Event(event)) => match *event {
@@ -343,7 +346,10 @@ fn rewrite_response_line(
         *response_color_active = false;
     }
 
-    let clear_width = streamed_text.chars().count().saturating_sub(final_text.chars().count());
+    let clear_width = streamed_text
+        .chars()
+        .count()
+        .saturating_sub(final_text.chars().count());
     let clear_padding = " ".repeat(clear_width);
     if green_responses {
         writeln!(

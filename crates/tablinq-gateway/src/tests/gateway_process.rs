@@ -192,5 +192,3 @@ fn gateway_health_and_admin_follow_daemon_browser_health() {
     gateway_handle.join().unwrap().unwrap();
     stop_daemon(&state_root, daemon);
 }
-
-
