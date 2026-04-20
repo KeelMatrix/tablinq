@@ -9,8 +9,10 @@ import {
   conversationIdFromUrl,
   deepResearchStartDelayMs,
   detectBrowserExecutable,
+  MAX_UPLOAD_FILE_BYTES,
   resolveConversationUrl,
   resolveBrowserLaunchConfig,
+  uploadAckTimeoutMsForFiles,
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
 import {
@@ -409,6 +411,19 @@ describe("browser adapter", () => {
     expect(deepResearchStartDelayMs(0)).toBe(4_000);
     expect(deepResearchStartDelayMs(0.5)).toBe(7_000);
     expect(deepResearchStartDelayMs(1)).toBe(10_000);
+  });
+
+  it("scales upload acknowledgment timeout nonlinearly by file size and additional files", () => {
+    expect(uploadAckTimeoutMsForFiles([])).toBe(10_000);
+    expect(uploadAckTimeoutMsForFiles([0])).toBe(10_000);
+    expect(uploadAckTimeoutMsForFiles([MAX_UPLOAD_FILE_BYTES])).toBe(40_000);
+    expect(uploadAckTimeoutMsForFiles([MAX_UPLOAD_FILE_BYTES / 4])).toBe(25_000);
+    expect(
+      uploadAckTimeoutMsForFiles([
+        MAX_UPLOAD_FILE_BYTES,
+        MAX_UPLOAD_FILE_BYTES / 4,
+      ]),
+    ).toBe(62_500);
   });
 
   it("reuses the managed page on repeated open", async () => {
@@ -1632,8 +1647,12 @@ describe("browser adapter", () => {
   it("runs research jobs with progress updates and persisted artifacts", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const fixture = path.join(root, "brief.txt");
-    await writeFile(fixture, "brief body", "utf8");
+    const fixtureDir = path.join(root, "fixtures");
+    const firstFile = path.join(fixtureDir, "brief.txt");
+    const secondFile = path.join(fixtureDir, "notes.csv");
+    await mkdir(fixtureDir, { recursive: true });
+    await writeFile(firstFile, "brief body", "utf8");
+    await writeFile(secondFile, "col\nvalue", "utf8");
     const adapter = trackAdapter(
       new BrowserAdapter({
         profileDir: path.join(root, "profile"),
@@ -1657,7 +1676,7 @@ describe("browser adapter", () => {
       {
         jobId: "job-research-success",
         query: "investigate launch risks",
-        files: [fixture],
+        files: [firstFile, secondFile],
         timeoutMs: 5_000,
       },
       (update) => {
@@ -1672,6 +1691,8 @@ describe("browser adapter", () => {
       "Research report for: investigate launch risks",
     );
     expect(result.artifacts).toHaveLength(1);
+    const artifactBody = await readFile(result.artifacts[0]!.storage_path, "utf8");
+    expect(artifactBody).toContain("Uploads: brief.txt, notes.csv");
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -2391,6 +2412,35 @@ describe("browser adapter", () => {
         () => {},
       ),
     ).rejects.toThrow(/attachments are still processing/i);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("rejects files larger than 20 MiB before upload", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "oversize.bin");
+    await writeFile(fixture, Buffer.alloc(MAX_UPLOAD_FILE_BYTES + 1));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+      }),
+    );
+    await adapter.open({ targetUrl: server.url, headless: true });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-oversize-upload",
+          prompt: "repeat attached file",
+          files: [fixture],
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/file exceeds 20 MiB/i);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

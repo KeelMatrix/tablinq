@@ -1,4 +1,5 @@
 use super::*;
+use crate::uploads::MAX_STAGED_UPLOAD_BYTES;
 
 #[test]
 fn upload_store_cleans_up_expired_staged_files() {
@@ -23,6 +24,19 @@ fn upload_store_cleans_up_expired_staged_files() {
 
     store.cleanup_expired().unwrap();
     assert!(!upload_dir.exists());
+}
+
+#[test]
+fn upload_store_rejects_files_larger_than_twenty_mib() {
+    let dir = tempdir().unwrap();
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let store = UploadStore::load(&config).unwrap();
+    let body = vec![0_u8; MAX_STAGED_UPLOAD_BYTES + 1];
+
+    let err = store
+        .stage_upload("oversize.bin", Some("application/octet-stream"), &body)
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("20 MiB"));
 }
 
 
@@ -149,6 +163,29 @@ fn files_upload_endpoint_stages_files_and_research_accepts_file_ids() {
     handle.join().unwrap().unwrap();
     let _ = fake_server.kill();
     let _ = fake_server.wait();
+}
+
+#[test]
+fn files_upload_endpoint_rejects_files_larger_than_twenty_mib() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let response = http_request_with_declared_content_length(
+        &snapshot,
+        &auth,
+        "oversize.bin",
+        "application/octet-stream",
+        MAX_STAGED_UPLOAD_BYTES + 1,
+    );
+    assert_eq!(response.status_code, 413);
+    let json: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(json["error"], "file exceeds 20 MiB limit");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
 }
 
 #[test]

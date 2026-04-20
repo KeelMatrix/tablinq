@@ -191,7 +191,11 @@ fn core_service_runs_research_jobs_without_cli() {
     let _guard = integration_lock();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
+    let upload_fixture = dir.path().join("brief.txt");
+    let second_upload_fixture = dir.path().join("notes.csv");
     let output_dir = dir.path().join("research-out");
+    fs::write(&upload_fixture, "brief body").unwrap();
+    fs::write(&second_upload_fixture, "col\nvalue").unwrap();
 
     let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
     config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
@@ -212,7 +216,10 @@ fn core_service_runs_research_jobs_without_cli() {
                 query: "investigate launch blockers".to_owned(),
                 conversation_id: None,
                 new_conversation: false,
-                files: vec![],
+                files: vec![
+                    upload_fixture.display().to_string(),
+                    second_upload_fixture.display().to_string(),
+                ],
                 output_dir: Some(output_dir.display().to_string()),
             },
             |event| {
@@ -228,11 +235,15 @@ fn core_service_runs_research_jobs_without_cli() {
     assert!(result.output_path.is_some());
     assert!(statuses.contains(&JobStatus::WaitingForSources));
     assert!(statuses.contains(&JobStatus::Completed));
+    assert_eq!(result.artifacts.len(), 1);
+    let artifact_body = fs::read_to_string(&result.artifacts[0].storage_path).unwrap();
+    assert!(artifact_body.contains("Uploads: brief.txt, notes.csv"));
 
     let detail = core.job_detail(&result.job_id).unwrap();
     assert_eq!(detail.kind, JobKind::Research);
     assert_eq!(detail.status, JobStatus::Completed);
     assert!(detail.output_path.is_some());
+    assert_eq!(detail.artifacts.len(), 1);
 
     let _ = core.browser_close();
     let _ = fake_server.kill();

@@ -124,6 +124,7 @@ import {
   deepResearchStartDelayMs,
 } from "./timing";
 export { deepResearchStartDelayMs } from "./timing";
+export { MAX_UPLOAD_FILE_BYTES, uploadAckTimeoutMsForFiles } from "./timing";
 import {
   buildTargetPageId,
   conversationIdFromUrl,

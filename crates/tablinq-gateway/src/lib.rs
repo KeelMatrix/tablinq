@@ -329,6 +329,22 @@ fn handle_connection(
         Ok(context) => context,
         Err(err) => {
             let request_id = next_request_id(request_counter);
+            let response = if format!("{err:#}").contains("upload exceeds 20 MiB limit") {
+                json_response(
+                    413,
+                    json!({
+                        "request_id": request_id,
+                        "error": "file exceeds 20 MiB limit",
+                    }),
+                )
+            } else {
+                json_response(
+                    400,
+                    json!({
+                        "error": "bad_request",
+                    }),
+                )
+            };
             logger.warn(
                 "gateway request parse failed",
                 json!({
@@ -336,16 +352,7 @@ fn handle_connection(
                     "error": format!("{err:#}"),
                 }),
             )?;
-            return write_http_response(
-                &mut stream,
-                &request_id,
-                json_response(
-                    400,
-                    json!({
-                        "error": "bad_request",
-                    }),
-                ),
-            );
+            return write_http_response(&mut stream, &request_id, response);
         }
     };
 
@@ -907,6 +914,15 @@ fn handle_file_upload_request(
             }),
         ));
     };
+    if context.request.body.len() > crate::uploads::MAX_STAGED_UPLOAD_BYTES {
+        return Ok(json_response(
+            413,
+            json!({
+                "request_id": context.request_id,
+                "error": "file exceeds 20 MiB limit",
+            }),
+        ));
+    }
     let metadata = upload_store.stage_upload(
         file_name,
         context
@@ -1642,6 +1658,12 @@ fn parse_http_request(stream: &mut TcpStream, counter: &AtomicU64) -> Result<Req
         .map(|value| value.parse::<usize>().context("parse Content-Length"))
         .transpose()?
         .unwrap_or(0);
+    if method == "POST"
+        && path == V1_FILES_PATH
+        && content_length > crate::uploads::MAX_STAGED_UPLOAD_BYTES
+    {
+        bail!("upload exceeds 20 MiB limit");
+    }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader
@@ -1732,6 +1754,93 @@ fn http_request(
             .write_all(body)
             .context("write gateway request body")?;
     }
+    stream.flush().context("flush gateway request")?;
+
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader
+        .read_line(&mut status_line)
+        .context("read gateway status line")?;
+    let parts: Vec<_> = status_line.split_whitespace().collect();
+    if parts.len() < 2 {
+        bail!("invalid gateway HTTP status line");
+    }
+    let status_code = parts[1]
+        .parse::<u16>()
+        .context("parse gateway status code")?;
+
+    let mut response_headers = BTreeMap::new();
+    loop {
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .context("read gateway response header")?;
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            break;
+        }
+        let (name, value) = trimmed
+            .split_once(':')
+            .context("invalid gateway response header")?;
+        response_headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
+    }
+
+    let content_length = response_headers
+        .get("content-length")
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .context("parse response Content-Length")
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let mut response_body = vec![0u8; content_length];
+    if content_length > 0 {
+        reader
+            .read_exact(&mut response_body)
+            .context("read gateway response body")?;
+    } else {
+        reader
+            .read_to_end(&mut response_body)
+            .context("read gateway response body to end")?;
+    }
+
+    Ok(SimpleHttpResponse {
+        status_code,
+        #[cfg(test)]
+        headers: response_headers,
+        body: response_body,
+    })
+}
+
+#[cfg(test)]
+fn http_request_with_declared_content_length(
+    host: &str,
+    port: u16,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    declared_content_length: usize,
+    timeout_ms: u64,
+) -> Result<SimpleHttpResponse> {
+    let mut stream = TcpStream::connect((host, port))
+        .with_context(|| format!("connect to gateway {host}:{port}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(timeout_ms)))
+        .context("set gateway client read timeout")?;
+    stream
+        .set_write_timeout(Some(Duration::from_millis(timeout_ms)))
+        .context("set gateway client write timeout")?;
+
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Length: {declared_content_length}\r\nConnection: close\r\n"
+    )
+    .context("write gateway request line")?;
+    for (name, value) in headers {
+        write!(stream, "{name}: {value}\r\n").context("write gateway request header")?;
+    }
+    write!(stream, "\r\n").context("write gateway request terminator")?;
     stream.flush().context("flush gateway request")?;
 
     let mut reader = BufReader::new(stream);

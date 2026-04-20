@@ -5,7 +5,8 @@ import type { Page } from "playwright-core";
 import type { CapabilityReportPayload } from "../contracts";
 import {
   INTERACTION_TIMEOUT_MS,
-  UPLOAD_ACK_TIMEOUT_MS,
+  MAX_UPLOAD_FILE_BYTES,
+  uploadAckTimeoutMsForFiles,
 } from "../timing";
 
 import { waitForPageAdapterCondition } from "./adapter";
@@ -45,13 +46,23 @@ export async function uploadAttachments(
       if (!fileStat?.isFile()) {
         throw new Error(`upload failed: file not found: ${absolutePath}`);
       }
-      return absolutePath;
+      if (fileStat.size > MAX_UPLOAD_FILE_BYTES) {
+        throw new Error(
+          `upload failed: file exceeds 20 MiB: ${absolutePath}`,
+        );
+      }
+      return {
+        absolutePath,
+        sizeBytes: fileStat.size,
+      };
     }),
   );
 
   const fileInput = page.locator("input[type='file']").first();
   if ((await fileInput.count()) > 0) {
-    await fileInput.setInputFiles(resolvedFiles);
+    await fileInput.setInputFiles(
+      resolvedFiles.map((item) => item.absolutePath),
+    );
   } else {
     const uploadEntry = page
       .locator(
@@ -75,17 +86,17 @@ export async function uploadAttachments(
     if (!chooser) {
       throw new Error("upload failed: file chooser did not open");
     }
-    await chooser.setFiles(resolvedFiles);
+    await chooser.setFiles(resolvedFiles.map((item) => item.absolutePath));
   }
 
-  const expectedNames = resolvedFiles.map((filePath) => basename(filePath));
+  const expectedNames = resolvedFiles.map((file) => basename(file.absolutePath));
   await waitForPageAdapterCondition(
     page,
     "uploadAcknowledged",
     {
       names: expectedNames,
     },
-    UPLOAD_ACK_TIMEOUT_MS,
+    uploadAckTimeoutMsForFiles(resolvedFiles.map((file) => file.sizeBytes)),
   ).catch(() => {
     throw new Error(
       `upload failed: the page did not acknowledge uploaded files: ${expectedNames.join(", ")}`,
