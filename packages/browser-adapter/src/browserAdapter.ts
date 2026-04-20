@@ -176,6 +176,18 @@ interface TargetPageState {
   probe_ready_until_ms: number;
 }
 
+function isRecoverableTargetPageError(error: unknown): boolean {
+  if (isTransientPageError(error)) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Timeout") ||
+    message.includes("timed out") ||
+    message.includes("Target closed")
+  );
+}
+
 export class BrowserAdapter {
   private browser: Browser | undefined;
   private context: BrowserContext | undefined;
@@ -680,6 +692,17 @@ export class BrowserAdapter {
     await this.recoverManagedPage();
     let page = this.managedPage;
 
+    if (this.cdpAttached) {
+      const preferred = await this.findAttachedTargetPage(targetUrl);
+      if (preferred && preferred !== page) {
+        this.context = preferred.context();
+        this.observeContext(this.context);
+        this.attachPage(preferred, true);
+        this.targetPageCreatedByAdapter = false;
+        page = preferred;
+      }
+    }
+
     if (!page || page.isClosed()) {
       page = await this.createTargetPage(targetUrl);
     }
@@ -687,12 +710,17 @@ export class BrowserAdapter {
     try {
       await this.navigateTargetPage(page, targetUrl);
     } catch (error) {
-      if (!isTransientPageError(error)) {
+      if (!isRecoverableTargetPageError(error)) {
         throw error;
       }
 
+      await this.discardAttachedTargetPage(page);
       page = await this.createTargetPage(targetUrl);
       await this.navigateTargetPage(page, targetUrl);
+    }
+
+    if (this.cdpAttached) {
+      await this.cleanupStaleAttachedTargetPages(targetUrl, page);
     }
 
     return page;
@@ -977,6 +1005,7 @@ export class BrowserAdapter {
           "target-tab-missing: no matching target tab was found in the attached browser",
         );
       }
+      await this.cleanupStaleAttachedTargetPages(targetUrl);
     }
 
     if (!this.context) {
@@ -1024,35 +1053,98 @@ export class BrowserAdapter {
       return undefined;
     }
 
-    const candidates = this.browser
+    const workspaceCandidates = uniquePages(
+      this.browser
       .contexts()
       .flatMap((context) => context.pages())
       .filter(
         (page) =>
-          !page.isClosed() && matchesTargetLocation(page.url(), targetUrl),
-      );
+          !page.isClosed() && this.pageMatchesTargetWorkspace(page, targetUrl),
+      ),
+    );
+    const orderedCandidates = uniquePages([
+      ...(this.managedPage && !this.managedPage.isClosed()
+        ? [this.managedPage]
+        : []),
+      ...workspaceCandidates,
+    ]);
 
-    if (
-      this.managedPage &&
-      !this.managedPage.isClosed() &&
-      candidates.includes(this.managedPage)
-    ) {
-      const activeState = await this.refreshCapabilities(this.managedPage);
-      if (activeState?.extension_connected) {
-        return this.managedPage;
+    let workspaceFallback: Page | undefined;
+    for (const page of orderedCandidates) {
+      if (!(await this.isUsableAttachedTargetPage(page))) {
+        continue;
       }
-    }
-
-    let fallback: Page | undefined;
-    for (const page of candidates) {
-      const state = await this.refreshCapabilities(page);
-      if (state?.extension_connected) {
+      if (this.pageMatchesTargetLocation(page, targetUrl)) {
         return page;
       }
-      fallback = page;
+      workspaceFallback ??= page;
     }
 
-    return fallback ?? candidates.at(-1);
+    return workspaceFallback;
+  }
+
+  private pageMatchesTargetLocation(page: Page, targetUrl: string): boolean {
+    const currentUrl = safePageUrl(page);
+    return Boolean(currentUrl && matchesTargetLocation(currentUrl, targetUrl));
+  }
+
+  private pageMatchesTargetWorkspace(page: Page, targetUrl: string): boolean {
+    const currentUrl = safePageUrl(page);
+    return Boolean(currentUrl && matchesTargetWorkspace(currentUrl, targetUrl));
+  }
+
+  private async isUsableAttachedTargetPage(page: Page): Promise<boolean> {
+    const currentUrl = safePageUrl(page);
+    if (!currentUrl || !inferAuthenticated(currentUrl)) {
+      return false;
+    }
+    const state = await this.refreshCapabilities(page);
+    return Boolean(
+      state?.extension_connected &&
+        state.capability_report &&
+        hasUsableCapabilityReport(state.capability_report),
+    );
+  }
+
+  private async cleanupStaleAttachedTargetPages(
+    targetUrl: string,
+    keepPage?: Page,
+  ): Promise<void> {
+    if (!this.browser) {
+      return;
+    }
+
+    const candidates = uniquePages(
+      this.browser
+        .contexts()
+        .flatMap((context) => context.pages())
+        .filter(
+          (page) =>
+            !page.isClosed() &&
+            page !== keepPage &&
+            this.pageMatchesTargetWorkspace(page, targetUrl),
+        ),
+    );
+
+    for (const page of candidates) {
+      if (await this.isUsableAttachedTargetPage(page)) {
+        continue;
+      }
+      await this.discardAttachedTargetPage(page);
+    }
+  }
+
+  private async discardAttachedTargetPage(page: Page): Promise<void> {
+    if (!this.cdpAttached || page.isClosed()) {
+      return;
+    }
+    if (this.managedPage === page) {
+      this.managedPage = undefined;
+      this.targetPageId = null;
+      this.targetPageCreatedByAdapter = false;
+      this.clearActiveCapabilityState();
+    }
+    await this.closeAttachedTargetPage(page).catch(() => undefined);
   }
 
   private async closeAttachedTargetPage(page: Page): Promise<void> {
