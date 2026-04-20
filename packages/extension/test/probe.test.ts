@@ -55,18 +55,25 @@ describe("extension capability probe", () => {
     expect(message.report.matrix).toEqual({
       composer_ready: true,
       submit_available: true,
-      model_picker_visible: false,
-      thinking_effort_visible: false,
+      model_picker_visible: true,
+      thinking_effort_visible: true,
       search_mode_visible: true,
-      research_mode_visible: false,
+      research_mode_visible: true,
       upload_control_visible: true,
       downloadable_artifacts_observable: true,
     });
     expect(message.runtime.strategy_matches.composer_ready).toBe(
       "data-slot-composer",
     );
-    expect(message.report.aliases.model_classes.instant).toBeUndefined();
-    expect(message.report.aliases.efforts.extended).toBeUndefined();
+    expect(message.runtime.strategy_matches.model_picker_visible).toBe(
+      "data-slot-model-picker",
+    );
+    expect(message.report.aliases.model_classes.instant).toContain("instant");
+    expect(message.report.aliases.model_classes.thinking).toContain(
+      "thinking",
+    );
+    expect(message.report.aliases.efforts.extended).toContain("extended");
+    expect(message.report.aliases.modes.research).toContain("deep research");
     expect(message.runtime.dom_neighborhoods.length).toBeGreaterThan(3);
     expect(validateCapabilityReport(message.report)).toBe(true);
     expect(validateCapabilityReport.errors).toBeNull();
@@ -115,21 +122,29 @@ describe("extension capability probe", () => {
     expect(message.report.matrix).toEqual({
       composer_ready: true,
       submit_available: true,
-      model_picker_visible: false,
-      thinking_effort_visible: false,
+      model_picker_visible: true,
+      thinking_effort_visible: true,
       search_mode_visible: true,
-      research_mode_visible: false,
+      research_mode_visible: true,
       upload_control_visible: true,
       downloadable_artifacts_observable: true,
     });
     expect(message.runtime.strategy_matches.composer_ready).toBe(
       "aria-textbox",
     );
+    expect(message.runtime.strategy_matches.model_picker_visible).toBe(
+      "inline-model-options",
+    );
     expect(message.runtime.strategy_matches.search_mode_visible).toBe(
       "chatgpt-search-toggle",
     );
     expect(message.report.aliases.modes.search).toContain("browse the web");
-    expect(message.report.aliases.model_classes.instant).toBeUndefined();
+    expect(message.report.aliases.modes.research).toContain("deep research");
+    expect(message.report.aliases.model_classes.instant).toContain("instant");
+    expect(message.report.aliases.model_classes.thinking).toContain(
+      "thinking",
+    );
+    expect(message.report.aliases.efforts.extended).toContain("extended");
     expect(message.runtime.ui_signature).toContain("aria");
     expect(validateCapabilityReport(message.report)).toBe(true);
   });

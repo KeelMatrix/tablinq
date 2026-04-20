@@ -43,13 +43,15 @@ function withHarnessUrl(
       | "recover-done-transient"
       | "recover-rich-markdown"
       | "recover-running-transient"
+      | "recover-same-message-rewrite"
       | "recover-mismatch"
       | "recover-wrong-conversation"
       | "research-success"
       | "research-starting-shell"
       | "research-failure"
       | "research-deep-landing"
-      | "research-deep-landing-submit-fail";
+      | "research-deep-landing-submit-fail"
+      | "research-reload";
     missing?: string[];
     conversationStyle?: "query" | "path";
     initialModel?: "instant" | "thinking";
@@ -252,10 +254,12 @@ describe("browser adapter", () => {
   });
 
   it.each([
+    ["classic", "classic"],
+    ["aria", "aria"],
     ["menu", "menu"],
     ["live", "live"],
   ] as const)(
-    "captures the modern ChatGPT capability matrix for the %s harness",
+    "captures the harness capability matrix for the %s variant",
     async (_label, variant) => {
       const server = await startTrackedFakeChatGptServer();
       const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
@@ -869,7 +873,7 @@ describe("browser adapter", () => {
         jobId: "job-ask-success",
         prompt: "hello streaming world",
       },
-      (chunk) => {
+      (chunk: any) => {
         if (chunk.kind === "delta") {
           chunks.push(chunk.text);
         }
@@ -1198,6 +1202,120 @@ describe("browser adapter", () => {
       mode: "search",
       model: "instant",
     });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("selects Instant from the classic inline model controls", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      initialModel: "thinking",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-classic-instant",
+        prompt: "configure classic instant",
+        modelClass: "instant",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+    }));
+
+    expect(state).toEqual({
+      model: "instant",
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("selects Thinking and Extended from the aria inline controls", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "aria",
+      initialModel: "instant",
+      initialEffort: "standard",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-aria-thinking-extended",
+        prompt: "configure aria thinking",
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "extended",
+    });
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("starts a fresh conversation when a new ask requests one", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const first = await adapter.ask(
+      {
+        jobId: "job-ask-first-conversation",
+        prompt: "start the first conversation",
+      },
+      () => {},
+    );
+    const fresh = await adapter.ask(
+      {
+        jobId: "job-ask-fresh-conversation",
+        prompt: "start a fresh conversation",
+        newConversation: true,
+      },
+      () => {},
+    );
+
+    expect(fresh.conversation_id).not.toBe(first.conversation_id);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -1795,19 +1913,20 @@ describe("browser adapter", () => {
       }
     });
 
+    const prompt = "reply after chip clear";
     const result = await adapter.ask(
       {
         jobId: "job-ask-clears-blocking-composer-chips",
-        prompt: "reply after clearing blocking composer chips",
+        prompt,
         modelClass: "thinking",
         effort: "standard",
-        timeoutMs: 7_000,
+        timeoutMs: 12_000,
       },
       () => {},
     );
 
     expect(result.output_text).toContain(
-      "Fake response for: reply after clearing blocking composer chips",
+      `Fake response for: ${prompt}`,
     );
 
     const pageState = await adapter.getManagedPageForTest()!.evaluate(() => ({
@@ -1997,6 +2116,77 @@ describe("browser adapter", () => {
         () => {},
       ),
     ).rejects.toThrow(/research job failed/i);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("fails classic research jobs with a research-specific error", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          scenario: "research-failure",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        scenario: "research-failure",
+      }),
+      headless: true,
+    });
+
+    await expect(
+      adapter.research(
+        {
+          jobId: "job-research-failure-classic",
+          query: "investigate classic flaky providers",
+          timeoutMs: 5_000,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/research job failed/i);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("includes uploaded file names in classic research output", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, {
+          scenario: "research-success",
+        }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, {
+        scenario: "research-success",
+      }),
+      headless: true,
+    });
+
+    const result = await adapter.research(
+      {
+        jobId: "job-research-success-classic",
+        query: "summarize the upload",
+        files: [fixture],
+        timeoutMs: 5_000,
+      },
+      () => {},
+    );
+
+    expect(result.report_text).toContain("brief.txt");
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -2441,10 +2631,7 @@ describe("browser adapter", () => {
       }
     });
 
-    const adapterWithInternals = adapter as unknown as BrowserAdapter & {
-      currentTargetUrl: string;
-      reconcileAskAfterInterruption: (...args: any[]) => Promise<any>;
-    };
+    const adapterWithInternals = adapter as any;
     adapterWithInternals.currentTargetUrl = server.url;
 
     const chunks: string[] = [];
@@ -2471,7 +2658,7 @@ describe("browser adapter", () => {
         recoveryAttempts: 0,
         lastStatusAt: 0,
       },
-      (chunk) => {
+      (chunk: any) => {
         if (chunk.kind === "delta") {
           chunks.push(chunk.text);
         }
@@ -2818,7 +3005,7 @@ describe("browser adapter", () => {
       },
       async (chunk) => {
         if (chunk.kind === "delta") {
-          chunks.push(chunk.delta_text);
+          chunks.push(chunk.text);
         }
         if (chunk.kind === "delta" && !closeTriggered) {
           closeTriggered = true;

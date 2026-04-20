@@ -35,6 +35,7 @@ type AdapterRequest =
       job_id: string;
       prompt: string;
       conversation_id?: string | null;
+      new_conversation?: boolean;
       timeout_ms?: number;
       mode?: "normal" | "search" | "research";
       model_class?: "instant" | "thinking" | null;
@@ -48,6 +49,7 @@ type AdapterRequest =
       job_id: string;
       prompt: string;
       conversation_id?: string | null;
+      new_conversation?: boolean;
       timeout_ms?: number;
       mode?: "normal" | "search" | "research";
       model_class?: "instant" | "thinking" | null;
@@ -147,6 +149,7 @@ async function main() {
           jobId: request.job_id,
           prompt: request.prompt,
           conversationId: request.conversation_id,
+          newConversation: request.new_conversation,
           timeoutMs: request.timeout_ms,
           mode: request.mode,
           modelClass: request.model_class,

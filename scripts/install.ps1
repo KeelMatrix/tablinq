@@ -299,7 +299,7 @@ function Ensure-ConfigFile {
   $configPath = Join-Path $StateRoot "config\config.toml"
   if (-not (Test-Path $configPath)) {
     @(
-      "version = 1"
+      "version = 2"
       "warm_mode = false"
       "safe_mode = false"
       "browser_target_url = 'https://chatgpt.com/'"
