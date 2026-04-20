@@ -668,6 +668,43 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
+  it("reopens the attached ChatGPT tab and completes ask after the target tab is closed", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const attached = await startTrackedAttachableBrowser(server.url);
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+
+    await adapter.open({ targetUrl: server.url, headless: true });
+    await adapter.getManagedPageForTest()!.close();
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-reopen-closed-attached-tab",
+        prompt: "reopen the attached tab and answer",
+      },
+      () => {},
+    );
+    const workspacePages = (await listAttachedPages(attached.endpoint)).filter(
+      (url) => workspaceKeyFromUrl(url) === workspaceKeyFromUrl(server.url),
+    );
+
+    expect(result.output_text).toBe(
+      "Fake response for: reopen the attached tab and answer",
+    );
+    expect(workspacePages).toHaveLength(1);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
   it("counts reloads in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
     const attached = await startTrackedAttachableBrowser(server.url);
@@ -828,6 +865,46 @@ describe("browser adapter", () => {
 
     expect(selected).toContain("/c/preferred");
     expect((await adapter.health()).extension_connected).toBe(true);
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("closes stale attached ChatGPT tabs after selecting a healthy target tab", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const attached = await startTrackedAttachableBrowser(server.url);
+    await withAttachedBrowser(attached.endpoint, async (browser) => {
+      const context = browser.contexts()[0]!;
+      const stale = context.pages()[0]!;
+      await stale.evaluate(() => {
+        document.body.innerHTML = "<main>stale tab</main>";
+      });
+
+      const healthy = await context.newPage();
+      await healthy.goto(server.url, { waitUntil: "domcontentloaded" });
+    });
+
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+
+    await adapter.open({
+      targetUrl: server.url,
+      headless: true,
+    });
+    const workspacePages = (await listAttachedPages(attached.endpoint)).filter(
+      (url) => workspaceKeyFromUrl(url) === workspaceKeyFromUrl(server.url),
+    );
+
+    expect(workspacePages).toHaveLength(1);
+    expect(await adapter.getManagedPageForTest()!.url()).toContain(server.url);
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
