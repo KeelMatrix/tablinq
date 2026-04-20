@@ -184,8 +184,6 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
             .arg("-StateRoot")
             .arg(state_dir.path())
             .arg("-SkipRegistry")
-            .arg("-SkipAutoStartSetup")
-            .arg("-SkipLaunch")
             .arg("-SkipPathUpdate");
         command.current_dir(&repo_root);
         command
