@@ -279,15 +279,19 @@ export function probeDocument(options = {}) {
   const isModelOption = (element) =>
     element instanceof HTMLElement &&
     !isModelPickerTrigger(element) &&
-    isPopupOption(element) &&
-    element.closest(popupRootSelector) !== null &&
+    ((element.hasAttribute("data-model") &&
+      (element.getAttribute("aria-pressed") !== null ||
+        element.tagName.toLowerCase() === "button")) ||
+      (isPopupOption(element) && element.closest(popupRootSelector) !== null)) &&
     hasToken(accessibleName(element), ["instant", "thinking", "pro"]);
 
   const isEffortOption = (element) =>
     element instanceof HTMLElement &&
     !isEffortPickerTrigger(element) &&
-    isPopupOption(element) &&
-    element.closest(popupRootSelector) !== null &&
+    ((element.hasAttribute("data-effort") &&
+      (element.getAttribute("aria-pressed") !== null ||
+        element.tagName.toLowerCase() === "button")) ||
+      (isPopupOption(element) && element.closest(popupRootSelector) !== null)) &&
     hasToken(accessibleName(element), ["standard", "extended"]);
 
   const elementPathname = (element) => {
@@ -323,7 +327,11 @@ export function probeDocument(options = {}) {
     }
     const pathname = elementPathname(element);
     return (
+      element.matches("[data-mode='research']") ||
       element.getAttribute("data-testid") === "deep-research-sidebar-item" ||
+      ((element.tagName.toLowerCase() === "button" ||
+        element.getAttribute("role") === "button") &&
+        hasToken(accessibleName(element), ["research", "deep research"])) ||
       (element.tagName.toLowerCase() === "a" &&
         pathnameHasSegment(pathname, "deep-research"))
     );
@@ -587,6 +595,11 @@ export function probeDocument(options = {}) {
       key: "model_picker_visible",
       strategies: [
         {
+          id: "data-slot-model-picker",
+          score: 1,
+          find: () => firstVisibleBySelector("[data-slot='model-picker']"),
+        },
+        {
           id: "chatgpt-model-trigger",
           score: 0.99,
           find: () => findModelPickerTrigger(),
@@ -594,10 +607,18 @@ export function probeDocument(options = {}) {
         {
           id: "visible-model-options",
           score: 0.95,
+            find: () =>
+              findNamedControl(["instant", "thinking", "pro"], {
+                include: isModelOption,
+                roots: visiblePopupRootsFor(isModelOption),
+              }),
+        },
+        {
+          id: "inline-model-options",
+          score: 0.93,
           find: () =>
             findNamedControl(["instant", "thinking", "pro"], {
               include: isModelOption,
-              roots: visiblePopupRootsFor(isModelOption),
             }),
         },
         {
@@ -617,6 +638,11 @@ export function probeDocument(options = {}) {
       key: "thinking_effort_visible",
       strategies: [
         {
+          id: "data-slot-effort-toggle",
+          score: 1,
+          find: () => firstVisibleBySelector("[data-slot='effort-toggle']"),
+        },
+        {
           id: "composer-effort-trigger",
           score: 0.96,
           find: () => findEffortPickerTrigger(),
@@ -624,10 +650,18 @@ export function probeDocument(options = {}) {
         {
           id: "visible-effort-options",
           score: 0.91,
+            find: () =>
+              findNamedControl(["standard", "extended"], {
+                include: isEffortOption,
+                roots: visiblePopupRootsFor(isEffortOption),
+              }),
+        },
+        {
+          id: "inline-effort-options",
+          score: 0.9,
           find: () =>
-            findNamedControl(["standard", "extended"], {
+            findComposerAdjacentNamedControl(["standard", "extended"], {
               include: isEffortOption,
-              roots: visiblePopupRootsFor(isEffortOption),
             }),
         },
         {
@@ -677,14 +711,39 @@ export function probeDocument(options = {}) {
       key: "research_mode_visible",
       strategies: [
         {
-          id: "deep-research-anchor",
+          id: "data-mode-research",
           score: 1,
+          find: () => firstVisibleBySelector("[data-mode='research']"),
+        },
+        {
+          id: "deep-research-anchor",
+          score: 0.97,
           find: () =>
             firstVisibleBySelectors([
               "a[data-testid='deep-research-sidebar-item']",
               "a[href='/deep-research']",
               "a[href$='/deep-research']",
             ]),
+        },
+        {
+          id: "chatgpt-research-toggle",
+          score: 0.92,
+          find: () =>
+            firstVisibleBySelectors([
+              "button[aria-label*='Research']",
+              "button[aria-label*='Deep research']",
+            ]) ??
+            findNamedControl(["research", "deep research"], {
+              include: isResearchModeControl,
+            }),
+        },
+        {
+          id: "aria-research-toggle",
+          score: 0.88,
+          find: () =>
+            findNamedControl(["research", "deep research"], {
+              include: isResearchModeControl,
+            }),
         },
       ],
     },

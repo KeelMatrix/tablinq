@@ -1,7 +1,14 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use shared_protocol::{CapabilityMatrix, CapabilityReport, Effort, Mode, ModelClass};
+use shared_protocol::{CapabilityReport, Effort, Mode, ModelClass};
+
+#[cfg(test)]
+use chrono::Utc;
+#[cfg(test)]
+use shared_protocol::{CapabilityMatrix, RuntimeAliases};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderModelSpec {
@@ -287,16 +294,14 @@ pub fn model_availability(
         };
     };
 
-    let matrix = &report.matrix;
     let available = match spec.id {
-        "tablinq-instant" => matrix.composer_ready && matrix.submit_available,
+        "tablinq-instant" => composer_submission_ready(report),
         "tablinq-thinking-standard" | "tablinq-thinking-extended" => {
-            matrix.composer_ready && matrix.submit_available && matrix.thinking_effort_visible
+            composer_submission_ready(report)
+                && thinking_effort_available(report, spec.effort.unwrap_or(Effort::None))
         }
-        "tablinq-search" => {
-            matrix.composer_ready && matrix.submit_available && matrix.search_mode_visible
-        }
-        "tablinq-research" => matrix.research_mode_visible,
+        "tablinq-search" => search_capability_available(report),
+        "tablinq-research" => research_capability_available(report),
         _ => false,
     };
     if available {
@@ -341,27 +346,27 @@ pub fn provider_capability_catalog(
         "available_model_ids": available_model_ids,
         "capabilities": {
             "search": capability_status(
-                report.map(|value| &value.matrix),
+                report,
                 "tablinq-search",
-                |matrix| matrix.composer_ready && matrix.submit_available && matrix.search_mode_visible,
+                search_capability_available,
                 "search mode is unavailable in the current managed session",
             ),
             "research": capability_status(
-                report.map(|value| &value.matrix),
+                report,
                 "tablinq-research",
-                |matrix| matrix.research_mode_visible,
+                research_capability_available,
                 "research mode is unavailable in the current managed session",
             ),
             "uploads": capability_status(
-                report.map(|value| &value.matrix),
+                report,
                 "all_models",
-                |matrix| matrix.upload_control_visible,
+                |value| value.matrix.upload_control_visible,
                 "file upload controls are unavailable in the current managed session",
             ),
             "artifacts": capability_status(
-                report.map(|value| &value.matrix),
+                report,
                 "all_models",
-                |matrix| matrix.downloadable_artifacts_observable,
+                |value| value.matrix.downloadable_artifacts_observable,
                 "downloadable artifacts are unavailable in the current managed session",
             ),
             "streaming": json!({
@@ -383,13 +388,13 @@ pub fn provider_capability_catalog(
 }
 
 fn capability_status(
-    matrix: Option<&CapabilityMatrix>,
+    report: Option<&CapabilityReport>,
     stable_model_ids: impl Serialize,
-    predicate: impl FnOnce(&CapabilityMatrix) -> bool,
+    predicate: impl FnOnce(&CapabilityReport) -> bool,
     unavailable_warning: &str,
 ) -> Value {
-    match matrix {
-        Some(matrix) if predicate(matrix) => json!({
+    match report {
+        Some(report) if predicate(report) => json!({
             "availability": "available",
             "stable_model_ids": stable_model_ids,
             "warning": Value::Null,
@@ -405,6 +410,38 @@ fn capability_status(
             "warning": "live capability availability is unknown until the managed browser reports probes",
         }),
     }
+}
+
+fn composer_submission_ready(report: &CapabilityReport) -> bool {
+    report.matrix.composer_ready && report.matrix.submit_available
+}
+
+fn thinking_effort_available(report: &CapabilityReport, effort: Effort) -> bool {
+    report.matrix.thinking_effort_visible || has_effort_alias(report, effort_name(effort))
+}
+
+fn search_capability_available(report: &CapabilityReport) -> bool {
+    composer_submission_ready(report)
+        && (report.matrix.search_mode_visible || has_mode_alias(report, "search"))
+}
+
+fn research_capability_available(report: &CapabilityReport) -> bool {
+    report.matrix.research_mode_visible || has_mode_alias(report, "research")
+}
+
+fn has_mode_alias(report: &CapabilityReport, key: &str) -> bool {
+    has_alias_values(&report.aliases.modes, key)
+}
+
+fn has_effort_alias(report: &CapabilityReport, key: &str) -> bool {
+    has_alias_values(&report.aliases.efforts, key)
+}
+
+fn has_alias_values(aliases: &BTreeMap<String, Vec<String>>, key: &str) -> bool {
+    aliases
+        .get(key)
+        .map(|values| values.iter().any(|value| !value.trim().is_empty()))
+        .unwrap_or(false)
 }
 
 fn observed_aliases(spec: &ProviderModelSpec, report: Option<&CapabilityReport>) -> Value {
@@ -476,6 +513,104 @@ pub fn openai_error(status: u16, error_type: &str, code: &str, message: &str) ->
         },
         "status": status,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn report_with_aliases(matrix: CapabilityMatrix, aliases: RuntimeAliases) -> CapabilityReport {
+        CapabilityReport {
+            reported_at: Utc::now(),
+            selector_pack_id: "test-pack".to_owned(),
+            selector_pack_version: "v1".to_owned(),
+            matrix,
+            aliases,
+        }
+    }
+
+    fn aliases_with_mode(key: &str, alias: &str) -> RuntimeAliases {
+        let mut aliases = RuntimeAliases::default();
+        aliases
+            .modes
+            .insert(key.to_owned(), vec![alias.to_owned()]);
+        aliases
+    }
+
+    fn aliases_with_effort(key: &str, alias: &str) -> RuntimeAliases {
+        let mut aliases = RuntimeAliases::default();
+        aliases
+            .efforts
+            .insert(key.to_owned(), vec![alias.to_owned()]);
+        aliases
+    }
+
+    #[test]
+    fn search_and_research_use_aliases_when_matrix_lags() {
+        let report = report_with_aliases(
+            CapabilityMatrix {
+                composer_ready: true,
+                submit_available: true,
+                ..CapabilityMatrix::default()
+            },
+            RuntimeAliases {
+                modes: BTreeMap::from([
+                    ("search".to_owned(), vec!["search".to_owned()]),
+                    ("research".to_owned(), vec!["deep research".to_owned()]),
+                ]),
+                ..RuntimeAliases::default()
+            },
+        );
+
+        assert_eq!(
+            model_availability(&PROVIDER_MODELS[3], Some(&report)).availability,
+            "available"
+        );
+        assert_eq!(
+            model_availability(&PROVIDER_MODELS[4], Some(&report)).availability,
+            "available"
+        );
+    }
+
+    #[test]
+    fn thinking_models_require_effort_signal() {
+        let report = report_with_aliases(
+            CapabilityMatrix {
+                composer_ready: true,
+                submit_available: true,
+                ..CapabilityMatrix::default()
+            },
+            aliases_with_effort("standard", "standard"),
+        );
+
+        assert_eq!(
+            model_availability(&PROVIDER_MODELS[1], Some(&report)).availability,
+            "available"
+        );
+        assert_eq!(
+            model_availability(&PROVIDER_MODELS[2], Some(&report)).availability,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn provider_catalog_keeps_missing_modes_unavailable_without_aliases() {
+        let report = report_with_aliases(
+            CapabilityMatrix {
+                composer_ready: true,
+                submit_available: true,
+                ..CapabilityMatrix::default()
+            },
+            aliases_with_mode("normal", "chat"),
+        );
+
+        let provider = provider_capability_catalog(Some(&report), "live");
+        assert_eq!(provider["capabilities"]["search"]["availability"], "unavailable");
+        assert_eq!(
+            provider["capabilities"]["research"]["availability"],
+            "unavailable"
+        );
+    }
 }
 
 pub fn request_role_name(role: RequestRole) -> &'static str {

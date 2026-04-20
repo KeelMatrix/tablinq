@@ -134,19 +134,19 @@ Prefer the fake harness first. Use [live-smoke-checklist.md](live-smoke-checklis
 ## Code hotspots
 
 - `crates/gpt/src/lib.rs`
-  - CLI command surface and user-facing presentation
-- `crates/gptd/src/core.rs`
-  - durable execution logic, state transitions, and persistence boundaries
-- `crates/gptd/src/browser.rs`
-  - browser-adapter supervision and recovery handoff
+  - top-level CLI wiring into focused presentation modules such as `cli.rs`, `daemon.rs`, `browser.rs`, `status.rs`, and `terminal.rs`
+- `crates/gptd/src/core/`
+  - durable execution logic split across orchestration, lifecycle support, and persistence-facing helpers
+- `crates/gptd/src/browser/`
+  - browser-adapter supervision, request transport, cancellation, and recovery handoff
 - `crates/tablinq-gateway/src/lib.rs`
-  - HTTP provider surface, queueing, and request summaries
+  - HTTP entry wiring into `chat.rs`, `scheduler.rs`, `uploads.rs`, `capabilities.rs`, and `process_control.rs`
 - `packages/browser-adapter/src/browserAdapter.ts`
-  - Playwright attach runtime, browser ownership boundaries, and reconciliation logic
+  - high-level attach runtime orchestration over focused modules such as `contracts.ts`, `timing.ts`, `assets.ts`, `pageRuntime.ts`, and `urls.ts`
 - `packages/browser-adapter/src/pageAdapter.runtime.js`
   - page-level DOM helpers and UI-specific logic
 - `packages/extension/src/probe.ts`
-  - capability probes and alias discovery
+  - extension-facing capability probes and alias discovery, with DOM/runtime helpers in `probe.runtime.js`
 
 ## Antivirus warning on Windows
 

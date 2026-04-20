@@ -185,7 +185,7 @@ ensure_config_file() {
   mkdir -p "$CONFIG_DIR"
   if [[ ! -f "$CONFIG_PATH" ]]; then
     cat >"$CONFIG_PATH" <<'EOF'
-version = 1
+version = 2
 warm_mode = false
 safe_mode = false
 browser_target_url = 'https://chatgpt.com/'

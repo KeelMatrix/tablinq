@@ -151,9 +151,14 @@ function classicModelControls() {
 }
 
 function classicModeControls() {
-  return hasControl("search")
-    ? `<button type="button" data-mode="search" aria-pressed="false">Search</button>`
-    : "";
+  return [
+    hasControl("search")
+      ? `<button type="button" data-mode="search" aria-pressed="false">Search</button>`
+      : "",
+    hasControl("research")
+      ? `<button type="button" data-mode="research" aria-pressed="false">Research</button>`
+      : "",
+  ].join("");
 }
 
 function classicEffortControls() {
@@ -191,9 +196,14 @@ function ariaModelControls() {
 }
 
 function ariaModeControls() {
-  return hasControl("search")
-    ? `<button type="button" data-mode="search" aria-pressed="false">Browse the web</button>`
-    : "";
+  return [
+    hasControl("search")
+      ? `<button type="button" data-mode="search" aria-pressed="false">Browse the web</button>`
+      : "",
+    hasControl("research")
+      ? `<button type="button" data-mode="research" aria-pressed="false">Deep research</button>`
+      : "",
+  ].join("");
 }
 
 function ariaEffortControls() {
@@ -1029,6 +1039,18 @@ function syncSelectedState() {
     element.setAttribute("aria-pressed", selected ? "true" : "false");
     element.dataset.selected = selected ? "true" : "false";
   });
+  document.querySelectorAll("[data-model]").forEach((element) => {
+    const selected =
+      element.getAttribute("data-model") === document.body.dataset.selectedModel;
+    element.setAttribute("aria-pressed", selected ? "true" : "false");
+    element.dataset.selected = selected ? "true" : "false";
+  });
+  document.querySelectorAll("[data-effort]").forEach((element) => {
+    const selected =
+      element.getAttribute("data-effort") === document.body.dataset.selectedEffort;
+    element.setAttribute("aria-pressed", selected ? "true" : "false");
+    element.dataset.selected = selected ? "true" : "false";
+  });
   const deepResearchNav = document.querySelector("#deep-research-nav");
   if (deepResearchNav instanceof HTMLElement) {
     const selected = selectedMode === "research" || onDeepResearchLanding();
@@ -1314,6 +1336,12 @@ function startResearch(promptText) {
   setStreamingControls(false);
   renderDeepResearchPlanner(state);
   persistResearchState(state);
+  if (!usesDeepResearchFrame) {
+    setStreamState("running");
+    setResearchState("waiting_for_sources", "gathering sources");
+    setStreamingControls(true);
+    activeTimer = setTimeout(() => tickResearch(state), 80);
+  }
 }
 
 function tickStream(state) {
@@ -1623,6 +1651,28 @@ document.querySelector("#effort-option-extended")?.addEventListener("click", () 
   document.body.dataset.selectedEffort = "extended";
   effortPickerTrigger?.setAttribute("aria-expanded", "false");
   syncSelectedState();
+});
+
+document.querySelectorAll("[data-model]").forEach((element) => {
+  element.addEventListener("click", () => {
+    const selectedModel = element.getAttribute("data-model");
+    if (!selectedModel) {
+      return;
+    }
+    document.body.dataset.selectedModel = selectedModel;
+    syncSelectedState();
+  });
+});
+
+document.querySelectorAll("[data-effort]").forEach((element) => {
+  element.addEventListener("click", () => {
+    const selectedEffort = element.getAttribute("data-effort");
+    if (!selectedEffort) {
+      return;
+    }
+    document.body.dataset.selectedEffort = selectedEffort;
+    syncSelectedState();
+  });
 });
 
 document.querySelectorAll("[data-mode]").forEach((element) => {
