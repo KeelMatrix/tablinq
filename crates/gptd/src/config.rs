@@ -274,7 +274,8 @@ impl AppConfig {
 
 pub fn parse_file_config(raw: &str) -> Result<FileConfig> {
     let parsed: FileConfig = toml::from_str(raw).context("parse config.toml")?;
-    Ok(upgrade_file_config(parsed))
+    ensure_current_config_version(&parsed)?;
+    Ok(normalize_file_config(parsed))
 }
 
 fn load_or_create_file_config(path: &Path) -> Result<FileConfig> {
@@ -284,7 +285,7 @@ fn load_or_create_file_config(path: &Path) -> Result<FileConfig> {
         write_file_config(path, &file)?;
         Ok(file)
     } else {
-        let file = upgrade_file_config(FileConfig::default());
+        let file = normalize_file_config(FileConfig::default());
         write_file_config(path, &file)?;
         Ok(file)
     }
@@ -311,7 +312,19 @@ fn ensure_directories(paths: &StatePaths) -> Result<()> {
     Ok(())
 }
 
-fn upgrade_file_config(mut file: FileConfig) -> FileConfig {
+fn ensure_current_config_version(file: &FileConfig) -> Result<()> {
+    match file.version {
+        Some(CONFIG_VERSION) => Ok(()),
+        Some(version) => bail!(
+            "config.toml version {version} is unsupported; expected version {CONFIG_VERSION}"
+        ),
+        None => bail!(
+            "config.toml must declare version = {CONFIG_VERSION}; older config layouts are unsupported"
+        ),
+    }
+}
+
+fn normalize_file_config(mut file: FileConfig) -> FileConfig {
     file.version = Some(CONFIG_VERSION);
     if file.warm_mode.is_none() {
         file.warm_mode = Some(false);
@@ -445,8 +458,8 @@ mod tests {
     }
 
     #[test]
-    fn parse_file_config_upgrades_missing_values() {
-        let parsed = parse_file_config("version = 0").unwrap();
+    fn parse_file_config_fills_missing_values_for_current_version() {
+        let parsed = parse_file_config(&format!("version = {CONFIG_VERSION}")).unwrap();
         assert_eq!(parsed.version, Some(CONFIG_VERSION));
         assert_eq!(parsed.warm_mode, Some(false));
         assert_eq!(parsed.safe_mode, Some(false));
@@ -508,44 +521,33 @@ mod tests {
     }
 
     #[test]
-    fn parse_file_config_upgrades_legacy_config_without_new_browser_fields() {
-        let parsed = parse_file_config(
+    fn parse_file_config_rejects_missing_version() {
+        let err = parse_file_config("warm_mode = true").unwrap_err();
+        assert!(
+            format!("{err:#}")
+                .contains(&format!("config.toml must declare version = {CONFIG_VERSION}"))
+        );
+    }
+
+    #[test]
+    fn parse_file_config_rejects_outdated_version() {
+        let err = parse_file_config(
             r#"
 version = 1
 warm_mode = true
-safe_mode = false
-browser_target_url = "https://chatgpt.com/"
-
-[gateway]
-port = 3847
 "#,
         )
-        .unwrap();
-
-        assert_eq!(parsed.version, Some(CONFIG_VERSION));
-        assert_eq!(parsed.warm_mode, Some(true));
-        assert_eq!(
-            parsed.browser_connection_mode,
-            Some(BrowserConnectionMode::AttachFirst)
-        );
-        assert_eq!(parsed.browser_debug_host.as_deref(), Some("127.0.0.1"));
-        assert_eq!(parsed.browser_debug_port, Some(9222));
-        assert_eq!(
-            parsed.browser_channel.as_deref(),
-            Some(if cfg!(windows) { "msedge" } else { "chrome" })
-        );
-        assert_eq!(parsed.browser_extension_required, Some(true));
-        assert_eq!(parsed.browser_auto_open_target_tab, Some(true));
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("config.toml version 1 is unsupported"));
     }
 
     proptest! {
         #[test]
-        fn file_config_upgrade_preserves_explicit_warm_mode(
-            version in proptest::option::of(0u32..10),
+        fn file_config_normalization_preserves_explicit_warm_mode(
             warm_mode in proptest::option::of(any::<bool>()),
         ) {
             let file = FileConfig {
-                version,
+                version: Some(CONFIG_VERSION),
                 warm_mode,
                 safe_mode: None,
                 browser_connection_mode: None,
@@ -559,10 +561,10 @@ port = 3847
                 browser_auto_open_target_tab: None,
                 gateway: None,
             };
-            let upgraded = super::upgrade_file_config(file.clone());
+            let normalized = super::normalize_file_config(file.clone());
 
-            prop_assert_eq!(upgraded.version, Some(CONFIG_VERSION));
-            prop_assert_eq!(upgraded.warm_mode, Some(file.warm_mode.unwrap_or(false)));
+            prop_assert_eq!(normalized.version, Some(CONFIG_VERSION));
+            prop_assert_eq!(normalized.warm_mode, Some(file.warm_mode.unwrap_or(false)));
         }
     }
 }
