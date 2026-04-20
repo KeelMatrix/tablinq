@@ -99,9 +99,9 @@ struct HttpResponse {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 struct SimpleHttpResponse {
     status_code: u16,
+    #[cfg(test)]
     headers: BTreeMap<String, String>,
     body: Vec<u8>,
 }
@@ -3312,6 +3312,7 @@ fn http_request(
 
     Ok(SimpleHttpResponse {
         status_code,
+        #[cfg(test)]
         headers: response_headers,
         body: response_body,
     })
@@ -3458,7 +3459,9 @@ mod tests {
             Some(shared_protocol::BrowserConnectionMode::ManagedOnly);
         if let Some(gateway) = config.file.gateway.as_mut() {
             gateway.port = Some(0);
-            gateway.request_timeout_ms = Some(20_000);
+            gateway.ask_timeout_ms = Some(20_000);
+            gateway.extended_thinking_timeout_ms = Some(20_000);
+            gateway.research_timeout_ms = Some(20_000);
             gateway.queue_timeout_ms = Some(20_000);
         }
         (dir, config)
