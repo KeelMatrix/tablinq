@@ -52,22 +52,38 @@ What `scripts/install.ps1` does:
 - initializes the state root under `%LOCALAPPDATA%\Tablinq`
 - registers the user-level native messaging host for Edge and Chrome
 - updates the user `PATH` to include `%LOCALAPPDATA%\Tablinq\install\bin`
-- writes startup helper scripts and starts the daemon and gateway
+- removes legacy Startup-folder launchers and any existing Tablinq logon-time persistence
+- does not create Startup-folder launchers, Run-key entries, or scheduled tasks by default
+- does not start the daemon or gateway by default
 
 What still requires you:
 
-1. Remove any previously loaded Tablinq extension from Chrome or Edge if it is still present.
-2. If you plan to use Edge attach-first, load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension` into the Edge profile you will attach to.
-3. Fully close Edge or Chrome.
-4. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser start-debug`.
-5. If you plan to use Chrome attach-first, load the unpacked extension into the dedicated Tablinq Chrome attach profile under `%LOCALAPPDATA%\Tablinq\chrome-attach-profile`.
-6. Sign in manually at `https://chatgpt.com/` in that same browser profile.
-7. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`.
-8. Verify with:
+1. Start the daemon: `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe daemon start`
+2. Start the gateway: `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe gateway start`
+3. Remove any previously loaded Tablinq extension from Chrome or Edge if it is still present.
+4. If you plan to use Edge attach-first, load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension` into the Edge profile you will attach to.
+5. Fully close Edge or Chrome.
+6. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser start-debug`.
+7. If you plan to use Chrome attach-first, load the unpacked extension into the dedicated Tablinq Chrome attach profile under `%LOCALAPPDATA%\Tablinq\chrome-attach-profile`.
+8. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+9. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`.
+10. Verify with:
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser connection-info`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe status`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe doctor`
    - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe capabilities`
+
+To enable Windows logon-time autostart explicitly later, rerun the installer with:
+
+```powershell
+scripts/install.ps1 -EnableAutoStart
+```
+
+To auto-launch the daemon and gateway immediately after install, opt in separately:
+
+```powershell
+scripts/install.ps1 -LaunchAfterInstall
+```
 
 ## Unix-like systems
 
@@ -141,7 +157,6 @@ Example Windows paths that may require exceptions in a typical local environment
 
 - `<repo-root>`
 - `%LOCALAPPDATA%\Tablinq`
-- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`
 - `%NVM_SYMLINK%`
 - `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
 - `%NVM_SYMLINK%\node.exe`

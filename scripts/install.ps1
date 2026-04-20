@@ -4,8 +4,8 @@ param(
   [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA "Tablinq\install"),
   [string]$StateRoot = (Join-Path $env:LOCALAPPDATA "Tablinq"),
   [switch]$SkipRegistry,
-  [switch]$SkipAutoStartSetup,
-  [switch]$SkipLaunch,
+  [switch]$EnableAutoStart,
+  [switch]$LaunchAfterInstall,
   [switch]$SkipPathUpdate,
   [switch]$SkipDependencyInstall,
   [switch]$SkipPackageBuild
@@ -372,6 +372,55 @@ function Remove-LegacyStartupLaunchers {
   }
 }
 
+function Remove-AutoStartScheduledTask {
+  param([string]$TaskName)
+
+  $stdoutPath = [System.IO.Path]::GetTempFileName()
+  $stderrPath = [System.IO.Path]::GetTempFileName()
+  try {
+    $query = Start-Process -FilePath "schtasks.exe" -ArgumentList @("/Query", "/TN", $TaskName) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    if ($query.ExitCode -eq 0) {
+      Start-Process -FilePath "schtasks.exe" -ArgumentList @("/Delete", "/TN", $TaskName, "/F") -Wait -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath | Out-Null
+    }
+  }
+  finally {
+    Remove-Item -Force $stdoutPath, $stderrPath -ErrorAction SilentlyContinue
+  }
+}
+
+function Remove-RunKeyValue {
+  param([string]$ValueName)
+
+  $runKeyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+  if (-not (Test-Path $runKeyPath)) {
+    return
+  }
+
+  try {
+    $value = Get-ItemProperty -Path $runKeyPath -Name $ValueName -ErrorAction Stop
+    if ($null -ne $value) {
+      Remove-ItemProperty -Path $runKeyPath -Name $ValueName -ErrorAction Stop
+    }
+  }
+  catch [System.Management.Automation.PSArgumentException] {
+  }
+  catch [System.Management.Automation.ItemNotFoundException] {
+  }
+}
+
+function Remove-AutoStartPersistence {
+  Remove-LegacyStartupLaunchers
+  foreach ($taskName in @($daemonTaskName, $gatewayTaskName)) {
+    Remove-AutoStartScheduledTask -TaskName $taskName
+    Remove-RunKeyValue -ValueName $taskName
+  }
+
+  $helperDir = Join-Path $InstallRoot "startup"
+  if (Test-Path $helperDir) {
+    Remove-Item -Recurse -Force $helperDir -ErrorAction SilentlyContinue
+  }
+}
+
 function Try-RegisterRegistryDefaultValue {
   param(
     [string]$KeyPath,
@@ -389,21 +438,34 @@ function Try-RegisterRegistryDefaultValue {
   }
 }
 
-function Write-StartupLauncher {
+function New-AutoStartScheduledTask {
   param(
-    [string]$FileName,
+    [string]$TaskName,
     [string]$ExecutablePath,
-    [string]$StateRoot,
-    [string]$BaseDirectory = (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup")
+    [string]$StateRoot
   )
 
-  New-Item -ItemType Directory -Force -Path $BaseDirectory | Out-Null
-  $launcherPath = Join-Path $BaseDirectory $FileName
-
-  @(
-    'Set shell = CreateObject("WScript.Shell")'
-    ('shell.Run """" & "{0}" & """ serve --state-root """" & "{1}" & """", 0, False' -f $ExecutablePath.Replace('"', '""'), $StateRoot.Replace('"', '""'))
-  ) | Set-Content -Path $launcherPath -Encoding ascii
+  $taskCommand = ('"{0}" serve --state-root "{1}"' -f $ExecutablePath, $StateRoot)
+  $stdoutPath = [System.IO.Path]::GetTempFileName()
+  $stderrPath = [System.IO.Path]::GetTempFileName()
+  try {
+    $process = Start-Process -FilePath "schtasks.exe" -ArgumentList @(
+      "/Create",
+      "/SC",
+      "ONLOGON",
+      "/TN",
+      $TaskName,
+      "/TR",
+      $taskCommand,
+      "/F"
+    ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    if ($process.ExitCode -ne 0) {
+      throw "Could not create autostart scheduled task '$TaskName'."
+    }
+  }
+  finally {
+    Remove-Item -Force $stdoutPath, $stderrPath -ErrorAction SilentlyContinue
+  }
 }
 
 function Install-AutoStartPersistence {
@@ -414,19 +476,10 @@ function Install-AutoStartPersistence {
     [string]$InstallRoot
   )
 
-  $helperDir = Join-Path $InstallRoot "startup"
-  Write-StartupLauncher -FileName "Tablinq Daemon.vbs" -ExecutablePath $DaemonExecutable -StateRoot $StateRoot -BaseDirectory $helperDir
-  Write-StartupLauncher -FileName "Tablinq Gateway.vbs" -ExecutablePath $GatewayExecutable -StateRoot $StateRoot -BaseDirectory $helperDir
-
-  try {
-    Write-StartupLauncher -FileName "Tablinq Daemon.vbs" -ExecutablePath $DaemonExecutable -StateRoot $StateRoot
-    Write-StartupLauncher -FileName "Tablinq Gateway.vbs" -ExecutablePath $GatewayExecutable -StateRoot $StateRoot
-    return "startup_folder"
-  }
-  catch {
-    Write-Warning "Could not write Windows Startup-folder launchers. Startup helpers were written to $helperDir instead."
-    return "local_helpers_only"
-  }
+  Remove-AutoStartPersistence
+  New-AutoStartScheduledTask -TaskName $daemonTaskName -ExecutablePath $DaemonExecutable -StateRoot $StateRoot
+  New-AutoStartScheduledTask -TaskName $gatewayTaskName -ExecutablePath $GatewayExecutable -StateRoot $StateRoot
+  return "scheduled_tasks"
 }
 
 function Add-UserPathEntry {
@@ -632,10 +685,6 @@ Assert-DirectoryWritable -Path $localAppDataRoot -Label "Local application data 
 Assert-DirectoryWritable -Path $InstallRoot -Label "Install root"
 Assert-DirectoryWritable -Path $StateRoot -Label "State root"
 
-if (-not $SkipAutoStartSetup) {
-  Assert-DirectoryWritable -Path (Join-Path $appDataRoot "Microsoft\Windows\Start Menu\Programs\Startup") -Label "Windows Startup folder"
-}
-
 if (-not $SkipRegistry) {
   Assert-RegistryWritable -KeyPath "HKCU\Software"
 }
@@ -747,14 +796,14 @@ Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -Labe
 Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-host.exe") -Label "Installed native host"
 Assert-PathExists -Path (Join-Path $InstallRoot "extension\manifest.json") -Label "Installed extension"
 
-Remove-LegacyStartupLaunchers
+Remove-AutoStartPersistence
 
 $autoStartMode = "disabled"
-if (-not $SkipAutoStartSetup) {
+if ($EnableAutoStart) {
   $autoStartMode = Install-AutoStartPersistence -DaemonExecutable (Join-Path $InstallRoot "bin\gptd.exe") -GatewayExecutable (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -StateRoot $StateRoot -InstallRoot $InstallRoot
 }
 
-if (-not $SkipLaunch) {
+if ($LaunchAfterInstall) {
   Start-ManagedBinary -ExecutablePath (Join-Path $InstallRoot "bin\gptd.exe") -StateRoot $StateRoot
   Start-Sleep -Seconds 2
   Assert-PathExists -Path (Join-Path $InstallRoot "bin\gptd.exe") -Label "Installed daemon"
