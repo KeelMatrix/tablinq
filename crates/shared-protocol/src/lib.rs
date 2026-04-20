@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -1138,6 +1139,19 @@ pub enum ValidationError {
     EmptyField(&'static str),
     #[error("{0} must contain at least one item")]
     EmptyCollection(&'static str),
+    #[error("{field} must contain at most {max} items; found {found}")]
+    TooManyItems {
+        field: &'static str,
+        max: usize,
+        found: usize,
+    },
+    #[error("{field} file exceeds {max_bytes} bytes: {path} ({found_bytes} bytes)")]
+    FileTooLarge {
+        field: &'static str,
+        path: String,
+        max_bytes: u64,
+        found_bytes: u64,
+    },
     #[error("{field} is invalid: {message}")]
     InvalidFieldCombination { field: String, message: String },
     #[error("selector pack format version {found} is unsupported; expected {expected}")]
@@ -1150,6 +1164,9 @@ pub enum ValidationError {
         expected: &'static str,
     },
 }
+
+const MAX_ATTACHMENT_FILES: usize = 10;
+pub const MAX_ATTACHMENT_FILE_BYTES: u64 = 20 * 1024 * 1024;
 
 fn validate_exact_version(version: &str) -> Result<(), ValidationError> {
     if version == PROTOCOL_VERSION {
@@ -1178,8 +1195,26 @@ fn validate_optional(field: &'static str, value: Option<&str>) -> Result<(), Val
 }
 
 fn validate_paths(field: &'static str, values: &[String]) -> Result<(), ValidationError> {
+    if values.len() > MAX_ATTACHMENT_FILES {
+        return Err(ValidationError::TooManyItems {
+            field,
+            max: MAX_ATTACHMENT_FILES,
+            found: values.len(),
+        });
+    }
     for value in values {
         validate_required(field, value)?;
+        if let Ok(metadata) = fs::metadata(value)
+            && metadata.is_file()
+            && metadata.len() > MAX_ATTACHMENT_FILE_BYTES
+        {
+            return Err(ValidationError::FileTooLarge {
+                field,
+                path: value.clone(),
+                max_bytes: MAX_ATTACHMENT_FILE_BYTES,
+                found_bytes: metadata.len(),
+            });
+        }
     }
     Ok(())
 }
@@ -1188,6 +1223,8 @@ fn validate_paths(field: &'static str, values: &[String]) -> Result<(), Validati
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use std::fs;
+    use tempfile::tempdir;
 
     fn fixed_time() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 4, 12, 3, 4, 5).unwrap()
@@ -1273,6 +1310,89 @@ mod tests {
 
         let err = envelope.validate().unwrap_err();
         assert_eq!(err, ValidationError::EmptyField("request_id"));
+    }
+
+    #[test]
+    fn ask_command_accepts_up_to_ten_files() {
+        let command = AskCommand {
+            prompt: "hello".to_owned(),
+            conversation_id: None,
+            new_conversation: false,
+            mode: Mode::Normal,
+            model_class: Some(ModelClass::Instant),
+            effort: None,
+            files: (0..10)
+                .map(|index| format!("fixtures/input-{index}.txt"))
+                .collect(),
+        };
+
+        command.validate().unwrap();
+    }
+
+    #[test]
+    fn research_command_rejects_more_than_ten_files() {
+        let command = ResearchCommand {
+            query: "investigate".to_owned(),
+            conversation_id: None,
+            new_conversation: false,
+            files: (0..11)
+                .map(|index| format!("fixtures/input-{index}.txt"))
+                .collect(),
+            output_dir: None,
+        };
+
+        let err = command.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ValidationError::TooManyItems {
+                field: "files",
+                max: 10,
+                found: 11,
+            }
+        );
+    }
+
+    #[test]
+    fn ask_command_rejects_file_larger_than_twenty_mib() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("oversize.bin");
+        fs::write(&path, vec![0_u8; (MAX_ATTACHMENT_FILE_BYTES as usize) + 1]).unwrap();
+        let command = AskCommand {
+            prompt: "hello".to_owned(),
+            conversation_id: None,
+            new_conversation: false,
+            mode: Mode::Normal,
+            model_class: Some(ModelClass::Instant),
+            effort: None,
+            files: vec![path.display().to_string()],
+        };
+
+        let err = command.validate().unwrap_err();
+        assert_eq!(
+            err,
+            ValidationError::FileTooLarge {
+                field: "files",
+                path: path.display().to_string(),
+                max_bytes: MAX_ATTACHMENT_FILE_BYTES,
+                found_bytes: MAX_ATTACHMENT_FILE_BYTES + 1,
+            }
+        );
+    }
+
+    #[test]
+    fn research_command_accepts_file_at_twenty_mib() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("limit.bin");
+        fs::write(&path, vec![0_u8; MAX_ATTACHMENT_FILE_BYTES as usize]).unwrap();
+        let command = ResearchCommand {
+            query: "investigate".to_owned(),
+            conversation_id: None,
+            new_conversation: false,
+            files: vec![path.display().to_string()],
+            output_dir: None,
+        };
+
+        command.validate().unwrap();
     }
 
     #[test]

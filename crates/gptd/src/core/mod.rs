@@ -6,7 +6,7 @@ use crate::browser::{
 };
 use crate::config::AppConfig;
 use crate::db::Database;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 pub use support::error_code_for_message;
 use shared_protocol::{
@@ -117,6 +117,7 @@ impl CoreService {
                 "safe mode enabled: prompt execution is disabled; run doctor or capabilities only"
             );
         }
+        command.validate().context("validate ask command")?;
 
         let db = self.open_db()?;
         let created_at = Utc::now();
@@ -351,6 +352,7 @@ impl CoreService {
                 "safe mode enabled: prompt execution is disabled; run doctor or capabilities only"
             );
         }
+        command.validate().context("validate research command")?;
 
         let db = self.open_db()?;
         let created_at = Utc::now();

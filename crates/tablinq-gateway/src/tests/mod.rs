@@ -175,6 +175,29 @@ fn upload_file(
     .unwrap()
 }
 
+fn http_request_with_declared_content_length(
+    snapshot: &GatewayStatusSnapshot,
+    auth: &str,
+    file_name: &str,
+    content_type: &str,
+    declared_content_length: usize,
+) -> SimpleHttpResponse {
+    super::http_request_with_declared_content_length(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_FILES_PATH,
+        &[
+            ("authorization", auth),
+            ("x-file-name", file_name),
+            ("content-type", content_type),
+        ],
+        declared_content_length,
+        20_000,
+    )
+    .unwrap()
+}
+
 fn openclaude_request_body(
     model: &str,
     prompt: &str,

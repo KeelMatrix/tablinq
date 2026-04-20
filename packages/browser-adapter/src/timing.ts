@@ -4,7 +4,10 @@ export const RESEARCH_TIMEOUT_MS = 60_000;
 export const PROBE_TIMEOUT_MS = 5_000;
 export const ATTACH_PROBE_GRACE_MS = 1_500;
 export const INTERACTION_TIMEOUT_MS = 7_500;
-export const UPLOAD_ACK_TIMEOUT_MS = 10_000;
+export const MAX_UPLOAD_FILE_BYTES = 20 * 1024 * 1024;
+export const UPLOAD_ACK_TIMEOUT_MIN_MS = 10_000;
+export const UPLOAD_ACK_TIMEOUT_MAX_MS = 40_000;
+export const ADDITIONAL_UPLOAD_ACK_WEIGHT = 0.9;
 export const SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS = 60_000;
 export const RESEARCH_SUBMISSION_START_TIMEOUT_MS = 7_500;
 export const DEEP_RESEARCH_HANDOFF_TIMEOUT_MS = 60_000;
@@ -25,5 +28,35 @@ export function deepResearchStartDelayMs(randomValue = Math.random()): number {
   return (
     DEEP_RESEARCH_START_DELAY_MIN_MS +
     Math.round(jitter * DEEP_RESEARCH_START_DELAY_JITTER_MS)
+  );
+}
+
+export function uploadAckTimeoutMsForFiles(fileSizes: number[]): number {
+  if (fileSizes.length === 0) {
+    return UPLOAD_ACK_TIMEOUT_MIN_MS;
+  }
+
+  const perFileTimeouts = fileSizes
+    .map((value) => uploadAckTimeoutMsForFile(value))
+    .sort((left, right) => right - left);
+  const [largest, ...rest] = perFileTimeouts;
+  return Math.round(
+    largest +
+      rest.reduce(
+        (total, value) => total + value * ADDITIONAL_UPLOAD_ACK_WEIGHT,
+        0,
+      ),
+  );
+}
+
+function uploadAckTimeoutMsForFile(fileSizeBytes: number): number {
+  const normalizedSize = Math.min(
+    1,
+    Math.max(0, fileSizeBytes) / MAX_UPLOAD_FILE_BYTES,
+  );
+  return Math.round(
+    UPLOAD_ACK_TIMEOUT_MIN_MS +
+      (UPLOAD_ACK_TIMEOUT_MAX_MS - UPLOAD_ACK_TIMEOUT_MIN_MS) *
+        Math.sqrt(normalizedSize),
   );
 }
