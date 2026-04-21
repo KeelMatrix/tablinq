@@ -2585,7 +2585,7 @@ describe("browser adapter", () => {
 
     const diagnostics = await adapter.diagnostics(path.join(root, "bundle"));
     expect(diagnostics.screenshot_path).toContain("failure.png");
-    expect(diagnostics.dom_snapshot).toContain("body_excerpt");
+    expect(diagnostics.dom_snapshot).toContain("dom_text");
     expect(diagnostics.aria_snapshot).toContain("role");
 
     await adapter.shutdown();
@@ -3764,7 +3764,7 @@ describe("browser adapter", () => {
       path.join(bundleRoot, "bundle"),
     );
     expect(diagnostics.screenshot_path).toContain("failure.png");
-    expect(diagnostics.dom_snapshot).toContain("body_excerpt");
+    expect(diagnostics.dom_snapshot).toContain("dom_text");
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

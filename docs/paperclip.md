@@ -64,6 +64,8 @@ Paperclip is a good fit when you want file-backed browser automation, research-s
 - if the client drops mid-run, inspect request status before retrying
 - do not assume a disconnected research job is lost; it may complete upstream and reconcile as `recovered`
 
+For request-scoped evidence capture and how to consume `GET /v1/requests/{request_id}/evidence`, use the centralized guidance in [provider-mode.md#evidence-workflow](provider-mode.md#evidence-workflow).
+
 ## Example request
 
 ```json

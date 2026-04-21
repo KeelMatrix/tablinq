@@ -464,6 +464,12 @@ fn handle_connection(
                 Err(response) => response,
             }
         }
+        ("GET", _) if request_evidence_request_id_from_path(&context.request.path).is_some() => {
+            match authorize_request(config, &context.request, false) {
+                Ok(()) => handle_request_evidence_request(core, &context)?,
+                Err(response) => response,
+            }
+        }
         ("GET", _) if request_id_from_path(&context.request.path).is_some() => {
             match authorize_request(config, &context.request, false) {
                 Ok(()) => handle_request_summary_request(core, &context)?,
@@ -595,6 +601,7 @@ fn handle_connection(
                         queue_wait_ms,
                         RequestOutcome {
                             kind: RequestOutcomeKind::Cancelled,
+                            low_confidence: false,
                             conversation_id: prepared.conversation_id_hint().map(str::to_owned),
                             interrupted_at: None,
                             interruption_reason: None,
@@ -621,6 +628,7 @@ fn handle_connection(
                             &context.request_id,
                             outcome.conversation_id.as_deref(),
                         );
+                        let should_capture_evidence = outcome.low_confidence;
                         let _ = core.record_request_summary(&build_request_summary(
                             &context,
                             &prepared,
@@ -629,6 +637,14 @@ fn handle_connection(
                             queue_wait_ms,
                             outcome,
                         ));
+                        if should_capture_evidence {
+                            let _ = maybe_capture_request_evidence(
+                                core,
+                                &context.request_id,
+                                None,
+                                true,
+                            );
+                        }
                     }
                     Err(err) => {
                         let _ = core.record_request_summary(&build_request_summary(
@@ -639,6 +655,12 @@ fn handle_connection(
                             queue_wait_ms,
                             outcome_from_error(&err),
                         ));
+                        let _ = maybe_capture_request_evidence(
+                            core,
+                            &context.request_id,
+                            Some(&err),
+                            false,
+                        );
                         let failure_bundle_id = capture_gateway_failure_bundle(
                             core, &context, &prepared, &client_id, &err,
                         );
@@ -1039,6 +1061,44 @@ fn handle_request_summary_request(
     ))
 }
 
+fn handle_request_evidence_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(target_request_id) = request_evidence_request_id_from_path(&context.request.path)
+    else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+
+    let artifact = match core.latest_request_evidence(target_request_id) {
+        Ok(artifact) => artifact,
+        Err(_) => {
+            return Ok(json_response(
+                404,
+                json!({
+                    "request_id": context.request_id,
+                    "error": "not_found",
+                }),
+            ));
+        }
+    };
+
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.request_evidence",
+            "request_id": context.request_id,
+            "data": artifact_object(core, artifact)?,
+        }),
+    ))
+}
+
 fn handle_files_list_request(upload_store: &UploadStore, request_id: &str) -> Result<HttpResponse> {
     let files = upload_store
         .list()?
@@ -1342,6 +1402,43 @@ fn refusal_reason_for_code(code: &str) -> Option<&str> {
     }
 }
 
+fn maybe_capture_request_evidence(
+    core: &CoreService,
+    request_id: &str,
+    err: Option<&anyhow::Error>,
+    low_confidence: bool,
+) -> Option<String> {
+    if !should_capture_request_evidence(core, err, low_confidence) {
+        return None;
+    }
+    core.capture_browser_evidence(request_id)
+        .ok()
+        .map(|artifact| artifact.artifact_id)
+}
+
+fn should_capture_request_evidence(
+    core: &CoreService,
+    err: Option<&anyhow::Error>,
+    low_confidence: bool,
+) -> bool {
+    if low_confidence {
+        return true;
+    }
+
+    let message = err.map(|value| format!("{value:#}")).unwrap_or_default();
+    if message.contains("timed out")
+        || message.contains("reload")
+        || message.contains("extension")
+        || message.contains("disconnect")
+        || message.contains("reconcil")
+    {
+        return true;
+    }
+
+    core.browser_profile_info()
+        .is_ok_and(|snapshot| !snapshot.extension_connected || snapshot.reload_count >= 2)
+}
+
 fn parse_request_list_query(
     path: &str,
     request_id: &str,
@@ -1493,6 +1590,13 @@ fn handle_cancel_request(
 fn cancel_request_id_from_path(path: &str) -> Option<&str> {
     let suffix = normalized_request_path(path).strip_prefix(V1_REQUESTS_PREFIX)?;
     suffix.strip_suffix("/cancel")
+}
+
+fn request_evidence_request_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_REQUESTS_PREFIX)?;
+    suffix
+        .strip_suffix("/evidence")
+        .filter(|value| !value.is_empty())
 }
 
 fn request_id_from_path(path: &str) -> Option<&str> {

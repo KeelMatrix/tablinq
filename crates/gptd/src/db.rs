@@ -841,6 +841,38 @@ impl Database {
         Ok(artifact)
     }
 
+    pub fn latest_request_artifact_by_content_type(
+        &self,
+        request_id: &str,
+        content_type: &str,
+    ) -> Result<Option<ArtifactSummary>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT artifacts.artifact_id,
+                       artifacts.conversation_id,
+                       artifacts.message_id,
+                       artifacts.file_name,
+                       artifacts.content_type,
+                       artifacts.size_bytes,
+                       artifacts.sha256,
+                       artifacts.storage_path,
+                       artifacts.created_at
+                FROM request_history
+                INNER JOIN job_artifacts ON job_artifacts.job_id = request_history.job_id
+                INNER JOIN artifacts ON artifacts.artifact_id = job_artifacts.artifact_id
+                WHERE request_history.request_id = ?1
+                  AND artifacts.content_type = ?2
+                ORDER BY artifacts.created_at DESC
+                LIMIT 1
+                "#,
+                params![request_id, content_type],
+                map_artifact_row,
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn find_artifact(&self, artifact_id: &str) -> Result<Option<ArtifactSummary>> {
         let artifact = self
             .conn

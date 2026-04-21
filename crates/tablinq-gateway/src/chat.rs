@@ -65,6 +65,7 @@ pub(crate) enum RequestOutcomeKind {
 #[derive(Debug, Clone)]
 pub(crate) struct RequestOutcome {
     pub(crate) kind: RequestOutcomeKind,
+    pub(crate) low_confidence: bool,
     pub(crate) conversation_id: Option<String>,
     pub(crate) interrupted_at: Option<DateTime<Utc>>,
     pub(crate) interruption_reason: Option<String>,
@@ -218,7 +219,7 @@ pub(crate) fn execute_chat_completions_request(
                     }
                     Ok(())
                 })
-                .map(|result| result.conversation_id),
+                .map(|result| (result.conversation_id, result.low_confidence)),
             PreparedChatJob::Ask(job) => core
                 .execute_prepared_ask(job, |event| {
                     if downstream_interrupted.is_some() {
@@ -248,11 +249,11 @@ pub(crate) fn execute_chat_completions_request(
                     }
                     Ok(())
                 })
-                .map(|result| result.conversation_id),
+                .map(|result| (result.conversation_id, result.low_confidence)),
         };
 
         match result {
-            Ok(conversation_id) => {
+            Ok((conversation_id, low_confidence)) => {
                 if let Some((interrupted_at, interruption_reason)) = downstream_interrupted.take() {
                     let recovered_at = Utc::now();
                     let recovery_reason =
@@ -272,6 +273,7 @@ pub(crate) fn execute_chat_completions_request(
                     )?;
                     return Ok(RequestOutcome {
                         kind: RequestOutcomeKind::Recovered,
+                        low_confidence: true,
                         conversation_id: Some(conversation_id),
                         interrupted_at: Some(interrupted_at),
                         interruption_reason: Some(interruption_reason),
@@ -321,6 +323,7 @@ pub(crate) fn execute_chat_completions_request(
                         );
                         return Ok(RequestOutcome {
                             kind: RequestOutcomeKind::Recovered,
+                            low_confidence: true,
                             conversation_id: Some(conversation_id),
                             interrupted_at: Some(interrupted_at),
                             interruption_reason: Some(interruption_reason),
@@ -354,6 +357,7 @@ pub(crate) fn execute_chat_completions_request(
                         );
                         return Ok(RequestOutcome {
                             kind: RequestOutcomeKind::Recovered,
+                            low_confidence: true,
                             conversation_id: Some(conversation_id),
                             interrupted_at: Some(interrupted_at),
                             interruption_reason: Some(interruption_reason),
@@ -374,7 +378,12 @@ pub(crate) fn execute_chat_completions_request(
                     }),
                 )?;
                 Ok(RequestOutcome {
-                    kind: RequestOutcomeKind::Completed,
+                    kind: if low_confidence {
+                        RequestOutcomeKind::Recovered
+                    } else {
+                        RequestOutcomeKind::Completed
+                    },
+                    low_confidence,
                     conversation_id: Some(conversation_id),
                     interrupted_at: None,
                     interruption_reason: None,
@@ -402,12 +411,13 @@ pub(crate) fn execute_chat_completions_request(
                 if let Some((interrupted_at, interruption_reason)) = downstream_interrupted {
                     outcome.interrupted_at = Some(interrupted_at);
                     outcome.interruption_reason = Some(interruption_reason);
+                    outcome.low_confidence = true;
                 }
                 Ok(outcome)
             }
         }
     } else {
-        let (response, conversation_id) = match &prepared.job {
+        let (response, conversation_id, low_confidence) = match &prepared.job {
             PreparedChatJob::Research(job) => {
                 let result = core.execute_prepared_research(job, |_event| Ok(()))?;
                 let conversation = core.find_conversation(&result.conversation_id)?;
@@ -424,6 +434,7 @@ pub(crate) fn execute_chat_completions_request(
                         "stop",
                     ),
                     Some(result.conversation_id),
+                    result.low_confidence,
                 )
             }
             PreparedChatJob::Ask(job) => {
@@ -442,6 +453,7 @@ pub(crate) fn execute_chat_completions_request(
                         "stop",
                     ),
                     Some(result.conversation_id),
+                    result.low_confidence,
                 )
             }
         };
@@ -467,6 +479,7 @@ pub(crate) fn execute_chat_completions_request(
                 );
                 return Ok(RequestOutcome {
                     kind: RequestOutcomeKind::Recovered,
+                    low_confidence: true,
                     conversation_id,
                     interrupted_at: Some(interrupted_at),
                     interruption_reason: Some(interruption_reason),
@@ -479,7 +492,12 @@ pub(crate) fn execute_chat_completions_request(
             return Err(err);
         }
         Ok(RequestOutcome {
-            kind: RequestOutcomeKind::Completed,
+            kind: if low_confidence {
+                RequestOutcomeKind::Recovered
+            } else {
+                RequestOutcomeKind::Completed
+            },
+            low_confidence,
             conversation_id,
             interrupted_at: None,
             interruption_reason: None,
@@ -546,6 +564,7 @@ pub(crate) fn outcome_from_error(err: &anyhow::Error) -> RequestOutcome {
         } else {
             RequestOutcomeKind::Failed
         },
+        low_confidence: message.contains("timed out"),
         conversation_id: None,
         interrupted_at: None,
         interruption_reason: None,

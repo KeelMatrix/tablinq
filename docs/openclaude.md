@@ -70,6 +70,8 @@ Use `tablinq-research` only when you explicitly want the longer-running research
 
 Because Tablinq is browser-backed, a local disconnect may later show up as `recovered` instead of a simple failure.
 
+For request-scoped evidence capture and how to consume `GET /v1/requests/{request_id}/evidence`, use the centralized guidance in [provider-mode.md#evidence-workflow](provider-mode.md#evidence-workflow).
+
 ## Example request
 
 ```json
