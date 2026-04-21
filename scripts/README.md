@@ -5,6 +5,7 @@ This folder contains the repo's operational helper scripts.
 The scripts are intentionally split by responsibility:
 
 - **bootstrap** checks whether a machine is ready to work on the repo.
+- **ci-local** mirrors the current GitHub Actions jobs as closely as a local machine can.
 - **test** validates the repo.
 - **package** builds a distributable layout.
 - **install** installs that packaged layout onto a machine.
@@ -17,6 +18,7 @@ That separation matters. Packaging and installation are not the same step, and v
 | Goal                                                        | Use                           |
 | ----------------------------------------------------------- | ----------------------------- |
 | Confirm your Windows shell can see Node, pnpm, and cargo    | `bootstrap.ps1`               |
+| Mirror the current GitHub Actions jobs locally on Windows   | `ci-local.ps1`                |
 | Run the full repo validation suite                          | `test.ps1` or `test.sh`       |
 | Build a distributable package without installing it         | `package.ps1` or `package.sh` |
 | Install Tablinq locally from the repo/package output        | `install.ps1` or `install.sh` |
@@ -85,6 +87,46 @@ It gives Windows contributors and CI-like local runs a single command that cover
 
 - Producing a distributable package.
 - Installing the app onto a machine.
+
+---
+
+### `ci-local.ps1`
+
+**What it does**
+
+Runs the current GitHub job commands locally on Windows, with the same environment variables and command ordering used in workflow files:
+
+- `rust`
+  - `cargo fmt --all --check`
+  - `cargo clippy --workspace --all-targets --locked -- -D warnings`
+  - `cargo test --workspace --locked`
+- `typescript`
+  - `pnpm install --frozen-lockfile`
+  - `pnpm format`
+  - `pnpm lint`
+  - `pnpm build`
+  - `pnpm test`
+- `package-smoke`
+  - `pnpm install --frozen-lockfile`
+  - `./scripts/package.ps1 -Profile dev`
+  - `cargo test -p gpt --test production_smoke windows_packaging_and_install_smoke_cover_packaged_layout -- --nocapture`
+
+It accepts `-Job rust`, `-Job typescript`, `-Job package-smoke`, or `-Job all`.
+
+**Why it exists**
+
+The repo already has general validation helpers, but GitHub now has three distinct jobs with slightly different command surfaces. This script gives Windows developers a one-command way to mirror those jobs locally without mentally translating workflow YAML into shell commands.
+
+**Use it when**
+
+- You want the closest local equivalent to the current GitHub Actions jobs.
+- You are debugging a failure that happened in GitHub CI and want to replay the exact job commands.
+- You want to run only one CI job locally instead of the broader local validation script.
+
+**Do not use it for**
+
+- Cross-platform Unix validation.
+- Packaging or installation outside the CI-mirroring workflow.
 
 ---
 
@@ -300,9 +342,10 @@ This is not a developer build or install helper. It is an operational confidence
 
 1. Run `bootstrap.ps1`.
 2. Run `test.ps1` while iterating on code.
-3. Run `package.ps1` when you need an installable layout.
-4. Run `install.ps1` when you need a real local install.
-5. Run `soak_gateway.ps1` only after the local gateway is up and you want runtime confidence.
+3. Run `ci-local.ps1` when you need to reproduce the current GitHub job commands locally.
+4. Run `package.ps1` when you need an installable layout.
+5. Run `install.ps1` when you need a real local install.
+6. Run `soak_gateway.ps1` only after the local gateway is up and you want runtime confidence.
 
 ### Unix/Linux contributor
 
