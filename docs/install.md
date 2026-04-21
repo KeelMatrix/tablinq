@@ -9,9 +9,9 @@ Tablinq is attach-first.
 The intended production workflow is:
 
 - install Tablinq
-- load the Tablinq extension into your normal Chrome or Edge profile
-- start the daemon and gateway
+- let the installer bring up the daemon and gateway
 - start an attachable browser session with `gpt browser start-debug`
+- load the Tablinq extension into the target Chrome or Edge profile
 - sign in manually at `chatgpt.com`
 - let Tablinq attach to that existing browser session with `gpt browser attach`
 
@@ -54,25 +54,19 @@ What `scripts/install.ps1` does:
 - updates the user `PATH` to include `%LOCALAPPDATA%\Tablinq\install\bin`
 - removes legacy Startup-folder launchers and any existing Tablinq logon-time persistence
 - does not create Startup-folder launchers, Run-key entries, or scheduled tasks by default
-- does not start the daemon or gateway by default
+- starts the daemon and gateway by default and reports whether they are healthy
+- prints a compact install summary plus the remaining manual browser steps
 
 What still requires you:
 
-1. Start the daemon: `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe daemon start`
-2. Start the gateway: `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe gateway start`
-3. Remove any previously loaded Tablinq extension from Chrome or Edge if it is still present.
-4. If you plan to use Edge attach-first, load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension` into the Edge profile you will attach to.
-5. Fully close Edge or Chrome.
-6. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser start-debug`.
-7. If you plan to use Chrome attach-first, load the unpacked extension into the dedicated Tablinq Chrome attach profile under `%LOCALAPPDATA%\Tablinq\chrome-attach-profile`.
-8. Sign in manually at `https://chatgpt.com/` in that same browser profile.
-9. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`.
-10. Verify with:
-
-- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser connection-info`
-- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe status`
-- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe doctor`
-- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe capabilities`
+1. If the summary says daemon or gateway need attention, run `gpt daemon start` or `gpt gateway start`.
+2. Fully close Edge or Chrome.
+3. Run `gpt browser start-debug`.
+4. Load the unpacked extension from `%LOCALAPPDATA%\Tablinq\install\extension`.
+5. If you are using Chrome attach-first, use the dedicated Chrome attach profile under `%LOCALAPPDATA%\Tablinq\chrome-attach-profile`.
+6. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+7. Run `gpt browser attach`.
+8. Verify with `gpt status`.
 
 To enable Windows logon-time autostart explicitly later, rerun the installer with:
 
@@ -80,10 +74,10 @@ To enable Windows logon-time autostart explicitly later, rerun the installer wit
 scripts/install.ps1 -EnableAutoStart
 ```
 
-To auto-launch the daemon and gateway immediately after install, opt in separately:
+To skip the default daemon and gateway launch, opt out explicitly:
 
 ```powershell
-scripts/install.ps1 -LaunchAfterInstall
+scripts/install.ps1 -NoLaunchAfterInstall
 ```
 
 ## Unix-like systems

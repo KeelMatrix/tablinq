@@ -242,8 +242,8 @@ This is the Windows all-in-one local install path. It can:
 - register the native host unless skipped,
 - enable logon-time scheduled-task autostart when `-EnableAutoStart` is passed,
 - optionally update PATH,
-- optionally launch the daemon and gateway with `-LaunchAfterInstall`,
-- print the remaining manual browser/extension steps.
+- launch the daemon and gateway by default unless `-NoLaunchAfterInstall` is passed,
+- print a short status summary plus the remaining manual browser/extension steps.
 
 It also contains defensive handling for blocked files, registry access, legacy launcher cleanup, and antivirus-related failure modes.
 
@@ -265,7 +265,8 @@ A packaged layout is still not a usable local install. Windows needs extra machi
 
 **Notes**
 
-- Supports several `-Skip...` switches so operators can bypass dependency install, package build, registry changes, autostart setup, launch, or PATH updates.
+- Supports several `-Skip...` switches so operators can bypass dependency install, package build, registry changes, autostart setup, or PATH updates.
+- Uses `-NoLaunchAfterInstall` only when you explicitly do not want the script to start services immediately.
 - Prefer this over calling lower-level steps manually unless you are debugging a specific install stage.
 
 ---

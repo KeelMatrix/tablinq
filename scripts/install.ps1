@@ -5,7 +5,7 @@ param(
   [string]$StateRoot = (Join-Path $env:LOCALAPPDATA "Tablinq"),
   [switch]$SkipRegistry,
   [switch]$EnableAutoStart,
-  [switch]$LaunchAfterInstall,
+  [switch]$NoLaunchAfterInstall,
   [switch]$SkipPathUpdate,
   [switch]$SkipDependencyInstall,
   [switch]$SkipPackageBuild
@@ -19,28 +19,169 @@ $daemonTaskName = "Tablinq Daemon"
 $gatewayTaskName = "Tablinq Gateway"
 $legacyDaemonLaunchers = @("Tablinq Daemon.cmd")
 $legacyGatewayLaunchers = @("Tablinq Gateway.cmd")
+$script:InstallProgressId = 8701
+$script:CurrentPhase = 0
+$script:TotalPhases = 3
+if (-not $SkipDependencyInstall) {
+  $script:TotalPhases += 1
+}
+if (-not $SkipPackageBuild) {
+  $script:TotalPhases += 1
+}
+if (-not $NoLaunchAfterInstall) {
+  $script:TotalPhases += 1
+}
+
+function Update-InstallProgress {
+  param([string]$Status)
+
+  if ($Host.Name -eq "ServerRemoteHost") {
+    return
+  }
+
+  $percent = 0
+  if ($script:TotalPhases -gt 0) {
+    $percent = [math]::Min([math]::Round(($script:CurrentPhase / $script:TotalPhases) * 100), 100)
+  }
+
+  Write-Progress -Id $script:InstallProgressId -Activity "Installing Tablinq" -Status $Status -PercentComplete $percent
+}
+
+function Complete-InstallProgress {
+  Write-Progress -Id $script:InstallProgressId -Activity "Installing Tablinq" -Completed
+}
+
+function Start-InstallPhase {
+  param([string]$Title)
+
+  $script:CurrentPhase += 1
+  Write-Host ""
+  Write-Host ("[{0}/{1}] {2}" -f $script:CurrentPhase, $script:TotalPhases, $Title)
+  Update-InstallProgress -Status $Title
+}
+
+function Write-StatusLine {
+  param(
+    [string]$Label,
+    [string]$State,
+    [string]$Details = ""
+  )
+
+  if ($Details) {
+    Write-Host ("  {0,-12} {1,-12} {2}" -f ($Label + ":"), $State, $Details)
+  }
+  else {
+    Write-Host ("  {0,-12} {1}" -f ($Label + ":"), $State)
+  }
+}
+
+function Show-CommandFailureLog {
+  param(
+    [string]$StdoutPath,
+    [string]$StderrPath
+  )
+
+  foreach ($item in @(
+    @{ Label = "stdout"; Path = $StdoutPath },
+    @{ Label = "stderr"; Path = $StderrPath }
+  )) {
+    if (-not (Test-Path $item.Path)) {
+      continue
+    }
+
+    $content = Get-Content -Path $item.Path -Tail 40 -ErrorAction SilentlyContinue
+    if (-not $content) {
+      continue
+    }
+
+    Write-Host ("  {0} tail:" -f $item.Label)
+    foreach ($line in $content) {
+      Write-Host ("    {0}" -f $line)
+    }
+  }
+}
+
+function Convert-ToCmdArgument {
+  param([string]$Value)
+
+  if ($null -eq $Value -or $Value -eq "") {
+    return '""'
+  }
+
+  $escaped = $Value.Replace('"', '\"')
+  if ($escaped -match '[\s"&^|<>()]') {
+    return '"' + $escaped + '"'
+  }
+
+  return $escaped
+}
 
 function Invoke-Step {
   param(
+    [string]$Label,
     [string]$FilePath,
     [string[]]$ArgumentList = @(),
-    [string]$WorkingDirectory
+    [string]$WorkingDirectory,
+    [string]$LogPath
   )
 
-  Write-Host "> $FilePath $($ArgumentList -join ' ')"
+  $displayLabel = if ($Label) { $Label } else { $FilePath }
+  $stdoutPath = if ($LogPath) { "$LogPath.stdout.log" } else { [System.IO.Path]::GetTempFileName() }
+  $stderrPath = if ($LogPath) { "$LogPath.stderr.log" } else { [System.IO.Path]::GetTempFileName() }
+  $startedAt = Get-Date
+  $resolvedPath = $FilePath
+  if (-not [System.IO.Path]::IsPathRooted($FilePath)) {
+    $commandInfo = Get-Command $FilePath -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($commandInfo -and $commandInfo.Source) {
+      $resolvedPath = $commandInfo.Source
+    }
+  }
+
+  $launchFilePath = $resolvedPath
+  $launchArguments = $ArgumentList
+  $extension = [System.IO.Path]::GetExtension($resolvedPath)
+  if ($extension -eq ".ps1") {
+    $launchFilePath = Resolve-PowerShellExecutable
+    $launchArguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $resolvedPath) + $ArgumentList
+  }
+  elseif ($extension -in @(".cmd", ".bat")) {
+    $cmdLine = @((Convert-ToCmdArgument -Value $resolvedPath))
+    foreach ($argument in $ArgumentList) {
+      $cmdLine += (Convert-ToCmdArgument -Value $argument)
+    }
+    $launchFilePath = "cmd.exe"
+    $launchArguments = @("/d", "/c", ($cmdLine -join " "))
+  }
+
+  Write-Host ("  -> {0}" -f $displayLabel)
   if ($WorkingDirectory) {
     Push-Location $WorkingDirectory
   }
 
   try {
-    & $FilePath @ArgumentList
-    if ($LASTEXITCODE -ne 0) {
-      throw "Command failed: $FilePath $($ArgumentList -join ' ')"
+    $process = Start-Process -FilePath $launchFilePath -ArgumentList $launchArguments -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    while (-not $process.HasExited) {
+      $elapsed = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
+      Update-InstallProgress -Status ("{0} ({1}s)" -f $displayLabel, $elapsed)
+      Start-Sleep -Milliseconds 250
+      $process.Refresh()
     }
+
+    if ($process.ExitCode -ne 0) {
+      Show-CommandFailureLog -StdoutPath $stdoutPath -StderrPath $stderrPath
+      throw "Command failed: $displayLabel"
+    }
+
+    $elapsed = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
+    Write-Host ("  [OK] {0} ({1}s)" -f $displayLabel, $elapsed)
   }
   finally {
     if ($WorkingDirectory) {
       Pop-Location
+    }
+
+    if (-not $LogPath) {
+      Remove-Item -Path $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
     }
   }
 }
@@ -54,6 +195,16 @@ function Assert-CommandAvailable {
   if (-not (Get-Command $CommandName -ErrorAction SilentlyContinue)) {
     throw "Missing required command '$CommandName'. $InstallHint"
   }
+}
+
+function Resolve-PowerShellExecutable {
+  foreach ($commandName in @("pwsh", "powershell")) {
+    if (Get-Command $commandName -ErrorAction SilentlyContinue) {
+      return $commandName
+    }
+  }
+
+  throw "Missing required PowerShell host. Install PowerShell 7 (`"pwsh`") or Windows PowerShell (`"powershell`")."
 }
 
 function Remove-PathIfExists {
@@ -523,31 +674,143 @@ function Start-ManagedBinary {
   Start-Process -FilePath $ExecutablePath -ArgumentList @("serve", "--state-root", $StateRoot) -WindowStyle Hidden | Out-Null
 }
 
-function Test-ManagedBinaryRunning {
-  param([string]$ExecutablePath)
+function Invoke-InternalCli {
+  param(
+    [string]$CliExecutablePath,
+    [string]$StateRoot,
+    [string[]]$Arguments,
+    [int]$TimeoutSeconds = 15
+  )
 
-  if (-not (Test-Path $ExecutablePath)) {
-    return $false
+  $stdoutPath = [System.IO.Path]::GetTempFileName()
+  $stderrPath = [System.IO.Path]::GetTempFileName()
+  try {
+    $process = Start-Process -FilePath $CliExecutablePath -ArgumentList (@("--state-root", $StateRoot) + $Arguments) -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
+      Start-Sleep -Milliseconds 100
+      $process.Refresh()
+    }
+
+    if (-not $process.HasExited) {
+      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+      throw "Command timed out: $($Arguments -join ' ')"
+    }
+
+    $stdout = Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue
+    $stderr = Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue
+    $stdoutText = if ($null -ne $stdout) { ($stdout | Out-String).Trim() } else { "" }
+    $stderrText = if ($null -ne $stderr) { $stderr.Trim() } else { "" }
+    [pscustomobject]@{
+      ExitCode = $process.ExitCode
+      Stdout = $stdoutText
+      Stderr = $stderrText
+    }
   }
-
-  $normalized = [System.IO.Path]::GetFullPath($ExecutablePath)
-  return [bool](Get-Process | Where-Object {
-    $_.Path -and $_.Path.Equals($normalized, [System.StringComparison]::OrdinalIgnoreCase)
-  } | Select-Object -First 1)
+  finally {
+    Remove-Item -Path $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+  }
 }
 
-function Test-DaemonResponsive {
+function Invoke-InternalCliJson {
+  param(
+    [string]$CliExecutablePath,
+    [string]$StateRoot,
+    [string[]]$Arguments
+  )
+
+  $result = Invoke-InternalCli -CliExecutablePath $CliExecutablePath -StateRoot $StateRoot -Arguments $Arguments
+  if ($result.ExitCode -ne 0) {
+    $message = if ($result.Stderr) { $result.Stderr } elseif ($result.Stdout) { $result.Stdout } else { "Command failed: $($Arguments -join ' ')" }
+    throw $message
+  }
+
+  if (-not $result.Stdout) {
+    return $null
+  }
+
+  try {
+    return ($result.Stdout | ConvertFrom-Json -Depth 20)
+  }
+  catch {
+    throw "Command returned non-JSON output: $($Arguments -join ' ')"
+  }
+}
+
+function Get-DaemonStatus {
   param(
     [string]$CliExecutablePath,
     [string]$StateRoot
   )
 
-  if (-not (Test-Path $CliExecutablePath)) {
-    return $false
+  $result = Invoke-InternalCli -CliExecutablePath $CliExecutablePath -StateRoot $StateRoot -Arguments @("daemon", "status")
+  if ($result.ExitCode -ne 0 -or -not $result.Stdout) {
+    return $null
   }
 
-  & $CliExecutablePath --state-root $StateRoot daemon status | Out-Null
-  return ($LASTEXITCODE -eq 0)
+  try {
+    return ($result.Stdout | ConvertFrom-Json -Depth 20)
+  }
+  catch {
+    return $null
+  }
+}
+
+function Get-GatewayStatus {
+  param(
+    [string]$CliExecutablePath,
+    [string]$StateRoot
+  )
+
+  $result = Invoke-InternalCli -CliExecutablePath $CliExecutablePath -StateRoot $StateRoot -Arguments @("gateway", "status")
+  if ($result.ExitCode -ne 0 -or -not $result.Stdout) {
+    return $null
+  }
+
+  try {
+    return ($result.Stdout | ConvertFrom-Json -Depth 20)
+  }
+  catch {
+    return $null
+  }
+}
+
+function Wait-ForDaemonReady {
+  param(
+    [string]$CliExecutablePath,
+    [string]$StateRoot,
+    [int]$TimeoutSeconds = 10
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    $status = Get-DaemonStatus -CliExecutablePath $CliExecutablePath -StateRoot $StateRoot
+    if ($status -and $status.type -eq "status" -and $status.payload) {
+      return $status
+    }
+    Start-Sleep -Milliseconds 250
+  }
+
+  throw "Daemon did not become ready within $TimeoutSeconds seconds."
+}
+
+function Wait-ForGatewayReady {
+  param(
+    [string]$CliExecutablePath,
+    [string]$StateRoot,
+    [int]$TimeoutSeconds = 10
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    $status = Get-GatewayStatus -CliExecutablePath $CliExecutablePath -StateRoot $StateRoot
+    if ($status -and $status.running -eq $true -and $status.ready -eq $true) {
+      return $status
+    }
+    Start-Sleep -Milliseconds 250
+  }
+
+  throw "Gateway did not become ready within $TimeoutSeconds seconds."
 }
 
 function Write-GptWrapper {
@@ -562,19 +825,6 @@ function Write-GptWrapper {
   ) | Set-Content -Path $WrapperPath -Encoding ascii
 }
 
-function Invoke-InternalCli {
-  param(
-    [string]$ExecutablePath,
-    [string]$StateRoot,
-    [string[]]$Arguments
-  )
-
-  & $ExecutablePath --state-root $StateRoot @Arguments | Out-Null
-  if ($LASTEXITCODE -ne 0) {
-    throw "Command failed: $($Arguments -join ' ')"
-  }
-}
-
 function Write-ManualSteps {
   param(
     [string]$InstallRoot,
@@ -583,71 +833,57 @@ function Write-ManualSteps {
     [string]$ConnectionMode,
     [string]$TargetUrl,
     [bool]$DaemonRunning,
-    [bool]$GatewayRunning
+    [bool]$GatewayRunning,
+    [bool]$UsePathCommand
   )
 
   $extensionPath = Join-Path $InstallRoot "extension"
-  $gptPath = Join-Path $InstallRoot "bin\gpt.exe"
   $chromeAttachProfilePath = Join-Path $StateRoot "chrome-attach-profile"
+  $gptCommand = if ($UsePathCommand) { "gpt" } else { Join-Path $InstallRoot "bin\gpt.exe" }
   $steps = [System.Collections.Generic.List[string]]::new()
 
   if (-not $DaemonRunning) {
-    $steps.Add("Start the daemon: $gptPath daemon start") | Out-Null
+    $steps.Add("$gptCommand daemon start") | Out-Null
   }
 
   if (-not $GatewayRunning) {
-    $steps.Add("Start the gateway: $gptPath gateway start") | Out-Null
+    $steps.Add("$gptCommand gateway start") | Out-Null
   }
 
   switch ($ConnectionMode) {
     "managed_only" {
-      $steps.Add("Run: $gptPath browser open") | Out-Null
-      $steps.Add("Sign in manually at $TargetUrl in the managed browser window if prompted.") | Out-Null
+      $steps.Add("$gptCommand browser open") | Out-Null
+      $steps.Add("Sign in at $TargetUrl if prompted.") | Out-Null
     }
     "managed_fallback" {
-      $steps.Add("Run: $gptPath browser open") | Out-Null
-      $steps.Add("Sign in manually at $TargetUrl in the managed browser window if prompted.") | Out-Null
+      $steps.Add("$gptCommand browser open") | Out-Null
+      $steps.Add("Sign in at $TargetUrl if prompted.") | Out-Null
     }
     default {
-      switch ($BrowserName) {
-        "Chrome" {
-          $steps.Add("Fully close Chrome.") | Out-Null
-          $steps.Add("Run: $gptPath browser start-debug") | Out-Null
-          $steps.Add("In the Chrome window opened by that command, open chrome://extensions/, enable Developer mode, remove any previously loaded Tablinq extension in that attach profile, and load the unpacked extension from: $extensionPath") | Out-Null
-          $steps.Add("Sign in manually at $TargetUrl in that same dedicated Chrome attach profile.") | Out-Null
-        }
-        default {
-          $steps.Add("Open edge://extensions/ in the Edge profile you will attach to, enable Developer mode, remove any previously loaded Tablinq extension, and load the unpacked extension from: $extensionPath") | Out-Null
-          $steps.Add("Fully close Edge.") | Out-Null
-          $steps.Add("Run: $gptPath browser start-debug") | Out-Null
-          $steps.Add("Sign in manually at $TargetUrl in that same Edge profile.") | Out-Null
-        }
+      if ($BrowserName -eq "Chrome") {
+        $steps.Add("Fully close Chrome: taskkill /IM chrome.exe /F") | Out-Null
+        $steps.Add("$gptCommand browser start-debug") | Out-Null
+        $steps.Add("In the Chrome window opened by that command, open chrome://extensions/, enable Developer mode, remove any previously loaded Tablinq extension in that attach profile, and load the unpacked extension from: $extensionPath") | Out-Null
+        $steps.Add("Sign in at $TargetUrl in that profile.") | Out-Null
+      }
+      else {
+        $steps.Add("Open edge://extensions/ and enable Developer mode.") | Out-Null
+        $steps.Add("Load the unpacked extension from: $extensionPath") | Out-Null
+        $steps.Add("Fully close Edge.") | Out-Null
+        $steps.Add("$gptCommand browser start-debug") | Out-Null
+        $steps.Add("Sign in at $TargetUrl in that profile.") | Out-Null
       }
 
-      $steps.Add("Run: $gptPath browser attach") | Out-Null
+      $steps.Add("$gptCommand browser attach") | Out-Null
     }
   }
 
-  $steps.Add("Verify browser session: $gptPath browser connection-info") | Out-Null
-  $steps.Add("Verify overall status: $gptPath status") | Out-Null
-  $steps.Add("Verify diagnostics: $gptPath doctor") | Out-Null
-  $steps.Add("Inspect capabilities: $gptPath capabilities") | Out-Null
-  $steps.Add("Try a smoke prompt: $gptPath ask `"hello`"") | Out-Null
-
   Write-Host ""
-  Write-Host "Tablinq install is ready."
-  Write-Host "Install root: $InstallRoot"
-  Write-Host "State root: $StateRoot"
-  Write-Host "Browser: $BrowserName"
-  Write-Host "Connection mode: $ConnectionMode"
-  Write-Host "Daemon running: $DaemonRunning"
-  Write-Host "Gateway running: $GatewayRunning"
-
   if ($ConnectionMode -eq "attach_first" -and $BrowserName -eq "Chrome") {
-    Write-Host "Chrome attach profile: $chromeAttachProfilePath"
+    Write-Host "Chrome attach-first uses the dedicated profile created automatically at: $chromeAttachProfilePath"
+    Write-Host ""
   }
 
-  Write-Host ""
   Write-Host "Manual steps:"
 
   for ($index = 0; $index -lt $steps.Count; $index += 1) {
@@ -658,13 +894,23 @@ function Write-ManualSteps {
     Write-Host ""
     Write-Host "Managed browser mode is a fallback path. Use attach-first unless your machine or browser profile cannot expose the local debug endpoint."
   }
+
+  Write-Host ""
+  Write-Host "Optional checks:"
+  Write-Host ("- {0} browser connection-info" -f $gptCommand)
+  Write-Host ("- {0} status" -f $gptCommand)
+  Write-Host ("- {0} doctor" -f $gptCommand)
+  Write-Host ("- {0} capabilities" -f $gptCommand)
+  Write-Host ("- {0} ask `"hi`"" -f $gptCommand)
 }
 
-Write-Host "Preparing Tablinq Windows install from repo checkout..."
+Write-Host "Installing Tablinq on Windows..."
+Write-Host "Defaults: launch now = yes, autostart on login = no"
+Start-InstallPhase -Title "Checking prerequisites"
 Assert-CommandAvailable -CommandName "cargo" -InstallHint "Install Rust and make sure cargo is on PATH."
 Assert-CommandAvailable -CommandName "node" -InstallHint "Install Node.js 20 or newer and make sure node is on PATH."
 Assert-CommandAvailable -CommandName "pnpm" -InstallHint "Install pnpm and make sure it is on PATH."
-Assert-CommandAvailable -CommandName "powershell" -InstallHint "Windows PowerShell is required and must be on PATH."
+$powerShellExecutable = Resolve-PowerShellExecutable
 
 $browserSelection = Resolve-BrowserSelection
 if (-not $browserSelection) {
@@ -684,32 +930,35 @@ if (-not $appDataRoot) {
 Assert-DirectoryWritable -Path $localAppDataRoot -Label "Local application data folder"
 Assert-DirectoryWritable -Path $InstallRoot -Label "Install root"
 Assert-DirectoryWritable -Path $StateRoot -Label "State root"
+Ensure-StateLayout -StateRoot $StateRoot
+$installLogDir = Join-Path $StateRoot "logs"
 
 if (-not $SkipRegistry) {
   Assert-RegistryWritable -KeyPath "HKCU\Software"
 }
 
 if (-not $SkipDependencyInstall) {
-  Write-Host "Installing workspace dependencies with pnpm..."
-  Invoke-Step -FilePath "pnpm" -ArgumentList @("install") -WorkingDirectory $repoRoot
+  Start-InstallPhase -Title "Installing workspace dependencies"
+  Invoke-Step -Label "pnpm install" -FilePath "pnpm" -ArgumentList @("install") -WorkingDirectory $repoRoot -LogPath (Join-Path $installLogDir "install-pnpm")
 }
 
 if (-not $SkipPackageBuild) {
-  Write-Host "Building and packaging Tablinq..."
-  Invoke-Step -FilePath "powershell" -ArgumentList @(
+  Start-InstallPhase -Title "Building package"
+  Invoke-Step -FilePath $powerShellExecutable -ArgumentList @(
     "-ExecutionPolicy",
     "Bypass",
     "-File",
     $packageScriptPath,
     "-Profile",
     $Profile
-  ) -WorkingDirectory $repoRoot
+  ) -WorkingDirectory $repoRoot -Label "package.ps1" -LogPath (Join-Path $installLogDir "install-package")
 }
 
 if (-not (Test-Path $PackageRoot)) {
   throw "Missing package root after packaging: $PackageRoot"
 }
 
+Start-InstallPhase -Title "Replacing install directory"
 $existingBinDir = Join-Path $InstallRoot "bin"
 Stop-ManagedProcessByPath -ExecutablePath (Join-Path $existingBinDir "tablinq-gateway.exe")
 Stop-ManagedProcessByPath -ExecutablePath (Join-Path $existingBinDir "gptd.exe")
@@ -745,7 +994,6 @@ Copy-Item -Path (Join-Path $PackageRoot "bin\tablinq-host.exe") -Destination (Jo
 Write-GptWrapper -WrapperPath $gptWrapper -CliExecutable $internalCliBin
 Normalize-PageAdapterRuntime -RuntimePath $pageAdapterRuntimePath
 
-Ensure-StateLayout -StateRoot $StateRoot
 $configPath = Ensure-ConfigFile -StateRoot $StateRoot
 
 $nativeHostDir = Join-Path $stagingRoot "native-host"
@@ -796,6 +1044,7 @@ Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -Labe
 Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-host.exe") -Label "Installed native host"
 Assert-PathExists -Path (Join-Path $InstallRoot "extension\manifest.json") -Label "Installed extension"
 
+Start-InstallPhase -Title "Configuring local machine"
 Remove-AutoStartPersistence
 
 $autoStartMode = "disabled"
@@ -803,18 +1052,59 @@ if ($EnableAutoStart) {
   $autoStartMode = Install-AutoStartPersistence -DaemonExecutable (Join-Path $InstallRoot "bin\gptd.exe") -GatewayExecutable (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -StateRoot $StateRoot -InstallRoot $InstallRoot
 }
 
-if ($LaunchAfterInstall) {
-  Start-ManagedBinary -ExecutablePath (Join-Path $InstallRoot "bin\gptd.exe") -StateRoot $StateRoot
-  Start-Sleep -Seconds 2
-  Assert-PathExists -Path (Join-Path $InstallRoot "bin\gptd.exe") -Label "Installed daemon"
-  Start-ManagedBinary -ExecutablePath (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -StateRoot $StateRoot
-  Start-Sleep -Seconds 2
-  Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -Label "Installed gateway"
+$installedCli = Join-Path $InstallRoot "bin\gpt.exe"
+$usePathCommand = -not $SkipPathUpdate
+$daemonStatus = $null
+$gatewayStatus = $null
+$launchMode = "skipped"
+
+if (-not $NoLaunchAfterInstall) {
+  Start-InstallPhase -Title "Starting services"
+  $null = Invoke-InternalCliJson -CliExecutablePath $installedCli -StateRoot $StateRoot -Arguments @("daemon", "start")
+  $daemonStatus = Wait-ForDaemonReady -CliExecutablePath $installedCli -StateRoot $StateRoot
+  $null = Invoke-InternalCliJson -CliExecutablePath $installedCli -StateRoot $StateRoot -Arguments @("gateway", "start")
+  $gatewayStatus = Wait-ForGatewayReady -CliExecutablePath $installedCli -StateRoot $StateRoot
+  $launchMode = "started"
+}
+else {
+  $daemonStatus = Get-DaemonStatus -CliExecutablePath $installedCli -StateRoot $StateRoot
+  $gatewayStatus = Get-GatewayStatus -CliExecutablePath $installedCli -StateRoot $StateRoot
 }
 
-$daemonRunning = Test-DaemonResponsive -CliExecutablePath (Join-Path $InstallRoot "bin\gpt.exe") -StateRoot $StateRoot
-$gatewayRunning = Test-ManagedBinaryRunning -ExecutablePath (Join-Path $InstallRoot "bin\tablinq-gateway.exe")
+$daemonRunning = [bool]($daemonStatus -and $daemonStatus.type -eq "status" -and $daemonStatus.payload)
+$gatewayRunning = [bool]($gatewayStatus -and $gatewayStatus.running -eq $true -and $gatewayStatus.ready -eq $true)
+$pathState = if ($SkipPathUpdate) { "unchanged" } else { "updated" }
+$daemonDetail = if ($daemonRunning) {
+  $daemonStatus.payload.ipc_endpoint
+}
+elseif ($NoLaunchAfterInstall) {
+  "start later with gpt daemon start"
+}
+else {
+  "not ready"
+}
+$gatewayDetail = if ($gatewayRunning) {
+  "{0}:{1}" -f $gatewayStatus.host, $gatewayStatus.port
+}
+elseif ($NoLaunchAfterInstall) {
+  "start later with gpt gateway start"
+}
+else {
+  "not ready"
+}
 
-Write-Host "Auto-start: enabled ($autoStartMode)"
-Write-Host "Browser: $($browserSelection.Name)"
-Write-ManualSteps -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserName $browserSelection.Name -ConnectionMode $connectionMode -TargetUrl $targetUrl -DaemonRunning $daemonRunning -GatewayRunning $gatewayRunning
+Complete-InstallProgress
+Write-Host ""
+Write-Host "Install complete."
+Write-Host ""
+Write-Host "Summary:"
+Write-StatusLine -Label "Install" -State "ok" -Details $InstallRoot
+Write-StatusLine -Label "State" -State "ok" -Details $StateRoot
+Write-StatusLine -Label "Browser" -State $browserSelection.Name -Details $connectionMode
+Write-StatusLine -Label "PATH" -State $pathState -Details $(if ($SkipPathUpdate) { "gpt not added to PATH" } else { "gpt available in new shells" })
+Write-StatusLine -Label "Autostart" -State $autoStartMode -Details $(if ($EnableAutoStart) { "starts on login" } else { "disabled" })
+Write-StatusLine -Label "Launch" -State $launchMode -Details $(if ($NoLaunchAfterInstall) { "use manual steps below" } else { "daemon and gateway checked" })
+Write-StatusLine -Label "Daemon" -State $(if ($daemonRunning) { "running" } else { "attention" }) -Details $daemonDetail
+Write-StatusLine -Label "Gateway" -State $(if ($gatewayRunning) { "running" } else { "attention" }) -Details $gatewayDetail
+
+Write-ManualSteps -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserName $browserSelection.Name -ConnectionMode $connectionMode -TargetUrl $targetUrl -DaemonRunning $daemonRunning -GatewayRunning $gatewayRunning -UsePathCommand $usePathCommand

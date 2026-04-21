@@ -5,10 +5,11 @@ use serde_json::Value;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
-use tempfile::tempdir;
+use tempfile::{NamedTempFile, tempdir};
 
 fn integration_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -17,30 +18,26 @@ fn integration_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-struct TestChild {
-    child: Child,
-}
-
-impl TestChild {
-    fn spawn(mut command: Command) -> Self {
-        let child = command.spawn().expect("spawn test child");
-        Self { child }
-    }
-}
-
-impl Drop for TestChild {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
-fn powershell() -> &'static str {
-    "powershell"
+fn powershell() -> String {
+    for candidate in ["pwsh", "powershell"] {
+        let status = Command::new(candidate)
+            .arg("-NoLogo")
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg("$PSVersionTable.PSVersion.Major")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if matches!(status, Ok(result) if result.success()) {
+            return candidate.to_owned();
+        }
+    }
+
+    panic!("missing PowerShell executable");
 }
 
 fn package_root_override() -> Option<PathBuf> {
@@ -48,16 +45,46 @@ fn package_root_override() -> Option<PathBuf> {
 }
 
 fn run_success(mut command: Command) -> String {
-    let output = command.output().expect("run command");
-    if !output.status.success() {
+    let stdout_file = NamedTempFile::new().expect("create stdout temp file");
+    let stderr_file = NamedTempFile::new().expect("create stderr temp file");
+    let stdout_path = stdout_file.path().to_path_buf();
+    let stderr_path = stderr_file.path().to_path_buf();
+    command.stdout(Stdio::from(
+        stdout_file.reopen().expect("reopen stdout temp file"),
+    ));
+    command.stderr(Stdio::from(
+        stderr_file.reopen().expect("reopen stderr temp file"),
+    ));
+
+    let mut child = command.spawn().expect("run command");
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll command") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "command timed out: stdout={} stderr={}",
+                String::from_utf8_lossy(&fs::read(&stdout_path).unwrap_or_default()),
+                String::from_utf8_lossy(&fs::read(&stderr_path).unwrap_or_default())
+            );
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+
+    let stdout = fs::read(&stdout_path).expect("read stdout temp file");
+    let stderr = fs::read(&stderr_path).expect("read stderr temp file");
+    if !status.success() {
         panic!(
             "command failed: status={} stdout={} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
+            status,
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
         );
     }
-    String::from_utf8(output.stdout).expect("utf8 stdout")
+    String::from_utf8(stdout).expect("utf8 stdout")
 }
 
 fn wait_for_daemon(state_root: &Path) {
@@ -111,11 +138,16 @@ fn reserve_local_port() -> u16 {
     port
 }
 
-fn set_gateway_port(state_root: &Path, port: u16) {
-    let config_path = state_root.join("config").join("config.toml");
-    let raw = fs::read_to_string(&config_path).expect("read config.toml");
-    let updated = raw.replace("port = 3847", &format!("port = {port}"));
-    fs::write(&config_path, updated).expect("write config.toml");
+fn seed_install_config(state_root: &Path, port: u16) {
+    let config_dir = state_root.join("config");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "version = 2\nwarm_mode = false\nsafe_mode = false\nbrowser_target_url = 'https://chatgpt.com/'\n\n[gateway]\nhost = '127.0.0.1'\nport = {port}\n"
+        ),
+    )
+    .expect("write seeded config.toml");
 }
 
 #[test]
@@ -126,6 +158,7 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
     let state_dir = tempdir().expect("state tempdir");
     let install_script = repo_root.join("scripts").join("install.ps1");
     let package_dir = tempdir().expect("package tempdir");
+    let powershell = powershell();
     let package_root = if let Some(package_root) = package_root_override() {
         package_root
     } else {
@@ -133,7 +166,7 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
         let package_script = repo_root.join("scripts").join("package.ps1");
         eprintln!("packaging");
         run_success({
-            let mut command = Command::new(powershell());
+            let mut command = Command::new(&powershell);
             command
                 .arg("-ExecutionPolicy")
                 .arg("Bypass")
@@ -169,9 +202,12 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
         );
     }
 
+    let port = reserve_local_port();
+    seed_install_config(state_dir.path(), port);
+
     eprintln!("installing package");
-    run_success({
-        let mut command = Command::new(powershell());
+    let install_output = run_success({
+        let mut command = Command::new(&powershell);
         command
             .arg("-ExecutionPolicy")
             .arg("Bypass")
@@ -188,6 +224,9 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
         command.current_dir(&repo_root);
         command
     });
+    assert!(install_output.contains("Install complete."));
+    assert!(install_output.contains("Daemon:"));
+    assert!(install_output.contains("Gateway:"));
 
     let installed_root = install_dir.path().to_path_buf();
     eprintln!("verifying install layout");
@@ -230,37 +269,13 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
         );
     }
 
-    set_gateway_port(state_dir.path(), reserve_local_port());
-
     let installed_gpt = installed_root.join("bin").join("gpt.exe");
     let installed_gptd = installed_root.join("bin").join("gptd.exe");
     let installed_gateway = installed_root.join("bin").join("tablinq-gateway.exe");
-    eprintln!("starting packaged daemon");
-    let _daemon_child = TestChild::spawn({
-        let mut command = Command::new(&installed_gptd);
-        command
-            .arg("serve")
-            .arg("--state-root")
-            .arg(state_dir.path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        command
-    });
+    eprintln!("checking packaged daemon status");
     wait_for_daemon(state_dir.path());
 
     eprintln!("checking packaged gateway status");
-    let _gateway_child = TestChild::spawn({
-        let mut command = Command::new(&installed_gateway);
-        command
-            .arg("serve")
-            .arg("--state-root")
-            .arg(state_dir.path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        command
-    });
     let gateway_status = wait_for_packaged_gateway(
         &installed_gpt,
         &installed_gptd,
