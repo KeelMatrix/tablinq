@@ -42,6 +42,12 @@ Also confirm:
 9. After at least one download, confirm the attached normal-browser tab is still usable by running `gpt capabilities` or another `gpt ask`.
 10. Open two ChatGPT tabs, keep the extension active in only one, rerun `gpt browser attach`, and confirm Tablinq returns to the tab with working extension connectivity.
 
+If you want to retain command output or before/after snapshots from a live check, save them under `docs/smoke/`, for example:
+
+- `gpt browser attach > docs/smoke/smoke-attach.txt`
+- `gpt browser connection-info > docs/smoke/smoke-connection-info.txt`
+- save any before/after JSON snapshots as `docs/smoke/smoke-pre-snapshot.json` and `docs/smoke/smoke-post-snapshot.json`
+
 ## Provider checks
 
 1. Call `POST /v1/chat/completions` with `tablinq-instant` and confirm the response includes `request_id`, `tablinq_job_id`, and warnings metadata.
