@@ -54,6 +54,7 @@ Recommended posture:
 - `POST /v1/chat/completions`
 - `POST /v1/files`
 - `GET /v1/files`
+- `GET /v1/files/{id}`
 - `GET /v1/artifacts`
 - `GET /v1/artifacts/{id}`
 - `GET /v1/artifacts/{id}/content`

@@ -53,8 +53,11 @@ Formatting:
 - `cargo run -p gpt -- jobs show job-123`
 - `cargo run -p gpt -- jobs cancel job-123`
 - `cargo run -p gpt -- sessions list`
+- `cargo run -p gpt -- conversations list`
+- `cargo run -p gpt -- conversations switch conv-123`
+- `cargo run -p gpt -- conversations new`
 - `cargo run -p gpt -- artifacts list`
-- `cargo run -p gpt -- artifacts pull last`
+- `cargo run -p gpt -- artifacts pull last --to .`
 - `cargo run -p gpt -- doctor`
 - `cargo run -p gpt -- capabilities`
 - `cargo run -p gpt -- config show`
@@ -79,7 +82,7 @@ Use this only when the fake harness is not enough:
 5. If you are using Chrome attach-first, load the unpacked extension into the dedicated Chrome attach profile created under the Tablinq state root.
 6. Sign in manually at `https://chatgpt.com/` in that profile.
 7. Run `cargo run -p gpt -- browser attach`.
-8. Use `cargo run -p gpt -- status`, `doctor`, and `capabilities` before testing ask or research flows.
+8. Use `cargo run -p gpt -- status`, `cargo run -p gpt -- doctor`, and `cargo run -p gpt -- capabilities` before testing ask or research flows.
 
 Managed fallback exists only for debugging, CI, harness isolation, and machines that cannot expose a usable local debug endpoint.
 
@@ -92,7 +95,7 @@ Managed fallback exists only for debugging, CI, harness isolation, and machines 
 - `scripts/package.ps1`
   - builds release Rust binaries, emits browser adapter and extension JavaScript, and assembles `dist/package/tablinq`
 - `scripts/install.ps1`
-  - the Windows all-in-one entry point: installs dependencies, packages the repo, replaces `%LOCALAPPDATA%\Tablinq\install`, registers the native host, writes startup helpers, and prints the remaining manual browser-extension steps
+  - the Windows all-in-one entry point: installs dependencies, packages the repo, replaces `%LOCALAPPDATA%\Tablinq\install`, registers the native host, removes legacy autostart persistence, optionally enables autostart with `-EnableAutoStart`, and prints the remaining manual browser-extension steps
 
 ## CI expectations
 
