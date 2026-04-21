@@ -132,7 +132,7 @@ impl UploadStore {
                 items.push(metadata);
             }
         }
-        items.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+        items.sort_by_key(|item| std::cmp::Reverse(item.created_at));
         Ok(items)
     }
 

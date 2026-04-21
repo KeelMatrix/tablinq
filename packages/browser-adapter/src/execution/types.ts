@@ -10,10 +10,7 @@ import type {
   ResearchResultSnapshot,
   StreamChunkSnapshot,
 } from "../contracts";
-import type {
-  AskBaseline,
-  AskSnapshot,
-} from "../snapshotState";
+import type { AskBaseline, AskSnapshot } from "../snapshotState";
 import type { textRelation } from "../snapshotState";
 
 export interface BrowserExecutionHost {
@@ -81,13 +78,9 @@ export type AskRecoveryResolution = {
   canContinue: boolean;
 };
 
-export type ChunkSink = (
-  chunk: StreamChunkSnapshot,
-) => Promise<void> | void;
+export type ChunkSink = (chunk: StreamChunkSnapshot) => Promise<void> | void;
 
-export type StateSink = (
-  update: RequestStateSnapshot,
-) => Promise<void> | void;
+export type StateSink = (update: RequestStateSnapshot) => Promise<void> | void;
 
 export type ResearchUpdateSink = (
   update: ResearchProgressSnapshot,

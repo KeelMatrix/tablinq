@@ -250,7 +250,8 @@ export function probeDocument(options = {}) {
     });
 
   const popupRootSelector = "[role='menu'], [role='listbox']";
-  const popupOptionSelector = "[role='menuitemradio'], [role='menuitem'], [role='option']";
+  const popupOptionSelector =
+    "[role='menuitemradio'], [role='menuitem'], [role='option']";
   const elementRole = (element) => element?.getAttribute?.("role") ?? "";
   const isPopupOption = (element) =>
     element instanceof HTMLElement &&
@@ -282,7 +283,8 @@ export function probeDocument(options = {}) {
     ((element.hasAttribute("data-model") &&
       (element.getAttribute("aria-pressed") !== null ||
         element.tagName.toLowerCase() === "button")) ||
-      (isPopupOption(element) && element.closest(popupRootSelector) !== null)) &&
+      (isPopupOption(element) &&
+        element.closest(popupRootSelector) !== null)) &&
     hasToken(accessibleName(element), ["instant", "thinking", "pro"]);
 
   const isEffortOption = (element) =>
@@ -291,7 +293,8 @@ export function probeDocument(options = {}) {
     ((element.hasAttribute("data-effort") &&
       (element.getAttribute("aria-pressed") !== null ||
         element.tagName.toLowerCase() === "button")) ||
-      (isPopupOption(element) && element.closest(popupRootSelector) !== null)) &&
+      (isPopupOption(element) &&
+        element.closest(popupRootSelector) !== null)) &&
     hasToken(accessibleName(element), ["standard", "extended"]);
 
   const elementPathname = (element) => {
@@ -348,7 +351,9 @@ export function probeDocument(options = {}) {
         }
       }
     }
-    for (const root of Array.from(documentRoot.querySelectorAll(popupRootSelector))) {
+    for (const root of Array.from(
+      documentRoot.querySelectorAll(popupRootSelector),
+    )) {
       if (
         isVisible(root) &&
         !roots.includes(root) &&
@@ -368,12 +373,9 @@ export function probeDocument(options = {}) {
       "button[aria-label='Switch model']",
       "button[data-testid='model-switcher-dropdown-button']",
     ]) ??
-    findNamedControl(
-      ["chatgpt", "model", "selector"],
-      {
-        include: isModelPickerTrigger,
-      },
-    );
+    findNamedControl(["chatgpt", "model", "selector"], {
+      include: isModelPickerTrigger,
+    });
 
   const findEffortPickerTrigger = () =>
     firstVisibleBySelectors([
@@ -607,11 +609,11 @@ export function probeDocument(options = {}) {
         {
           id: "visible-model-options",
           score: 0.95,
-            find: () =>
-              findNamedControl(["instant", "thinking", "pro"], {
-                include: isModelOption,
-                roots: visiblePopupRootsFor(isModelOption),
-              }),
+          find: () =>
+            findNamedControl(["instant", "thinking", "pro"], {
+              include: isModelOption,
+              roots: visiblePopupRootsFor(isModelOption),
+            }),
         },
         {
           id: "inline-model-options",
@@ -625,12 +627,9 @@ export function probeDocument(options = {}) {
           id: "aria-model-trigger",
           score: 0.9,
           find: () =>
-            findNamedControl(
-              ["chatgpt", "model", "selector"],
-              {
-                include: isModelPickerTrigger,
-              },
-            ),
+            findNamedControl(["chatgpt", "model", "selector"], {
+              include: isModelPickerTrigger,
+            }),
         },
       ],
     },
@@ -650,11 +649,11 @@ export function probeDocument(options = {}) {
         {
           id: "visible-effort-options",
           score: 0.91,
-            find: () =>
-              findNamedControl(["standard", "extended"], {
-                include: isEffortOption,
-                roots: visiblePopupRootsFor(isEffortOption),
-              }),
+          find: () =>
+            findNamedControl(["standard", "extended"], {
+              include: isEffortOption,
+              roots: visiblePopupRootsFor(isEffortOption),
+            }),
         },
         {
           id: "inline-effort-options",
@@ -877,7 +876,9 @@ export function probeDocument(options = {}) {
     pushName(element);
     if (capability === "model_picker_visible") {
       for (const root of visiblePopupRootsFor(isModelOption, element)) {
-        for (const candidate of Array.from(root.querySelectorAll(popupOptionSelector))) {
+        for (const candidate of Array.from(
+          root.querySelectorAll(popupOptionSelector),
+        )) {
           if (isVisible(candidate) && isModelOption(candidate)) {
             pushName(candidate);
           }
@@ -889,7 +890,9 @@ export function probeDocument(options = {}) {
     }
     if (capability === "thinking_effort_visible") {
       for (const root of visiblePopupRootsFor(isEffortOption, element)) {
-        for (const candidate of Array.from(root.querySelectorAll(popupOptionSelector))) {
+        for (const candidate of Array.from(
+          root.querySelectorAll(popupOptionSelector),
+        )) {
           if (isVisible(candidate) && isEffortOption(candidate)) {
             pushName(candidate);
           }
@@ -902,7 +905,10 @@ export function probeDocument(options = {}) {
     if (capability === "search_mode_visible" && isSearchModeControl(element)) {
       pushName("search");
     }
-    if (capability === "research_mode_visible" && isResearchModeControl(element)) {
+    if (
+      capability === "research_mode_visible" &&
+      isResearchModeControl(element)
+    ) {
       pushName("deep research");
     }
     return names;

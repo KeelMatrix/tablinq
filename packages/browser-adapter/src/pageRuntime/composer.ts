@@ -109,7 +109,10 @@ export async function focusComposer(page: Page): Promise<void> {
     ].join(", "),
   );
   if ((await composer.count()) > 0) {
-    await composer.first().focus().catch(() => undefined);
+    await composer
+      .first()
+      .focus()
+      .catch(() => undefined);
   }
 }
 
@@ -179,7 +182,10 @@ export async function clickActiveComposerSubmit(page: Page): Promise<boolean> {
     if (!actionable) {
       continue;
     }
-    const clicked = await candidate.click().then(() => true).catch(() => false);
+    const clicked = await candidate
+      .click()
+      .then(() => true)
+      .catch(() => false);
     if (clicked) {
       return true;
     }

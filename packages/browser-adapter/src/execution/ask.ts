@@ -1,7 +1,4 @@
-import type {
-  AskExecutionCommand,
-  AskResultSnapshot,
-} from "../contracts";
+import type { AskExecutionCommand, AskResultSnapshot } from "../contracts";
 import {
   applyAskConfiguration,
   clickSubmit,
@@ -182,7 +179,12 @@ export async function runAsk(
     ) {
       state.pendingTextReconciliation = false;
     }
-    const progressed = await applyAskSnapshot(command, state, snapshot, onChunk);
+    const progressed = await applyAskSnapshot(
+      command,
+      state,
+      snapshot,
+      onChunk,
+    );
     if (progressed) {
       state.lastProgressAt = Date.now();
     }

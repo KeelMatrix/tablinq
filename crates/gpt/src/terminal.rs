@@ -409,7 +409,7 @@ fn ansi_color_enabled_for_stderr() -> bool {
     )
 }
 
-fn ansi_color_supported(env: &[(String, String)], windows_console_support: Option<bool>) -> bool {
+fn ansi_color_supported(env: &[(String, String)], _windows_console_support: Option<bool>) -> bool {
     let get = |key: &str| {
         env.iter()
             .find(|(candidate, _)| candidate == key)
@@ -433,11 +433,11 @@ fn ansi_color_supported(env: &[(String, String)], windows_console_support: Optio
 
     #[cfg(windows)]
     {
-        return windows_console_support.unwrap_or(false)
+        _windows_console_support.unwrap_or(false)
             || get("WT_SESSION").is_some()
             || get("ANSICON").is_some()
             || matches!(get("ConEmuANSI"), Some(value) if value.eq_ignore_ascii_case("ON"))
-            || (!term.is_empty() && !term.eq_ignore_ascii_case("dumb"));
+            || (!term.is_empty() && !term.eq_ignore_ascii_case("dumb"))
     }
 
     #[cfg(not(windows))]

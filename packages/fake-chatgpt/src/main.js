@@ -20,7 +20,8 @@ const usesDeepResearchStartingShell = scenario === "research-starting-shell";
 const usesDeepResearchLanding =
   scenario === "research-deep-landing" ||
   scenario === "research-deep-landing-submit-fail";
-const researchSubmissionFails = scenario === "research-deep-landing-submit-fail";
+const researchSubmissionFails =
+  scenario === "research-deep-landing-submit-fail";
 const usesDeepResearchFrame =
   variant === "live" &&
   (scenario === "research-success" ||
@@ -128,11 +129,11 @@ note.textContent =
     ? "ARIA-first variant with moved controls, renamed labels, and semantic groups."
     : variant === "menu"
       ? "Current menu variant with a ChatGPT trigger, portal menus, and composer-adjacent effort controls."
-    : variant === "live"
-      ? usesComposerPlusTrap
-        ? "Current live variant with a ChatGPT trigger, portal menus, and a composer plus button trap."
-        : "Current live variant with a ChatGPT trigger, portal menus, and composer-adjacent effort controls."
-      : "Classic variant with grouped controls and direct toolbar buttons.";
+      : variant === "live"
+        ? usesComposerPlusTrap
+          ? "Current live variant with a ChatGPT trigger, portal menus, and a composer plus button trap."
+          : "Current live variant with a ChatGPT trigger, portal menus, and composer-adjacent effort controls."
+        : "Classic variant with grouped controls and direct toolbar buttons.";
 
 function hasControl(name) {
   return !missingControls.has(name);
@@ -476,7 +477,7 @@ root.innerHTML =
       </section>
     `
     : variant === "live"
-    ? `
+      ? `
       <main aria-label="chatgpt workspace">
         ${liveSidebarNav()}
         <section class="stacked-toolbar">
@@ -576,7 +577,7 @@ root.innerHTML =
         ${currentPortalMenus()}
       </main>
     `
-      : `
+        : `
       <section class="shell" aria-label="fake-chatgpt-shell">
         <div class="toolbar">
           ${classicModelControls()}
@@ -705,7 +706,9 @@ function deepResearchFrameDocument() {
     return doc;
   }
   doc.open();
-  doc.write(`<!doctype html><html><body data-tablinq-frame="true"></body></html>`);
+  doc.write(
+    `<!doctype html><html><body data-tablinq-frame="true"></body></html>`,
+  );
   doc.close();
   return deepResearchFrame.contentDocument;
 }
@@ -735,20 +738,16 @@ function renderDeepResearchPlanner(state) {
       </div>
     </main>
   `;
-  doc
-    .querySelector("[data-action='cancel']")
-    ?.addEventListener("click", () => {
-      setStreamState("idle");
-      setResearchState("failed", "research cancelled");
-      setStreamingControls(false);
-      clearResearchState(state.conversationId);
-      renderDeepResearchFrameIdle();
-    });
-  doc
-    .querySelector("[data-action='start']")
-    ?.addEventListener("click", () => {
-      launchDeepResearch(state);
-    });
+  doc.querySelector("[data-action='cancel']")?.addEventListener("click", () => {
+    setStreamState("idle");
+    setResearchState("failed", "research cancelled");
+    setStreamingControls(false);
+    clearResearchState(state.conversationId);
+    renderDeepResearchFrameIdle();
+  });
+  doc.querySelector("[data-action='start']")?.addEventListener("click", () => {
+    launchDeepResearch(state);
+  });
 }
 
 function renderDeepResearchFrameReport(state) {
@@ -1041,13 +1040,15 @@ function syncSelectedState() {
   });
   document.querySelectorAll("[data-model]").forEach((element) => {
     const selected =
-      element.getAttribute("data-model") === document.body.dataset.selectedModel;
+      element.getAttribute("data-model") ===
+      document.body.dataset.selectedModel;
     element.setAttribute("aria-pressed", selected ? "true" : "false");
     element.dataset.selected = selected ? "true" : "false";
   });
   document.querySelectorAll("[data-effort]").forEach((element) => {
     const selected =
-      element.getAttribute("data-effort") === document.body.dataset.selectedEffort;
+      element.getAttribute("data-effort") ===
+      document.body.dataset.selectedEffort;
     element.setAttribute("aria-pressed", selected ? "true" : "false");
     element.dataset.selected = selected ? "true" : "false";
   });
@@ -1084,9 +1085,11 @@ function syncSelectedState() {
   const modelTrigger = document.querySelector("#model-switcher-trigger");
   const modelMenuOpen = modelTrigger?.getAttribute("aria-expanded") === "true";
   modelMenu?.toggleAttribute("hidden", !modelMenuOpen);
-  modelMenu?.querySelectorAll("[role='menuitemradio'], [role='menuitem']").forEach((element) => {
-    element.toggleAttribute("hidden", !modelMenuOpen);
-  });
+  modelMenu
+    ?.querySelectorAll("[role='menuitemradio'], [role='menuitem']")
+    .forEach((element) => {
+      element.toggleAttribute("hidden", !modelMenuOpen);
+    });
 
   const currentUiVariant = variant === "live" || variant === "menu";
   const effortVisible =
@@ -1447,9 +1450,9 @@ function startStream(promptText) {
       ? responseBlocks.join("\n\n")
       : richRecoveryPrompt
         ? `${richRecoveryPrompt}\n\nOutline\n1. Goal\n2. Inputs\n3. Constraints\n4. Output`
-      : promptText
-        ? `Fake response for: ${promptText}`
-        : "Fake response for an empty prompt.",
+        : promptText
+          ? `Fake response for: ${promptText}`
+          : "Fake response for an empty prompt.",
     responseBlocks,
     richRecoveryPrompt,
     richRecoveryOutline,
@@ -1618,22 +1621,25 @@ modelPickerTrigger?.addEventListener("click", () => {
   syncSelectedState();
 });
 
-document.querySelector("#model-option-instant")?.addEventListener("click", () => {
-  document.body.dataset.selectedModel = "instant";
-  modelPickerTrigger?.setAttribute("aria-expanded", "false");
-  effortPickerTrigger?.setAttribute("aria-expanded", "false");
-  syncSelectedState();
-});
+document
+  .querySelector("#model-option-instant")
+  ?.addEventListener("click", () => {
+    document.body.dataset.selectedModel = "instant";
+    modelPickerTrigger?.setAttribute("aria-expanded", "false");
+    effortPickerTrigger?.setAttribute("aria-expanded", "false");
+    syncSelectedState();
+  });
 
-document.querySelector("#model-option-thinking")?.addEventListener("click", () => {
-  document.body.dataset.selectedModel = "thinking";
-  modelPickerTrigger?.setAttribute("aria-expanded", "false");
-  syncSelectedState();
-});
+document
+  .querySelector("#model-option-thinking")
+  ?.addEventListener("click", () => {
+    document.body.dataset.selectedModel = "thinking";
+    modelPickerTrigger?.setAttribute("aria-expanded", "false");
+    syncSelectedState();
+  });
 
 effortPickerTrigger?.addEventListener("click", () => {
-  const expanded =
-    effortPickerTrigger.getAttribute("aria-expanded") === "true";
+  const expanded = effortPickerTrigger.getAttribute("aria-expanded") === "true";
   effortPickerTrigger.setAttribute(
     "aria-expanded",
     expanded ? "false" : "true",
@@ -1641,17 +1647,21 @@ effortPickerTrigger?.addEventListener("click", () => {
   syncSelectedState();
 });
 
-document.querySelector("#effort-option-standard")?.addEventListener("click", () => {
-  document.body.dataset.selectedEffort = "standard";
-  effortPickerTrigger?.setAttribute("aria-expanded", "false");
-  syncSelectedState();
-});
+document
+  .querySelector("#effort-option-standard")
+  ?.addEventListener("click", () => {
+    document.body.dataset.selectedEffort = "standard";
+    effortPickerTrigger?.setAttribute("aria-expanded", "false");
+    syncSelectedState();
+  });
 
-document.querySelector("#effort-option-extended")?.addEventListener("click", () => {
-  document.body.dataset.selectedEffort = "extended";
-  effortPickerTrigger?.setAttribute("aria-expanded", "false");
-  syncSelectedState();
-});
+document
+  .querySelector("#effort-option-extended")
+  ?.addEventListener("click", () => {
+    document.body.dataset.selectedEffort = "extended";
+    effortPickerTrigger?.setAttribute("aria-expanded", "false");
+    syncSelectedState();
+  });
 
 document.querySelectorAll("[data-model]").forEach((element) => {
   element.addEventListener("click", () => {
@@ -1688,12 +1698,14 @@ document.querySelectorAll("[data-mode]").forEach((element) => {
   });
 });
 
-document.querySelector("#deep-research-nav")?.addEventListener("click", (event) => {
-  event.preventDefault();
-  document.body.dataset.selectedMode = "research";
-  enterDeepResearchLanding();
-  syncSelectedState();
-});
+document
+  .querySelector("#deep-research-nav")
+  ?.addEventListener("click", (event) => {
+    event.preventDefault();
+    document.body.dataset.selectedMode = "research";
+    enterDeepResearchLanding();
+    syncSelectedState();
+  });
 
 uploadEntry?.addEventListener("click", () => {
   if (uploadInput instanceof HTMLElement) {

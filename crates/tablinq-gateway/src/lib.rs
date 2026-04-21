@@ -957,17 +957,17 @@ fn handle_conversation_select_request(
             }),
         ));
     }
-    if let Some(conversation_id) = command.conversation_id.as_deref() {
-        if core.find_conversation(conversation_id)?.is_none() {
-            return Ok(json_response(
-                404,
-                json!({
-                    "request_id": context.request_id,
-                    "error": "conversation_not_found",
-                    "message": format!("conversation {conversation_id} was not found"),
-                }),
-            ));
-        }
+    if let Some(conversation_id) = command.conversation_id.as_deref()
+        && core.find_conversation(conversation_id)?.is_none()
+    {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "conversation_not_found",
+                "message": format!("conversation {conversation_id} was not found"),
+            }),
+        ));
     }
 
     match core.select_conversation(command) {

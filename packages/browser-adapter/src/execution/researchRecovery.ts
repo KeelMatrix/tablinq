@@ -7,7 +7,11 @@ import type {
   ResearchProgressSnapshot,
   ResearchResultSnapshot,
 } from "../contracts";
-import { beginDeepResearchRun, readLiveResearchSnapshot, sleep } from "../pageRuntime";
+import {
+  beginDeepResearchRun,
+  readLiveResearchSnapshot,
+  sleep,
+} from "../pageRuntime";
 import type { ResearchSnapshot } from "../snapshotState";
 import { normalizeOptionalString, textRelation } from "../snapshotState";
 import {
@@ -165,8 +169,7 @@ export async function reconcileResearchAfterInterruption(
     conversation_id: snapshot.conversationId,
     message_id: snapshot.messageId,
     current_url: snapshot.currentUrl,
-    streaming_safe:
-      snapshot.status !== "done" && snapshot.status !== "failed",
+    streaming_safe: snapshot.status !== "done" && snapshot.status !== "failed",
   });
 
   const progressed = await applyResearchSnapshot(state, snapshot, onUpdate);
@@ -221,7 +224,10 @@ export async function findRecoverableResearchPage(
   const expectedConversationId = normalizeOptionalString(knownConversationId);
   const candidates = uniquePages([
     page,
-    ...page.context().pages().filter((candidate) => !candidate.isClosed()),
+    ...page
+      .context()
+      .pages()
+      .filter((candidate) => !candidate.isClosed()),
   ]);
 
   let best = page;
@@ -235,7 +241,9 @@ export async function findRecoverableResearchPage(
     if (locationScore < 0) {
       continue;
     }
-    const snapshot = await readLiveResearchSnapshot(candidate).catch(() => null);
+    const snapshot = await readLiveResearchSnapshot(candidate).catch(
+      () => null,
+    );
     const snapshotConversationId =
       normalizeOptionalString(snapshot?.conversationId) ??
       conversationIdFromUrl(snapshot?.currentUrl) ??
@@ -276,7 +284,8 @@ export async function reloadResearchPageIfStale(
     conversationIdFromUrl(snapshot?.currentUrl) ??
     conversationIdFromUrl(safePageUrl(page));
   const exactConversation =
-    !!expectedConversationId && snapshotConversationId === expectedConversationId;
+    !!expectedConversationId &&
+    snapshotConversationId === expectedConversationId;
   const stale =
     !snapshot ||
     ((snapshot.status === "idle" || snapshot.status === "failed") &&

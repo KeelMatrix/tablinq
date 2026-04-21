@@ -3,10 +3,7 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import type { Download, Locator, Page } from "playwright-core";
 
-import {
-  chooseUniqueArtifactPath,
-  contentTypeForFile,
-} from "../artifacts";
+import { chooseUniqueArtifactPath, contentTypeForFile } from "../artifacts";
 import type { ArtifactMetadataSnapshot } from "../contracts";
 import { DOWNLOAD_TIMEOUT_MS } from "../timing";
 

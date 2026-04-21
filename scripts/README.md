@@ -14,13 +14,13 @@ That separation matters. Packaging and installation are not the same step, and v
 
 ## Which script should I use?
 
-| Goal | Use |
-| --- | --- |
-| Confirm your Windows shell can see Node, pnpm, and cargo | `bootstrap.ps1` |
-| Run the full repo validation suite | `test.ps1` or `test.sh` |
-| Build a distributable package without installing it | `package.ps1` or `package.sh` |
-| Install Tablinq locally from the repo/package output | `install.ps1` or `install.sh` |
-| Repeatedly hit the local gateway to check stability/latency | `soak_gateway.ps1` |
+| Goal                                                        | Use                           |
+| ----------------------------------------------------------- | ----------------------------- |
+| Confirm your Windows shell can see Node, pnpm, and cargo    | `bootstrap.ps1`               |
+| Run the full repo validation suite                          | `test.ps1` or `test.sh`       |
+| Build a distributable package without installing it         | `package.ps1` or `package.sh` |
+| Install Tablinq locally from the repo/package output        | `install.ps1` or `install.sh` |
+| Repeatedly hit the local gateway to check stability/latency | `soak_gateway.ps1`            |
 
 ## Principles behind these scripts
 

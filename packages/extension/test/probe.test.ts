@@ -69,9 +69,7 @@ describe("extension capability probe", () => {
       "data-slot-model-picker",
     );
     expect(message.report.aliases.model_classes.instant).toContain("instant");
-    expect(message.report.aliases.model_classes.thinking).toContain(
-      "thinking",
-    );
+    expect(message.report.aliases.model_classes.thinking).toContain("thinking");
     expect(message.report.aliases.efforts.extended).toContain("extended");
     expect(message.report.aliases.modes.research).toContain("deep research");
     expect(message.runtime.dom_neighborhoods.length).toBeGreaterThan(3);
@@ -141,9 +139,7 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.modes.search).toContain("browse the web");
     expect(message.report.aliases.modes.research).toContain("deep research");
     expect(message.report.aliases.model_classes.instant).toContain("instant");
-    expect(message.report.aliases.model_classes.thinking).toContain(
-      "thinking",
-    );
+    expect(message.report.aliases.model_classes.thinking).toContain("thinking");
     expect(message.report.aliases.efforts.extended).toContain("extended");
     expect(message.runtime.ui_signature).toContain("aria");
     expect(validateCapabilityReport(message.report)).toBe(true);

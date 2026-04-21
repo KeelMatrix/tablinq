@@ -51,12 +51,12 @@ jobs:
 
       - name: Build package layout
         shell: pwsh
-        run: ./scripts/package.ps1
+        run: ./scripts/package.ps1 -Profile dev
 
       - name: Run Windows packaging smoke test
         env:
           TABLINQ_PACKAGE_ROOT: ${{ github.workspace }}\dist\package\tablinq
-        run: cargo test -p gpt windows_packaging_and_install_smoke_cover_packaged_layout -- --nocapture
+        run: cargo test -p gpt --test production_smoke windows_packaging_and_install_smoke_cover_packaged_layout -- --nocapture
 
       - name: Upload package artifact
         if: github.event_name != 'pull_request'

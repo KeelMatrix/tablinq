@@ -269,9 +269,7 @@ export async function reconcileAskAfterInterruption(
     ),
   );
   if (Date.now() >= timeoutAt) {
-    throw new Error(
-      "ask timed out while reconciling the interrupted request",
-    );
+    throw new Error("ask timed out while reconciling the interrupted request");
   }
 
   let snapshot: AskSnapshot | null = null;

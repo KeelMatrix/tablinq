@@ -84,7 +84,9 @@ export function detectBrowserAvailability(
   };
 }
 
-export function resolveExtensionDir(extensionDir?: string | null): string | null {
+export function resolveExtensionDir(
+  extensionDir?: string | null,
+): string | null {
   const explicit = extensionDir?.trim();
   if (explicit) {
     const resolved = resolve(explicit);

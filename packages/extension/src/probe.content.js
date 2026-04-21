@@ -553,9 +553,10 @@
           {
             id: "visible-model-options",
             score: 0.95,
-            find: () => findNamedControl(["instant", "thinking", "gpt"], {
-              include: isModelOption,
-            }),
+            find: () =>
+              findNamedControl(["instant", "thinking", "gpt"], {
+                include: isModelOption,
+              }),
           },
           {
             id: "aria-model-trigger",
@@ -742,7 +743,9 @@
           : [...strategies];
       const preferred = preferredStrategies[capability];
       if (!preferred) {
-        return orderedStrategies.sort((left, right) => right.score - left.score);
+        return orderedStrategies.sort(
+          (left, right) => right.score - left.score,
+        );
       }
       return orderedStrategies.sort((left, right) => {
         if (left.id === preferred) {
@@ -788,11 +791,7 @@
         ? element
         : element.parentElement;
       for (const candidate of Array.from(
-          scoped?.querySelectorAll(
-            [
-              controlCandidateSelector,
-            ].join(", "),
-          ) ?? [],
+        scoped?.querySelectorAll([controlCandidateSelector].join(", ")) ?? [],
       )) {
         if (isVisible(candidate)) {
           pushName(candidate);

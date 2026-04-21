@@ -1,7 +1,5 @@
 interface ChromeRuntimeLike {
-  sendMessage?: (
-    message: CapabilityBridgeMessage,
-  ) => void | Promise<unknown>;
+  sendMessage?: (message: CapabilityBridgeMessage) => void | Promise<unknown>;
   id?: string;
 }
 
@@ -53,7 +51,9 @@ interface TablinqWindow extends Window {
 
 const DOM_SNAPSHOT_MAX_CHARS = 16_000;
 
-function probeDocument(options: ProbeDocumentOptions = {}): CapabilityBridgeMessage {
+function probeDocument(
+  options: ProbeDocumentOptions = {},
+): CapabilityBridgeMessage {
   const probe = (globalThis as TablinqGlobal).__TABLINQ_PROBE_DOCUMENT__;
   if (typeof probe !== "function") {
     throw new Error("Tablinq probe helper is not available");
@@ -76,7 +76,12 @@ function cleanDomText(maxChars = DOM_SNAPSHOT_MAX_CHARS): string {
         return NodeFilter.FILTER_REJECT;
       }
       const tag = parent.tagName.toLowerCase();
-      if (tag === "script" || tag === "style" || tag === "noscript" || tag === "template") {
+      if (
+        tag === "script" ||
+        tag === "style" ||
+        tag === "noscript" ||
+        tag === "template"
+      ) {
         return NodeFilter.FILTER_REJECT;
       }
       const text = node.textContent?.replace(/\s+/g, " ").trim() ?? "";
@@ -177,7 +182,10 @@ function sendMessage(message: CapabilityBridgeMessage): void {
   if (runtime?.sendMessage) {
     try {
       const pending = runtime.sendMessage(message);
-      if (pending && typeof (pending as Promise<unknown>).catch === "function") {
+      if (
+        pending &&
+        typeof (pending as Promise<unknown>).catch === "function"
+      ) {
         void (pending as Promise<unknown>).catch(() => {
           window.postMessage(
             {
