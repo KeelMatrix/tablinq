@@ -77,4 +77,7 @@ packages/extension/dist/
 packages/browser-adapter/dist/
 
 # === Misc ===
+docs/smoke/
 .cache/
+/smoke-*.txt
+/smoke-*.json
