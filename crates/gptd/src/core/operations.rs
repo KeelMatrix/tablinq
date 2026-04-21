@@ -7,15 +7,29 @@ use super::{ARTIFACT_RETENTION_LIMIT, CoreService, error_code_for_message};
 use crate::browser::BrowserDiagnosticsSnapshot;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
+use serde::Serialize;
+use sha2::{Digest, Sha256};
 use shared_protocol::{
-    AckEvent, ArtifactList, ArtifactPullResult, BrowserDoctor, BrowserOpenRequest,
-    BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot, ConfigSnapshot, ConversationList,
-    ConversationSelectCommand, ConversationSelection, ConversationSummary, DoctorReport,
-    FailureBundle, GatewayRequestContext, JobDetail, JobList, JobStatus, PullArtifactCommand,
-    RequestHistory, RequestListPage, RequestSummary, SessionList,
+    AckEvent, ArtifactList, ArtifactMetadata, ArtifactPullResult, ArtifactSummary, BrowserDoctor,
+    BrowserOpenRequest, BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot,
+    ConfigSnapshot, ConversationList, ConversationSelectCommand, ConversationSelection,
+    ConversationSummary, DoctorReport, FailureBundle, GatewayRequestContext, JobDetail, JobList,
+    JobStatus, PullArtifactCommand, RequestHistory, RequestListPage, RequestSummary, SessionList,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
+
+const EVIDENCE_ARTIFACT_CONTENT_TYPE: &str = "application/tablinq-browser-evidence+json";
+
+#[derive(Serialize)]
+struct BrowserEvidencePayload {
+    request_id: String,
+    job_id: String,
+    captured_at: chrono::DateTime<Utc>,
+    current_url: Option<String>,
+    screenshot_path: Option<String>,
+    dom_snapshot: String,
+}
 
 impl CoreService {
     pub fn status_snapshot(&self) -> shared_protocol::DaemonStatusSnapshot {
@@ -331,6 +345,12 @@ impl CoreService {
         self.open_db()?.artifact_request_ids(artifact_id)
     }
 
+    pub fn latest_request_evidence(&self, request_id: &str) -> Result<ArtifactSummary> {
+        self.open_db()?
+            .latest_request_artifact_by_content_type(request_id, EVIDENCE_ARTIFACT_CONTENT_TYPE)?
+            .with_context(|| format!("evidence for request {request_id} was not found"))
+    }
+
     pub fn pull_artifact(&self, command: PullArtifactCommand) -> Result<ArtifactPullResult> {
         let db = self.open_db()?;
         let artifact = if command.artifact_id == "last" {
@@ -423,6 +443,48 @@ impl CoreService {
             .profile_info()
     }
 
+    pub fn capture_browser_evidence(&self, request_id: &str) -> Result<ArtifactMetadata> {
+        let db = self.open_db()?;
+        let request = self.request_summary(request_id)?;
+        let job = self.job_detail(&request.job_id)?;
+        let created_at = Utc::now();
+        let evidence_dir = self.config.paths.crash_bundles_dir.join(format!(
+            "evidence-{request_id}-{}",
+            created_at.timestamp_millis()
+        ));
+        fs::create_dir_all(&evidence_dir)
+            .with_context(|| format!("create {}", evidence_dir.display()))?;
+
+        let diagnostics = capture_diagnostics_snapshot(&self.browser, &evidence_dir);
+        let payload = BrowserEvidencePayload {
+            request_id: request.request_id.clone(),
+            job_id: request.job_id.clone(),
+            captured_at: created_at,
+            current_url: diagnostics.current_url.clone(),
+            screenshot_path: diagnostics.screenshot_path.clone(),
+            dom_snapshot: diagnostics.dom_snapshot,
+        };
+        let artifact_path = evidence_dir.join("evidence.json");
+        let payload_bytes = serde_json::to_vec_pretty(&payload)?;
+        fs::write(&artifact_path, &payload_bytes)
+            .with_context(|| format!("write {}", artifact_path.display()))?;
+
+        let artifact = ArtifactMetadata {
+            artifact_id: format!("artifact-evidence-{}", created_at.timestamp_millis()),
+            conversation_id: job.conversation_id,
+            message_id: None,
+            file_name: format!("request-evidence-{request_id}.json"),
+            content_type: EVIDENCE_ARTIFACT_CONTENT_TYPE.to_owned(),
+            size_bytes: payload_bytes.len() as u64,
+            sha256: format!("{:x}", Sha256::digest(&payload_bytes)),
+            storage_path: artifact_path.display().to_string(),
+        };
+        db.insert_artifact(&artifact, created_at)?;
+        db.link_job_artifact(&request.job_id, &artifact.artifact_id)?;
+        db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
+        Ok(artifact)
+    }
+
     pub fn capture_failure_bundle(
         &self,
         mode: Option<shared_protocol::Mode>,
@@ -436,26 +498,7 @@ impl CoreService {
         fs::create_dir_all(&bundle_dir)
             .with_context(|| format!("create {}", bundle_dir.display()))?;
 
-        let diagnostics = lock_browser(&self.browser)
-            .and_then(|mut manager| manager.diagnostics(Some(&bundle_dir)))
-            .unwrap_or_else(|_| {
-                let placeholder_screenshot = bundle_dir.join("failure.png");
-                let _ = fs::write(&placeholder_screenshot, []);
-                BrowserDiagnosticsSnapshot {
-                    current_url: None,
-                    capability_matrix: Default::default(),
-                    strategy_attempts: vec![],
-                    dom_snapshot: String::new(),
-                    aria_snapshot: String::new(),
-                    screenshot_path: Some(placeholder_screenshot.display().to_string()),
-                    selector_pack: default_selector_pack_summary(),
-                    strategy_telemetry: vec![],
-                    browser_detected: cfg!(windows),
-                    detected_browser_path: None,
-                    profile_accessible: true,
-                    profile_access_error: None,
-                }
-            });
+        let diagnostics = capture_diagnostics_snapshot(&self.browser, &bundle_dir);
 
         let dom_snapshot_path = bundle_dir.join("dom.json");
         fs::write(&dom_snapshot_path, diagnostics.dom_snapshot.as_bytes())
@@ -484,5 +527,33 @@ impl CoreService {
             .with_context(|| format!("write {}", bundle_json_path.display()))?;
         db.insert_failure_bundle(&bundle)?;
         Ok(bundle)
+    }
+}
+
+fn capture_diagnostics_snapshot(
+    browser: &std::sync::Arc<std::sync::Mutex<crate::browser::BrowserManager>>,
+    output_dir: &Path,
+) -> BrowserDiagnosticsSnapshot {
+    lock_browser(browser)
+        .and_then(|mut manager| manager.diagnostics(Some(output_dir)))
+        .unwrap_or_else(|_| placeholder_diagnostics_snapshot(output_dir))
+}
+
+fn placeholder_diagnostics_snapshot(output_dir: &Path) -> BrowserDiagnosticsSnapshot {
+    let placeholder_screenshot = output_dir.join("failure.png");
+    let _ = fs::write(&placeholder_screenshot, []);
+    BrowserDiagnosticsSnapshot {
+        current_url: None,
+        capability_matrix: Default::default(),
+        strategy_attempts: vec![],
+        dom_snapshot: String::new(),
+        aria_snapshot: String::new(),
+        screenshot_path: Some(placeholder_screenshot.display().to_string()),
+        selector_pack: default_selector_pack_summary(),
+        strategy_telemetry: vec![],
+        browser_detected: cfg!(windows),
+        detected_browser_path: None,
+        profile_accessible: true,
+        profile_access_error: None,
     }
 }

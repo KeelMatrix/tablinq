@@ -245,8 +245,9 @@ impl CoreService {
         let _ = db.set_job_cancel_requested(&prepared.job_id, false);
 
         match outcome {
-            Ok(result) => {
+            Ok(mut result) => {
                 let recovery_state = recovery_state.into_inner();
+                result.low_confidence = recovery_state.recovered;
                 let completed_at = result.completed_at;
                 for artifact in &result.artifacts {
                     db.insert_artifact(artifact, completed_at)?;
@@ -473,6 +474,7 @@ impl CoreService {
         match outcome {
             Ok(mut result) => {
                 let recovery_state = recovery_state.into_inner();
+                result.low_confidence = recovery_state.recovered;
                 let output_path = maybe_write_research_output(
                     &prepared.command,
                     &prepared.job_id,

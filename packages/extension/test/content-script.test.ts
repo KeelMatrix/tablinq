@@ -64,3 +64,34 @@ it("falls back to page messaging when runtime.sendMessage rejects asynchronously
     "*",
   );
 });
+
+it("responds to dom snapshot requests with cleaned text", async () => {
+  document.body.innerHTML =
+    "<main><h1>Alpha</h1><script>secret-token</script><style>.hidden{display:none}</style><p>Beta text</p></main>";
+  const postMessageSpy = vi
+    .spyOn(window, "postMessage")
+    .mockImplementation(() => undefined);
+
+  await import("../src/content-script");
+
+  window.dispatchEvent(
+    new MessageEvent("message", {
+      source: window,
+      data: {
+        source: "tablinq-page",
+        type: "GET_DOM_SNAPSHOT",
+        request_id: "req-dom-1",
+      },
+    }),
+  );
+
+  const domResponse = postMessageSpy.mock.calls.find(
+    ([message]) =>
+      (message as { type?: string }).type === "GET_DOM_SNAPSHOT_RESULT",
+  )?.[0] as { dom_snapshot?: string; request_id?: string } | undefined;
+
+  expect(domResponse?.request_id).toBe("req-dom-1");
+  expect(domResponse?.dom_snapshot).toContain("Alpha");
+  expect(domResponse?.dom_snapshot).toContain("Beta text");
+  expect(domResponse?.dom_snapshot).not.toContain("secret-token");
+});

@@ -1053,6 +1053,8 @@ pub struct AskResult {
     pub artifacts: Vec<ArtifactMetadata>,
     pub completed_at: DateTime<Utc>,
     pub current_url: String,
+    #[serde(default)]
+    pub low_confidence: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1066,6 +1068,8 @@ pub struct ResearchResult {
     pub completed_at: DateTime<Utc>,
     pub current_url: String,
     pub output_path: Option<String>,
+    #[serde(default)]
+    pub low_confidence: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

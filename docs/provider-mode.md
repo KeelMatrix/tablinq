@@ -48,6 +48,7 @@ Recommended posture:
 - `GET /v1/usage`
 - `GET /v1/requests`
 - `GET /v1/requests/{request_id}`
+- `GET /v1/requests/{request_id}/evidence`
 - `GET /v1/conversations`
 - `POST /v1/conversations/select`
 - `POST /v1/chat/completions`
@@ -105,7 +106,16 @@ Also:
 - on `429`, wait for `retry_after_ms` before retrying
 - use `GET /v1/requests?status=<status>&limit=<n>&offset=<n>` for paginated request polling
 - inspect `GET /v1/requests/{request_id}` or `GET /v1/usage` to separate queue delay from upstream execution time
+- inspect `GET /v1/requests/{request_id}/evidence` when a request times out, recovers, or looks uncertain; Tablinq captures a compact browser-state artifact automatically for those cases
 - treat token usage as unknown or provider-specific unless the integration explicitly expects estimates
+
+## Evidence workflow
+
+- persist `request_id` from every `POST /v1/chat/completions` response
+- poll `GET /v1/requests/{request_id}` to distinguish queue delay, failure, timeout, cancellation, and `recovered` state
+- fetch `GET /v1/requests/{request_id}/evidence` when a request times out, recovers, or otherwise looks uncertain
+- treat the returned artifact as a compact browser-state snapshot for agent analysis: current URL, timestamp, full-page screenshot path, and cleaned DOM text with scripts and styles removed
+- do not treat `/evidence` as a general scraping API; it exists only for request-scoped debugging and recovery analysis
 
 ## Conversations and session reuse
 
