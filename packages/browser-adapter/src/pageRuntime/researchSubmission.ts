@@ -8,7 +8,11 @@ import {
 import { SNAPSHOT_POLL_INTERVAL_MS } from "../timing";
 
 import { callPageAdapter, waitForPageAdapterCondition } from "./adapter";
-import { fillComposer, focusComposer, waitForInteractionSurface } from "./composer";
+import {
+  fillComposer,
+  focusComposer,
+  waitForInteractionSurface,
+} from "./composer";
 import { sleep } from "./common";
 
 export async function readResearchSubmissionState(
@@ -51,7 +55,9 @@ export async function submitResearch(
 ): Promise<ResearchSubmissionStateSnapshot> {
   await waitForInteractionSurface(page);
   const baseline = await readResearchSubmissionState(page);
-  if (normalizePromptText(baseline.composerText) !== normalizePromptText(query)) {
+  if (
+    normalizePromptText(baseline.composerText) !== normalizePromptText(query)
+  ) {
     throw new Error(
       "research submit failed: query was not present in the composer before submission",
     );
@@ -88,7 +94,9 @@ export async function submitResearch(
   }
 
   const current = await readResearchSubmissionState(page).catch(() => baseline);
-  if (normalizePromptText(current.composerText) !== normalizePromptText(query)) {
+  if (
+    normalizePromptText(current.composerText) !== normalizePromptText(query)
+  ) {
     throw new Error(
       "research submit failed: query was not present in the composer before submission",
     );
@@ -98,5 +106,7 @@ export async function submitResearch(
       "research submit failed: query was filled on /deep-research but research never started",
     );
   }
-  throw new Error("research submit failed: query was filled but research never started");
+  throw new Error(
+    "research submit failed: query was filled but research never started",
+  );
 }

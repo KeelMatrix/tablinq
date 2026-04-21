@@ -79,7 +79,7 @@ Use this only when the fake harness is not enough:
 5. If you are using Chrome attach-first, load the unpacked extension into the dedicated Chrome attach profile created under the Tablinq state root.
 6. Sign in manually at `https://chatgpt.com/` in that profile.
 7. Run `cargo run -p gpt -- browser attach`.
-7. Use `cargo run -p gpt -- status`, `doctor`, and `capabilities` before testing ask or research flows.
+8. Use `cargo run -p gpt -- status`, `doctor`, and `capabilities` before testing ask or research flows.
 
 Managed fallback exists only for debugging, CI, harness isolation, and machines that cannot expose a usable local debug endpoint.
 

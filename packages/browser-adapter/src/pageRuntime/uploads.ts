@@ -47,9 +47,7 @@ export async function uploadAttachments(
         throw new Error(`upload failed: file not found: ${absolutePath}`);
       }
       if (fileStat.size > MAX_UPLOAD_FILE_BYTES) {
-        throw new Error(
-          `upload failed: file exceeds 20 MiB: ${absolutePath}`,
-        );
+        throw new Error(`upload failed: file exceeds 20 MiB: ${absolutePath}`);
       }
       return {
         absolutePath,
@@ -89,7 +87,9 @@ export async function uploadAttachments(
     await chooser.setFiles(resolvedFiles.map((item) => item.absolutePath));
   }
 
-  const expectedNames = resolvedFiles.map((file) => basename(file.absolutePath));
+  const expectedNames = resolvedFiles.map((file) =>
+    basename(file.absolutePath),
+  );
   await waitForPageAdapterCondition(
     page,
     "uploadAcknowledged",

@@ -1,10 +1,7 @@
 import type { Page } from "playwright-core";
 
 import type { AskBaseline, AskSnapshot } from "../snapshotState";
-import {
-  normalizeAskBaseline,
-  normalizeAskSnapshot,
-} from "../snapshotState";
+import { normalizeAskBaseline, normalizeAskSnapshot } from "../snapshotState";
 
 import { callPageAdapter } from "./adapter";
 

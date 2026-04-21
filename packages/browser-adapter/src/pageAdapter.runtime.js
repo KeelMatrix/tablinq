@@ -157,7 +157,9 @@ export function createTablinqPageAdapterRuntime() {
 
   const queryVisible = (selectors) =>
     visibleUnique(
-      selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector))),
+      selectors.flatMap((selector) =>
+        Array.from(document.querySelectorAll(selector)),
+      ),
     );
 
   const actionableSelector = [
@@ -292,8 +294,10 @@ export function createTablinqPageAdapterRuntime() {
       composed: true,
       button: 0,
       buttons: 1,
-      clientX: rect.left + Math.max(1, Math.min(rect.width / 2, rect.width - 1)),
-      clientY: rect.top + Math.max(1, Math.min(rect.height / 2, rect.height - 1)),
+      clientX:
+        rect.left + Math.max(1, Math.min(rect.width / 2, rect.width - 1)),
+      clientY:
+        rect.top + Math.max(1, Math.min(rect.height / 2, rect.height - 1)),
     };
     if (typeof PointerEvent === "function") {
       element.dispatchEvent(
@@ -813,7 +817,8 @@ export function createTablinqPageAdapterRuntime() {
     );
   };
 
-  const collapseInlineText = (value) => (value ?? "").replace(/\s+/g, " ").trim();
+  const collapseInlineText = (value) =>
+    (value ?? "").replace(/\s+/g, " ").trim();
 
   const normalizeInlineOutput = (value) =>
     (value ?? "")
@@ -861,9 +866,7 @@ export function createTablinqPageAdapterRuntime() {
             "h6",
           ].join(", "),
         ),
-      ).every(
-        (candidate) => candidate === button || button.contains(candidate),
-      )
+      ).every((candidate) => candidate === button || button.contains(candidate))
     );
   };
 
@@ -891,11 +894,19 @@ export function createTablinqPageAdapterRuntime() {
     }
     const explicitCode = element.querySelector("code");
     if (explicitCode instanceof HTMLElement) {
-      return (explicitCode.innerText || explicitCode.textContent || "").trimEnd();
+      return (
+        explicitCode.innerText ||
+        explicitCode.textContent ||
+        ""
+      ).trimEnd();
     }
     const editorContent = element.querySelector(".cm-content");
     if (editorContent instanceof HTMLElement) {
-      return (editorContent.innerText || editorContent.textContent || "").trimEnd();
+      return (
+        editorContent.innerText ||
+        editorContent.textContent ||
+        ""
+      ).trimEnd();
     }
     return (element.innerText || element.textContent || "").trimEnd();
   };
@@ -1002,7 +1013,9 @@ export function createTablinqPageAdapterRuntime() {
 
   const serializeInlineChildren = (element) =>
     normalizeInlineOutput(
-      Array.from(element.childNodes).map((node) => serializeInlineNode(node)).join(""),
+      Array.from(element.childNodes)
+        .map((node) => serializeInlineNode(node))
+        .join(""),
     );
 
   const indentLines = (value, prefix, blankPrefix = prefix) =>
@@ -1083,7 +1096,9 @@ export function createTablinqPageAdapterRuntime() {
         }),
       )
       .filter(Boolean)
-      .map((value) => indentLines(value, continuationPrefix, continuationPrefix))
+      .map((value) =>
+        indentLines(value, continuationPrefix, continuationPrefix),
+      )
       .join("\n");
     return [firstLine, rest, nested].filter(Boolean).join("\n");
   };
@@ -1099,7 +1114,14 @@ export function createTablinqPageAdapterRuntime() {
     if (tag === "button") {
       return "";
     }
-    if (tag === "h1" || tag === "h2" || tag === "h3" || tag === "h4" || tag === "h5" || tag === "h6") {
+    if (
+      tag === "h1" ||
+      tag === "h2" ||
+      tag === "h3" ||
+      tag === "h4" ||
+      tag === "h5" ||
+      tag === "h6"
+    ) {
       const level = Number(tag.slice(1));
       return `${"#".repeat(level)} ${serializeInlineChildren(element)}`.trim();
     }
@@ -1203,7 +1225,9 @@ export function createTablinqPageAdapterRuntime() {
         .filter((node) => node.nodeType === Node.TEXT_NODE)
         .map((node) => node.textContent),
     );
-    return directText.filter((value) => !isTransientAskStatusText(value)).join("\n");
+    return directText
+      .filter((value) => !isTransientAskStatusText(value))
+      .join("\n");
   };
 
   const findAssistantMessages = () => {
@@ -1278,11 +1302,7 @@ export function createTablinqPageAdapterRuntime() {
     if (messages.length > Math.max(0, baseline.assistantMessageCount ?? 0)) {
       return latest;
     }
-    if (
-      latest &&
-      latestMessageId &&
-      latestMessageId !== baseline.messageId
-    ) {
+    if (latest && latestMessageId && latestMessageId !== baseline.messageId) {
       return latest;
     }
     if (
@@ -1358,7 +1378,10 @@ export function createTablinqPageAdapterRuntime() {
     return null;
   };
 
-  const inferResearchStatus = (text, statusMessage = readResearchStatusMessage()) => {
+  const inferResearchStatus = (
+    text,
+    statusMessage = readResearchStatusMessage(),
+  ) => {
     const explicitState = datasetValue(document.body.dataset.researchState);
     if (explicitState && explicitState !== "idle") {
       return explicitState;
@@ -1421,7 +1444,8 @@ export function createTablinqPageAdapterRuntime() {
     };
   };
 
-  const researchSubmissionStarted = () => readResearchSubmissionState().submitted;
+  const researchSubmissionStarted = () =>
+    readResearchSubmissionState().submitted;
 
   const setComposerValue = (element, value) => {
     if (!(element instanceof HTMLElement)) {
@@ -1524,7 +1548,8 @@ export function createTablinqPageAdapterRuntime() {
   const effortFallbackTokens = (effort) =>
     effort === "standard" ? ["standard"] : ["extended"];
 
-  const menuOptionSelector = "[role='menuitemradio'], [role='menuitem'], [role='option']";
+  const menuOptionSelector =
+    "[role='menuitemradio'], [role='menuitem'], [role='option']";
   const popupRootSelector = "[role='menu'], [role='listbox']";
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   const elementRole = (element) => element?.getAttribute?.("role") ?? "";
@@ -1631,7 +1656,8 @@ export function createTablinqPageAdapterRuntime() {
         instant: ["instant"],
         thinking: ["thinking"],
       },
-      exclude: (element) => isModelPickerTrigger(element) || !isModelOption(element),
+      exclude: (element) =>
+        isModelPickerTrigger(element) || !isModelOption(element),
     });
 
   const discoverVisibleEffortAliases = () =>
@@ -1658,7 +1684,9 @@ export function createTablinqPageAdapterRuntime() {
           roots.push(controlled);
         }
       }
-      for (const root of visibleUnique(document.querySelectorAll(popupRootSelector))) {
+      for (const root of visibleUnique(
+        document.querySelectorAll(popupRootSelector),
+      )) {
         if (
           !roots.includes(root) &&
           visibleUnique(root.querySelectorAll(menuOptionSelector)).some(
@@ -1729,7 +1757,9 @@ export function createTablinqPageAdapterRuntime() {
 
   const visibleRoots = (selectors) =>
     visibleUnique(
-      selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector))),
+      selectors.flatMap((selector) =>
+        Array.from(document.querySelectorAll(selector)),
+      ),
     );
 
   const queryFirstVisibleInRoots = (roots, selectors) => {
@@ -1785,7 +1815,9 @@ export function createTablinqPageAdapterRuntime() {
     }
 
     for (const root of roots) {
-      for (const element of visibleUnique(root.querySelectorAll(actionableSelector))) {
+      for (const element of visibleUnique(
+        root.querySelectorAll(actionableSelector),
+      )) {
         if (exclude?.(element) || (include && !include(element))) {
           continue;
         }
@@ -1818,11 +1850,13 @@ export function createTablinqPageAdapterRuntime() {
         }
       }
     }
-    for (const root of visibleUnique(document.querySelectorAll(popupRootSelector))) {
+    for (const root of visibleUnique(
+      document.querySelectorAll(popupRootSelector),
+    )) {
       if (
         !roots.includes(root) &&
-        visibleUnique(root.querySelectorAll(menuOptionSelector)).some((element) =>
-          include(element),
+        visibleUnique(root.querySelectorAll(menuOptionSelector)).some(
+          (element) => include(element),
         )
       ) {
         roots.push(root);
@@ -2132,7 +2166,8 @@ export function createTablinqPageAdapterRuntime() {
         conversationId:
           datasetValue(document.body.dataset.conversationId) ??
           parseConversationIdFromUrl(),
-        messageId: datasetValue(article?.getAttribute("data-message-id")) ?? null,
+        messageId:
+          datasetValue(article?.getAttribute("data-message-id")) ?? null,
         text: article ? collectText(article) : "",
       };
     },
@@ -2148,7 +2183,9 @@ export function createTablinqPageAdapterRuntime() {
           parseConversationIdFromUrl(),
         messageId:
           datasetValue(article?.getAttribute("data-message-id")) ??
-          (article ? datasetValue(document.body.dataset.lastMessageId) : null) ??
+          (article
+            ? datasetValue(document.body.dataset.lastMessageId)
+            : null) ??
           null,
         currentUrl: window.location.href,
       };

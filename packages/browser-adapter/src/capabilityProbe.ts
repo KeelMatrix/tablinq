@@ -40,7 +40,9 @@ async function requestExtensionDomSnapshot(page: Page): Promise<string | null> {
         },
       });
       while (walker.nextNode()) {
-        const text = walker.currentNode.textContent?.replace(/\s+/g, " ").trim();
+        const text = walker.currentNode.textContent
+          ?.replace(/\s+/g, " ")
+          .trim();
         if (!text) {
           continue;
         }
@@ -108,30 +110,32 @@ export async function captureDomSnapshot(
   neighborhoods: DomNeighborhoodSnapshot[],
 ): Promise<string> {
   const domText = await requestExtensionDomSnapshot(page).catch(() => null);
-  return page.evaluate((entries) => {
-    return JSON.stringify(
-      {
-        title: document.title,
-        url: window.location.href,
-        neighborhoods: entries,
-        dom_text: document.body?.innerText?.replace(/\s+/g, " ").trim() ?? "",
-      },
-      null,
-      2,
-    );
-  }, neighborhoods).then((raw) => {
-    const snapshot = JSON.parse(raw) as {
-      title: string;
-      url: string;
-      neighborhoods: DomNeighborhoodSnapshot[];
-      dom_text: string;
-    };
-    snapshot.dom_text = (domText ?? snapshot.dom_text ?? "").slice(
-      0,
-      DOM_SNAPSHOT_MAX_CHARS,
-    );
-    return JSON.stringify(snapshot, null, 2);
-  });
+  return page
+    .evaluate((entries) => {
+      return JSON.stringify(
+        {
+          title: document.title,
+          url: window.location.href,
+          neighborhoods: entries,
+          dom_text: document.body?.innerText?.replace(/\s+/g, " ").trim() ?? "",
+        },
+        null,
+        2,
+      );
+    }, neighborhoods)
+    .then((raw) => {
+      const snapshot = JSON.parse(raw) as {
+        title: string;
+        url: string;
+        neighborhoods: DomNeighborhoodSnapshot[];
+        dom_text: string;
+      };
+      snapshot.dom_text = (domText ?? snapshot.dom_text ?? "").slice(
+        0,
+        DOM_SNAPSHOT_MAX_CHARS,
+      );
+      return JSON.stringify(snapshot, null, 2);
+    });
 }
 
 export async function captureAriaSnapshot(page: Page): Promise<string> {

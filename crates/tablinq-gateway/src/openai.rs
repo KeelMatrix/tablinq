@@ -515,6 +515,14 @@ pub fn openai_error(status: u16, error_type: &str, code: &str, message: &str) ->
     })
 }
 
+pub fn request_role_name(role: RequestRole) -> &'static str {
+    match role {
+        RequestRole::Primary => "primary",
+        RequestRole::Subagent => "subagent",
+        RequestRole::Branch => "branch",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,13 +619,5 @@ mod tests {
             provider["capabilities"]["research"]["availability"],
             "unavailable"
         );
-    }
-}
-
-pub fn request_role_name(role: RequestRole) -> &'static str {
-    match role {
-        RequestRole::Primary => "primary",
-        RequestRole::Subagent => "subagent",
-        RequestRole::Branch => "branch",
     }
 }

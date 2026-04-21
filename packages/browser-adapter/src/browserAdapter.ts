@@ -7,10 +7,7 @@ import {
   type BrowserContext,
   type Page,
 } from "playwright-core";
-import {
-  loadProbeSource,
-  resolveTablinqAssetPath,
-} from "./assets";
+import { loadProbeSource, resolveTablinqAssetPath } from "./assets";
 import { chooseUniqueArtifactPath } from "./artifacts";
 import {
   captureAriaSnapshot,
@@ -1055,12 +1052,13 @@ export class BrowserAdapter {
 
     const workspaceCandidates = uniquePages(
       this.browser
-      .contexts()
-      .flatMap((context) => context.pages())
-      .filter(
-        (page) =>
-          !page.isClosed() && this.pageMatchesTargetWorkspace(page, targetUrl),
-      ),
+        .contexts()
+        .flatMap((context) => context.pages())
+        .filter(
+          (page) =>
+            !page.isClosed() &&
+            this.pageMatchesTargetWorkspace(page, targetUrl),
+        ),
     );
     const orderedCandidates = uniquePages([
       ...(this.managedPage && !this.managedPage.isClosed()
@@ -1101,8 +1099,8 @@ export class BrowserAdapter {
     const state = await this.refreshCapabilities(page);
     return Boolean(
       state?.extension_connected &&
-        state.capability_report &&
-        hasUsableCapabilityReport(state.capability_report),
+      state.capability_report &&
+      hasUsableCapabilityReport(state.capability_report),
     );
   }
 
@@ -1466,4 +1464,3 @@ export class BrowserAdapter {
     return screenshotPath;
   }
 }
-

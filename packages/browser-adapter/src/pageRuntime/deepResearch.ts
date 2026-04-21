@@ -61,7 +61,9 @@ export async function beginDeepResearchRun(
       );
     }
 
-    const submission = await readResearchSubmissionState(page).catch(() => null);
+    const submission = await readResearchSubmissionState(page).catch(
+      () => null,
+    );
     if (
       submission &&
       !submission.onDeepResearchLanding &&
@@ -88,41 +90,53 @@ export async function beginDeepResearchRun(
 }
 
 export async function candidateDeepResearchPages(page: Page): Promise<Page[]> {
-  return [page, ...page.context().pages().filter((candidate) => candidate !== page).reverse()]
+  return [
+    page,
+    ...page
+      .context()
+      .pages()
+      .filter((candidate) => candidate !== page)
+      .reverse(),
+  ]
     .filter((candidate, index, all) => all.indexOf(candidate) === index)
     .filter((candidate) =>
       (safePageUrl(candidate)?.toLowerCase() ?? "").includes("/deep-research"),
     );
 }
 
-export async function deepResearchComposerVisible(page: Page): Promise<boolean> {
+export async function deepResearchComposerVisible(
+  page: Page,
+): Promise<boolean> {
   return await page
-    .evaluate((selectors: string[]) => {
-      const isVisible = (element: Element | null) => {
-        if (!(element instanceof HTMLElement) || element.hidden) {
-          return false;
-        }
-        const style = window.getComputedStyle(element);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          style.opacity !== "0"
-        );
-      };
+    .evaluate(
+      (selectors: string[]) => {
+        const isVisible = (element: Element | null) => {
+          if (!(element instanceof HTMLElement) || element.hidden) {
+            return false;
+          }
+          const style = window.getComputedStyle(element);
+          return (
+            style.display !== "none" &&
+            style.visibility !== "hidden" &&
+            style.opacity !== "0"
+          );
+        };
 
-      for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (isVisible(element)) {
-          return true;
+        for (const selector of selectors) {
+          const element = document.querySelector(selector);
+          if (isVisible(element)) {
+            return true;
+          }
         }
-      }
-      return false;
-    }, [
-      "#prompt-textarea",
-      "#prompt-textarea[role='textbox']",
-      "[role='textbox'][aria-label*='Chat with ChatGPT']",
-      "textarea[placeholder='Get a detailed report']",
-    ])
+        return false;
+      },
+      [
+        "#prompt-textarea",
+        "#prompt-textarea[role='textbox']",
+        "[role='textbox'][aria-label*='Chat with ChatGPT']",
+        "textarea[placeholder='Get a detailed report']",
+      ],
+    )
     .catch(() => false);
 }
 
@@ -134,7 +148,9 @@ export async function waitForDeepResearchLanding(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     for (const candidate of await candidateDeepResearchPages(page)) {
-      await candidate.waitForLoadState("domcontentloaded").catch(() => undefined);
+      await candidate
+        .waitForLoadState("domcontentloaded")
+        .catch(() => undefined);
       const landingState = await readResearchSubmissionState(candidate).catch(
         () => null,
       );
@@ -257,7 +273,8 @@ export async function inspectDeepResearchFrame(
           ? nestedRootFrame.contentDocument
           : null;
       const activeDocument =
-        nestedRootDocument?.body && nestedRootDocument.body.childElementCount > 0
+        nestedRootDocument?.body &&
+        nestedRootDocument.body.childElementCount > 0
           ? nestedRootDocument
           : document;
       const activeWindow = activeDocument.defaultView ?? window;
@@ -295,9 +312,7 @@ export async function inspectDeepResearchFrame(
             startButton.getAttribute("data-disabled") === "true" ||
             ("disabled" in startButton &&
               Boolean(
-                (
-                  startButton as HTMLButtonElement | HTMLInputElement
-                ).disabled,
+                (startButton as HTMLButtonElement | HTMLInputElement).disabled,
               ))
           )
         : false;
@@ -321,7 +336,7 @@ export async function inspectDeepResearchFrame(
       const bodyText = normalize(
         reportRoot instanceof HTMLElementCtor
           ? reportRoot.innerText
-          : activeDocument.body?.innerText ?? "",
+          : (activeDocument.body?.innerText ?? ""),
       );
       const statusText = normalize(
         statusRoot instanceof HTMLElementCtor ? statusRoot.innerText : "",
@@ -332,8 +347,9 @@ export async function inspectDeepResearchFrame(
         lowerText.includes("starting") ||
         lowerText.includes("getting ready") ||
         lowerText.includes("preparing");
-      const generatingReport =
-        lowerText.includes("providing a comprehensive report for the user");
+      const generatingReport = lowerText.includes(
+        "providing a comprehensive report for the user",
+      );
       const plannerShell =
         hasPlannerControls ||
         lowerText.includes("proposed research plan") ||
@@ -405,8 +421,7 @@ export async function inspectDeepResearchFrame(
         phase,
         statusMessage: startVisible
           ? "awaiting start confirmation"
-          : (statusText ||
-              (starting ? "starting research" : lines[0] || null)),
+          : statusText || (starting ? "starting research" : lines[0] || null),
         reportText,
         frameUrl: window.location.href,
         startVisible,

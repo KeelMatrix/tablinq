@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
+import { JSDOM } from "jsdom";
 import { chromium } from "playwright-core";
 import {
   BrowserAdapter,
@@ -340,12 +341,11 @@ describe("browser adapter", () => {
         document
           .querySelector("#model-switcher-trigger")
           ?.getAttribute("aria-label") ?? null,
-      effortVisible:
-        !(
-          document
-            .querySelector("#thinking-effort-trigger")
-            ?.hasAttribute("hidden") ?? true
-        ),
+      effortVisible: !(
+        document
+          .querySelector("#thinking-effort-trigger")
+          ?.hasAttribute("hidden") ?? true
+      ),
       menuItems: [
         document
           .querySelector("#model-option-instant")
@@ -417,7 +417,9 @@ describe("browser adapter", () => {
     expect(uploadAckTimeoutMsForFiles([])).toBe(10_000);
     expect(uploadAckTimeoutMsForFiles([0])).toBe(10_000);
     expect(uploadAckTimeoutMsForFiles([MAX_UPLOAD_FILE_BYTES])).toBe(40_000);
-    expect(uploadAckTimeoutMsForFiles([MAX_UPLOAD_FILE_BYTES / 4])).toBe(25_000);
+    expect(uploadAckTimeoutMsForFiles([MAX_UPLOAD_FILE_BYTES / 4])).toBe(
+      25_000,
+    );
     expect(
       uploadAckTimeoutMsForFiles([
         MAX_UPLOAD_FILE_BYTES,
@@ -984,7 +986,9 @@ describe("browser adapter", () => {
   it("does not replay the previous reply when a follow-up ask reuses the latest conversation implicitly", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const targetUrl = withHarnessUrl(server.url, { scenario: "followup-stale" });
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "followup-stale",
+    });
     const adapter = trackAdapter(
       new BrowserAdapter({
         profileDir: path.join(root, "profile"),
@@ -1027,7 +1031,9 @@ describe("browser adapter", () => {
   it("does not replay the previous reply when a follow-up ask uses the explicit conversation id", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const targetUrl = withHarnessUrl(server.url, { scenario: "followup-stale" });
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "followup-stale",
+    });
     const adapter = trackAdapter(
       new BrowserAdapter({
         profileDir: path.join(root, "profile"),
@@ -1122,13 +1128,11 @@ describe("browser adapter", () => {
   });
 
   it("serializes rich assistant markdown into terminal-safe markdown text", async () => {
-    const server = await startTrackedFakeChatGptServer();
-    const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-    await page.goto(withHarnessUrl(server.url, { variant: "live" }));
-
     const runtimeSource = await readFile(
-      path.join(process.cwd(), "packages/browser-adapter/src/pageAdapter.runtime.js"),
+      path.join(
+        process.cwd(),
+        "packages/browser-adapter/src/pageAdapter.runtime.js",
+      ),
       "utf8",
     );
     const expected = [
@@ -1148,7 +1152,7 @@ describe("browser adapter", () => {
       "Inline `code` example.",
       "",
       "```python",
-      'def hello():',
+      "def hello():",
       '    return "world"',
       "```",
       "",
@@ -1163,18 +1167,17 @@ describe("browser adapter", () => {
       "Final sentence.",
     ].join("\n");
 
-    const snapshot = await page.evaluate(
-      ({ source }) => {
-        const article = document.querySelector(
-          "[data-slot='assistant-message'], [data-message-author-role='assistant']",
-        );
-        if (!(article instanceof HTMLElement)) {
-          throw new Error("assistant article not found");
-        }
-        article.hidden = false;
-        article.setAttribute("data-message-author-role", "assistant");
-        article.setAttribute("data-message-id", "msg-rich-markdown");
-        article.innerHTML = `
+    const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+      url: "http://127.0.0.1:3847/?variant=live",
+      runScripts: "outside-only",
+    });
+    const { window } = dom;
+    const article = window.document.createElement("article");
+    article.setAttribute("data-slot", "assistant-message");
+    article.hidden = false;
+    article.setAttribute("data-message-author-role", "assistant");
+    article.setAttribute("data-message-id", "msg-rich-markdown");
+    article.innerHTML = `
           <div class="markdown prose dark:prose-invert w-full wrap-break-word light markdown-new-styling">
             <h1>Heading One</h1>
             <h2>Heading Two</h2>
@@ -1210,24 +1213,20 @@ describe("browser adapter", () => {
             <p>Final sentence.</p>
           </div>
         `;
-        document.body.dataset.conversationId = "conv-rich-markdown";
-        document.body.dataset.lastMessageId = "msg-rich-markdown";
-        document.body.dataset.streamState = "done";
-        const runtime = Function(
-          `${source.replace(
-            /^export\s+/gm,
-            "",
-          )}\nreturn createTablinqPageAdapterRuntime();`,
-        )();
-        return runtime.readAskSnapshot();
-      },
-      { source: runtimeSource },
+    window.document.body.append(article);
+    window.document.body.dataset.conversationId = "conv-rich-markdown";
+    window.document.body.dataset.lastMessageId = "msg-rich-markdown";
+    window.document.body.dataset.streamState = "done";
+
+    const snapshot = window.eval(
+      `${runtimeSource.replace(
+        /^export\s+/gm,
+        "",
+      )}\ncreateTablinqPageAdapterRuntime().readAskSnapshot();`,
     );
 
     expect(snapshot.text).toBe(expected);
-
-    await browser.close();
-    await stopFakeChatGptServer(server.process);
+    dom.window.close();
   });
 
   it("refuses asks when the managed page is a signed-out local login screen", async () => {
@@ -1482,7 +1481,9 @@ describe("browser adapter", () => {
         },
         () => {},
       ),
-    ).rejects.toThrow(/ui drift: could not find a concrete control for model=instant/i);
+    ).rejects.toThrow(
+      /ui drift: could not find a concrete control for model=instant/i,
+    );
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -1515,7 +1516,9 @@ describe("browser adapter", () => {
         },
         () => {},
       ),
-    ).rejects.toThrow(/capability missing: thinking effort; requested=extended/i);
+    ).rejects.toThrow(
+      /capability missing: thinking effort; requested=extended/i,
+    );
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
@@ -1558,15 +1561,16 @@ describe("browser adapter", () => {
 
     const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
       model: document.body.dataset.selectedModel,
-      effortVisible:
-        !(
-          document
-            .querySelector("#thinking-effort-trigger")
-            ?.hasAttribute("hidden") ?? true
-        ),
+      effortVisible: !(
+        document
+          .querySelector("#thinking-effort-trigger")
+          ?.hasAttribute("hidden") ?? true
+      ),
     }));
 
-    expect(result.output_text).toBe("Fake response for: configure live instant");
+    expect(result.output_text).toBe(
+      "Fake response for: configure live instant",
+    );
     expect(result.artifacts).toHaveLength(1);
     expect(state).toEqual({
       model: "instant",
@@ -1768,7 +1772,10 @@ describe("browser adapter", () => {
       "Research report for: investigate launch risks",
     );
     expect(result.artifacts).toHaveLength(1);
-    const artifactBody = await readFile(result.artifacts[0]!.storage_path, "utf8");
+    const artifactBody = await readFile(
+      result.artifacts[0]!.storage_path,
+      "utf8",
+    );
     expect(artifactBody).toContain("Uploads: brief.txt, notes.csv");
 
     await adapter.shutdown();
@@ -1800,7 +1807,8 @@ describe("browser adapter", () => {
     const result = await adapter.research(
       {
         jobId: "job-research-starting-shell",
-        query: "analyze browser-backed provider tradeoffs across latency, privacy, resilience, and deployment constraints",
+        query:
+          "analyze browser-backed provider tradeoffs across latency, privacy, resilience, and deployment constraints",
         timeoutMs: 8_000,
       },
       (update) => {
@@ -1978,14 +1986,16 @@ describe("browser adapter", () => {
     await adapter.getManagedPageForTest()!.evaluate(() => {
       const trigger = document.querySelector("#model-switcher-trigger");
       const composer = document.querySelector("[data-testid='composer-root']");
-      if (!(trigger instanceof HTMLElement) || !(composer instanceof HTMLElement)) {
+      if (
+        !(trigger instanceof HTMLElement) ||
+        !(composer instanceof HTMLElement)
+      ) {
         throw new Error("composer setup missing");
       }
 
       trigger.hidden = true;
-      const syncState = (
-        window as Window & { syncSelectedState?: () => void }
-      ).syncSelectedState;
+      const syncState = (window as Window & { syncSelectedState?: () => void })
+        .syncSelectedState;
       const maybeRestoreTrigger = () => {
         if (
           composer.querySelectorAll("button[aria-label*='remove']").length === 0
@@ -2023,17 +2033,17 @@ describe("browser adapter", () => {
       () => {},
     );
 
-    expect(result.output_text).toContain(
-      `Fake response for: ${prompt}`,
-    );
+    expect(result.output_text).toContain(`Fake response for: ${prompt}`);
 
     const pageState = await adapter.getManagedPageForTest()!.evaluate(() => ({
       remainingChips: document.querySelectorAll(
         "[data-testid='composer-root'] button[aria-label*='remove']",
       ).length,
       modelTriggerVisible:
-        document.querySelector("#model-switcher-trigger") instanceof HTMLElement &&
-        !(document.querySelector("#model-switcher-trigger") as HTMLElement).hidden,
+        document.querySelector("#model-switcher-trigger") instanceof
+          HTMLElement &&
+        !(document.querySelector("#model-switcher-trigger") as HTMLElement)
+          .hidden,
     }));
 
     expect(pageState.remainingChips).toBe(0);
@@ -2064,10 +2074,12 @@ describe("browser adapter", () => {
 
     await adapter.getManagedPageForTest()!.evaluate(() => {
       const trigger = document.querySelector("#model-switcher-trigger");
-      const syncState = (
-        window as Window & { syncSelectedState?: () => void }
-      ).syncSelectedState;
-      if (!(trigger instanceof HTMLElement) || typeof syncState !== "function") {
+      const syncState = (window as Window & { syncSelectedState?: () => void })
+        .syncSelectedState;
+      if (
+        !(trigger instanceof HTMLElement) ||
+        typeof syncState !== "function"
+      ) {
         throw new Error("live model controls missing");
       }
 
@@ -2118,10 +2130,10 @@ describe("browser adapter", () => {
       selectedModel: document.body.dataset.selectedModel,
       selectedEffort: document.body.dataset.selectedEffort,
       thinkingChipVisible:
-        document.querySelector("#thinking-effort-trigger") instanceof HTMLElement &&
-        !(
-          document.querySelector("#thinking-effort-trigger") as HTMLElement
-        ).hidden,
+        document.querySelector("#thinking-effort-trigger") instanceof
+          HTMLElement &&
+        !(document.querySelector("#thinking-effort-trigger") as HTMLElement)
+          .hidden,
     }));
 
     expect(pageState.selectedModel).toBe("thinking");
@@ -2352,7 +2364,8 @@ describe("browser adapter", () => {
     const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
       uploadPopoverOpen: document.body.dataset.uploadPopoverOpen,
       lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
-      uploadChips: document.querySelectorAll("[data-testid='upload-chip']").length,
+      uploadChips: document.querySelectorAll("[data-testid='upload-chip']")
+        .length,
       plusPresent: Boolean(document.querySelector("#composer-plus-btn")),
     }));
 
@@ -2672,7 +2685,9 @@ describe("browser adapter", () => {
   it("recovers a follow-up ask in the same conversation without replaying the previous reply", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const targetUrl = withHarnessUrl(server.url, { scenario: "followup-stale" });
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "followup-stale",
+    });
     const adapter = trackAdapter(
       new BrowserAdapter({
         profileDir: path.join(root, "profile"),
@@ -2731,7 +2746,9 @@ describe("browser adapter", () => {
   it("recovers a follow-up ask from the ask baseline conversation when the cached target URL is stale", async () => {
     const server = await startTrackedFakeChatGptServer();
     const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-    const targetUrl = withHarnessUrl(server.url, { scenario: "followup-stale" });
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "followup-stale",
+    });
     const adapter = trackAdapter(
       new BrowserAdapter({
         profileDir: path.join(root, "profile"),
@@ -3375,8 +3392,7 @@ describe("browser adapter", () => {
         if (
           !closeTriggered &&
           (update.status === "waiting_for_sources" ||
-            (update.status === "running" &&
-              Boolean(update.chunk_text?.length)))
+            (update.status === "running" && Boolean(update.chunk_text?.length)))
         ) {
           closeTriggered = true;
           await adapter.getManagedPageForTest()!.context().browser()!.close();
@@ -3401,9 +3417,7 @@ describe("browser adapter", () => {
     await stopFakeChatGptServer(server.process);
   });
 
-  it(
-    "recovers a live research job after the client reconnects to an attached browser",
-    async () => {
+  it("recovers a live research job after the client reconnects to an attached browser", async () => {
     const server = await startTrackedFakeChatGptServer();
     const targetUrl = withHarnessUrl(server.url, {
       variant: "live",
@@ -3465,144 +3479,134 @@ describe("browser adapter", () => {
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
-    },
-    30_000,
-  );
+  }, 30_000);
 
-  it(
-    "recovers a running deep research job from the active conversation tab when another attached tab is selected",
-    async () => {
-      const server = await startTrackedFakeChatGptServer();
-      const targetUrl = withHarnessUrl(server.url, {
-        variant: "live",
-        scenario: "research-success",
-      });
-      const attached = await startTrackedAttachableBrowser(targetUrl);
+  it("recovers a running deep research job from the active conversation tab when another attached tab is selected", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "research-success",
+    });
+    const attached = await startTrackedAttachableBrowser(targetUrl);
 
-      await withAttachedBrowser(attached.endpoint, async (browser) => {
-        const context = browser.contexts()[0]!;
-        const rootPage = context.pages()[0]!;
-        await rootPage.waitForLoadState("domcontentloaded");
-        const researchPage = await context.newPage();
-        await researchPage.goto(targetUrl, { waitUntil: "domcontentloaded" });
-        await researchPage.locator("#deep-research-nav").click();
-        await researchPage
-          .locator("#prompt-textarea")
-          .fill("recover the active research tab after a client reconnect");
-        await researchPage.locator("[data-testid='send-button']").click();
-        await researchPage
-          .frameLocator("#deep-research-sandbox")
-          .getByRole("button", { name: "Start" })
-          .click();
-        await rootPage.bringToFront();
-        await researchPage.waitForTimeout(250);
-      });
+    await withAttachedBrowser(attached.endpoint, async (browser) => {
+      const context = browser.contexts()[0]!;
+      const rootPage = context.pages()[0]!;
+      await rootPage.waitForLoadState("domcontentloaded");
+      const researchPage = await context.newPage();
+      await researchPage.goto(targetUrl, { waitUntil: "domcontentloaded" });
+      await researchPage.locator("#deep-research-nav").click();
+      await researchPage
+        .locator("#prompt-textarea")
+        .fill("recover the active research tab after a client reconnect");
+      await researchPage.locator("[data-testid='send-button']").click();
+      await researchPage
+        .frameLocator("#deep-research-sandbox")
+        .getByRole("button", { name: "Start" })
+        .click();
+      await rootPage.bringToFront();
+      await researchPage.waitForTimeout(250);
+    });
 
-      const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-      const adapter = trackAdapter(
-        new BrowserAdapter({
-          profileDir: path.join(root, "profile"),
-          downloadsDir: path.join(root, "downloads"),
-          defaultTargetUrl: targetUrl,
-          connectionMode: "attach_first",
-          debugEndpoint: attached.endpoint,
-        }),
-      );
-      await adapter.open({ targetUrl, headless: true });
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
 
-      const states: string[] = [];
-      const result = await adapter.recoverResearch(
-        {
-          jobId: "job-research-recover-active-tab",
-          query: "recover the active research tab after a client reconnect",
-          timeoutMs: 7_000,
-        },
-        { emittedText: "", nextSeq: 0 },
-        () => {},
-        (update) => {
-          states.push(update.state);
-        },
-      );
+    const states: string[] = [];
+    const result = await adapter.recoverResearch(
+      {
+        jobId: "job-research-recover-active-tab",
+        query: "recover the active research tab after a client reconnect",
+        timeoutMs: 7_000,
+      },
+      { emittedText: "", nextSeq: 0 },
+      () => {},
+      (update) => {
+        states.push(update.state);
+      },
+    );
 
-      expect(result.report_text).toContain(
-        "Research report for: recover the active research tab after a client reconnect",
-      );
-      expect(result.current_url).toContain(`/c/${result.conversation_id}`);
-      expect(states).toContain("interrupted");
-      expect(states).toContain("recovered");
+    expect(result.report_text).toContain(
+      "Research report for: recover the active research tab after a client reconnect",
+    );
+    expect(result.current_url).toContain(`/c/${result.conversation_id}`);
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
 
-      await adapter.shutdown();
-      await stopFakeChatGptServer(server.process);
-    },
-    30_000,
-  );
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  }, 30_000);
 
-  it(
-    "recovers a running deep research job after the attached research tab reloads",
-    async () => {
-      const server = await startTrackedFakeChatGptServer();
-      const targetUrl = withHarnessUrl(server.url, {
-        variant: "live",
-        scenario: "research-reload",
-      });
-      const attached = await startTrackedAttachableBrowser(targetUrl);
+  it("recovers a running deep research job after the attached research tab reloads", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "research-reload",
+    });
+    const attached = await startTrackedAttachableBrowser(targetUrl);
 
-      await withAttachedBrowser(attached.endpoint, async (browser) => {
-        const page = browser.contexts()[0]!.pages()[0]!;
-        await page.waitForLoadState("domcontentloaded");
-        await page.locator("#deep-research-nav").click();
-        await page
-          .locator("#prompt-textarea")
-          .fill("recover a deep research run after a tab reload");
-        await page.locator("[data-testid='send-button']").click();
-        await page
-          .frameLocator("#deep-research-sandbox")
-          .getByRole("button", { name: "Start" })
-          .click();
-        await page.waitForTimeout(250);
-      });
+    await withAttachedBrowser(attached.endpoint, async (browser) => {
+      const page = browser.contexts()[0]!.pages()[0]!;
+      await page.waitForLoadState("domcontentloaded");
+      await page.locator("#deep-research-nav").click();
+      await page
+        .locator("#prompt-textarea")
+        .fill("recover a deep research run after a tab reload");
+      await page.locator("[data-testid='send-button']").click();
+      await page
+        .frameLocator("#deep-research-sandbox")
+        .getByRole("button", { name: "Start" })
+        .click();
+      await page.waitForTimeout(250);
+    });
 
-      const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
-      const adapter = trackAdapter(
-        new BrowserAdapter({
-          profileDir: path.join(root, "profile"),
-          downloadsDir: path.join(root, "downloads"),
-          defaultTargetUrl: targetUrl,
-          connectionMode: "attach_first",
-          debugEndpoint: attached.endpoint,
-        }),
-      );
-      await adapter.open({ targetUrl, headless: true });
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
 
-      const updates: string[] = [];
-      const states: string[] = [];
-      const result = await adapter.recoverResearch(
-        {
-          jobId: "job-research-recover-reload",
-          query: "recover a deep research run after a tab reload",
-          timeoutMs: 7_000,
-        },
-        { emittedText: "", nextSeq: 0 },
-        (update) => {
-          updates.push(update.status);
-        },
-        (update) => {
-          states.push(update.state);
-        },
-      );
+    const updates: string[] = [];
+    const states: string[] = [];
+    const result = await adapter.recoverResearch(
+      {
+        jobId: "job-research-recover-reload",
+        query: "recover a deep research run after a tab reload",
+        timeoutMs: 7_000,
+      },
+      { emittedText: "", nextSeq: 0 },
+      (update) => {
+        updates.push(update.status);
+      },
+      (update) => {
+        states.push(update.state);
+      },
+    );
 
-      expect(result.report_text).toContain(
-        "Research report for: recover a deep research run after a tab reload",
-      );
-      expect(updates).toContain("running");
-      expect(states).toContain("interrupted");
-      expect(states).toContain("recovered");
+    expect(result.report_text).toContain(
+      "Research report for: recover a deep research run after a tab reload",
+    );
+    expect(updates).toContain("running");
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
 
-      await adapter.shutdown();
-      await stopFakeChatGptServer(server.process);
-    },
-    30_000,
-  );
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  }, 30_000);
 
   it("streams ask responses to completion in attach mode", async () => {
     const server = await startTrackedFakeChatGptServer();
@@ -3712,7 +3716,9 @@ describe("browser adapter", () => {
       },
     );
 
-    expect(result.output_text).toBe("Fake response for: Reply with exactly: ASK_OK");
+    expect(result.output_text).toBe(
+      "Fake response for: Reply with exactly: ASK_OK",
+    );
     expect(chunks.join("")).toBe(result.output_text);
 
     await adapter.shutdown();

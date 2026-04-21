@@ -244,10 +244,15 @@ export async function ensureConfiguredModelClass(
     return;
   }
 
-  const trigger = await findVisibleModelPickerTrigger(page, INTERACTION_TIMEOUT_MS);
+  const trigger = await findVisibleModelPickerTrigger(
+    page,
+    INTERACTION_TIMEOUT_MS,
+  );
   if (!trigger) {
     if (!report.matrix.model_picker_visible) {
-      throw new Error(`capability missing: model picker; requested=${modelClass}`);
+      throw new Error(
+        `capability missing: model picker; requested=${modelClass}`,
+      );
     }
     throw new Error(
       `ui drift: could not find a model selector trigger for model=${modelClass}`,
@@ -320,7 +325,9 @@ export async function ensureConfiguredEffort(
   const trigger = await findVisibleEffortTrigger(page, INTERACTION_TIMEOUT_MS);
   if (!trigger) {
     if (!report.matrix.thinking_effort_visible) {
-      throw new Error(`capability missing: thinking effort; requested=${effort}`);
+      throw new Error(
+        `capability missing: thinking effort; requested=${effort}`,
+      );
     }
     throw new Error(
       `ui drift: could not find an effort trigger for effort=${effort}`,
@@ -386,14 +393,18 @@ export async function ensureConfiguredMode(
     INTERACTION_TIMEOUT_MS,
   );
   if (!locator) {
-    throw new Error(`ui drift: could not find ${mode} mode control after probing it`);
+    throw new Error(
+      `ui drift: could not find ${mode} mode control after probing it`,
+    );
   }
   const isActive =
     mode === "research"
       ? page.url().toLowerCase().includes("/deep-research")
       : (await locator.getAttribute("aria-pressed")) === "true";
   const controlHref =
-    mode === "research" ? await locator.getAttribute("href").catch(() => null) : null;
+    mode === "research"
+      ? await locator.getAttribute("href").catch(() => null)
+      : null;
   const requiresDeepResearchLandingWait =
     mode === "research" &&
     (await locator
@@ -404,7 +415,8 @@ export async function ensureConfiguredMode(
         const href = element.getAttribute("href") ?? "";
         return (
           element.tagName.toLowerCase() === "a" ||
-          element.getAttribute("data-testid") === "deep-research-sidebar-item" ||
+          element.getAttribute("data-testid") ===
+            "deep-research-sidebar-item" ||
           href.toLowerCase().includes("deep-research")
         );
       })
@@ -484,7 +496,10 @@ export async function activateModeControl(locator: Locator): Promise<void> {
     await locator.click();
     return;
   } catch (error) {
-    if (!(error instanceof Error) || !/intercepts pointer events/i.test(error.message)) {
+    if (
+      !(error instanceof Error) ||
+      !/intercepts pointer events/i.test(error.message)
+    ) {
       throw error;
     }
   }

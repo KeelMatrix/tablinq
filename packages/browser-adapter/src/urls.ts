@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { Page } from "playwright-core";
 
-function normalizeOptionalString(value: string | null | undefined): string | null {
+function normalizeOptionalString(
+  value: string | null | undefined,
+): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
 }
@@ -116,7 +118,10 @@ export function workspaceKeyFromUrl(rawUrl: string): string {
   }
 }
 
-export function matchesTargetWorkspace(pageUrl: string, targetUrl: string): boolean {
+export function matchesTargetWorkspace(
+  pageUrl: string,
+  targetUrl: string,
+): boolean {
   try {
     return workspaceKeyFromUrl(pageUrl) === workspaceKeyFromUrl(targetUrl);
   } catch {
@@ -124,7 +129,10 @@ export function matchesTargetWorkspace(pageUrl: string, targetUrl: string): bool
   }
 }
 
-export function matchesTargetLocation(pageUrl: string, targetUrl: string): boolean {
+export function matchesTargetLocation(
+  pageUrl: string,
+  targetUrl: string,
+): boolean {
   const targetConversationId = conversationIdFromUrl(targetUrl);
   if (targetConversationId) {
     return conversationIdFromUrl(pageUrl) === targetConversationId;

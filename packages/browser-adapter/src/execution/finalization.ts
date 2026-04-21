@@ -21,10 +21,7 @@ import {
   sameAskCompletionSnapshot,
   sameResearchCompletionSnapshot,
 } from "../snapshotState";
-import {
-  SNAPSHOT_POLL_INTERVAL_MS,
-  STABLE_DONE_POLLS,
-} from "../timing";
+import { SNAPSHOT_POLL_INTERVAL_MS, STABLE_DONE_POLLS } from "../timing";
 
 import type { BrowserExecutionHost } from "./types";
 
@@ -113,8 +110,7 @@ export async function finalizeAsk(
   });
   return {
     job_id: command.jobId,
-    conversation_id:
-      snapshot.conversationId ?? `${command.jobId}-conversation`,
+    conversation_id: snapshot.conversationId ?? `${command.jobId}-conversation`,
     message_id: snapshot.messageId ?? `${command.jobId}-message`,
     output_text: snapshot.text,
     artifacts,
@@ -140,8 +136,7 @@ export async function finalizeResearch(
   );
   return {
     job_id: command.jobId,
-    conversation_id:
-      snapshot.conversationId ?? `${command.jobId}-conversation`,
+    conversation_id: snapshot.conversationId ?? `${command.jobId}-conversation`,
     message_id: snapshot.messageId ?? `${command.jobId}-message`,
     report_text: snapshot.reportText,
     artifacts,

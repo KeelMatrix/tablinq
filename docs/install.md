@@ -68,10 +68,11 @@ What still requires you:
 8. Sign in manually at `https://chatgpt.com/` in that same browser profile.
 9. Run `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser attach`.
 10. Verify with:
-   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser connection-info`
-   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe status`
-   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe doctor`
-   - `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe capabilities`
+
+- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe browser connection-info`
+- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe status`
+- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe doctor`
+- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe capabilities`
 
 To enable Windows logon-time autostart explicitly later, rerun the installer with:
 

@@ -1,7 +1,4 @@
-import {
-  STALL_DETECTION_MAX_MS,
-  STALL_DETECTION_MIN_MS,
-} from "./timing";
+import { STALL_DETECTION_MAX_MS, STALL_DETECTION_MIN_MS } from "./timing";
 import { conversationIdFromUrl } from "./urls";
 
 export interface AskSnapshot {
