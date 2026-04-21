@@ -238,11 +238,11 @@ This is the Windows all-in-one local install path. It can:
 - optionally invoke `package.ps1`,
 - stage and replace the installed layout under `%LOCALAPPDATA%\Tablinq\install`,
 - validate that expected binaries and extension files exist,
-- update config and startup state,
+- update config and clear legacy autostart persistence,
 - register the native host unless skipped,
-- set up auto-start/task scheduling unless skipped,
+- enable logon-time scheduled-task autostart when `-EnableAutoStart` is passed,
 - optionally update PATH,
-- optionally launch managed binaries,
+- optionally launch the daemon and gateway with `-LaunchAfterInstall`,
 - print the remaining manual browser/extension steps.
 
 It also contains defensive handling for blocked files, registry access, legacy launcher cleanup, and antivirus-related failure modes.
@@ -282,7 +282,7 @@ This is the Unix/Linux install path. It:
 - ensures config exists,
 - writes config values such as browser path and channel,
 - writes startup helper scripts,
-- optionally starts the daemon and gateway via the installed `gpt` binary,
+- attempts to start the daemon and gateway via the installed `gpt` binary,
 - prints follow-up manual steps for attach-first browser setup.
 
 **Why it exists**

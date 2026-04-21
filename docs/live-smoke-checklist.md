@@ -37,7 +37,7 @@ Also confirm:
 4. Run `gpt ask --model thinking --effort extended "reason carefully about this tradeoff"` and confirm completion or a clean capability failure.
 5. Run `gpt ask --mode search "latest rust stable release"` and confirm completion or a clean capability failure.
 6. Run `gpt ask --file path\to\notes.txt "summarize the attached file"` and confirm the page acknowledges the attachment before submit.
-7. After a run that produces an artifact, confirm `gpt artifacts list` shows it and `gpt artifacts pull last` retrieves it.
+7. After a run that produces an artifact, confirm `gpt artifacts list` shows it and `gpt artifacts pull last --to .` retrieves it.
 8. Run `gpt research "investigate launch blockers"` and confirm progress states advance until completion or typed failure.
 9. After at least one download, confirm the attached normal-browser tab is still usable by running `gpt capabilities` or another `gpt ask`.
 10. Open two ChatGPT tabs, keep the extension active in only one, rerun `gpt browser attach`, and confirm Tablinq returns to the tab with working extension connectivity.

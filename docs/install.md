@@ -98,9 +98,9 @@ Build and install:
 Then:
 
 1. If you plan to use Edge attach-first, load the unpacked extension from `~/.local/share/tablinq/install/extension` into the Edge profile you will attach to.
-2. Start the daemon:
+2. If the installer did not already bring it up successfully, start the daemon:
    - `~/.local/share/tablinq/install/bin/gpt daemon start`
-3. Start the gateway:
+3. If the installer did not already bring it up successfully, start the gateway:
    - `~/.local/share/tablinq/install/bin/gpt gateway start`
 4. Fully close Chrome or Edge so the debug flags can take effect cleanly.
 5. Start your normal browser in attachable mode:
@@ -114,7 +114,7 @@ Then:
    - `~/.local/share/tablinq/install/bin/gpt doctor`
    - `~/.local/share/tablinq/install/bin/gpt capabilities`
 
-The Unix installer prepares install and state directories and writes startup helper scripts. Native-host registration remains Windows-first.
+The Unix installer prepares install and state directories, writes startup helper scripts, and attempts to start the daemon and gateway through the installed `gpt` binary. Native-host registration remains Windows-first.
 
 ## First-run checks
 

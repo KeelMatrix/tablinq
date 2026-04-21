@@ -44,12 +44,14 @@ Persisted directories:
 - `logs/`
 - `db/`
 - `browser-profile/`
+- `chrome-attach-profile/`
 - `downloads/`
 - `crash-bundles/`
 - `gateway-uploads/`
 
 SQLite entities currently live in [`crates/gptd/src/db.rs`](../crates/gptd/src/db.rs):
 
+- `schema_migrations`
 - `sessions`
 - `jobs`
 - `job_details`

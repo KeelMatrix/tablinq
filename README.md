@@ -121,8 +121,11 @@ Common commands:
 - `gpt jobs show job-123`
 - `gpt jobs cancel job-123`
 - `gpt sessions list`
+- `gpt conversations list`
+- `gpt conversations switch conv-123`
+- `gpt conversations new`
 - `gpt artifacts list`
-- `gpt artifacts pull last`
+- `gpt artifacts pull last --to .`
 - `gpt browser start-debug`
 - `gpt browser attach`
 - `gpt browser connection-info`
