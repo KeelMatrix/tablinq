@@ -29,8 +29,9 @@ use gptd::{AppConfig, CoreService};
 use serde_json::{Value, json};
 use shared_protocol::{
     ArtifactSummary, AuthSource, BrowserConnectionMode, BrowserOpenRequest, BrowserOwner,
-    BrowserStatusSnapshot, ConversationSelectCommand, DaemonRequest, DaemonResponse, DoctorReport,
-    ErrorCode, GatewayRequestContext, HealthCheck,
+    BrowserStatusSnapshot, ConversationSelectCommand, ConversationSelection, ConversationSummary,
+    DaemonRequest, DaemonResponse, DoctorReport, ErrorCode, GatewayRequestContext, HealthCheck,
+    JobStatus,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -44,7 +45,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use crate::uploads::{gateway_uploads_dir, staged_metadata_path};
 #[cfg(test)]
-use shared_protocol::{CapabilityReport, JobStatus};
+use shared_protocol::CapabilityReport;
 #[cfg(test)]
 use std::process::Command;
 
@@ -66,12 +67,14 @@ const V1_FILES_PATH: &str = "/v1/files";
 const V1_ARTIFACTS_PATH: &str = "/v1/artifacts";
 const V1_PROVIDER_PATH: &str = "/v1/provider";
 const V1_SESSIONS_PATH: &str = "/v1/sessions";
+const V1_REQUESTS_PATH: &str = "/v1/requests";
 const V1_CONVERSATIONS_PATH: &str = "/v1/conversations";
 const V1_CONVERSATIONS_SELECT_PATH: &str = "/v1/conversations/select";
 const V1_USAGE_PATH: &str = "/v1/usage";
 const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 const STAGED_UPLOAD_RETENTION_SECS: i64 = 24 * 60 * 60;
 const REQUEST_SUMMARY_LIMIT: usize = 50;
+const REQUEST_LIST_MAX_LIMIT: usize = 100;
 
 #[derive(Debug)]
 struct RequestContext {
@@ -101,6 +104,13 @@ struct SimpleHttpResponse {
     #[cfg(test)]
     headers: BTreeMap<String, String>,
     body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RequestListQuery {
+    limit: usize,
+    offset: usize,
+    status: Option<JobStatus>,
 }
 
 fn daemon_health_snapshot(config: &AppConfig) -> Option<HealthCheck> {
@@ -358,11 +368,9 @@ fn handle_connection(
 
     log_request(logger, &context.request_id, &context.request, &remote_addr)?;
     let scheduler_status = scheduler.snapshot()?;
+    let request_path = normalized_request_path(&context.request.path);
 
-    let response = match (
-        context.request.method.as_str(),
-        context.request.path.as_str(),
-    ) {
+    let response = match (context.request.method.as_str(), request_path) {
         ("GET", HEALTH_PATH) => {
             let health = effective_health_snapshot(config, core)?;
             json_response(
@@ -446,6 +454,10 @@ fn handle_connection(
             Ok(()) => handle_sessions_request(core, &context.request_id)?,
             Err(response) => response,
         },
+        ("GET", V1_REQUESTS_PATH) => match authorize_request(config, &context.request, false) {
+            Ok(()) => handle_requests_request(core, &context)?,
+            Err(response) => response,
+        },
         ("GET", V1_CONVERSATIONS_PATH) => {
             match authorize_request(config, &context.request, false) {
                 Ok(()) => handle_conversations_request(core, &context.request_id)?,
@@ -492,7 +504,7 @@ fn handle_connection(
                 Err(response) => response,
             }
         }
-        ("POST", _) if context.request.path.starts_with(V1_REQUESTS_PREFIX) => {
+        ("POST", _) if request_path.starts_with(V1_REQUESTS_PREFIX) => {
             if let Err(response) = authorize_request(config, &context.request, false) {
                 response
             } else {
@@ -843,6 +855,31 @@ fn handle_usage_request(core: &CoreService, request_id: &str) -> Result<HttpResp
     ))
 }
 
+fn handle_requests_request(core: &CoreService, context: &RequestContext) -> Result<HttpResponse> {
+    let query = match parse_request_list_query(&context.request.path, &context.request_id) {
+        Ok(query) => query,
+        Err(response) => return Ok(response),
+    };
+    let page = core.list_request_page(query.status, query.limit, query.offset)?;
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.request_list",
+            "request_id": context.request_id,
+            "data": page.requests,
+            "pagination": {
+                "limit": page.limit,
+                "offset": page.offset,
+                "next_offset": page.next_offset,
+                "has_more": page.next_offset.is_some(),
+            },
+            "filter": {
+                "status": page.status,
+            },
+        }),
+    ))
+}
+
 fn handle_sessions_request(core: &CoreService, request_id: &str) -> Result<HttpResponse> {
     let sessions = core.list_sessions()?;
     Ok(json_response(
@@ -862,7 +899,11 @@ fn handle_conversations_request(core: &CoreService, request_id: &str) -> Result<
         json!({
             "object": "tablinq.conversation_list",
             "request_id": request_id,
-            "data": conversations.conversations,
+            "data": conversations
+                .conversations
+                .into_iter()
+                .map(conversation_summary_object)
+                .collect::<Vec<_>>(),
         }),
     ))
 }
@@ -884,6 +925,16 @@ fn handle_conversation_select_request(
             ));
         }
     };
+    if let Err(err) = command.validate() {
+        return Ok(json_response(
+            400,
+            json!({
+                "request_id": context.request_id,
+                "error": "invalid_request",
+                "message": format!("{err}"),
+            }),
+        ));
+    }
     if let Some(conversation_id) = command.conversation_id.as_deref() {
         if core.find_conversation(conversation_id)?.is_none() {
             return Ok(json_response(
@@ -903,7 +954,7 @@ fn handle_conversation_select_request(
             json!({
                 "object": "tablinq.conversation_selection",
                 "request_id": context.request_id,
-                "data": selection,
+                "data": conversation_selection_object(selection),
             }),
         )),
         Err(err) => {
@@ -924,6 +975,31 @@ fn handle_conversation_select_request(
             ))
         }
     }
+}
+
+fn conversation_summary_object(summary: ConversationSummary) -> Value {
+    let conversation_id = summary.conversation_id;
+    json!({
+        "conversation_id": conversation_id.clone(),
+        "tablinq_conversation_id": conversation_id,
+        "session_id": summary.session_id,
+        "label": summary.label,
+        "tab_url": summary.tab_url,
+        "last_prompt": summary.last_prompt,
+        "last_response": summary.last_response,
+        "last_seen_at": summary.last_seen_at,
+    })
+}
+
+fn conversation_selection_object(selection: ConversationSelection) -> Value {
+    let conversation_id = selection.conversation_id.clone();
+    json!({
+        "conversation_id": conversation_id.clone(),
+        "tablinq_conversation_id": selection.conversation_id,
+        "session_id": selection.session_id,
+        "current_url": selection.current_url,
+        "browser": selection.browser,
+    })
 }
 
 fn handle_request_summary_request(
@@ -1266,13 +1342,98 @@ fn refusal_reason_for_code(code: &str) -> Option<&str> {
     }
 }
 
+fn parse_request_list_query(
+    path: &str,
+    request_id: &str,
+) -> std::result::Result<RequestListQuery, HttpResponse> {
+    let mut query = RequestListQuery {
+        limit: REQUEST_SUMMARY_LIMIT,
+        offset: 0,
+        status: None,
+    };
+    for (key, value) in request_query_pairs(path) {
+        match key {
+            "limit" => {
+                let parsed = value.parse::<usize>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": "limit must be a positive integer",
+                        }),
+                    )
+                })?;
+                if parsed == 0 || parsed > REQUEST_LIST_MAX_LIMIT {
+                    return Err(json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
+                        }),
+                    ));
+                }
+                query.limit = parsed;
+            }
+            "offset" => {
+                query.offset = value.parse::<usize>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": "offset must be a non-negative integer",
+                        }),
+                    )
+                })?;
+            }
+            "status" => {
+                query.status = Some(value.parse::<JobStatus>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": format!("unsupported status filter: {value}"),
+                        }),
+                    )
+                })?);
+            }
+            _ => {}
+        }
+    }
+    Ok(query)
+}
+
+fn normalized_request_path(path: &str) -> &str {
+    path.split_once('?').map(|(base, _)| base).unwrap_or(path)
+}
+
+fn request_query_pairs(path: &str) -> impl Iterator<Item = (&str, &str)> {
+    path.split_once('?')
+        .map(|(_, query)| query)
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .filter_map(|pair| {
+            if pair.is_empty() {
+                None
+            } else if let Some((key, value)) = pair.split_once('=') {
+                Some((key, value))
+            } else {
+                Some((pair, ""))
+            }
+        })
+}
+
 fn file_id_from_path(path: &str) -> Option<&str> {
-    path.strip_prefix(&format!("{V1_FILES_PATH}/"))
+    normalized_request_path(path)
+        .strip_prefix(&format!("{V1_FILES_PATH}/"))
         .filter(|value| !value.contains('/'))
 }
 
 fn artifact_id_from_path(path: &str) -> Option<(&str, bool)> {
-    let suffix = path.strip_prefix(&format!("{V1_ARTIFACTS_PATH}/"))?;
+    let suffix = normalized_request_path(path).strip_prefix(&format!("{V1_ARTIFACTS_PATH}/"))?;
     if let Some(artifact_id) = suffix.strip_suffix("/content") {
         if artifact_id.contains('/') || artifact_id.is_empty() {
             return None;
@@ -1330,12 +1491,12 @@ fn handle_cancel_request(
 }
 
 fn cancel_request_id_from_path(path: &str) -> Option<&str> {
-    let suffix = path.strip_prefix(V1_REQUESTS_PREFIX)?;
+    let suffix = normalized_request_path(path).strip_prefix(V1_REQUESTS_PREFIX)?;
     suffix.strip_suffix("/cancel")
 }
 
 fn request_id_from_path(path: &str) -> Option<&str> {
-    let suffix = path.strip_prefix(V1_REQUESTS_PREFIX)?;
+    let suffix = normalized_request_path(path).strip_prefix(V1_REQUESTS_PREFIX)?;
     if suffix.is_empty() || suffix.contains('/') {
         None
     } else {

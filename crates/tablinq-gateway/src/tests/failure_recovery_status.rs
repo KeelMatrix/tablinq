@@ -88,6 +88,84 @@ fn request_summary_endpoint_persists_latency_and_unknown_usage_for_success() {
 }
 
 #[test]
+fn requests_endpoint_lists_paginated_request_summaries_with_status_filter() {
+    let _guard = integration_lock();
+    require_browser_integration_prereqs!();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url);
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    for (request_id, prompt) in [
+        ("req-list-1", "first listed request"),
+        ("req-list-2", "second listed request"),
+    ] {
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", request_id),
+            ],
+            &serde_json::to_vec(&json!({
+                "model": "tablinq-instant",
+                "messages": [{ "role": "user", "content": prompt }]
+            }))
+            .unwrap(),
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 200);
+    }
+
+    let page = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "GET",
+        "/v1/requests?status=completed&limit=1&offset=0",
+        &[("authorization", auth.as_str())],
+        &[],
+        10_000,
+    )
+    .unwrap();
+    assert_eq!(page.status_code, 200);
+    let page_body: Value = serde_json::from_slice(&page.body).unwrap();
+    assert_eq!(page_body["object"], "tablinq.request_list");
+    assert_eq!(page_body["filter"]["status"], "completed");
+    assert_eq!(page_body["pagination"]["limit"], 1);
+    assert_eq!(page_body["pagination"]["offset"], 0);
+    assert_eq!(page_body["pagination"]["next_offset"], 1);
+    assert_eq!(page_body["data"][0]["id"], "req-list-2");
+    assert_eq!(page_body["data"][0]["status"], "completed");
+    assert_eq!(page_body["data"][0]["model"], "tablinq-instant");
+    assert_eq!(page_body["data"][0]["metadata"]["execution_kind"], "ask");
+
+    let next_page = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "GET",
+        "/v1/requests?status=completed&limit=1&offset=1",
+        &[("authorization", auth.as_str())],
+        &[],
+        10_000,
+    )
+    .unwrap();
+    assert_eq!(next_page.status_code, 200);
+    let next_body: Value = serde_json::from_slice(&next_page.body).unwrap();
+    assert_eq!(next_body["data"][0]["id"], "req-list-1");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
 fn request_summary_records_recovered_status_when_the_gateway_client_disconnects() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();

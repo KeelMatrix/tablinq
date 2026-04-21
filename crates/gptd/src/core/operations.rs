@@ -12,7 +12,7 @@ use shared_protocol::{
     BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot, ConfigSnapshot, ConversationList,
     ConversationSelectCommand, ConversationSelection, ConversationSummary, DoctorReport,
     FailureBundle, GatewayRequestContext, JobDetail, JobList, JobStatus, PullArtifactCommand,
-    RequestHistory, RequestSummary, SessionList,
+    RequestHistory, RequestListPage, RequestSummary, SessionList,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -182,6 +182,15 @@ impl CoreService {
 
     pub fn list_request_summaries(&self, limit: usize) -> Result<RequestHistory> {
         self.open_db()?.list_request_summaries(limit)
+    }
+
+    pub fn list_request_page(
+        &self,
+        status: Option<JobStatus>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<RequestListPage> {
+        self.open_db()?.list_request_page(status, limit, offset)
     }
 
     pub fn cancel_job(&self, command: CancelJobCommand) -> Result<AckEvent> {

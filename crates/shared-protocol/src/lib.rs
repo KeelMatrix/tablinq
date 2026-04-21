@@ -2,8 +2,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use thiserror::Error;
 
 pub const PROTOCOL_VERSION: &str = "tablinq.v1";
@@ -76,6 +78,49 @@ pub enum JobStatus {
     Cancelled,
     Failed,
     ArtifactReady,
+}
+
+impl JobStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            JobStatus::Queued => "queued",
+            JobStatus::Starting => "starting",
+            JobStatus::Running => "running",
+            JobStatus::Interrupted => "interrupted",
+            JobStatus::Recovered => "recovered",
+            JobStatus::WaitingForSources => "waiting_for_sources",
+            JobStatus::Completed => "completed",
+            JobStatus::Cancelled => "cancelled",
+            JobStatus::Failed => "failed",
+            JobStatus::ArtifactReady => "artifact_ready",
+        }
+    }
+}
+
+impl fmt::Display for JobStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for JobStatus {
+    type Err = ();
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "queued" => Ok(JobStatus::Queued),
+            "starting" => Ok(JobStatus::Starting),
+            "running" => Ok(JobStatus::Running),
+            "interrupted" => Ok(JobStatus::Interrupted),
+            "recovered" => Ok(JobStatus::Recovered),
+            "waiting_for_sources" => Ok(JobStatus::WaitingForSources),
+            "completed" => Ok(JobStatus::Completed),
+            "cancelled" => Ok(JobStatus::Cancelled),
+            "failed" => Ok(JobStatus::Failed),
+            "artifact_ready" => Ok(JobStatus::ArtifactReady),
+            _ => Err(()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -924,6 +969,54 @@ pub struct RequestSummary {
 #[serde(deny_unknown_fields)]
 pub struct RequestHistory {
     pub requests: Vec<RequestSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RequestListMetadata {
+    pub job_id: String,
+    pub request_role: Option<String>,
+    pub parent_request_id: Option<String>,
+    pub execution_kind: RequestExecutionKind,
+    pub cancelled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RequestListEntry {
+    pub id: String,
+    pub status: JobStatus,
+    pub created_at: DateTime<Utc>,
+    pub model: Option<String>,
+    pub metadata: RequestListMetadata,
+}
+
+impl From<RequestSummary> for RequestListEntry {
+    fn from(summary: RequestSummary) -> Self {
+        Self {
+            id: summary.request_id,
+            status: summary.status,
+            created_at: summary.start_time,
+            model: summary.model_id,
+            metadata: RequestListMetadata {
+                job_id: summary.job_id,
+                request_role: summary.request_role,
+                parent_request_id: summary.parent_request_id,
+                execution_kind: summary.execution_kind,
+                cancelled: summary.cancelled,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RequestListPage {
+    pub requests: Vec<RequestListEntry>,
+    pub limit: usize,
+    pub offset: usize,
+    pub next_offset: Option<usize>,
+    pub status: Option<JobStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

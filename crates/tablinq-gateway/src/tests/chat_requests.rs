@@ -377,6 +377,7 @@ fn conversations_endpoint_lists_persisted_conversations() {
     assert_eq!(conversations_json["object"], "tablinq.conversation_list");
     let items = conversations_json["data"].as_array().unwrap();
     assert_eq!(items[0]["conversation_id"], second_conversation_id);
+    assert_eq!(items[0]["tablinq_conversation_id"], second_conversation_id);
     assert!(
         items
             .iter()
@@ -465,6 +466,10 @@ fn conversation_select_endpoint_switches_existing_and_fresh_conversations() {
     assert_eq!(switched_json["object"], "tablinq.conversation_selection");
     assert_eq!(
         switched_json["data"]["conversation_id"].as_str(),
+        Some(first_conversation_id.as_str())
+    );
+    assert_eq!(
+        switched_json["data"]["tablinq_conversation_id"].as_str(),
         Some(first_conversation_id.as_str())
     );
 
@@ -565,6 +570,49 @@ fn conversation_select_endpoint_rejects_unknown_conversation_ids() {
     assert_eq!(response.status_code, 404);
     let body: Value = serde_json::from_slice(&response.body).unwrap();
     assert_eq!(body["error"], "conversation_not_found");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn conversation_select_endpoint_rejects_conflicting_targets_before_lookup() {
+    let _guard = integration_lock();
+    require_browser_integration_prereqs!();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url);
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CONVERSATIONS_SELECT_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        &serde_json::to_vec(&json!({
+            "conversation_id": "conv-missing",
+            "new_conversation": true
+        }))
+        .unwrap(),
+        20_000,
+    )
+    .unwrap();
+    assert_eq!(response.status_code, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["error"], "invalid_request");
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("cannot be combined"))
+    );
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

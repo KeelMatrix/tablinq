@@ -46,7 +46,10 @@ Recommended posture:
 - `GET /v1/provider`
 - `GET /v1/sessions`
 - `GET /v1/usage`
+- `GET /v1/requests`
 - `GET /v1/requests/{request_id}`
+- `GET /v1/conversations`
+- `POST /v1/conversations/select`
 - `POST /v1/chat/completions`
 - `POST /v1/files`
 - `GET /v1/files`
@@ -100,15 +103,18 @@ Also:
 
 - keep streaming enabled when the client wants fast cancellation
 - on `429`, wait for `retry_after_ms` before retrying
+- use `GET /v1/requests?status=<status>&limit=<n>&offset=<n>` for paginated request polling
 - inspect `GET /v1/requests/{request_id}` or `GET /v1/usage` to separate queue delay from upstream execution time
 - treat token usage as unknown or provider-specific unless the integration explicitly expects estimates
 
 ## Conversations and session reuse
 
-- set `tablinq_new_conversation = true` for isolated tasks, retries, and batch jobs that should not inherit prior context
-- pass `tablinq_conversation_id` only when follow-up context matters
-- store `tablinq_conversation_id`, `tablinq_session_id`, and `request_id` from responses client-side
-- use `GET /v1/sessions` to inspect recent reusable conversations
+- create: send `POST /v1/chat/completions` with `tablinq_new_conversation = true` when the next task must not inherit browser context
+- persist: store `tablinq_conversation_id`, `tablinq_session_id`, and `request_id` from chat responses client-side
+- inspect: use `GET /v1/conversations` to list reusable conversation IDs; each item also echoes `tablinq_conversation_id` for direct chat reuse
+- select: call `POST /v1/conversations/select` with either `{ "conversation_id": "..." }` to switch to an existing thread or `{ "new_conversation": true }` to clear the active selection
+- reuse: pass the stored `tablinq_conversation_id` back to `POST /v1/chat/completions` only when follow-up context matters
+- fall back: use `GET /v1/sessions` when you need the broader recent-session view rather than the direct conversation list
 
 ## Files and artifacts
 
