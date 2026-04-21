@@ -4,7 +4,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use shared_protocol::{
     ArtifactList, ArtifactMetadata, ArtifactSummary, ConversationList, ConversationSummary,
     FailureBundle, JobDetail, JobKind, JobList, JobStatus, JobSummary, RequestExecutionKind,
-    RequestHistory, RequestSummary, RequestUsage, SessionList, SessionSummary,
+    RequestHistory, RequestListEntry, RequestListPage, RequestSummary, RequestUsage, SessionList,
+    SessionSummary,
 };
 use std::fs;
 use std::path::Path;
@@ -399,6 +400,69 @@ impl Database {
         let rows = statement.query_map([limit as i64], map_request_summary_row)?;
         Ok(RequestHistory {
             requests: rows.collect::<std::result::Result<Vec<_>, _>>()?,
+        })
+    }
+
+    pub fn list_request_page(
+        &self,
+        status: Option<JobStatus>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<RequestListPage> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT request_id,
+                   job_id,
+                   model_id,
+                   request_role,
+                   parent_request_id,
+                   execution_kind,
+                   status,
+                   cancelled,
+                   start_time,
+                   end_time,
+                   duration_ms,
+                   queue_wait_ms,
+                   interrupted_at,
+                   interruption_reason,
+                   recovered_at,
+                   recovery_reason,
+                   failed_at,
+                   failure_reason,
+                   usage_status,
+                   prompt_tokens,
+                   completion_tokens,
+                   total_tokens,
+                   warnings_json
+            FROM request_history
+            WHERE (?1 IS NULL OR status = ?1)
+            ORDER BY start_time DESC
+            LIMIT ?2 OFFSET ?3
+            "#,
+        )?;
+        let query_limit = limit.saturating_add(1) as i64;
+        let status_value = status.as_ref().map(JobStatus::as_str);
+        let rows = statement.query_map(
+            params![status_value, query_limit, offset as i64],
+            map_request_summary_row,
+        )?;
+        let mut requests = rows
+            .collect::<std::result::Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(RequestListEntry::from)
+            .collect::<Vec<_>>();
+        let next_offset = if requests.len() > limit {
+            requests.truncate(limit);
+            Some(offset + limit)
+        } else {
+            None
+        };
+        Ok(RequestListPage {
+            requests,
+            limit,
+            offset,
+            next_offset,
+            status,
         })
     }
 
@@ -1139,18 +1203,7 @@ fn map_request_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestS
 }
 
 fn parse_job_status(value: &str) -> JobStatus {
-    match value {
-        "queued" => JobStatus::Queued,
-        "starting" => JobStatus::Starting,
-        "running" => JobStatus::Running,
-        "interrupted" => JobStatus::Interrupted,
-        "recovered" => JobStatus::Recovered,
-        "waiting_for_sources" => JobStatus::WaitingForSources,
-        "completed" => JobStatus::Completed,
-        "cancelled" => JobStatus::Cancelled,
-        "artifact_ready" => JobStatus::ArtifactReady,
-        _ => JobStatus::Failed,
-    }
+    value.parse().unwrap_or(JobStatus::Failed)
 }
 
 fn parse_job_kind(value: &str) -> JobKind {
