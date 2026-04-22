@@ -143,34 +143,38 @@ pub(super) fn provider_recovery_attempt_request_id(job_id: &str, attempt: u32) -
     format!("{job_id}:provider-attempt-{attempt}")
 }
 
+pub(super) struct ProviderGenerationRecoveryPacketInput<'a> {
+    pub original_input: &'a str,
+    pub mode: Mode,
+    pub model_class: Option<ModelClass>,
+    pub effort: Option<Effort>,
+    pub files: &'a [String],
+    pub context_summary: Option<String>,
+    pub context_manifest: Option<ConversationRecoveryManifest>,
+    pub recovery_manifest_path: Option<String>,
+    pub replay_files: Vec<String>,
+    pub prior_request_id: Option<String>,
+    pub prior_conversation_id: Option<String>,
+    pub recovery_attempt_count: u32,
+}
+
 pub(super) fn build_provider_generation_recovery_packet(
-    original_input: &str,
-    mode: Mode,
-    model_class: Option<ModelClass>,
-    effort: Option<Effort>,
-    files: &[String],
-    context_summary: Option<String>,
-    context_manifest: Option<ConversationRecoveryManifest>,
-    recovery_manifest_path: Option<String>,
-    replay_files: Vec<String>,
-    prior_request_id: Option<String>,
-    prior_conversation_id: Option<String>,
-    recovery_attempt_count: u32,
+    input: ProviderGenerationRecoveryPacketInput<'_>,
 ) -> RecoveryPacket {
     RecoveryPacket {
-        original_input: original_input.to_owned(),
-        mode,
-        model_class,
-        effort,
-        files: files.to_vec(),
-        context_summary,
-        context_manifest,
-        recovery_manifest_path,
-        replay_files,
-        prior_request_id,
-        prior_conversation_id,
+        original_input: input.original_input.to_owned(),
+        mode: input.mode,
+        model_class: input.model_class,
+        effort: input.effort,
+        files: input.files.to_vec(),
+        context_summary: input.context_summary,
+        context_manifest: input.context_manifest,
+        recovery_manifest_path: input.recovery_manifest_path,
+        replay_files: input.replay_files,
+        prior_request_id: input.prior_request_id,
+        prior_conversation_id: input.prior_conversation_id,
         failure_code: ErrorCode::ProviderGenerationFailedNonretryable,
-        recovery_attempt_count,
+        recovery_attempt_count: input.recovery_attempt_count,
     }
 }
 
@@ -583,9 +587,8 @@ fn summarize_recovery_manifest_turn(turn: &RecoveryManifestTurn) -> String {
 }
 
 fn recovery_file_name(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .and_then(|value| value.to_str())
+    path.rsplit(['/', '\\'])
+        .find(|segment| !segment.trim().is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| path.to_owned())
 }

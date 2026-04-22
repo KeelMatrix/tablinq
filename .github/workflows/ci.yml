@@ -64,7 +64,7 @@ jobs:
           cache: pnpm
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Check formatting
         run: pnpm format
@@ -76,4 +76,4 @@ jobs:
         run: pnpm build
 
       - name: Run TypeScript tests
-        run: pnpm test
+        run: pnpm exec vitest run --reporter=dot

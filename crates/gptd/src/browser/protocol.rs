@@ -90,7 +90,7 @@ pub(super) enum AdapterFrame {
     AskResult {
         ok: bool,
         state: BrowserStatusSnapshot,
-        result: Option<AskResult>,
+        result: Box<Option<AskResult>>,
         error: Option<String>,
     },
     ResearchUpdate {
@@ -99,13 +99,13 @@ pub(super) enum AdapterFrame {
     ResearchResult {
         ok: bool,
         state: BrowserStatusSnapshot,
-        result: Option<ResearchResult>,
+        result: Box<Option<ResearchResult>>,
         error: Option<String>,
     },
     Diagnostics {
         ok: bool,
         state: BrowserStatusSnapshot,
-        diagnostics: Option<BrowserDiagnosticsSnapshot>,
+        diagnostics: Box<Option<BrowserDiagnosticsSnapshot>>,
         error: Option<String>,
     },
 }

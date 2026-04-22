@@ -1224,6 +1224,34 @@ fn is_non_empty(value: &str) -> bool {
     !value.trim().is_empty()
 }
 
+fn capture_diagnostics_snapshot(
+    browser: &std::sync::Arc<std::sync::Mutex<crate::browser::BrowserManager>>,
+    output_dir: &Path,
+) -> BrowserDiagnosticsSnapshot {
+    lock_browser(browser)
+        .and_then(|mut manager| manager.diagnostics(Some(output_dir)))
+        .unwrap_or_else(|_| placeholder_diagnostics_snapshot(output_dir))
+}
+
+fn placeholder_diagnostics_snapshot(output_dir: &Path) -> BrowserDiagnosticsSnapshot {
+    let placeholder_screenshot = output_dir.join("failure.png");
+    let _ = fs::write(&placeholder_screenshot, []);
+    BrowserDiagnosticsSnapshot {
+        current_url: None,
+        capability_matrix: Default::default(),
+        strategy_attempts: vec![],
+        dom_snapshot: String::new(),
+        aria_snapshot: String::new(),
+        screenshot_path: Some(placeholder_screenshot.display().to_string()),
+        selector_pack: default_selector_pack_summary(),
+        strategy_telemetry: vec![],
+        browser_detected: cfg!(windows),
+        detected_browser_path: None,
+        profile_accessible: true,
+        profile_access_error: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1652,33 +1680,5 @@ mod tests {
         assert_eq!(sessions.conversations.len(), 2);
         assert_eq!(sessions.conversations[0].conversation_id, "conv-summary");
         assert_eq!(sessions.conversations[1].conversation_id, "conv-inspect");
-    }
-}
-
-fn capture_diagnostics_snapshot(
-    browser: &std::sync::Arc<std::sync::Mutex<crate::browser::BrowserManager>>,
-    output_dir: &Path,
-) -> BrowserDiagnosticsSnapshot {
-    lock_browser(browser)
-        .and_then(|mut manager| manager.diagnostics(Some(output_dir)))
-        .unwrap_or_else(|_| placeholder_diagnostics_snapshot(output_dir))
-}
-
-fn placeholder_diagnostics_snapshot(output_dir: &Path) -> BrowserDiagnosticsSnapshot {
-    let placeholder_screenshot = output_dir.join("failure.png");
-    let _ = fs::write(&placeholder_screenshot, []);
-    BrowserDiagnosticsSnapshot {
-        current_url: None,
-        capability_matrix: Default::default(),
-        strategy_attempts: vec![],
-        dom_snapshot: String::new(),
-        aria_snapshot: String::new(),
-        screenshot_path: Some(placeholder_screenshot.display().to_string()),
-        selector_pack: default_selector_pack_summary(),
-        strategy_telemetry: vec![],
-        browser_detected: cfg!(windows),
-        detected_browser_path: None,
-        profile_accessible: true,
-        profile_access_error: None,
     }
 }

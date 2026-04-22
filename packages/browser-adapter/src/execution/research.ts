@@ -48,11 +48,11 @@ export async function runResearch(
   selection: ResearchSelection = {},
 ): Promise<ResearchResultSnapshot> {
   const executionTimeoutMs = command.timeoutMs ?? RESEARCH_TIMEOUT_MS;
-  const timeoutAt = Date.now() + executionTimeoutMs;
   const stallTimeoutMs = computeStallTimeoutMs(
     command.timeoutMs,
     RESEARCH_TIMEOUT_MS,
   );
+  let timeoutAt = Date.now() + executionTimeoutMs;
   let page = await host.openExecutionPage(
     host.resolveConversationTarget(command.conversationId),
   );
@@ -99,6 +99,7 @@ export async function runResearch(
       page,
       DEEP_RESEARCH_HANDOFF_TIMEOUT_MS,
     );
+    timeoutAt = Date.now() + executionTimeoutMs;
   }
 
   const state: ResearchRuntimeState = {

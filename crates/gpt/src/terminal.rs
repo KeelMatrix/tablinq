@@ -108,25 +108,26 @@ pub(crate) fn execute_ask_with_terminal_presentation(
             Ok(CliStreamMessage::Event(event)) => match *event {
                 EventPayload::StreamChunk(chunk) => {
                     current_job_id = Some(chunk.job_id.clone());
-                    if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
-                        if stream_responses {
-                            buffer_response_chunk(
-                                &mut stdout,
-                                &chunk.text,
-                                green_responses,
-                                &mut response_stream,
-                            )?;
-                        }
+                    if chunk.kind == StreamChunkKind::Delta
+                        && !chunk.text.is_empty()
+                        && stream_responses
+                    {
+                        buffer_response_chunk(
+                            &mut stdout,
+                            &chunk.text,
+                            green_responses,
+                            &mut response_stream,
+                        )?;
                     }
                 }
                 EventPayload::JobState(state) => {
                     current_job_id = Some(state.job_id.clone());
-                    if let Some(next) = ask_progress_status_line(&state) {
-                        if last_status.as_ref() != Some(&next) {
-                            writeln!(stderr, "{}", next.message)?;
-                            stderr.flush()?;
-                            last_status = Some(next);
-                        }
+                    if let Some(next) = ask_progress_status_line(&state)
+                        && last_status.as_ref() != Some(&next)
+                    {
+                        writeln!(stderr, "{}", next.message)?;
+                        stderr.flush()?;
+                        last_status = Some(next);
                     }
                 }
                 _ => {}
@@ -490,14 +491,14 @@ fn reconcile_streamed_response_with_rewrite_safety(
     }
 
     let effective_streamed_text = format!("{printed_text}{pending_text}");
-    if let Some(suffix) = final_text.strip_prefix(printed_text) {
-        if effective_streamed_text == final_text || final_text.starts_with(&effective_streamed_text)
-        {
-            if !suffix.is_empty() {
-                write_response_chunk(stdout, suffix, green_responses, response_color_active)?;
-            }
-            return finish_terminal_stream(stdout, true, response_color_active);
+    if let Some(suffix) = final_text.strip_prefix(printed_text)
+        && (effective_streamed_text == final_text
+            || final_text.starts_with(&effective_streamed_text))
+    {
+        if !suffix.is_empty() {
+            write_response_chunk(stdout, suffix, green_responses, response_color_active)?;
         }
+        return finish_terminal_stream(stdout, true, response_color_active);
     }
 
     if printed_text == final_text {

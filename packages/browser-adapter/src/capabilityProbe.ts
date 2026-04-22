@@ -220,6 +220,9 @@ export function logRecoveryDecision(
   kind: "ask" | "research",
   details: Record<string, unknown>,
 ): void {
+  if (!recoveryLoggingEnabled()) {
+    return;
+  }
   try {
     process.stderr.write(
       `[tablinq-recovery] ${kind} ${JSON.stringify(details)}\n`,
@@ -227,6 +230,11 @@ export function logRecoveryDecision(
   } catch {
     // Recovery logging is opportunistic and must not affect browser control.
   }
+}
+
+function recoveryLoggingEnabled(): boolean {
+  const flag = process.env.TABLINQ_RECOVERY_DEBUG?.trim().toLowerCase();
+  return flag === "1" || flag === "true" || flag === "yes";
 }
 
 export function hasUsableCapabilityReport(

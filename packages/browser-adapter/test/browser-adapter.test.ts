@@ -413,26 +413,36 @@ describe("browser adapter", () => {
   });
 
   it("bounds the Deep Research start delay jitter to the real user range", () => {
-    expect(deepResearchStartDelayMs(0)).toBe(4_000);
-    expect(deepResearchStartDelayMs(0.5)).toBe(7_000);
-    expect(deepResearchStartDelayMs(1)).toBe(10_000);
+    expect(deepResearchStartDelayMs(0, true)).toBe(4_000);
+    expect(deepResearchStartDelayMs(0.5, true)).toBe(7_000);
+    expect(deepResearchStartDelayMs(1, true)).toBe(10_000);
+  });
+
+  it("disables the Deep Research start delay under vitest by default", () => {
+    expect(process.env.VITEST).toBe("true");
+    expect(deepResearchStartDelayMs()).toBe(0);
   });
 
   it("bounds short interaction jitters to human-scale ranges", () => {
-    expect(interactionJitterMs("chip_clear", 0)).toBe(30);
-    expect(interactionJitterMs("chip_clear", 1)).toBe(80);
-    expect(interactionJitterMs("keyboard_submit", 0)).toBe(35);
-    expect(interactionJitterMs("keyboard_submit", 1)).toBe(80);
-    expect(interactionJitterMs("picker_trigger", 0)).toBe(45);
-    expect(interactionJitterMs("picker_trigger", 1)).toBe(120);
-    expect(interactionJitterMs("choice_select", 0)).toBe(55);
-    expect(interactionJitterMs("choice_select", 1)).toBe(145);
-    expect(interactionJitterMs("mode_toggle", 0)).toBe(60);
-    expect(interactionJitterMs("mode_toggle", 1)).toBe(150);
-    expect(interactionJitterMs("upload_entry", 0)).toBe(70);
-    expect(interactionJitterMs("upload_entry", 1)).toBe(160);
-    expect(interactionJitterMs("button_click", 0)).toBe(70);
-    expect(interactionJitterMs("button_click", 1)).toBe(170);
+    expect(interactionJitterMs("chip_clear", 0, true)).toBe(30);
+    expect(interactionJitterMs("chip_clear", 1, true)).toBe(80);
+    expect(interactionJitterMs("keyboard_submit", 0, true)).toBe(35);
+    expect(interactionJitterMs("keyboard_submit", 1, true)).toBe(80);
+    expect(interactionJitterMs("picker_trigger", 0, true)).toBe(45);
+    expect(interactionJitterMs("picker_trigger", 1, true)).toBe(120);
+    expect(interactionJitterMs("choice_select", 0, true)).toBe(55);
+    expect(interactionJitterMs("choice_select", 1, true)).toBe(145);
+    expect(interactionJitterMs("mode_toggle", 0, true)).toBe(60);
+    expect(interactionJitterMs("mode_toggle", 1, true)).toBe(150);
+    expect(interactionJitterMs("upload_entry", 0, true)).toBe(70);
+    expect(interactionJitterMs("upload_entry", 1, true)).toBe(160);
+    expect(interactionJitterMs("button_click", 0, true)).toBe(70);
+    expect(interactionJitterMs("button_click", 1, true)).toBe(170);
+  });
+
+  it("disables short interaction jitters under vitest by default", () => {
+    expect(process.env.VITEST).toBe("true");
+    expect(interactionJitterMs("button_click", 1)).toBe(0);
   });
 
   it("scales upload acknowledgment timeout nonlinearly by file size and additional files", () => {

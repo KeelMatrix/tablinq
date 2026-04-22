@@ -286,10 +286,16 @@ export async function reloadResearchPageIfStale(
   const exactConversation =
     !!expectedConversationId &&
     snapshotConversationId === expectedConversationId;
+  const awaitingInitialOutput =
+    !!snapshot &&
+    !snapshot.reportText &&
+    (snapshot.status === "waiting_for_sources" ||
+      snapshot.status === "running");
   const stale =
     !snapshot ||
     ((snapshot.status === "idle" || snapshot.status === "failed") &&
-      !snapshot.reportText);
+      !snapshot.reportText) ||
+    awaitingInitialOutput;
   if (!stale || Date.now() >= timeoutAt) {
     return page;
   }
