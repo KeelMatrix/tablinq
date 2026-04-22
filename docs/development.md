@@ -71,6 +71,13 @@ Formatting:
 - `cargo run -p gpt -- browser reset-profile`
 - `cargo run -p gpt -- browser profile-info`
 
+## Local cleanup
+
+- `cargo clean`
+  Removes the Rust `target/` directory, including debug and release binaries, incremental compiler caches, PDBs, and package-smoke build outputs.
+- Use it when the repo checkout grows large from repeated `cargo run`, `cargo test`, or packaging work.
+- The next Rust build will take longer because Cargo must rebuild artifacts from scratch.
+
 ## Local browser workflow for real-site checks
 
 Use this only when the fake harness is not enough:
