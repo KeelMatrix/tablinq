@@ -38,6 +38,7 @@ type AdapterRequest =
       conversation_id?: string | null;
       new_conversation?: boolean;
       timeout_ms?: number;
+      submit_jitter_ms?: number;
       mode?: "normal" | "search" | "research";
       model_class?: "instant" | "thinking" | null;
       effort?: "none" | "standard" | "extended" | null;
@@ -52,6 +53,7 @@ type AdapterRequest =
       conversation_id?: string | null;
       new_conversation?: boolean;
       timeout_ms?: number;
+      submit_jitter_ms?: number;
       mode?: "normal" | "search" | "research";
       model_class?: "instant" | "thinking" | null;
       effort?: "none" | "standard" | "extended" | null;
@@ -67,6 +69,7 @@ type AdapterRequest =
       files?: string[];
       output_dir?: string | null;
       timeout_ms?: number;
+      submit_jitter_ms?: number;
       emitted_text?: string | null;
       next_seq?: number | null;
     }
@@ -78,6 +81,7 @@ type AdapterRequest =
       files?: string[];
       output_dir?: string | null;
       timeout_ms?: number;
+      submit_jitter_ms?: number;
       emitted_text?: string | null;
       next_seq?: number | null;
     }
@@ -153,6 +157,7 @@ async function main() {
           conversationId: request.conversation_id,
           newConversation: request.new_conversation,
           timeoutMs: request.timeout_ms,
+          submitJitterMs: request.submit_jitter_ms,
           mode: request.mode,
           modelClass: request.model_class,
           effort: request.effort,
@@ -214,6 +219,7 @@ async function main() {
                   files: request.files ?? [],
                   outputDir: request.output_dir,
                   timeoutMs: request.timeout_ms,
+                  submitJitterMs: request.submit_jitter_ms,
                 } satisfies ResearchExecutionCommand,
                 {
                   emittedText: request.emitted_text ?? "",
@@ -240,6 +246,7 @@ async function main() {
                   files: request.files ?? [],
                   outputDir: request.output_dir,
                   timeoutMs: request.timeout_ms,
+                  submitJitterMs: request.submit_jitter_ms,
                 } satisfies ResearchExecutionCommand,
                 (update) => {
                   writeFrame({

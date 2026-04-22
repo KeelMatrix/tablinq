@@ -20,7 +20,7 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const ADAPTER_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -29,6 +29,8 @@ pub(super) struct AdapterProcess {
     stdin: ChildStdin,
     frames: Receiver<Result<AdapterFrame>>,
     reader_thread: Option<JoinHandle<()>>,
+    submit_jitter_min_ms: u64,
+    submit_jitter_max_ms: u64,
 }
 
 impl AdapterProcess {
@@ -84,6 +86,8 @@ impl AdapterProcess {
             stdin,
             frames: rx,
             reader_thread,
+            submit_jitter_min_ms: config.browser_submit_jitter_min_ms(),
+            submit_jitter_max_ms: config.browser_submit_jitter_max_ms(),
         })
     }
 
@@ -168,6 +172,7 @@ impl AdapterProcess {
                 conversation_id: command.conversation_id.clone(),
                 new_conversation: command.new_conversation,
                 timeout_ms: Some(timeout_ms),
+                submit_jitter_ms: Some(self.next_submit_jitter_ms()),
                 mode: Some(command.mode),
                 model_class: command.model_class,
                 effort: command.effort,
@@ -204,6 +209,7 @@ impl AdapterProcess {
                 conversation_id: command.conversation_id.clone(),
                 new_conversation: command.new_conversation,
                 timeout_ms: Some(timeout_ms),
+                submit_jitter_ms: Some(self.next_submit_jitter_ms()),
                 mode: Some(command.mode),
                 model_class: command.model_class,
                 effort: command.effort,
@@ -309,6 +315,7 @@ impl AdapterProcess {
                 files: command.files.clone(),
                 output_dir: command.output_dir.clone(),
                 timeout_ms: Some(timeout_ms),
+                submit_jitter_ms: Some(self.next_submit_jitter_ms()),
                 emitted_text: None,
                 next_seq: None,
             },
@@ -343,6 +350,7 @@ impl AdapterProcess {
                 files: command.files.clone(),
                 output_dir: command.output_dir.clone(),
                 timeout_ms: Some(timeout_ms),
+                submit_jitter_ms: Some(self.next_submit_jitter_ms()),
                 emitted_text: Some(emitted_text.to_owned()),
                 next_seq: Some(next_seq),
             },
@@ -481,6 +489,22 @@ impl AdapterProcess {
             let _ = reader_thread.join();
         }
     }
+
+    fn next_submit_jitter_ms(&self) -> u64 {
+        bounded_submit_jitter_ms(self.submit_jitter_min_ms, self.submit_jitter_max_ms)
+    }
+}
+
+fn bounded_submit_jitter_ms(min_ms: u64, max_ms: u64) -> u64 {
+    if max_ms <= min_ms {
+        return min_ms;
+    }
+
+    let span = max_ms - min_ms;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    min_ms + (u64::from(now.subsec_nanos()) % (span + 1))
 }
 
 fn adapter_frame_error(

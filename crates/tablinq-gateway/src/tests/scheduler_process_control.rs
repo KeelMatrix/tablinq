@@ -68,6 +68,85 @@ fn paperclip_like_queue_pressure_returns_retry_metadata() {
 }
 
 #[test]
+fn queued_chat_completions_wait_for_submit_jitter_before_each_provider_submit() {
+    let _guard = integration_lock();
+    require_browser_integration_prereqs!();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url.clone());
+    config.file.browser_submit_jitter_min_ms = Some(1_000);
+    config.file.browser_submit_jitter_max_ms = Some(1_000);
+    if let Some(gateway) = config.file.gateway.as_mut() {
+        gateway.max_concurrent_upstream_jobs = Some(1);
+        gateway.queue_length = Some(4);
+        gateway.queue_timeout_ms = Some(15_000);
+        gateway.ask_timeout_ms = Some(15_000);
+    }
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let first_body = serde_json::to_vec(&json!({
+        "model": "tablinq-instant",
+        "messages": [{ "role": "user", "content": "first queued ask" }]
+    }))
+    .unwrap();
+    let second_body = serde_json::to_vec(&json!({
+        "model": "tablinq-instant",
+        "messages": [{ "role": "user", "content": "second queued ask" }]
+    }))
+    .unwrap();
+    let host = snapshot.host.clone();
+    let port = snapshot.port;
+    let auth_for_first = auth.clone();
+    let first = thread::spawn(move || {
+        http_request(
+            &host,
+            port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth_for_first.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "req-submit-gap-1"),
+            ],
+            &first_body,
+            20_000,
+        )
+        .unwrap()
+    });
+
+    thread::sleep(Duration::from_millis(50));
+
+    let second_started = Instant::now();
+    let second = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+            ("x-request-id", "req-submit-gap-2"),
+        ],
+        &second_body,
+        20_000,
+    )
+    .unwrap();
+    let second_elapsed = second_started.elapsed();
+
+    let first = first.join().unwrap();
+    assert_eq!(first.status_code, 200);
+    assert_eq!(second.status_code, 200);
+    assert!(second_elapsed >= Duration::from_millis(1_000));
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
 fn chat_completions_run_queued_requests_in_fifo_order() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();

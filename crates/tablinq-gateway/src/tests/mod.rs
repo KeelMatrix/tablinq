@@ -134,6 +134,8 @@ fn test_config() -> (TempDir, AppConfig) {
     let dir = tempdir().unwrap();
     let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
     config.file.browser_connection_mode = Some(shared_protocol::BrowserConnectionMode::ManagedOnly);
+    config.file.browser_submit_jitter_min_ms = Some(0);
+    config.file.browser_submit_jitter_max_ms = Some(0);
     if let Some(gateway) = config.file.gateway.as_mut() {
         gateway.port = Some(0);
         gateway.ask_timeout_ms = Some(15_000);

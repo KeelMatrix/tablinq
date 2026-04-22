@@ -48,6 +48,7 @@ export async function runResearch(
   selection: ResearchSelection = {},
 ): Promise<ResearchResultSnapshot> {
   const executionTimeoutMs = command.timeoutMs ?? RESEARCH_TIMEOUT_MS;
+  const timeoutAt = Date.now() + executionTimeoutMs;
   const stallTimeoutMs = computeStallTimeoutMs(
     command.timeoutMs,
     RESEARCH_TIMEOUT_MS,
@@ -88,6 +89,7 @@ export async function runResearch(
     if ((command.files ?? []).length > 0) {
       await waitForSubmitReadyAfterUploads(page);
     }
+    await maybeApplySubmitJitter(command.submitJitterMs, timeoutAt);
     submissionState = await submitResearch(
       page,
       command.query,
@@ -98,8 +100,6 @@ export async function runResearch(
       DEEP_RESEARCH_HANDOFF_TIMEOUT_MS,
     );
   }
-
-  const timeoutAt = Date.now() + executionTimeoutMs;
 
   const state: ResearchRuntimeState = {
     emittedText: options.emittedText,
@@ -239,4 +239,19 @@ export async function runResearch(
   }
 
   throw new Error("research job failed: timed out waiting for completion");
+}
+
+async function maybeApplySubmitJitter(
+  submitJitterMs: number | undefined,
+  timeoutAt: number,
+): Promise<void> {
+  const jitterMs = Math.max(0, Math.trunc(submitJitterMs ?? 0));
+  if (jitterMs === 0) {
+    return;
+  }
+  const remainingMs = Math.max(0, timeoutAt - Date.now() - 1);
+  if (remainingMs === 0) {
+    return;
+  }
+  await sleep(Math.min(jitterMs, remainingMs));
 }

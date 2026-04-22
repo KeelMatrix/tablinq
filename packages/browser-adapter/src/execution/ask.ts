@@ -120,6 +120,7 @@ export async function runAsk(
         ),
       );
     }
+    await maybeApplySubmitJitter(command.submitJitterMs, timeoutAt);
     await clickSubmit(page);
   }
 
@@ -292,6 +293,21 @@ export async function runAsk(
   }
 
   throw new Error("ask timed out waiting for streamed response");
+}
+
+async function maybeApplySubmitJitter(
+  submitJitterMs: number | undefined,
+  timeoutAt: number,
+): Promise<void> {
+  const jitterMs = Math.max(0, Math.trunc(submitJitterMs ?? 0));
+  if (jitterMs === 0) {
+    return;
+  }
+  const remainingMs = Math.max(0, timeoutAt - Date.now() - 1);
+  if (remainingMs === 0) {
+    return;
+  }
+  await sleep(Math.min(jitterMs, remainingMs));
 }
 
 export async function runAskAsResearch(

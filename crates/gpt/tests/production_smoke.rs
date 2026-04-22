@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -42,6 +42,61 @@ fn powershell() -> String {
 
 fn package_root_override() -> Option<PathBuf> {
     std::env::var_os("TABLINQ_PACKAGE_ROOT").map(PathBuf::from)
+}
+
+struct CapturedCommand {
+    child: Child,
+    stdout_file: NamedTempFile,
+    stderr_file: NamedTempFile,
+}
+
+struct CapturedOutput {
+    status: ExitStatus,
+    stderr: String,
+}
+
+impl CapturedCommand {
+    fn wait(mut self, timeout: Duration) -> CapturedOutput {
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            if let Some(status) = self.child.try_wait().expect("poll captured command") {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                panic!(
+                    "captured command timed out: stdout={} stderr={}",
+                    fs::read_to_string(self.stdout_file.path()).unwrap_or_default(),
+                    fs::read_to_string(self.stderr_file.path()).unwrap_or_default()
+                );
+            }
+            thread::sleep(Duration::from_millis(50));
+        };
+
+        CapturedOutput {
+            status,
+            stderr: fs::read_to_string(self.stderr_file.path()).unwrap_or_default(),
+        }
+    }
+}
+
+fn spawn_captured(mut command: Command) -> CapturedCommand {
+    let stdout_file = NamedTempFile::new().expect("create stdout temp file");
+    let stderr_file = NamedTempFile::new().expect("create stderr temp file");
+    command.stdout(Stdio::from(
+        stdout_file.reopen().expect("reopen stdout temp file"),
+    ));
+    command.stderr(Stdio::from(
+        stderr_file.reopen().expect("reopen stderr temp file"),
+    ));
+
+    let child = command.spawn().expect("spawn captured command");
+    CapturedCommand {
+        child,
+        stdout_file,
+        stderr_file,
+    }
 }
 
 fn run_success(mut command: Command) -> String {
@@ -99,6 +154,115 @@ fn wait_for_daemon(state_root: &Path) {
     panic!("daemon did not become responsive");
 }
 
+fn browser_integration_prereqs_available() -> bool {
+    let repo_root = repo_root();
+    let adapter_entry = repo_root
+        .join("packages")
+        .join("browser-adapter")
+        .join("dist")
+        .join("src")
+        .join("service.js");
+    let playwright_core = repo_root
+        .join("node_modules")
+        .join("playwright-core")
+        .join("package.json");
+
+    let node_available = Command::new("node")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+
+    node_available && adapter_entry.exists() && playwright_core.exists()
+}
+
+fn spawn_fake_chatgpt_with_url() -> (Child, String) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("allocate tcp port");
+    let port = listener.local_addr().expect("resolve local address").port();
+    drop(listener);
+
+    let server_path = repo_root()
+        .join("packages")
+        .join("fake-chatgpt")
+        .join("server.mjs");
+    let child = Command::new("node")
+        .arg(server_path)
+        .env("PORT", port.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn fake chatgpt");
+
+    let url = format!("http://127.0.0.1:{port}");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            return (child, url);
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    panic!("fake-chatgpt did not become ready on port {port}");
+}
+
+fn seed_cli_test_config(state_root: &Path, browser_target_url: &str) {
+    let config_dir = state_root.join("config");
+    fs::create_dir_all(&config_dir).expect("create config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "version = 2\nbrowser_connection_mode = 'managed_only'\nbrowser_target_url = '{browser_target_url}'\nbrowser_submit_jitter_min_ms = 0\nbrowser_submit_jitter_max_ms = 0\n"
+        ),
+    )
+    .expect("write cli smoke config");
+}
+
+fn wait_for_job_id(state_root: &Path) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let response = gptd::send_request(
+            &shared_protocol::build_state_paths(state_root).ipc_endpoint,
+            &shared_protocol::DaemonRequest::JobsList,
+        )
+        .unwrap();
+        if let shared_protocol::DaemonResponse::Jobs(list) = response
+            && let Some(job) = list.jobs.first()
+        {
+            return job.job_id.clone();
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    panic!("job id was not created in time");
+}
+
+fn wait_for_job_status(
+    state_root: &Path,
+    job_id: &str,
+    expected: shared_protocol::JobStatus,
+) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let response = gptd::send_request(
+            &shared_protocol::build_state_paths(state_root).ipc_endpoint,
+            &shared_protocol::DaemonRequest::JobsShow(job_id.to_owned()),
+        )
+        .unwrap();
+        if let shared_protocol::DaemonResponse::Job(job) = response
+            && job.status == expected
+        {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    panic!("job {job_id} did not reach status {expected:?} in time");
+}
+
 fn wait_for_packaged_gateway(
     installed_gpt: &Path,
     installed_gptd: &Path,
@@ -148,6 +312,104 @@ fn seed_install_config(state_root: &Path, port: u16) {
         ),
     )
     .expect("write seeded config.toml");
+}
+
+#[test]
+fn concurrent_cli_asks_fail_fast_with_browser_busy() {
+    let _guard = integration_lock();
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed CLI smoke test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt_with_url();
+    let state_dir = tempdir().expect("state tempdir");
+    seed_cli_test_config(state_dir.path(), &format!("{fake_url}/?scenario=timeout"));
+
+    let config = AppConfig::load_or_create(Some(state_dir.path())).expect("load CLI smoke config");
+    let daemon_handle = thread::spawn(move || gptd::run_service(config));
+    wait_for_daemon(state_dir.path());
+
+    let gpt = PathBuf::from(env!("CARGO_BIN_EXE_gpt"));
+    run_success({
+        let mut command = Command::new(&gpt);
+        command
+            .arg("--state-root")
+            .arg(state_dir.path())
+            .arg("browser")
+            .arg("open")
+            .arg("--target-url")
+            .arg(format!("{fake_url}/?scenario=timeout"))
+            .arg("--headless");
+        command
+    });
+
+    let first = spawn_captured({
+        let mut command = Command::new(&gpt);
+        command
+            .arg("--state-root")
+            .arg(state_dir.path())
+            .arg("ask")
+            .arg("hold the only browser slot");
+        command
+    });
+
+    let job_id = wait_for_job_id(state_dir.path());
+    wait_for_job_status(
+        state_dir.path(),
+        &job_id,
+        shared_protocol::JobStatus::Running,
+    );
+
+    let second = spawn_captured({
+        let mut command = Command::new(&gpt);
+        command
+            .arg("--state-root")
+            .arg(state_dir.path())
+            .arg("ask")
+            .arg("second concurrent ask");
+        command
+    });
+    let third = spawn_captured({
+        let mut command = Command::new(&gpt);
+        command
+            .arg("--state-root")
+            .arg(state_dir.path())
+            .arg("ask")
+            .arg("third concurrent ask");
+        command
+    });
+
+    let second = second.wait(Duration::from_secs(10));
+    let third = third.wait(Duration::from_secs(10));
+    assert!(!second.status.success());
+    assert!(!third.status.success());
+    assert!(second.stderr.contains("browser busy"));
+    assert!(third.stderr.contains("browser busy"));
+
+    let cancel = gptd::send_request(
+        &shared_protocol::build_state_paths(state_dir.path()).ipc_endpoint,
+        &shared_protocol::DaemonRequest::JobsCancel(shared_protocol::CancelJobCommand { job_id }),
+    )
+    .expect("cancel running ask");
+    assert!(matches!(cancel, shared_protocol::DaemonResponse::Ack(_)));
+
+    let first = first.wait(Duration::from_secs(10));
+    assert!(!first.status.success());
+    assert!(first.stderr.contains("cancelled"));
+
+    let shutdown = gptd::send_request(
+        &shared_protocol::build_state_paths(state_dir.path()).ipc_endpoint,
+        &shared_protocol::DaemonRequest::Shutdown,
+    )
+    .expect("shutdown daemon");
+    assert!(matches!(shutdown, shared_protocol::DaemonResponse::Ack(_)));
+    daemon_handle.join().unwrap().unwrap();
+
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
 }
 
 #[test]
