@@ -294,7 +294,10 @@ fn core_service_recovers_provider_generation_failure_with_fresh_conversation_rep
 
     assert!(result.low_confidence);
     assert!(result.output_text.contains("Recovery note:"));
-    assert!(result.output_text.contains("Original user request:"));
+    assert!(result.output_text.contains(
+        "Answer this request now, using the attachment for prior context when relevant:"
+    ));
+    assert!(!result.output_text.contains("Preserved context:"));
     assert!(
         result
             .output_text
