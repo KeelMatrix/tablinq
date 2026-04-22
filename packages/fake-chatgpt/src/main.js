@@ -1612,7 +1612,10 @@ function startStream(promptText) {
       const attempt = nextProviderFailureAttempt();
       const isRecoveryReplay =
         promptText.includes("Recovery note:") &&
-        promptText.includes("Original user request:");
+        (promptText.includes("Original user request:") ||
+          promptText.includes(
+            "Answer this request now, using the attachment for prior context when relevant:",
+          ));
       if (
         usesProviderGenerationFailureTwice ||
         attempt === 1 ||

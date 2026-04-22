@@ -22,9 +22,9 @@ use url::Url;
 
 const PROVIDER_GENERATION_FAILURE_MARKER: &str =
     "something went wrong while generating the response";
-const RECOVERY_MANIFEST_RECENT_TURNS_LIMIT: usize = 6;
-const RECOVERY_MANIFEST_ARCHIVED_CONTEXT_LIMIT: usize = 8;
-const RECOVERY_MANIFEST_RESPONSE_EXCERPT_LIMIT: usize = 720;
+const RECOVERY_MANIFEST_RECENT_TURNS_LIMIT: usize = 12;
+const RECOVERY_MANIFEST_ARCHIVED_CONTEXT_LIMIT: usize = 16;
+const RECOVERY_MANIFEST_RESPONSE_EXCERPT_LIMIT: usize = 24_000;
 const RECOVERY_CONTEXT_SUMMARY_RECENT_TURNS: usize = 3;
 const RECOVERY_REPLAY_FILE_LIMIT: usize = 10;
 const RECOVERY_REPLAY_HISTORICAL_FILE_LIMIT: usize = 4;
@@ -271,30 +271,25 @@ pub(super) fn build_provider_generation_context_summary(
 
 pub(super) fn build_provider_generation_replay_prompt(
     original_input: &str,
-    context_summary: Option<&str>,
+    _context_summary: Option<&str>,
     recovery_manifest_attachment: Option<&str>,
 ) -> String {
     let mut prompt = String::from(
-        "Recovery note: The previous provider generation failed. Continue this request in a fresh conversation using the preserved context below.",
+        "Recovery note: The previous response failed during generation. Continue the same task in this new conversation.",
     );
     if let Some(file_name) = recovery_manifest_attachment
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        prompt.push_str("\n\nA recovery manifest attachment is included: ");
+        prompt.push_str("\n\nAttached context file: ");
         prompt.push_str(file_name);
         prompt.push_str(
-            ". Use it as the durable source for preserved recent context, tracked files, and generated artifacts.",
+            ". Use it for prior conversation context, referenced files, and generated artifacts.",
         );
     }
-    if let Some(summary) = context_summary
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        prompt.push_str("\n\nPreserved context:\n");
-        prompt.push_str(summary);
-    }
-    prompt.push_str("\n\nOriginal user request:\n");
+    prompt.push_str(
+        "\n\nAnswer this request now, using the attachment for prior context when relevant:\n",
+    );
     prompt.push_str(original_input.trim());
     prompt
 }
@@ -349,7 +344,7 @@ pub(super) fn update_conversation_recovery_manifest(
     manifest.recent_turns.push(RecoveryManifestTurn {
         completed_at,
         request_text: request_text.trim().to_owned(),
-        response_excerpt: truncate_recovery_text(
+        response_excerpt: preserve_recovery_text(
             response_text,
             RECOVERY_MANIFEST_RESPONSE_EXCERPT_LIMIT,
         ),
@@ -425,18 +420,18 @@ pub(super) fn build_provider_generation_replay_files(
 pub(super) fn render_provider_generation_recovery_manifest(
     manifest: &ConversationRecoveryManifest,
 ) -> String {
-    let mut content = String::from("# Tablinq Recovery Manifest\n\n");
+    let mut content = String::from("# Recovery Context\n\n");
     content.push_str(
-        "This attachment preserves compact durable context for replay after a provider generation failure.\n\n",
+        "This attachment contains prior conversation context, file references, and generated artifacts so the current request can continue in a fresh conversation after the previous response failed.\n\n",
     );
     content.push_str(&format!(
-        "- Conversation ID: {}\n- Updated at: {}\n\n",
+        "- Source conversation: {}\n- Updated at: {}\n\n",
         manifest.conversation_id,
         manifest.updated_at.to_rfc3339()
     ));
 
     if !manifest.archived_context.is_empty() {
-        content.push_str("## Earlier Context\n");
+        content.push_str("## Earlier Conversation Context\n");
         for line in &manifest.archived_context {
             content.push_str("- ");
             content.push_str(line);
@@ -446,10 +441,10 @@ pub(super) fn render_provider_generation_recovery_manifest(
     }
 
     if !manifest.recent_turns.is_empty() {
-        content.push_str("## Recent Turns\n");
+        content.push_str("## Recent Conversation Turns\n");
         for (index, turn) in manifest.recent_turns.iter().enumerate() {
             content.push_str(&format!(
-                "### Turn {}\n- Completed at: {}\n- User request: {}\n- Assistant result: {}\n",
+                "### Turn {}\n- Completed at: {}\n\n#### User message\n{}\n\n#### Assistant response\n{}\n",
                 index + 1,
                 turn.completed_at.to_rfc3339(),
                 turn.request_text,
@@ -530,6 +525,21 @@ fn truncate_recovery_text(text: &str, limit: usize) -> String {
     output
 }
 
+fn preserve_recovery_text(text: &str, limit: usize) -> String {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let trimmed = normalized.trim();
+    if trimmed.chars().count() <= limit {
+        return trimmed.to_owned();
+    }
+
+    let mut output = String::new();
+    for ch in trimmed.chars().take(limit.saturating_sub(1)) {
+        output.push(ch);
+    }
+    output.push('…');
+    output
+}
+
 fn remember_recovery_manifest_file(
     files: &mut Vec<RecoveryManifestFile>,
     entry: RecoveryManifestFile,
@@ -552,12 +562,12 @@ fn push_replay_file(files: &mut Vec<String>, seen: &mut HashSet<String>, path: &
 fn summarize_recovery_manifest_turn(turn: &RecoveryManifestTurn) -> String {
     let mut parts = vec![
         format!(
-            "User request: {}",
-            truncate_recovery_text(&turn.request_text, 160)
+            "User message: {}",
+            truncate_recovery_text(&turn.request_text, 320)
         ),
         format!(
-            "Assistant result: {}",
-            truncate_recovery_text(&turn.response_excerpt, 220)
+            "Assistant response: {}",
+            truncate_recovery_text(&turn.response_excerpt, 1_200)
         ),
     ];
     if !turn.input_files.is_empty() {
@@ -1056,8 +1066,8 @@ mod tests {
         browser_session_identity, build_provider_generation_context_summary,
         build_provider_generation_replay_files, build_provider_generation_replay_prompt,
         current_url_requires_login_or_challenge, error_code_for_message, recovery_guidance,
-        resolve_conversation_target_url, should_auto_recover_provider_generation_failure,
-        update_conversation_recovery_manifest,
+        render_provider_generation_recovery_manifest, resolve_conversation_target_url,
+        should_auto_recover_provider_generation_failure, update_conversation_recovery_manifest,
     };
     use crate::{AppConfig, Database, core::CoreService};
     use chrono::Utc;
@@ -1314,10 +1324,12 @@ mod tests {
             Some("job-1-provider-recovery.md"),
         );
 
-        assert!(prompt.contains("Recovery note: The previous provider generation failed."));
-        assert!(prompt.contains("A recovery manifest attachment is included"));
-        assert!(prompt.contains("Preserved context:\nPrior conversation id: conv-123"));
-        assert!(prompt.ends_with("Original user request:\nreason carefully about this tradeoff"));
+        assert!(prompt.contains("Recovery note: The previous response failed during generation."));
+        assert!(prompt.contains("Attached context file: job-1-provider-recovery.md"));
+        assert!(!prompt.contains("Preserved context:"));
+        assert!(prompt.ends_with(
+            "Answer this request now, using the attachment for prior context when relevant:\nreason carefully about this tradeoff"
+        ));
     }
 
     #[test]
@@ -1365,6 +1377,28 @@ mod tests {
         );
         assert_eq!(manifest.tracked_input_files.len(), 1);
         assert_eq!(manifest.tracked_generated_artifacts.len(), 1);
+    }
+
+    #[test]
+    fn provider_generation_recovery_manifest_uses_generic_header_and_keeps_longer_context() {
+        let long_response = "detail ".repeat(250);
+        let manifest = update_conversation_recovery_manifest(
+            None,
+            "conv-1",
+            "Summarize the long-running task",
+            &long_response,
+            &[],
+            &[],
+            Utc::now(),
+        );
+
+        assert!(manifest.recent_turns[0].response_excerpt.len() > 1_000);
+
+        let rendered = render_provider_generation_recovery_manifest(&manifest);
+        assert!(rendered.starts_with("# Recovery Context"));
+        assert!(!rendered.contains("Tablinq"));
+        assert!(rendered.contains("#### User message"));
+        assert!(rendered.contains("#### Assistant response"));
     }
 
     #[test]
