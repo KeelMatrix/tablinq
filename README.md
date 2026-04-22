@@ -97,6 +97,8 @@ gpt status
 
 For install instructions, see [docs/install.md](docs/install.md).
 
+If your repo checkout grows large during development, run `cargo clean` to remove the local Rust `target/` build directory. That deletes compiled binaries, PDBs, incremental caches, and packaging-related build outputs, and the next Rust build will rebuild them from scratch.
+
 ## Command surface
 
 Common commands:
