@@ -491,7 +491,8 @@ fn reconcile_streamed_response_with_rewrite_safety(
 
     let effective_streamed_text = format!("{printed_text}{pending_text}");
     if let Some(suffix) = final_text.strip_prefix(printed_text) {
-        if effective_streamed_text == final_text || final_text.starts_with(&effective_streamed_text) {
+        if effective_streamed_text == final_text || final_text.starts_with(&effective_streamed_text)
+        {
             if !suffix.is_empty() {
                 write_response_chunk(stdout, suffix, green_responses, response_color_active)?;
             }

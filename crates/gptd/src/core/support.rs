@@ -7,10 +7,11 @@ use crate::db::Database;
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use shared_protocol::{
-    BrowserConnectionMode, BrowserStatusSnapshot, ConversationSummary, Effort, ErrorCode,
-    EventPayload, HealthCheck, HealthStatus, JobState, JobStatus, Mode, ModelClass,
-    RecoveryPacket, RecoveryStrategy, RecoveryTrace, ResearchCommand, SelectorPackSummary,
-    StreamChunk, StreamChunkKind,
+    ArtifactMetadata, BrowserConnectionMode, BrowserStatusSnapshot, ConversationRecoveryManifest,
+    ConversationSummary, Effort, ErrorCode, EventPayload, HealthCheck, HealthStatus, JobState,
+    JobStatus, Mode, ModelClass, RecoveryManifestFile, RecoveryManifestFileKind,
+    RecoveryManifestTurn, RecoveryPacket, RecoveryStrategy, RecoveryTrace, ResearchCommand,
+    SelectorPackSummary, StreamChunk, StreamChunkKind,
 };
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -21,6 +22,12 @@ use url::Url;
 
 const PROVIDER_GENERATION_FAILURE_MARKER: &str =
     "something went wrong while generating the response";
+const RECOVERY_MANIFEST_RECENT_TURNS_LIMIT: usize = 6;
+const RECOVERY_MANIFEST_ARCHIVED_CONTEXT_LIMIT: usize = 8;
+const RECOVERY_MANIFEST_RESPONSE_EXCERPT_LIMIT: usize = 720;
+const RECOVERY_CONTEXT_SUMMARY_RECENT_TURNS: usize = 3;
+const RECOVERY_REPLAY_FILE_LIMIT: usize = 10;
+const RECOVERY_REPLAY_HISTORICAL_FILE_LIMIT: usize = 4;
 
 impl CoreService {
     pub(super) fn open_db(&self) -> Result<Database> {
@@ -143,6 +150,9 @@ pub(super) fn build_provider_generation_recovery_packet(
     effort: Option<Effort>,
     files: &[String],
     context_summary: Option<String>,
+    context_manifest: Option<ConversationRecoveryManifest>,
+    recovery_manifest_path: Option<String>,
+    replay_files: Vec<String>,
     prior_request_id: Option<String>,
     prior_conversation_id: Option<String>,
     recovery_attempt_count: u32,
@@ -154,6 +164,9 @@ pub(super) fn build_provider_generation_recovery_packet(
         effort,
         files: files.to_vec(),
         context_summary,
+        context_manifest,
+        recovery_manifest_path,
+        replay_files,
         prior_request_id,
         prior_conversation_id,
         failure_code: ErrorCode::ProviderGenerationFailedNonretryable,
@@ -183,6 +196,7 @@ pub(super) fn build_provider_generation_recovery_trace(
 }
 
 pub(super) fn build_provider_generation_context_summary(
+    manifest: Option<&ConversationRecoveryManifest>,
     conversation: Option<&ConversationSummary>,
     prior_conversation_id: Option<&str>,
 ) -> Option<String> {
@@ -192,7 +206,44 @@ pub(super) fn build_provider_generation_context_summary(
     {
         parts.push(format!("Prior conversation id: {}", conversation_id.trim()));
     }
-    if let Some(conversation) = conversation {
+    if let Some(manifest) = manifest {
+        if !manifest.archived_context.is_empty() {
+            parts.push("Earlier preserved context:".to_owned());
+            for line in manifest.archived_context.iter().rev().take(2).rev() {
+                parts.push(format!("- {}", truncate_recovery_text(line, 220)));
+            }
+        }
+
+        let recent_turns = manifest
+            .recent_turns
+            .iter()
+            .rev()
+            .take(RECOVERY_CONTEXT_SUMMARY_RECENT_TURNS)
+            .collect::<Vec<_>>();
+        for (index, turn) in recent_turns.into_iter().rev().enumerate() {
+            let turn_number = index + 1;
+            parts.push(format!(
+                "Recent request {turn_number}: {}",
+                truncate_recovery_text(&turn.request_text, 220)
+            ));
+            parts.push(format!(
+                "Recent assistant result {turn_number}: {}",
+                truncate_recovery_text(&turn.response_excerpt, 320)
+            ));
+            if !turn.input_files.is_empty() {
+                parts.push(format!(
+                    "Recent input files {turn_number}: {}",
+                    turn.input_files.join(", ")
+                ));
+            }
+            if !turn.generated_artifacts.is_empty() {
+                parts.push(format!(
+                    "Recent generated artifacts {turn_number}: {}",
+                    turn.generated_artifacts.join(", ")
+                ));
+            }
+        }
+    } else if let Some(conversation) = conversation {
         if let Some(last_prompt) = conversation.last_prompt.as_deref()
             && !last_prompt.trim().is_empty()
         {
@@ -221,17 +272,247 @@ pub(super) fn build_provider_generation_context_summary(
 pub(super) fn build_provider_generation_replay_prompt(
     original_input: &str,
     context_summary: Option<&str>,
+    recovery_manifest_attachment: Option<&str>,
 ) -> String {
     let mut prompt = String::from(
         "Recovery note: The previous provider generation failed. Continue this request in a fresh conversation using the preserved context below.",
     );
-    if let Some(summary) = context_summary.map(str::trim).filter(|value| !value.is_empty()) {
+    if let Some(file_name) = recovery_manifest_attachment
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        prompt.push_str("\n\nA recovery manifest attachment is included: ");
+        prompt.push_str(file_name);
+        prompt.push_str(
+            ". Use it as the durable source for preserved recent context, tracked files, and generated artifacts.",
+        );
+    }
+    if let Some(summary) = context_summary
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
         prompt.push_str("\n\nPreserved context:\n");
         prompt.push_str(summary);
     }
     prompt.push_str("\n\nOriginal user request:\n");
     prompt.push_str(original_input.trim());
     prompt
+}
+
+pub(super) fn update_conversation_recovery_manifest(
+    existing: Option<&ConversationRecoveryManifest>,
+    conversation_id: &str,
+    request_text: &str,
+    response_text: &str,
+    files: &[String],
+    artifacts: &[ArtifactMetadata],
+    completed_at: DateTime<Utc>,
+) -> ConversationRecoveryManifest {
+    let mut manifest = existing
+        .cloned()
+        .unwrap_or_else(|| ConversationRecoveryManifest {
+            conversation_id: conversation_id.to_owned(),
+            archived_context: Vec::new(),
+            recent_turns: Vec::new(),
+            tracked_input_files: Vec::new(),
+            tracked_generated_artifacts: Vec::new(),
+            updated_at: completed_at,
+        });
+    manifest.conversation_id = conversation_id.to_owned();
+    manifest.updated_at = completed_at;
+
+    for file in files {
+        remember_recovery_manifest_file(
+            &mut manifest.tracked_input_files,
+            RecoveryManifestFile {
+                kind: RecoveryManifestFileKind::InputAttachment,
+                file_name: recovery_file_name(file),
+                local_path: file.to_owned(),
+                content_type: None,
+                recorded_at: completed_at,
+            },
+        );
+    }
+    for artifact in artifacts {
+        remember_recovery_manifest_file(
+            &mut manifest.tracked_generated_artifacts,
+            RecoveryManifestFile {
+                kind: RecoveryManifestFileKind::GeneratedArtifact,
+                file_name: artifact.file_name.clone(),
+                local_path: artifact.storage_path.clone(),
+                content_type: Some(artifact.content_type.clone()),
+                recorded_at: completed_at,
+            },
+        );
+    }
+
+    manifest.recent_turns.push(RecoveryManifestTurn {
+        completed_at,
+        request_text: request_text.trim().to_owned(),
+        response_excerpt: truncate_recovery_text(
+            response_text,
+            RECOVERY_MANIFEST_RESPONSE_EXCERPT_LIMIT,
+        ),
+        input_files: files.iter().map(|file| recovery_file_name(file)).collect(),
+        generated_artifacts: artifacts
+            .iter()
+            .map(|artifact| artifact.file_name.clone())
+            .collect(),
+    });
+
+    while manifest.recent_turns.len() > RECOVERY_MANIFEST_RECENT_TURNS_LIMIT {
+        let archived = manifest.recent_turns.remove(0);
+        manifest
+            .archived_context
+            .push(summarize_recovery_manifest_turn(&archived));
+    }
+    while manifest.archived_context.len() > RECOVERY_MANIFEST_ARCHIVED_CONTEXT_LIMIT {
+        manifest.archived_context.remove(0);
+    }
+
+    manifest
+}
+
+pub(super) fn build_provider_generation_replay_files(
+    files: &[String],
+    manifest: Option<&ConversationRecoveryManifest>,
+    recovery_manifest_path: Option<&str>,
+) -> Vec<String> {
+    let mut replay_files = Vec::new();
+    let mut seen = HashSet::new();
+    let mut historical_added = 0usize;
+
+    for file in files {
+        push_replay_file(&mut replay_files, &mut seen, file);
+    }
+
+    if let Some(path) = recovery_manifest_path {
+        push_replay_file(&mut replay_files, &mut seen, path);
+    }
+
+    if let Some(manifest) = manifest {
+        for file in &manifest.tracked_generated_artifacts {
+            if historical_added >= RECOVERY_REPLAY_HISTORICAL_FILE_LIMIT {
+                break;
+            }
+            if !Path::new(&file.local_path).exists() {
+                continue;
+            }
+            let before = replay_files.len();
+            push_replay_file(&mut replay_files, &mut seen, &file.local_path);
+            if replay_files.len() > before {
+                historical_added += 1;
+            }
+        }
+        for file in &manifest.tracked_input_files {
+            if historical_added >= RECOVERY_REPLAY_HISTORICAL_FILE_LIMIT {
+                break;
+            }
+            if !Path::new(&file.local_path).exists() {
+                continue;
+            }
+            let before = replay_files.len();
+            push_replay_file(&mut replay_files, &mut seen, &file.local_path);
+            if replay_files.len() > before {
+                historical_added += 1;
+            }
+        }
+    }
+
+    replay_files
+}
+
+pub(super) fn render_provider_generation_recovery_manifest(
+    manifest: &ConversationRecoveryManifest,
+) -> String {
+    let mut content = String::from("# Tablinq Recovery Manifest\n\n");
+    content.push_str(
+        "This attachment preserves compact durable context for replay after a provider generation failure.\n\n",
+    );
+    content.push_str(&format!(
+        "- Conversation ID: {}\n- Updated at: {}\n\n",
+        manifest.conversation_id,
+        manifest.updated_at.to_rfc3339()
+    ));
+
+    if !manifest.archived_context.is_empty() {
+        content.push_str("## Earlier Context\n");
+        for line in &manifest.archived_context {
+            content.push_str("- ");
+            content.push_str(line);
+            content.push('\n');
+        }
+        content.push('\n');
+    }
+
+    if !manifest.recent_turns.is_empty() {
+        content.push_str("## Recent Turns\n");
+        for (index, turn) in manifest.recent_turns.iter().enumerate() {
+            content.push_str(&format!(
+                "### Turn {}\n- Completed at: {}\n- User request: {}\n- Assistant result: {}\n",
+                index + 1,
+                turn.completed_at.to_rfc3339(),
+                turn.request_text,
+                turn.response_excerpt
+            ));
+            if !turn.input_files.is_empty() {
+                content.push_str("- Input files: ");
+                content.push_str(&turn.input_files.join(", "));
+                content.push('\n');
+            }
+            if !turn.generated_artifacts.is_empty() {
+                content.push_str("- Generated artifacts: ");
+                content.push_str(&turn.generated_artifacts.join(", "));
+                content.push('\n');
+            }
+        }
+        content.push('\n');
+    }
+
+    if !manifest.tracked_input_files.is_empty() {
+        content.push_str("## Tracked Input Files\n");
+        for file in &manifest.tracked_input_files {
+            content.push_str(&format!("- {} ({})\n", file.file_name, file.local_path));
+        }
+        content.push('\n');
+    }
+
+    if !manifest.tracked_generated_artifacts.is_empty() {
+        content.push_str("## Tracked Generated Artifacts\n");
+        for file in &manifest.tracked_generated_artifacts {
+            content.push_str(&format!(
+                "- {} ({}){}\n",
+                file.file_name,
+                file.local_path,
+                file.content_type
+                    .as_deref()
+                    .map(|value| format!(" [{}]", value))
+                    .unwrap_or_default()
+            ));
+        }
+    }
+
+    content
+}
+
+pub(super) fn write_provider_generation_recovery_manifest_attachment(
+    state_root: &Path,
+    job_id: &str,
+    attempt: u32,
+    manifest: &ConversationRecoveryManifest,
+) -> Result<String> {
+    let dir = state_root.join("recovery-manifests");
+    fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+    let safe_job_id = job_id.replace([':', '/', '\\'], "-");
+    let path = dir.join(format!(
+        "{safe_job_id}-provider-recovery-attempt-{attempt}.md"
+    ));
+    fs::write(
+        &path,
+        render_provider_generation_recovery_manifest(manifest),
+    )
+    .with_context(|| format!("write {}", path.display()))?;
+    Ok(path.display().to_string())
 }
 
 fn truncate_recovery_text(text: &str, limit: usize) -> String {
@@ -247,6 +528,56 @@ fn truncate_recovery_text(text: &str, limit: usize) -> String {
     }
     output.push('…');
     output
+}
+
+fn remember_recovery_manifest_file(
+    files: &mut Vec<RecoveryManifestFile>,
+    entry: RecoveryManifestFile,
+) {
+    files.retain(|candidate| candidate.local_path != entry.local_path);
+    files.insert(0, entry);
+}
+
+fn push_replay_file(files: &mut Vec<String>, seen: &mut HashSet<String>, path: &str) {
+    let trimmed = path.trim();
+    if trimmed.is_empty() || files.len() >= RECOVERY_REPLAY_FILE_LIMIT {
+        return;
+    }
+    if !seen.insert(trimmed.to_owned()) {
+        return;
+    }
+    files.push(trimmed.to_owned());
+}
+
+fn summarize_recovery_manifest_turn(turn: &RecoveryManifestTurn) -> String {
+    let mut parts = vec![
+        format!(
+            "User request: {}",
+            truncate_recovery_text(&turn.request_text, 160)
+        ),
+        format!(
+            "Assistant result: {}",
+            truncate_recovery_text(&turn.response_excerpt, 220)
+        ),
+    ];
+    if !turn.input_files.is_empty() {
+        parts.push(format!("Input files: {}", turn.input_files.join(", ")));
+    }
+    if !turn.generated_artifacts.is_empty() {
+        parts.push(format!(
+            "Generated artifacts: {}",
+            turn.generated_artifacts.join(", ")
+        ));
+    }
+    parts.join(" | ")
+}
+
+fn recovery_file_name(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| path.to_owned())
 }
 
 pub(super) fn lock_browser<'a>(
@@ -723,16 +1054,18 @@ pub(super) fn unique_destination_path(destination_dir: &Path, file_name: &Path) 
 mod tests {
     use super::{
         browser_session_identity, build_provider_generation_context_summary,
-        build_provider_generation_replay_prompt, current_url_requires_login_or_challenge,
-        error_code_for_message, recovery_guidance, resolve_conversation_target_url,
-        should_auto_recover_provider_generation_failure,
+        build_provider_generation_replay_files, build_provider_generation_replay_prompt,
+        current_url_requires_login_or_challenge, error_code_for_message, recovery_guidance,
+        resolve_conversation_target_url, should_auto_recover_provider_generation_failure,
+        update_conversation_recovery_manifest,
     };
     use crate::{AppConfig, Database, core::CoreService};
     use chrono::Utc;
     use shared_protocol::{
-        AskCommand, AuthSource, BrowserConnectionMode, BrowserOwner, BrowserStatusSnapshot, Mode,
-        ConversationSummary, ErrorCode, ResearchCommand,
+        ArtifactMetadata, AskCommand, AuthSource, BrowserConnectionMode, BrowserOwner,
+        BrowserStatusSnapshot, ConversationSummary, ErrorCode, Mode, ResearchCommand,
     };
+    use tempfile::tempdir;
 
     fn seed_conversation(config: &AppConfig, conversation_id: &str) {
         let db = Database::open(&config.paths.db_path).unwrap();
@@ -751,6 +1084,7 @@ mod tests {
             Some(&format!("https://chatgpt.com/c/{conversation_id}")),
             Some("seed prompt"),
             Some("seed response"),
+            None,
             now,
         )
         .unwrap();
@@ -951,6 +1285,7 @@ mod tests {
     #[test]
     fn provider_generation_context_summary_uses_prior_conversation_snapshot() {
         let summary = build_provider_generation_context_summary(
+            None,
             Some(&ConversationSummary {
                 conversation_id: "conv-123".to_owned(),
                 session_id: "session-1".to_owned(),
@@ -966,7 +1301,9 @@ mod tests {
 
         assert!(summary.contains("Prior conversation id: conv-123"));
         assert!(summary.contains("Previous prompt: Explain the current system state in detail"));
-        assert!(summary.contains("Previous assistant response: The current system state includes attached files"));
+        assert!(summary.contains(
+            "Previous assistant response: The current system state includes attached files"
+        ));
     }
 
     #[test]
@@ -974,9 +1311,11 @@ mod tests {
         let prompt = build_provider_generation_replay_prompt(
             "reason carefully about this tradeoff",
             Some("Prior conversation id: conv-123\nPrevious assistant response: partial answer"),
+            Some("job-1-provider-recovery.md"),
         );
 
         assert!(prompt.contains("Recovery note: The previous provider generation failed."));
+        assert!(prompt.contains("A recovery manifest attachment is included"));
         assert!(prompt.contains("Preserved context:\nPrior conversation id: conv-123"));
         assert!(prompt.ends_with("Original user request:\nreason carefully about this tradeoff"));
     }
@@ -986,5 +1325,120 @@ mod tests {
         assert!(should_auto_recover_provider_generation_failure(true, 0));
         assert!(!should_auto_recover_provider_generation_failure(true, 1));
         assert!(!should_auto_recover_provider_generation_failure(false, 0));
+    }
+
+    #[test]
+    fn conversation_recovery_manifest_tracks_recent_turns_and_files() {
+        let dir = tempdir().unwrap();
+        let input_path = dir.path().join("brief.txt");
+        let artifact_path = dir.path().join("summary.txt");
+        std::fs::write(&input_path, "brief").unwrap();
+        std::fs::write(&artifact_path, "summary").unwrap();
+
+        let manifest = update_conversation_recovery_manifest(
+            None,
+            "conv-1",
+            "Summarize the brief",
+            "The brief recommends a phased rollout with one generated summary.",
+            &[input_path.display().to_string()],
+            &[ArtifactMetadata {
+                artifact_id: "artifact-1".to_owned(),
+                conversation_id: Some("conv-1".to_owned()),
+                message_id: Some("msg-1".to_owned()),
+                file_name: "summary.txt".to_owned(),
+                content_type: "text/plain".to_owned(),
+                size_bytes: 7,
+                sha256: "sha-1".to_owned(),
+                storage_path: artifact_path.display().to_string(),
+            }],
+            Utc::now(),
+        );
+
+        assert_eq!(manifest.recent_turns.len(), 1);
+        assert_eq!(
+            manifest.recent_turns[0].input_files,
+            vec!["brief.txt".to_owned()]
+        );
+        assert_eq!(
+            manifest.recent_turns[0].generated_artifacts,
+            vec!["summary.txt".to_owned()]
+        );
+        assert_eq!(manifest.tracked_input_files.len(), 1);
+        assert_eq!(manifest.tracked_generated_artifacts.len(), 1);
+    }
+
+    #[test]
+    fn provider_generation_context_summary_prefers_durable_manifest() {
+        let manifest = update_conversation_recovery_manifest(
+            None,
+            "conv-123",
+            "Explain the deployment history",
+            "The deployment history includes an earlier rollback and a generated runbook artifact.",
+            &["C:\\inputs\\deploy-notes.md".to_owned()],
+            &[],
+            Utc::now(),
+        );
+
+        let summary = build_provider_generation_context_summary(
+            Some(&manifest),
+            Some(&ConversationSummary {
+                conversation_id: "conv-123".to_owned(),
+                session_id: "session-1".to_owned(),
+                label: "Browser conversation".to_owned(),
+                tab_url: Some("https://chatgpt.com/c/conv-123".to_owned()),
+                last_prompt: Some("fallback prompt".to_owned()),
+                last_response: Some("fallback response".to_owned()),
+                last_seen_at: Utc::now(),
+            }),
+            Some("conv-123"),
+        )
+        .unwrap();
+
+        assert!(summary.contains("Recent request 1: Explain the deployment history"));
+        assert!(summary.contains("Recent input files 1: deploy-notes.md"));
+        assert!(!summary.contains("fallback prompt"));
+    }
+
+    #[test]
+    fn provider_generation_replay_files_include_manifest_and_historical_context() {
+        let dir = tempdir().unwrap();
+        let original_input = dir.path().join("latest.txt");
+        let prior_input = dir.path().join("brief.txt");
+        let artifact = dir.path().join("artifact.txt");
+        let manifest_file = dir.path().join("tablinq-recovery.md");
+        std::fs::write(&original_input, "latest").unwrap();
+        std::fs::write(&prior_input, "brief").unwrap();
+        std::fs::write(&artifact, "artifact").unwrap();
+        std::fs::write(&manifest_file, "manifest").unwrap();
+
+        let manifest = update_conversation_recovery_manifest(
+            None,
+            "conv-1",
+            "Use the brief",
+            "Generated artifact attached.",
+            &[prior_input.display().to_string()],
+            &[ArtifactMetadata {
+                artifact_id: "artifact-1".to_owned(),
+                conversation_id: Some("conv-1".to_owned()),
+                message_id: Some("msg-1".to_owned()),
+                file_name: "artifact.txt".to_owned(),
+                content_type: "text/plain".to_owned(),
+                size_bytes: 8,
+                sha256: "sha-1".to_owned(),
+                storage_path: artifact.display().to_string(),
+            }],
+            Utc::now(),
+        );
+
+        let replay_files = build_provider_generation_replay_files(
+            &[original_input.display().to_string()],
+            Some(&manifest),
+            Some(&manifest_file.display().to_string()),
+        );
+
+        assert_eq!(replay_files[0], original_input.display().to_string());
+        assert!(replay_files.contains(&manifest_file.display().to_string()));
+        assert!(replay_files.contains(&artifact.display().to_string()));
+        assert!(replay_files.contains(&prior_input.display().to_string()));
     }
 }

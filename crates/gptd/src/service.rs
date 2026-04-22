@@ -1,6 +1,6 @@
+use crate::browser::execution_error_metadata;
 use crate::config::AppConfig;
 use crate::core::{CoreService, error_code_for_message};
-use crate::browser::execution_error_metadata;
 use crate::ipc;
 use crate::lockfile;
 use crate::logging::JsonLogger;

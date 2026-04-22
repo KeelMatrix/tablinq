@@ -6,8 +6,8 @@ use super::runtime::{
     AdapterLauncher, browser_connection_mode_name, node_command, resolve_adapter_runtime,
 };
 use super::{
-    BrowserDiagnosticsSnapshot, RequestLifecycleUpdate, ResearchUpdate, adapter_error_code,
-    execution_error, ExecutionErrorMetadata,
+    BrowserDiagnosticsSnapshot, ExecutionErrorMetadata, RequestLifecycleUpdate, ResearchUpdate,
+    adapter_error_code, execution_error,
 };
 use crate::config::AppConfig;
 use anyhow::{Context, Result, anyhow, bail};

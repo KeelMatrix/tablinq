@@ -2,8 +2,8 @@ use crate::openai::{self, ChatCompletionsRequest, RequestRole, request_role_name
 use crate::uploads::UploadStore;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gptd::browser::execution_error_metadata;
 use gptd::CoreService;
+use gptd::browser::execution_error_metadata;
 use gptd::core::{PreparedAskJob, PreparedResearchJob};
 use gptd::logging::JsonLogger;
 use serde_json::{Value, json};
@@ -225,14 +225,7 @@ pub(crate) fn execute_chat_completions_request(
                     }
                     Ok(())
                 })
-                .map(|result| {
-                    (
-                        result.conversation_id,
-                        result.low_confidence,
-                        None,
-                        None,
-                    )
-                }),
+                .map(|result| (result.conversation_id, result.low_confidence, None, None)),
             PreparedChatJob::Ask(job) => core
                 .execute_prepared_ask(job, |event| {
                     if downstream_interrupted.is_some() {
@@ -455,51 +448,51 @@ pub(crate) fn execute_chat_completions_request(
     } else {
         let (response, conversation_id, low_confidence, recovery_trace, recovery_packet) =
             match &prepared.job {
-            PreparedChatJob::Research(job) => {
-                let result = core.execute_prepared_research(job, |_event| Ok(()))?;
-                let conversation = core.find_conversation(&result.conversation_id)?;
-                (
-                    build_chat_completion_response(
-                        &context.request_id,
-                        prepared.job_id(),
-                        prepared.model_id,
-                        prepared.request_role,
-                        prepared.parent_request_id.as_deref(),
-                        Some(&result.conversation_id),
-                        conversation.as_ref().map(|item| item.session_id.as_str()),
-                        &result.report_text,
-                        "stop",
+                PreparedChatJob::Research(job) => {
+                    let result = core.execute_prepared_research(job, |_event| Ok(()))?;
+                    let conversation = core.find_conversation(&result.conversation_id)?;
+                    (
+                        build_chat_completion_response(
+                            &context.request_id,
+                            prepared.job_id(),
+                            prepared.model_id,
+                            prepared.request_role,
+                            prepared.parent_request_id.as_deref(),
+                            Some(&result.conversation_id),
+                            conversation.as_ref().map(|item| item.session_id.as_str()),
+                            &result.report_text,
+                            "stop",
+                            None,
+                        ),
+                        Some(result.conversation_id),
+                        result.low_confidence,
                         None,
-                    ),
-                    Some(result.conversation_id),
-                    result.low_confidence,
-                    None,
-                    None,
-                )
-            }
-            PreparedChatJob::Ask(job) => {
-                let result = core.execute_prepared_ask(job, |_event| Ok(()))?;
-                let conversation = core.find_conversation(&result.conversation_id)?;
-                (
-                    build_chat_completion_response(
-                        &context.request_id,
-                        prepared.job_id(),
-                        prepared.model_id,
-                        prepared.request_role,
-                        prepared.parent_request_id.as_deref(),
-                        Some(&result.conversation_id),
-                        conversation.as_ref().map(|item| item.session_id.as_str()),
-                        &result.output_text,
-                        "stop",
-                        result.recovery_trace.as_ref(),
-                    ),
-                    Some(result.conversation_id),
-                    result.low_confidence,
-                    result.recovery_trace,
-                    result.recovery_packet,
-                )
-            }
-        };
+                        None,
+                    )
+                }
+                PreparedChatJob::Ask(job) => {
+                    let result = core.execute_prepared_ask(job, |_event| Ok(()))?;
+                    let conversation = core.find_conversation(&result.conversation_id)?;
+                    (
+                        build_chat_completion_response(
+                            &context.request_id,
+                            prepared.job_id(),
+                            prepared.model_id,
+                            prepared.request_role,
+                            prepared.parent_request_id.as_deref(),
+                            Some(&result.conversation_id),
+                            conversation.as_ref().map(|item| item.session_id.as_str()),
+                            &result.output_text,
+                            "stop",
+                            result.recovery_trace.as_ref(),
+                        ),
+                        Some(result.conversation_id),
+                        result.low_confidence,
+                        result.recovery_trace,
+                        result.recovery_packet,
+                    )
+                }
+            };
         log_response(logger, &context.request_id, response.status_code)?;
         if let Err(err) = write_http_response(stream, &context.request_id, response) {
             if is_client_disconnect_error(&err) {

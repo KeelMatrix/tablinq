@@ -144,10 +144,48 @@ Typed failures are surfaced for:
 - managed-fallback launch issues
 - upload and download failures
 - action timeouts
+- provider generation failures that should not use the page Retry button
 - research-specific failures
 - reconciliation failures after interruption
 
 Failure bundles are written under `crash-bundles/` and recorded in SQLite with screenshot, DOM snapshot, ARIA snapshot, active URL, selector attempts, and linked logs.
+
+## Provider-generation recovery
+
+For the provider page error `Something went wrong while generating the response...`, Tablinq treats the failure as `provider_generation_failed_nonretryable`.
+
+The recovery policy is:
+
+- do not auto-click the provider Retry button
+- capture a failure bundle and persist recovery metadata
+- reload the target tab
+- start a fresh conversation
+- replay once through a deterministic recovery wrapper
+
+The replayed request is built in core from durable state, not from the provider's old live thread state.
+
+Current preserved context for this recovery path is intentionally compact:
+
+- the original user request
+- request options such as mode, model, and effort
+- request-scoped file references tracked by Tablinq
+- the prior conversation id
+- a durable conversation recovery manifest stored in SQLite and refreshed after each completed turn
+
+That manifest currently preserves:
+
+- archived compact summaries of older turns
+- recent turn summaries
+- tracked input attachment metadata
+- tracked generated artifact metadata
+
+During provider-generation recovery, core uses that manifest to build:
+
+- a concise inline replay wrapper
+- an optional recovery-manifest attachment uploaded into the fresh conversation
+- a bounded replay file set that can include the latest request files plus recent durable context files
+
+This is stronger than the earlier single-turn summary path, but it is still not a full provider-thread reconstruction.
 
 ## HTTP gateway
 
