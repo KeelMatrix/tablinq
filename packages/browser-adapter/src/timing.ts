@@ -23,12 +23,44 @@ export const STALL_DETECTION_MAX_MS = 2_000;
 export const ASK_STALL_RECOVERY_GRACE_MS = 5_000;
 export const MAX_RECOVERY_ATTEMPTS = 3;
 
+export type InteractionJitterKind =
+  | "chip_clear"
+  | "picker_trigger"
+  | "choice_select"
+  | "mode_toggle"
+  | "button_click"
+  | "keyboard_submit"
+  | "upload_entry";
+
 export function deepResearchStartDelayMs(randomValue = Math.random()): number {
   const jitter = Math.min(1, Math.max(0, randomValue));
   return (
     DEEP_RESEARCH_START_DELAY_MIN_MS +
     Math.round(jitter * DEEP_RESEARCH_START_DELAY_JITTER_MS)
   );
+}
+
+export function interactionJitterMs(
+  kind: InteractionJitterKind,
+  randomValue = Math.random(),
+): number {
+  const jitter = Math.min(1, Math.max(0, randomValue));
+  switch (kind) {
+    case "chip_clear":
+      return 30 + Math.round(jitter * 50);
+    case "keyboard_submit":
+      return 35 + Math.round(jitter * 45);
+    case "picker_trigger":
+      return 45 + Math.round(jitter * 75);
+    case "choice_select":
+      return 55 + Math.round(jitter * 90);
+    case "mode_toggle":
+      return 60 + Math.round(jitter * 90);
+    case "upload_entry":
+      return 70 + Math.round(jitter * 90);
+    case "button_click":
+      return 70 + Math.round(jitter * 100);
+  }
 }
 
 export function uploadAckTimeoutMsForFiles(fileSizes: number[]): number {

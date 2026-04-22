@@ -10,6 +10,7 @@ import {
 } from "../timing";
 
 import { waitForPageAdapterCondition } from "./adapter";
+import { clickWithInteractionJitter } from "./common";
 
 export async function uploadAttachments(
   page: Page,
@@ -79,7 +80,7 @@ export async function uploadAttachments(
     const chooserPromise = page.waitForEvent("filechooser", {
       timeout: INTERACTION_TIMEOUT_MS,
     });
-    await uploadEntry.click();
+    await clickWithInteractionJitter(uploadEntry, "upload_entry");
     const chooser = await chooserPromise.catch(() => null);
     if (!chooser) {
       throw new Error("upload failed: file chooser did not open");

@@ -10,6 +10,7 @@ import {
   conversationIdFromUrl,
   deepResearchStartDelayMs,
   detectBrowserExecutable,
+  interactionJitterMs,
   MAX_UPLOAD_FILE_BYTES,
   resolveConversationUrl,
   resolveBrowserLaunchConfig,
@@ -415,6 +416,23 @@ describe("browser adapter", () => {
     expect(deepResearchStartDelayMs(0)).toBe(4_000);
     expect(deepResearchStartDelayMs(0.5)).toBe(7_000);
     expect(deepResearchStartDelayMs(1)).toBe(10_000);
+  });
+
+  it("bounds short interaction jitters to human-scale ranges", () => {
+    expect(interactionJitterMs("chip_clear", 0)).toBe(30);
+    expect(interactionJitterMs("chip_clear", 1)).toBe(80);
+    expect(interactionJitterMs("keyboard_submit", 0)).toBe(35);
+    expect(interactionJitterMs("keyboard_submit", 1)).toBe(80);
+    expect(interactionJitterMs("picker_trigger", 0)).toBe(45);
+    expect(interactionJitterMs("picker_trigger", 1)).toBe(120);
+    expect(interactionJitterMs("choice_select", 0)).toBe(55);
+    expect(interactionJitterMs("choice_select", 1)).toBe(145);
+    expect(interactionJitterMs("mode_toggle", 0)).toBe(60);
+    expect(interactionJitterMs("mode_toggle", 1)).toBe(150);
+    expect(interactionJitterMs("upload_entry", 0)).toBe(70);
+    expect(interactionJitterMs("upload_entry", 1)).toBe(160);
+    expect(interactionJitterMs("button_click", 0)).toBe(70);
+    expect(interactionJitterMs("button_click", 1)).toBe(170);
   });
 
   it("scales upload acknowledgment timeout nonlinearly by file size and additional files", () => {

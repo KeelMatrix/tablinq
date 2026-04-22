@@ -10,7 +10,12 @@ import {
 } from "../timing";
 
 import { callPageAdapter, waitForPageAdapterCondition } from "./adapter";
-import { sleep } from "./common";
+import {
+  clickWithInteractionJitter,
+  pauseForInteraction,
+  pressShortcutWithInteractionJitter,
+  sleep,
+} from "./common";
 
 export async function waitForSubmitReadyAfterUploads(
   page: Page,
@@ -122,6 +127,7 @@ export async function clickSubmit(page: Page): Promise<void> {
     page,
     "readSubmitState",
   );
+  await pauseForInteraction("button_click");
   const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
   if (clicked && (await waitForSubmitStarted(page, baseline))) {
     return;
@@ -137,7 +143,7 @@ export async function clickSubmit(page: Page): Promise<void> {
 
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await focusComposer(page);
-  await page.keyboard.press(`${modifier}+Enter`).catch(() => undefined);
+  await pressShortcutWithInteractionJitter(page, `${modifier}+Enter`);
   const submitted = await waitForSubmitStarted(page, baseline);
   if (!submitted) {
     throw new Error(
@@ -182,8 +188,7 @@ export async function clickActiveComposerSubmit(page: Page): Promise<boolean> {
     if (!actionable) {
       continue;
     }
-    const clicked = await candidate
-      .click()
+    const clicked = await clickWithInteractionJitter(candidate, "button_click")
       .then(() => true)
       .catch(() => false);
     if (clicked) {

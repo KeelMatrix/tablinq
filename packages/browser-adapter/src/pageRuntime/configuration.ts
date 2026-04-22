@@ -8,6 +8,7 @@ import { INTERACTION_TIMEOUT_MS } from "../timing";
 import { deepResearchPathname } from "../urls";
 
 import { waitForInteractionSurface } from "./composer";
+import { clickWithInteractionJitter, pauseForInteraction } from "./common";
 import { waitForDeepResearchLanding } from "./deepResearch";
 
 export async function applyAskConfiguration(
@@ -55,7 +56,7 @@ export async function ensureComposerModelPickerAvailable(
       break;
     }
     clearedAny = true;
-    await chip.click();
+    await clickWithInteractionJitter(chip, "chip_clear");
     await page.waitForTimeout(150);
   }
 
@@ -215,7 +216,9 @@ export async function ensureConfiguredModelClass(
   );
   if (inlineOption) {
     if (!inlineOption.selected) {
-      await inlineOption.locator.click({ force: true });
+      await clickWithInteractionJitter(inlineOption.locator, "choice_select", {
+        force: true,
+      });
       await page.waitForTimeout(150);
     }
     return;
@@ -238,7 +241,9 @@ export async function ensureConfiguredModelClass(
       : await findVisiblePopupChoicePoint(page, modelClass, 750);
   if (option) {
     if (option.checked !== "true") {
-      await option.locator.click({ force: true });
+      await clickWithInteractionJitter(option.locator, "choice_select", {
+        force: true,
+      });
       await page.waitForTimeout(150);
     }
     return;
@@ -259,7 +264,7 @@ export async function ensureConfiguredModelClass(
     );
   }
 
-  await trigger.click();
+  await clickWithInteractionJitter(trigger, "picker_trigger");
   const reopenedPreferredOption = await waitForVisibleLocator(
     page.locator(`[data-testid='${preferredTestId}']`),
     1_000,
@@ -277,7 +282,9 @@ export async function ensureConfiguredModelClass(
     );
   }
   if (reopenedOption.checked !== "true") {
-    await reopenedOption.locator.click({ force: true });
+    await clickWithInteractionJitter(reopenedOption.locator, "choice_select", {
+      force: true,
+    });
     if (modelClass === "thinking") {
       await findVisibleEffortTrigger(page, 2_500);
     } else {
@@ -308,7 +315,9 @@ export async function ensureConfiguredEffort(
   );
   if (inlineOption) {
     if (!inlineOption.selected) {
-      await inlineOption.locator.click({ force: true });
+      await clickWithInteractionJitter(inlineOption.locator, "choice_select", {
+        force: true,
+      });
       await page.waitForTimeout(150);
     }
     return;
@@ -317,7 +326,9 @@ export async function ensureConfiguredEffort(
   let option = await findVisiblePopupChoicePoint(page, effort, 750);
   if (option) {
     if (option.checked !== "true") {
-      await option.locator.click({ force: true });
+      await clickWithInteractionJitter(option.locator, "choice_select", {
+        force: true,
+      });
     }
     return;
   }
@@ -334,7 +345,7 @@ export async function ensureConfiguredEffort(
     );
   }
 
-  await trigger.click();
+  await clickWithInteractionJitter(trigger, "picker_trigger");
   option = await findVisiblePopupChoicePoint(page, effort);
   if (!option) {
     throw new Error(
@@ -342,7 +353,9 @@ export async function ensureConfiguredEffort(
     );
   }
   if (option.checked !== "true") {
-    await option.locator.click({ force: true });
+    await clickWithInteractionJitter(option.locator, "choice_select", {
+      force: true,
+    });
   }
 }
 
@@ -481,6 +494,7 @@ export async function navigateDirectlyToDeepResearch(
 ): Promise<Page> {
   const url = new URL(page.url());
   url.pathname = deepResearchPathname(url.pathname);
+  await pauseForInteraction("mode_toggle", Math.max(0, timeoutMs));
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });
   const landingPage = await waitForDeepResearchLanding(page, timeoutMs);
   if (!landingPage) {
@@ -493,7 +507,7 @@ export async function navigateDirectlyToDeepResearch(
 
 export async function activateModeControl(locator: Locator): Promise<void> {
   try {
-    await locator.click();
+    await clickWithInteractionJitter(locator, "mode_toggle");
     return;
   } catch (error) {
     if (
@@ -505,9 +519,10 @@ export async function activateModeControl(locator: Locator): Promise<void> {
   }
 
   try {
-    await locator.click({ force: true });
+    await clickWithInteractionJitter(locator, "mode_toggle", { force: true });
     return;
   } catch {
+    await pauseForInteraction("mode_toggle");
     await locator.evaluate((element) => {
       if (!(element instanceof HTMLElement)) {
         throw new Error("mode control is not actionable");

@@ -13,7 +13,11 @@ import {
   focusComposer,
   waitForInteractionSurface,
 } from "./composer";
-import { sleep } from "./common";
+import {
+  pauseForInteraction,
+  pressShortcutWithInteractionJitter,
+  sleep,
+} from "./common";
 
 export async function readResearchSubmissionState(
   page: Page,
@@ -63,6 +67,7 @@ export async function submitResearch(
     );
   }
 
+  await pauseForInteraction("button_click");
   const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
   if (
     clicked &&
@@ -80,7 +85,7 @@ export async function submitResearch(
 
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await focusComposer(page);
-  await page.keyboard.press(`${modifier}+Enter`).catch(() => undefined);
+  await pressShortcutWithInteractionJitter(page, `${modifier}+Enter`);
   const submitted = await waitForPageAdapterCondition(
     page,
     "researchSubmissionStarted",

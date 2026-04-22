@@ -36,6 +36,7 @@ Recommended posture:
 - keep subagents disabled by default
 - prefer `stream = true` for interactive work and fast cancellation
 - set client timeouts above Tablinq's own upstream timeouts
+- expect small built-in browser interaction jitters and a longer pre-submit jitter; they exist to keep browser-driven actions closer to human pacing and reduce provider countermeasures
 
 ## Core endpoints
 

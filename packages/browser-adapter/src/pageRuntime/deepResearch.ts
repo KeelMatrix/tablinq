@@ -20,7 +20,7 @@ import {
 import { safePageUrl } from "../capabilityProbe";
 
 import { callPageAdapter } from "./adapter";
-import { sleep } from "./common";
+import { clickWithInteractionJitter, sleep } from "./common";
 import { readResearchSubmissionState } from "./researchSubmission";
 
 export async function beginDeepResearchRun(
@@ -222,8 +222,10 @@ export async function clickDeepResearchStart(page: Page): Promise<boolean> {
     if (!enabled) {
       continue;
     }
-    const clicked = await button
-      .click({ force: true, timeout: INTERACTION_TIMEOUT_MS })
+    const clicked = await clickWithInteractionJitter(button, "button_click", {
+      force: true,
+      timeout: INTERACTION_TIMEOUT_MS,
+    })
       .then(() => true)
       .catch(() => false);
     if (clicked) {
