@@ -30,6 +30,14 @@ struct JobStatusLine {
     message: String,
 }
 
+#[derive(Debug, Default)]
+struct ResponseStreamState {
+    printed_text: String,
+    pending_text: String,
+    printed_any: bool,
+    response_color_active: bool,
+}
+
 enum CliStreamMessage {
     Event(Box<EventPayload>),
     Done(Box<Result<DaemonResponse>>),
@@ -52,10 +60,8 @@ pub(crate) fn execute_ask_with_terminal_presentation(
 
     let mut stdout = io::stdout();
     let stream_responses = stdout.is_terminal();
-    let mut printed_any = false;
-    let mut streamed_text = String::new();
+    let mut response_stream = ResponseStreamState::default();
     let green_responses = ansi_green_enabled_for_stdout();
-    let mut response_color_active = false;
     let started_at = Instant::now();
     let mut current_job_id: Option<String> = None;
     thread::spawn(move || {
@@ -71,7 +77,11 @@ pub(crate) fn execute_ask_with_terminal_presentation(
 
     let response = loop {
         if interrupt_rx.try_recv().is_ok() {
-            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+            finish_terminal_stream(
+                &mut stdout,
+                response_stream.printed_any,
+                &mut response_stream.response_color_active,
+            )?;
             if let Some(job_id) = current_job_id.as_deref() {
                 let cancel_notice = request_job_cancellation(&endpoint, job_id).err();
                 if let Some(err) = cancel_notice {
@@ -85,7 +95,11 @@ pub(crate) fn execute_ask_with_terminal_presentation(
         }
 
         let Some(remaining) = timeout.checked_sub(started_at.elapsed()) else {
-            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+            finish_terminal_stream(
+                &mut stdout,
+                response_stream.printed_any,
+                &mut response_stream.response_color_active,
+            )?;
             anyhow::bail!("ask request timed out after {} ms", timeout.as_millis());
         };
         match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
@@ -93,15 +107,13 @@ pub(crate) fn execute_ask_with_terminal_presentation(
                 EventPayload::StreamChunk(chunk) => {
                     current_job_id = Some(chunk.job_id.clone());
                     if chunk.kind == StreamChunkKind::Delta && !chunk.text.is_empty() {
-                        streamed_text.push_str(&chunk.text);
                         if stream_responses {
-                            write_response_chunk(
+                            buffer_response_chunk(
                                 &mut stdout,
                                 &chunk.text,
                                 green_responses,
-                                &mut response_color_active,
+                                &mut response_stream,
                             )?;
-                            printed_any = true;
                         }
                     }
                 }
@@ -113,7 +125,11 @@ pub(crate) fn execute_ask_with_terminal_presentation(
             Ok(CliStreamMessage::Done(result)) => break (*result)?,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+                finish_terminal_stream(
+                    &mut stdout,
+                    response_stream.printed_any,
+                    &mut response_stream.response_color_active,
+                )?;
                 anyhow::bail!("ask request stream closed before a daemon response arrived");
             }
         }
@@ -121,18 +137,22 @@ pub(crate) fn execute_ask_with_terminal_presentation(
 
     match response {
         DaemonResponse::Ask(result) => {
-            reconcile_streamed_response(
+            reconcile_streamed_response_with_pending(
                 &mut stdout,
-                &streamed_text,
+                &response_stream.printed_text,
+                &response_stream.pending_text,
                 &result.output_text,
-                printed_any,
                 green_responses,
-                &mut response_color_active,
+                &mut response_stream.response_color_active,
             )?;
             Ok(())
         }
         DaemonResponse::Error(error) => {
-            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+            finish_terminal_stream(
+                &mut stdout,
+                response_stream.printed_any,
+                &mut response_stream.response_color_active,
+            )?;
             bail!("{}", error.message)
         }
         other => bail!("unexpected ask response: {other:?}"),
@@ -286,34 +306,173 @@ fn write_complete_response(
     Ok(())
 }
 
+fn buffer_response_chunk(
+    stdout: &mut impl Write,
+    text: &str,
+    green_responses: bool,
+    response_stream: &mut ResponseStreamState,
+) -> Result<()> {
+    response_stream.pending_text.push_str(text);
+    let (stable_text, unstable_suffix) = split_stable_prefix(&response_stream.pending_text);
+    if stable_text.is_empty() {
+        return Ok(());
+    }
+
+    let stable_text = stable_text.to_owned();
+    let unstable_suffix = unstable_suffix.to_owned();
+    write_response_chunk(
+        stdout,
+        &stable_text,
+        green_responses,
+        &mut response_stream.response_color_active,
+    )?;
+    response_stream.printed_text.push_str(&stable_text);
+    response_stream.pending_text = unstable_suffix;
+    response_stream.printed_any = true;
+    Ok(())
+}
+
+fn split_stable_prefix(text: &str) -> (&str, &str) {
+    let unstable_start = find_unstable_suffix_start(text).unwrap_or(text.len());
+    text.split_at(unstable_start)
+}
+
+fn find_unstable_suffix_start(text: &str) -> Option<usize> {
+    let mut inline_code_start = None;
+    let mut bold_start = None;
+    let mut italic_start = None;
+    let mut i = 0;
+
+    while i < text.len() {
+        let rest = &text[i..];
+        let ch = rest
+            .chars()
+            .next()
+            .expect("scan index should always be on a char boundary");
+
+        if ch == '`' && !is_escaped_markdown_delimiter(text, i) {
+            if inline_code_start.is_some() {
+                inline_code_start = None;
+            } else {
+                inline_code_start = Some(i);
+            }
+            i += ch.len_utf8();
+            continue;
+        }
+
+        if inline_code_start.is_some() {
+            i += ch.len_utf8();
+            continue;
+        }
+
+        if rest.starts_with("**") && !is_escaped_markdown_delimiter(text, i) {
+            if bold_start.is_some() {
+                if can_close_emphasis(text, i, 2) {
+                    bold_start = None;
+                    i += 2;
+                    continue;
+                }
+            } else if can_open_emphasis(text, i, 2) {
+                bold_start = Some(i);
+                i += 2;
+                continue;
+            }
+        }
+
+        if ch == '*' && !is_escaped_markdown_delimiter(text, i) {
+            if italic_start.is_some() {
+                if can_close_emphasis(text, i, 1) {
+                    italic_start = None;
+                    i += ch.len_utf8();
+                    continue;
+                }
+            } else if can_open_emphasis(text, i, 1) {
+                italic_start = Some(i);
+                i += ch.len_utf8();
+                continue;
+            }
+        }
+
+        i += ch.len_utf8();
+    }
+
+    [inline_code_start, bold_start, italic_start]
+        .into_iter()
+        .flatten()
+        .min()
+}
+
+fn is_escaped_markdown_delimiter(text: &str, idx: usize) -> bool {
+    let slash_count = text[..idx]
+        .chars()
+        .rev()
+        .take_while(|ch| *ch == '\\')
+        .count();
+    slash_count % 2 == 1
+}
+
+fn can_open_emphasis(text: &str, idx: usize, delimiter_len: usize) -> bool {
+    let prev = text[..idx].chars().next_back();
+    let next = text[idx + delimiter_len..].chars().next();
+    matches!(next, Some(ch) if !ch.is_whitespace())
+        && prev.is_none_or(|ch| ch.is_whitespace() || ch.is_ascii_punctuation())
+}
+
+fn can_close_emphasis(text: &str, idx: usize, delimiter_len: usize) -> bool {
+    let prev = text[..idx].chars().next_back();
+    let next = text[idx + delimiter_len..].chars().next();
+    matches!(prev, Some(ch) if !ch.is_whitespace())
+        && next.is_none_or(|ch| ch.is_whitespace() || ch.is_ascii_punctuation())
+}
+
+#[allow(dead_code)]
 pub(crate) fn reconcile_streamed_response(
     stdout: &mut impl Write,
     streamed_text: &str,
     final_text: &str,
-    printed_any: bool,
+    _printed_any: bool,
+    green_responses: bool,
+    response_color_active: &mut bool,
+) -> Result<()> {
+    reconcile_streamed_response_with_pending(
+        stdout,
+        streamed_text,
+        "",
+        final_text,
+        green_responses,
+        response_color_active,
+    )
+}
+
+fn reconcile_streamed_response_with_pending(
+    stdout: &mut impl Write,
+    printed_text: &str,
+    pending_text: &str,
+    final_text: &str,
     green_responses: bool,
     response_color_active: &mut bool,
 ) -> Result<()> {
     reconcile_streamed_response_with_rewrite_safety(
         stdout,
-        streamed_text,
+        printed_text,
+        pending_text,
         final_text,
-        printed_any,
         green_responses,
         response_color_active,
-        rewrite_response_line_is_safe(streamed_text, final_text),
+        rewrite_response_line_is_safe(printed_text, final_text),
     )
 }
 
 fn reconcile_streamed_response_with_rewrite_safety(
     stdout: &mut impl Write,
-    streamed_text: &str,
+    printed_text: &str,
+    pending_text: &str,
     final_text: &str,
-    printed_any: bool,
     green_responses: bool,
     response_color_active: &mut bool,
     rewrite_in_place_safe: bool,
 ) -> Result<()> {
+    let printed_any = !printed_text.is_empty();
     if !printed_any {
         if !final_text.is_empty() {
             write_complete_response(stdout, final_text, green_responses)?;
@@ -321,11 +480,21 @@ fn reconcile_streamed_response_with_rewrite_safety(
         return Ok(());
     }
 
-    if streamed_text == final_text {
+    let effective_streamed_text = format!("{printed_text}{pending_text}");
+    if let Some(suffix) = final_text.strip_prefix(printed_text) {
+        if effective_streamed_text == final_text || final_text.starts_with(&effective_streamed_text) {
+            if !suffix.is_empty() {
+                write_response_chunk(stdout, suffix, green_responses, response_color_active)?;
+            }
+            return finish_terminal_stream(stdout, true, response_color_active);
+        }
+    }
+
+    if printed_text == final_text {
         return finish_terminal_stream(stdout, true, response_color_active);
     }
 
-    if let Some(suffix) = final_text.strip_prefix(streamed_text) {
+    if let Some(suffix) = final_text.strip_prefix(printed_text) {
         if !suffix.is_empty() {
             write_response_chunk(stdout, suffix, green_responses, response_color_active)?;
         }
@@ -335,7 +504,7 @@ fn reconcile_streamed_response_with_rewrite_safety(
     if rewrite_in_place_safe {
         return rewrite_response_line(
             stdout,
-            streamed_text,
+            printed_text,
             final_text,
             green_responses,
             response_color_active,
@@ -698,12 +867,30 @@ mod tests {
         final_text: &str,
         green_responses: bool,
     ) -> String {
+        let rewrite_in_place_safe = render_streamed_chunks(streamed_chunks, green_responses)
+            .1
+            .printed_text;
         render_reconciled_response_with_rewrite_safety(
             streamed_chunks,
             final_text,
             green_responses,
-            rewrite_response_line_is_safe(&streamed_chunks.concat(), final_text),
+            rewrite_response_line_is_safe(&rewrite_in_place_safe, final_text),
         )
+    }
+
+    fn render_streamed_chunks(
+        streamed_chunks: &[&str],
+        green_responses: bool,
+    ) -> (String, ResponseStreamState) {
+        let mut stdout = Vec::new();
+        let mut response_stream = ResponseStreamState::default();
+
+        for chunk in streamed_chunks {
+            buffer_response_chunk(&mut stdout, chunk, green_responses, &mut response_stream)
+                .unwrap();
+        }
+
+        (String::from_utf8(stdout).unwrap(), response_stream)
     }
 
     fn render_reconciled_response_with_rewrite_safety(
@@ -712,30 +899,17 @@ mod tests {
         green_responses: bool,
         rewrite_in_place_safe: bool,
     ) -> String {
-        let mut stdout = Vec::new();
-        let mut response_color_active = false;
-        let mut streamed_text = String::new();
-        let mut printed_any = false;
-
-        for chunk in streamed_chunks {
-            streamed_text.push_str(chunk);
-            write_response_chunk(
-                &mut stdout,
-                chunk,
-                green_responses,
-                &mut response_color_active,
-            )
-            .unwrap();
-            printed_any = true;
-        }
+        let (streamed_output, mut response_stream) =
+            render_streamed_chunks(streamed_chunks, green_responses);
+        let mut stdout = streamed_output.into_bytes();
 
         reconcile_streamed_response_with_rewrite_safety(
             &mut stdout,
-            &streamed_text,
+            &response_stream.printed_text,
+            &response_stream.pending_text,
             final_text,
-            printed_any,
             green_responses,
-            &mut response_color_active,
+            &mut response_stream.response_color_active,
             rewrite_in_place_safe,
         )
         .unwrap();
@@ -791,6 +965,48 @@ mod tests {
         assert_eq!(
             render_reconciled_response_with_rewrite_safety(&["WRONG"], "ASK_OK", true, false),
             format!("{ANSI_GREEN}WRONG{ANSI_RESET}\n{ANSI_GREEN}ASK_OK{ANSI_RESET}\n")
+        );
+    }
+
+    #[test]
+    fn buffer_response_chunk_holds_unstable_bold_suffix_until_closed() {
+        let (output, response_stream) =
+            render_streamed_chunks(&["The core tradeoff is this: **TypeScr"], false);
+        assert_eq!(output, "The core tradeoff is this: ");
+        assert_eq!(response_stream.printed_text, "The core tradeoff is this: ");
+        assert_eq!(response_stream.pending_text, "**TypeScr");
+    }
+
+    #[test]
+    fn reconcile_streamed_response_prints_partial_bold_response_once_on_windows_safe_path() {
+        let final_text =
+            "The core tradeoff is this: **TypeScript optimizes for tool authoring speed**";
+        assert_eq!(
+            render_reconciled_response_with_rewrite_safety(
+                &["The core tradeoff is this: **TypeScr"],
+                final_text,
+                false,
+                false
+            ),
+            format!("{final_text}\n")
+        );
+    }
+
+    #[test]
+    fn reconcile_streamed_response_flushes_completed_bold_token_without_duplicate_final_output() {
+        let final_text =
+            "The core tradeoff is this: **TypeScript optimizes for tool authoring speed**";
+        assert_eq!(
+            render_reconciled_response_with_rewrite_safety(
+                &[
+                    "The core tradeoff is this: **TypeScr",
+                    "ipt optimizes for tool authoring speed**",
+                ],
+                final_text,
+                false,
+                false
+            ),
+            format!("{final_text}\n")
         );
     }
 
