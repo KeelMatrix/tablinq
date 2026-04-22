@@ -1,8 +1,8 @@
-use gptd::{AppConfig, CoreService};
 use gptd::browser::execution_error_metadata;
+use gptd::{AppConfig, CoreService};
 use shared_protocol::{
-    AskCommand, BrowserConnectionMode, BrowserOpenRequest, CancelJobCommand, EventPayload,
-    ErrorCode, GatewayRequestContext, JobKind, JobStatus, Mode, PullArtifactCommand,
+    AskCommand, BrowserConnectionMode, BrowserOpenRequest, CancelJobCommand, ErrorCode,
+    EventPayload, GatewayRequestContext, JobKind, JobStatus, Mode, PullArtifactCommand,
     ResearchCommand, StreamChunkKind,
 };
 use std::fs;
@@ -295,7 +295,11 @@ fn core_service_recovers_provider_generation_failure_with_fresh_conversation_rep
     assert!(result.low_confidence);
     assert!(result.output_text.contains("Recovery note:"));
     assert!(result.output_text.contains("Original user request:"));
-    assert!(result.output_text.contains("reason carefully about this tradeoff"));
+    assert!(
+        result
+            .output_text
+            .contains("reason carefully about this tradeoff")
+    );
 
     let trace = result.recovery_trace.as_ref().expect("recovery trace");
     assert!(trace.recovery_available);
@@ -308,10 +312,16 @@ fn core_service_recovers_provider_generation_failure_with_fresh_conversation_rep
     assert!(trace.replacement_request_id.is_some());
     assert!(trace.prior_conversation_id.is_some());
     assert!(trace.replacement_conversation_id.is_some());
-    assert_ne!(trace.prior_conversation_id, trace.replacement_conversation_id);
+    assert_ne!(
+        trace.prior_conversation_id,
+        trace.replacement_conversation_id
+    );
 
     let packet = result.recovery_packet.as_ref().expect("recovery packet");
-    assert_eq!(packet.original_input, "reason carefully about this tradeoff");
+    assert_eq!(
+        packet.original_input,
+        "reason carefully about this tradeoff"
+    );
     assert_eq!(
         packet.failure_code,
         ErrorCode::ProviderGenerationFailedNonretryable
@@ -322,6 +332,107 @@ fn core_service_recovers_provider_generation_failure_with_fresh_conversation_rep
     let detail = core.job_detail(&result.job_id).unwrap();
     assert_eq!(detail.recovery_trace, result.recovery_trace);
     assert_eq!(detail.recovery_packet, result.recovery_packet);
+
+    let _ = core.browser_close();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn core_service_recovers_provider_generation_failure_with_durable_manifest_context() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed core_service test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+    let upload_fixture = dir.path().join("brief.txt");
+    fs::write(&upload_fixture, "brief body").unwrap();
+
+    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let core = CoreService::new(config).unwrap();
+    core.browser_open(BrowserOpenRequest {
+        target_url: Some(format!(
+            "{fake_url}/?variant=live&scenario=provider-generation-failure-after-success"
+        )),
+        browser_path: None,
+        headless: Some(true),
+    })
+    .unwrap();
+
+    let first = core
+        .ask(
+            AskCommand {
+                prompt: "summarize the attached brief".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
+                mode: Mode::Normal,
+                model_class: None,
+                effort: None,
+                files: vec![upload_fixture.display().to_string()],
+                auto_recover_provider_generation_failure: true,
+            },
+            |_event| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(first.artifacts.len(), 1);
+
+    let second = core
+        .ask(
+            AskCommand {
+                prompt: "reason carefully about this tradeoff".to_owned(),
+                conversation_id: Some(first.conversation_id.clone()),
+                new_conversation: false,
+                mode: Mode::Normal,
+                model_class: None,
+                effort: None,
+                files: vec![],
+                auto_recover_provider_generation_failure: true,
+            },
+            |_event| Ok(()),
+        )
+        .unwrap();
+
+    assert!(second.low_confidence);
+    assert!(second.output_text.contains("Uploads:"));
+    assert!(second.output_text.contains("brief.txt"));
+
+    let packet = second.recovery_packet.as_ref().expect("recovery packet");
+    let manifest = packet.context_manifest.as_ref().expect("context manifest");
+    assert!(!manifest.recent_turns.is_empty());
+    assert!(packet.recovery_manifest_path.as_deref().is_some());
+    let manifest_path = packet
+        .recovery_manifest_path
+        .as_ref()
+        .expect("manifest attachment path");
+    assert!(Path::new(manifest_path).exists());
+    let manifest_name = Path::new(manifest_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .expect("manifest attachment filename");
+    assert!(second.output_text.contains(manifest_name));
+    assert!(
+        packet
+            .replay_files
+            .iter()
+            .any(|file| file.ends_with("brief.txt"))
+    );
+    assert!(packet.replay_files.iter().any(|file| file.ends_with(".md")));
+
+    let db = gptd::Database::open(&core.config().paths.db_path).unwrap();
+    let stored_manifest = db
+        .conversation_recovery_manifest(&second.conversation_id)
+        .unwrap()
+        .expect("stored manifest for recovered conversation");
+    assert_eq!(stored_manifest.recent_turns.len(), 2);
+    assert_eq!(
+        stored_manifest.recent_turns[0].input_files,
+        vec!["brief.txt".to_owned()]
+    );
 
     let _ = core.browser_close();
     let _ = fake_server.kill();
@@ -434,7 +545,10 @@ fn core_service_can_disable_provider_generation_failure_auto_recovery() {
     assert!(!trace.recovery_attempted);
     assert!(trace.replacement_request_id.is_none());
     let packet = metadata.recovery_packet.as_ref().expect("recovery packet");
-    assert_eq!(packet.original_input, "reason carefully about this tradeoff");
+    assert_eq!(
+        packet.original_input,
+        "reason carefully about this tradeoff"
+    );
 
     let _ = core.browser_close();
     let _ = fake_server.kill();

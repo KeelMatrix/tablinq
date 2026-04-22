@@ -30,6 +30,8 @@ const usesDeepResearchFrame =
     usesDeepResearchStartingShell);
 const usesProviderGenerationFailureRecovery =
   scenario === "provider-generation-failure-recover";
+const usesProviderGenerationFailureAfterSuccess =
+  scenario === "provider-generation-failure-after-success";
 const usesProviderGenerationFailureTwice =
   scenario === "provider-generation-failure-twice";
 const keyboardSubmitEnabled =
@@ -1488,27 +1490,33 @@ function startStream(promptText) {
     return;
   }
 
+  const conversationId = currentConversationId();
+  const askNumber = nextAskNumber(conversationId);
+
   if (
     usesProviderGenerationFailureRecovery ||
+    usesProviderGenerationFailureAfterSuccess ||
     usesProviderGenerationFailureTwice
   ) {
-    const attempt = nextProviderFailureAttempt();
-    const isRecoveryReplay =
-      promptText.includes("Recovery note:") &&
-      promptText.includes("Original user request:");
-    if (
-      usesProviderGenerationFailureTwice ||
-      attempt === 1 ||
-      !isRecoveryReplay
-    ) {
-      renderProviderGenerationFailure(promptText);
-      return;
+    const shouldCheckFailure =
+      !usesProviderGenerationFailureAfterSuccess || askNumber > 1;
+    if (shouldCheckFailure) {
+      const attempt = nextProviderFailureAttempt();
+      const isRecoveryReplay =
+        promptText.includes("Recovery note:") &&
+        promptText.includes("Original user request:");
+      if (
+        usesProviderGenerationFailureTwice ||
+        attempt === 1 ||
+        !isRecoveryReplay
+      ) {
+        renderProviderGenerationFailure(promptText);
+        return;
+      }
     }
   }
 
-  const conversationId = currentConversationId();
   const messageId = uniqueId("msg");
-  const askNumber = nextAskNumber(conversationId);
   const responseBlocks =
     scenario === "followup-rich-text" && askNumber > 1
       ? [
@@ -1528,13 +1536,17 @@ function startStream(promptText) {
     conversationId,
     messageId,
     promptText,
-    responseText: responseBlocks
-      ? responseBlocks.join("\n\n")
-      : richRecoveryPrompt
-        ? `${richRecoveryPrompt}\n\nOutline\n1. Goal\n2. Inputs\n3. Constraints\n4. Output`
-        : promptText
-          ? `Fake response for: ${promptText}`
-          : "Fake response for an empty prompt.",
+    responseText:
+      scenario === "provider-generation-failure-after-success" &&
+      promptText.includes("Recovery note:")
+        ? `Recovered response for: ${promptText}\nUploads: ${uploadedFiles().length ? uploadedFiles().join(", ") : "none"}`
+        : responseBlocks
+          ? responseBlocks.join("\n\n")
+          : richRecoveryPrompt
+            ? `${richRecoveryPrompt}\n\nOutline\n1. Goal\n2. Inputs\n3. Constraints\n4. Output`
+            : promptText
+              ? `Fake response for: ${promptText}`
+              : "Fake response for an empty prompt.",
     responseBlocks,
     richRecoveryPrompt,
     richRecoveryOutline,

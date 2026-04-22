@@ -3,10 +3,10 @@ use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::de::DeserializeOwned;
 use shared_protocol::{
-    ArtifactList, ArtifactMetadata, ArtifactSummary, ConversationList, ConversationSummary,
-    FailureBundle, JobDetail, JobKind, JobList, JobStatus, JobSummary, RequestExecutionKind,
-    RequestHistory, RequestListEntry, RequestListPage, RequestSummary, RequestUsage,
-    RecoveryPacket, RecoveryTrace, SessionList, SessionSummary,
+    ArtifactList, ArtifactMetadata, ArtifactSummary, ConversationList,
+    ConversationRecoveryManifest, ConversationSummary, FailureBundle, JobDetail, JobKind, JobList,
+    JobStatus, JobSummary, RecoveryPacket, RecoveryTrace, RequestExecutionKind, RequestHistory,
+    RequestListEntry, RequestListPage, RequestSummary, RequestUsage, SessionList, SessionSummary,
 };
 use std::fs;
 use std::path::Path;
@@ -163,6 +163,12 @@ const MIGRATIONS: &[(&str, &str)] = &[
         ALTER TABLE job_details ADD COLUMN recovery_packet_json TEXT;
         "#,
     ),
+    (
+        "0009_conversation_recovery_manifest",
+        r#"
+        ALTER TABLE conversations ADD COLUMN recovery_manifest_json TEXT;
+        "#,
+    ),
 ];
 
 const REQUEST_HISTORY_LIMIT: usize = 200;
@@ -237,6 +243,28 @@ impl Database {
             )
             .optional()
             .map_err(Into::into)
+    }
+
+    pub fn conversation_recovery_manifest(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Option<ConversationRecoveryManifest>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT recovery_manifest_json
+                FROM conversations
+                WHERE conversation_id = ?1
+                "#,
+                [conversation_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(anyhow::Error::from)
+            .and_then(|value| match value.flatten() {
+                Some(json) => Ok(Some(serde_json::from_str(&json)?)),
+                None => Ok(None),
+            })
     }
 
     pub fn list_conversations(&self) -> Result<ConversationList> {
@@ -736,20 +764,23 @@ impl Database {
         tab_url: Option<&str>,
         last_prompt: Option<&str>,
         last_response: Option<&str>,
+        recovery_manifest: Option<&ConversationRecoveryManifest>,
         last_seen_at: DateTime<Utc>,
     ) -> Result<()> {
         self.conn.execute(
             r#"
             INSERT INTO conversations (
-                conversation_id, session_id, label, tab_url, last_prompt, last_response, last_seen_at
+                conversation_id, session_id, label, tab_url, last_prompt, last_response,
+                recovery_manifest_json, last_seen_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
             ON CONFLICT(conversation_id) DO UPDATE SET
                 session_id = excluded.session_id,
                 label = excluded.label,
                 tab_url = excluded.tab_url,
                 last_prompt = excluded.last_prompt,
                 last_response = excluded.last_response,
+                recovery_manifest_json = excluded.recovery_manifest_json,
                 last_seen_at = excluded.last_seen_at
             "#,
             params![
@@ -759,6 +790,7 @@ impl Database {
                 tab_url,
                 last_prompt,
                 last_response,
+                recovery_manifest.map(serde_json::to_string).transpose()?,
                 last_seen_at.to_rfc3339()
             ],
         )?;
@@ -1444,7 +1476,9 @@ mod tests {
         let recovery_trace = RecoveryTrace {
             recovery_available: true,
             recovery_attempted: true,
-            recovery_strategy: Some(shared_protocol::RecoveryStrategy::ReloadNewConversationReplayWithContext),
+            recovery_strategy: Some(
+                shared_protocol::RecoveryStrategy::ReloadNewConversationReplayWithContext,
+            ),
             failure_code: Some(shared_protocol::ErrorCode::ProviderGenerationFailedNonretryable),
             failure_bundle_id: Some("bundle-1".to_owned()),
             prior_request_id: Some("job-1:provider-attempt-0".to_owned()),
@@ -1460,6 +1494,31 @@ mod tests {
             effort: Some(shared_protocol::Effort::Extended),
             files: vec!["C:\\input.txt".to_owned()],
             context_summary: Some("Prior conversation id: conv-old".to_owned()),
+            context_manifest: Some(shared_protocol::ConversationRecoveryManifest {
+                conversation_id: "conv-old".to_owned(),
+                archived_context: vec!["Earlier request: explain the system".to_owned()],
+                recent_turns: vec![shared_protocol::RecoveryManifestTurn {
+                    completed_at: now,
+                    request_text: "reason carefully about this tradeoff".to_owned(),
+                    response_excerpt: "The tradeoff depends on context.".to_owned(),
+                    input_files: vec!["input.txt".to_owned()],
+                    generated_artifacts: vec![],
+                }],
+                tracked_input_files: vec![shared_protocol::RecoveryManifestFile {
+                    kind: shared_protocol::RecoveryManifestFileKind::InputAttachment,
+                    file_name: "input.txt".to_owned(),
+                    local_path: "C:\\input.txt".to_owned(),
+                    content_type: None,
+                    recorded_at: now,
+                }],
+                tracked_generated_artifacts: vec![],
+                updated_at: now,
+            }),
+            recovery_manifest_path: Some("C:\\state\\recovery-manifests\\job-1.md".to_owned()),
+            replay_files: vec![
+                "C:\\input.txt".to_owned(),
+                "C:\\state\\recovery-manifests\\job-1.md".to_owned(),
+            ],
             prior_request_id: Some("job-1:provider-attempt-0".to_owned()),
             prior_conversation_id: Some("conv-old".to_owned()),
             failure_code: shared_protocol::ErrorCode::ProviderGenerationFailedNonretryable,
@@ -1520,6 +1579,67 @@ mod tests {
     }
 
     #[test]
+    fn conversation_recovery_manifest_roundtrips() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tablinq.sqlite3");
+        let now = Utc::now();
+        let db = Database::open(&path).unwrap();
+
+        db.upsert_session(
+            "session-1",
+            "Browser session",
+            Some("https://chatgpt.com/c/conv-1"),
+            now,
+        )
+        .unwrap();
+
+        let manifest = ConversationRecoveryManifest {
+            conversation_id: "conv-1".to_owned(),
+            archived_context: vec!["Older turn summary".to_owned()],
+            recent_turns: vec![shared_protocol::RecoveryManifestTurn {
+                completed_at: now,
+                request_text: "Summarize the brief".to_owned(),
+                response_excerpt: "The brief recommends a phased rollout.".to_owned(),
+                input_files: vec!["brief.txt".to_owned()],
+                generated_artifacts: vec!["rollout-summary.txt".to_owned()],
+            }],
+            tracked_input_files: vec![shared_protocol::RecoveryManifestFile {
+                kind: shared_protocol::RecoveryManifestFileKind::InputAttachment,
+                file_name: "brief.txt".to_owned(),
+                local_path: dir.path().join("brief.txt").display().to_string(),
+                content_type: None,
+                recorded_at: now,
+            }],
+            tracked_generated_artifacts: vec![shared_protocol::RecoveryManifestFile {
+                kind: shared_protocol::RecoveryManifestFileKind::GeneratedArtifact,
+                file_name: "rollout-summary.txt".to_owned(),
+                local_path: dir.path().join("rollout-summary.txt").display().to_string(),
+                content_type: Some("text/plain".to_owned()),
+                recorded_at: now,
+            }],
+            updated_at: now,
+        };
+
+        db.upsert_conversation(
+            "conv-1",
+            "session-1",
+            "Conversation 1",
+            Some("https://chatgpt.com/c/conv-1"),
+            Some("prompt 1"),
+            Some("response 1"),
+            Some(&manifest),
+            now,
+        )
+        .unwrap();
+
+        let stored = db
+            .conversation_recovery_manifest("conv-1")
+            .unwrap()
+            .expect("stored manifest");
+        assert_eq!(stored, manifest);
+    }
+
+    #[test]
     fn artifacts_are_pruned_with_a_fixed_bound() {
         let dir = tempdir().unwrap();
         let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
@@ -1576,6 +1696,7 @@ mod tests {
                 Some("http://example.test/c/conv-1"),
                 Some("first prompt"),
                 Some("first response"),
+                None,
                 now,
             )
             .unwrap();
@@ -1586,6 +1707,7 @@ mod tests {
                 Some("http://example.test/c/conv-2"),
                 Some("second prompt"),
                 Some("second response"),
+                None,
                 now + Duration::seconds(1),
             )
             .unwrap();
@@ -1630,6 +1752,7 @@ mod tests {
             Some("https://chatgpt.com/c/conv-1"),
             Some("prompt 1"),
             Some("response 1"),
+            None,
             now,
         )
         .unwrap();
@@ -1640,6 +1763,7 @@ mod tests {
             Some("https://chatgpt.com/c/conv-2"),
             Some("prompt 2"),
             Some("response 2"),
+            None,
             now + Duration::seconds(1),
         )
         .unwrap();

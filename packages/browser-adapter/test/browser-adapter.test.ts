@@ -50,6 +50,7 @@ function withHarnessUrl(
       | "recover-mismatch"
       | "recover-wrong-conversation"
       | "provider-generation-failure-recover"
+      | "provider-generation-failure-after-success"
       | "provider-generation-failure-twice"
       | "research-success"
       | "research-starting-shell"

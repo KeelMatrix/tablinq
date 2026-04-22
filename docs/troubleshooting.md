@@ -115,6 +115,40 @@ Actions:
 - do not blindly resubmit the same prompt
 - if needed, rerun `gpt browser attach` and `gpt browser open`
 
+## Provider page says "Something went wrong while generating the response"
+
+Symptoms:
+
+- the ChatGPT page shows `Something went wrong while generating the response...`
+- the CLI or gateway returns `provider_generation_failed_nonretryable`
+
+What that means:
+
+- Tablinq treats this as a provider failure where the page Retry button is intentionally disabled
+- the default recovery path is reload, fresh conversation, and one replay with preserved compact context
+- the replay does not depend on the provider preserving the old thread across reload
+
+Current context scope for this recovery:
+
+- original user request
+- request options and request-scoped file references Tablinq already knows about
+- prior conversation id
+- a durable recovery manifest synthesized from prior completed turns
+- an optional recovery-manifest attachment uploaded into the fresh conversation
+- a bounded replay file set that can include recent durable context files and generated artifacts when they still exist locally
+
+Current limitation:
+
+- this is not a full transcript restore
+- provider-only context and old provider-hosted artifacts are only recoverable if they already exist in Tablinq's own durable state
+- replayed historical files are intentionally bounded, so very large or very attachment-heavy threads may still lose some provider-side nuance
+
+Actions:
+
+- inspect `gpt jobs show <job-id>` or `GET /v1/requests/{request_id}` for recovery metadata
+- inspect the linked failure bundle if the replay also fails
+- if your workflow depends on deep prior-thread context, prefer explicit attachments or external durable context instead of relying on implicit browser-thread memory alone
+
 ## Native messaging does not connect
 
 Symptoms:

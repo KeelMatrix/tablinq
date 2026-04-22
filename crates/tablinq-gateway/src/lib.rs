@@ -1831,28 +1831,34 @@ fn annotate_openai_error_value(
     {
         value["tablinq_failure_bundle_id"] = Value::String(bundle_id.to_owned());
     }
-    value["tablinq_recovery_available"] =
-        Value::Bool(recovery_trace.map(|trace| trace.recovery_available).unwrap_or(false));
-    value["tablinq_recovery_attempted"] =
-        Value::Bool(recovery_trace.map(|trace| trace.recovery_attempted).unwrap_or(false));
+    value["tablinq_recovery_available"] = Value::Bool(
+        recovery_trace
+            .map(|trace| trace.recovery_available)
+            .unwrap_or(false),
+    );
+    value["tablinq_recovery_attempted"] = Value::Bool(
+        recovery_trace
+            .map(|trace| trace.recovery_attempted)
+            .unwrap_or(false),
+    );
     if let Some(strategy) = recovery_trace
         .and_then(|trace| trace.recovery_strategy.as_ref())
         .map(recovery_strategy_name)
     {
         value["tablinq_recovery_strategy"] = Value::String(strategy.to_owned());
     }
-    if let Some(prior_request_id) = recovery_trace.and_then(|trace| trace.prior_request_id.as_deref())
+    if let Some(prior_request_id) =
+        recovery_trace.and_then(|trace| trace.prior_request_id.as_deref())
     {
         value["tablinq_prior_request_id"] = Value::String(prior_request_id.to_owned());
     }
-    if let Some(replacement_request_id) = recovery_trace
-        .and_then(|trace| trace.replacement_request_id.as_deref())
+    if let Some(replacement_request_id) =
+        recovery_trace.and_then(|trace| trace.replacement_request_id.as_deref())
     {
-        value["tablinq_replacement_request_id"] =
-            Value::String(replacement_request_id.to_owned());
+        value["tablinq_replacement_request_id"] = Value::String(replacement_request_id.to_owned());
     }
-    if let Some(replacement_conversation_id) = recovery_trace
-        .and_then(|trace| trace.replacement_conversation_id.as_deref())
+    if let Some(replacement_conversation_id) =
+        recovery_trace.and_then(|trace| trace.replacement_conversation_id.as_deref())
     {
         value["tablinq_replacement_conversation_id"] =
             Value::String(replacement_conversation_id.to_owned());

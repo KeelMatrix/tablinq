@@ -143,6 +143,24 @@ Provider clients should expect a browser-backed lifecycle:
 - streaming resumes only when Tablinq can safely match the live browser state to the interrupted request
 - prompts are not blindly resubmitted by default
 
+For the provider page failure `Something went wrong while generating the response...`, Tablinq uses a separate recovery path:
+
+- classify the failure as `provider_generation_failed_nonretryable`
+- do not auto-click the page Retry button
+- reload the tab
+- start a fresh conversation
+- replay once with a compact preserved-context wrapper
+
+The replay wrapper currently includes:
+
+- a short recovery note
+- a compact context summary derived from the prior durable recovery manifest
+- the original user request
+
+The current durable recovery manifest is richer than a single-turn snapshot. It is refreshed after each completed turn and stores archived context, recent turn summaries, tracked input attachments, and tracked generated artifacts. On provider-generation recovery, Tablinq may also upload a generated recovery-manifest attachment and a bounded set of recent durable context files into the fresh conversation.
+
+This is still not a full raw chat dump. If clients need exact transcript reconstruction or provider-only thread state, they should still persist their own higher-fidelity context in addition to `request_id` and conversation ids.
+
 Persist `request_id` and inspect request status when a client connection drops unexpectedly.
 
 ## Recovery commands

@@ -1,9 +1,7 @@
 mod operations;
 mod support;
 
-use crate::browser::{
-    BrowserManager, execution_error, execution_error_metadata,
-};
+use crate::browser::{BrowserManager, execution_error, execution_error_metadata};
 use crate::config::AppConfig;
 use crate::db::Database;
 use anyhow::{Context, Result};
@@ -19,9 +17,11 @@ pub use support::error_code_for_message;
 use support::{
     apply_research_update, browser_session_identity, build_provider_generation_context_summary,
     build_provider_generation_recovery_packet, build_provider_generation_recovery_trace,
-    build_provider_generation_replay_prompt, conversation_id_from_url, is_cancelled_message,
-    lock_browser, lock_cancel_registry, maybe_write_research_output,
-    provider_recovery_attempt_request_id, should_auto_recover_provider_generation_failure,
+    build_provider_generation_replay_files, build_provider_generation_replay_prompt,
+    conversation_id_from_url, is_cancelled_message, lock_browser, lock_cancel_registry,
+    maybe_write_research_output, provider_recovery_attempt_request_id,
+    should_auto_recover_provider_generation_failure, update_conversation_recovery_manifest,
+    write_provider_generation_recovery_manifest_attachment,
 };
 
 const ARTIFACT_RETENTION_LIMIT: usize = 100;
@@ -298,13 +298,18 @@ impl CoreService {
                                 .as_deref()
                                 .and_then(conversation_id_from_url)
                         });
-                    let prior_conversation = if let Some(conversation_id) =
-                        prior_conversation_id.as_deref()
-                    {
-                        db.find_conversation(conversation_id)?
-                    } else {
-                        None
-                    };
+                    let prior_conversation =
+                        if let Some(conversation_id) = prior_conversation_id.as_deref() {
+                            db.find_conversation(conversation_id)?
+                        } else {
+                            None
+                        };
+                    let prior_manifest =
+                        if let Some(conversation_id) = prior_conversation_id.as_deref() {
+                            db.conversation_recovery_manifest(conversation_id)?
+                        } else {
+                            None
+                        };
                     let recovery_allowed = should_auto_recover_provider_generation_failure(
                         prepared.command.auto_recover_provider_generation_failure,
                         recovery_attempt_count,
@@ -329,9 +334,40 @@ impl CoreService {
                         .map(|bundle| bundle.bundle_id)
                     };
                     let context_summary = build_provider_generation_context_summary(
+                        prior_manifest.as_ref(),
                         prior_conversation.as_ref(),
                         prior_conversation_id.as_deref(),
                     );
+                    let previous_recovery_packet = recovery_packet.as_ref().cloned();
+                    let recovery_manifest_path = if recovery_allowed {
+                        prior_manifest
+                            .as_ref()
+                            .map(|manifest| {
+                                write_provider_generation_recovery_manifest_attachment(
+                                    &self.config.paths.state_root,
+                                    &prepared.job_id,
+                                    effective_attempt_count,
+                                    manifest,
+                                )
+                            })
+                            .transpose()?
+                    } else {
+                        previous_recovery_packet
+                            .as_ref()
+                            .and_then(|packet| packet.recovery_manifest_path.clone())
+                    };
+                    let replay_files = if recovery_allowed {
+                        build_provider_generation_replay_files(
+                            &prepared.command.files,
+                            prior_manifest.as_ref(),
+                            recovery_manifest_path.as_deref(),
+                        )
+                    } else {
+                        previous_recovery_packet
+                            .as_ref()
+                            .map(|packet| packet.replay_files.clone())
+                            .unwrap_or_else(|| prepared.command.files.clone())
+                    };
                     let mut trace = build_provider_generation_recovery_trace(
                         failure_bundle_id,
                         prior_request_id.clone(),
@@ -354,6 +390,9 @@ impl CoreService {
                         prepared.command.effort,
                         &prepared.command.files,
                         context_summary.clone(),
+                        prior_manifest.clone(),
+                        recovery_manifest_path.clone(),
+                        replay_files.clone(),
                         prior_request_id,
                         prior_conversation_id.clone(),
                         effective_attempt_count,
@@ -374,11 +413,7 @@ impl CoreService {
                         provider_error.current_url.as_deref(),
                         None,
                     )?;
-                    db.update_job_recovery_metadata(
-                        &prepared.job_id,
-                        Some(&trace),
-                        Some(&packet),
-                    )?;
+                    db.update_job_recovery_metadata(&prepared.job_id, Some(&trace), Some(&packet))?;
 
                     if !recovery_allowed {
                         break Err(execution_error(provider_error.with_recovery(trace, packet)));
@@ -428,13 +463,17 @@ impl CoreService {
                         prompt: build_provider_generation_replay_prompt(
                             &prepared.command.prompt,
                             context_summary.as_deref(),
+                            recovery_manifest_path
+                                .as_deref()
+                                .and_then(|path| std::path::Path::new(path).file_name())
+                                .and_then(|value| value.to_str()),
                         ),
                         conversation_id: None,
                         new_conversation: true,
                         mode: prepared.command.mode,
                         model_class: prepared.command.model_class,
                         effort: prepared.command.effort,
-                        files: prepared.command.files.clone(),
+                        files: replay_files,
                         auto_recover_provider_generation_failure: false,
                     };
                 }
@@ -504,6 +543,22 @@ impl CoreService {
                     Some(&result.current_url),
                     completed_at,
                 )?;
+                let existing_manifest =
+                    db.conversation_recovery_manifest(&result.conversation_id)?;
+                let conversation_manifest = update_conversation_recovery_manifest(
+                    existing_manifest.as_ref().or_else(|| {
+                        result
+                            .recovery_packet
+                            .as_ref()
+                            .and_then(|packet| packet.context_manifest.as_ref())
+                    }),
+                    &result.conversation_id,
+                    &prepared.command.prompt,
+                    &result.output_text,
+                    &prepared.command.files,
+                    &result.artifacts,
+                    completed_at,
+                );
                 db.upsert_conversation(
                     &result.conversation_id,
                     &session_id,
@@ -511,6 +566,7 @@ impl CoreService {
                     Some(&result.current_url),
                     Some(&prepared.command.prompt),
                     Some(&result.output_text),
+                    Some(&conversation_manifest),
                     completed_at,
                 )?;
                 db.update_job_output(
@@ -559,7 +615,10 @@ impl CoreService {
                                     .or_else(|| trace.prior_conversation_id.clone())
                             })
                             .or_else(|| {
-                                error.current_url.as_deref().and_then(conversation_id_from_url)
+                                error
+                                    .current_url
+                                    .as_deref()
+                                    .and_then(conversation_id_from_url)
                             })
                     })
                     .or_else(|| prepared.command.conversation_id.clone());
@@ -776,6 +835,17 @@ impl CoreService {
                     Some(&result.current_url),
                     completed_at,
                 )?;
+                let existing_manifest =
+                    db.conversation_recovery_manifest(&result.conversation_id)?;
+                let conversation_manifest = update_conversation_recovery_manifest(
+                    existing_manifest.as_ref(),
+                    &result.conversation_id,
+                    &prepared.command.query,
+                    &result.report_text,
+                    &prepared.command.files,
+                    &result.artifacts,
+                    completed_at,
+                );
                 db.upsert_conversation(
                     &result.conversation_id,
                     &session_id,
@@ -783,6 +853,7 @@ impl CoreService {
                     Some(&result.current_url),
                     Some(&prepared.command.query),
                     Some(&result.report_text),
+                    Some(&conversation_manifest),
                     completed_at,
                 )?;
                 on_event(EventPayload::JobState(JobState {
