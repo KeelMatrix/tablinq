@@ -4,9 +4,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::de::DeserializeOwned;
 use shared_protocol::{
     ArtifactList, ArtifactMetadata, ArtifactSummary, ConversationList,
-    ConversationRecoveryManifest, ConversationSummary, FailureBundle, JobDetail, JobKind, JobList,
-    JobStatus, JobSummary, RecoveryPacket, RecoveryTrace, RequestExecutionKind, RequestHistory,
-    RequestListEntry, RequestListPage, RequestSummary, RequestUsage, SessionList, SessionSummary,
+    ConversationRecoveryManifest, ConversationSessionInfo, ConversationSummary, FailureBundle,
+    JobDetail, JobKind, JobList, JobStatus, JobSummary, RecoveryPacket, RecoveryTrace,
+    RequestExecutionKind, RequestHistory, RequestListEntry, RequestListPage, RequestSummary,
+    RequestUsage, SessionList, SessionSummary,
 };
 use std::fs;
 use std::path::Path;
@@ -179,6 +180,12 @@ pub struct Database {
     conn: Connection,
 }
 
+#[derive(Debug, Clone)]
+pub struct ConversationTurnRecord {
+    pub job: JobDetail,
+    pub request: Option<RequestSummary>,
+}
+
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
@@ -245,6 +252,28 @@ impl Database {
             .map_err(Into::into)
     }
 
+    pub fn find_session_info(&self, session_id: &str) -> Result<Option<ConversationSessionInfo>> {
+        self.conn
+            .query_row(
+                r#"
+                SELECT session_id, label, tab_url, last_seen_at
+                FROM sessions
+                WHERE session_id = ?1
+                "#,
+                [session_id],
+                |row| {
+                    Ok(ConversationSessionInfo {
+                        session_id: row.get(0)?,
+                        label: row.get(1)?,
+                        tab_url: row.get(2)?,
+                        last_seen_at: parse_timestamp(row.get::<_, String>(3)?)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
     pub fn conversation_recovery_manifest(
         &self,
         conversation_id: &str,
@@ -279,6 +308,205 @@ impl Database {
         let rows = statement.query_map([], map_conversation_row)?;
         let conversations = rows.collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(ConversationList { conversations })
+    }
+
+    pub fn list_session_conversations(&self, session_id: &str) -> Result<Vec<ConversationSummary>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT conversation_id, session_id, label, tab_url, last_prompt, last_response,
+                   last_seen_at
+            FROM conversations
+            WHERE session_id = ?1
+            ORDER BY last_seen_at DESC
+            "#,
+        )?;
+        let rows = statement.query_map([session_id], map_conversation_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    pub fn list_conversation_turn_records(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ConversationTurnRecord>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT jobs.job_id,
+                   jobs.status,
+                   jobs.message,
+                   jobs.conversation_id,
+                   jobs.created_at,
+                   jobs.updated_at,
+                   job_details.job_kind,
+                   job_details.input_text,
+                   job_details.output_text,
+                   job_details.current_url,
+                   job_details.output_path,
+                   job_details.cancel_requested,
+                   job_details.interrupted_at,
+                   job_details.interruption_reason,
+                   job_details.recovered_at,
+                   job_details.recovery_reason,
+                   job_details.failed_at,
+                   job_details.failure_reason,
+                   job_details.recovery_trace_json,
+                   job_details.recovery_packet_json,
+                   request_history.request_id,
+                   request_history.job_id,
+                   request_history.model_id,
+                   request_history.request_role,
+                   request_history.parent_request_id,
+                   request_history.execution_kind,
+                   request_history.status,
+                   request_history.cancelled,
+                   request_history.start_time,
+                   request_history.end_time,
+                   request_history.duration_ms,
+                   request_history.queue_wait_ms,
+                   request_history.interrupted_at,
+                   request_history.interruption_reason,
+                   request_history.recovered_at,
+                   request_history.recovery_reason,
+                   request_history.failed_at,
+                   request_history.failure_reason,
+                   request_history.recovery_trace_json,
+                   request_history.recovery_packet_json,
+                   request_history.usage_status,
+                   request_history.prompt_tokens,
+                   request_history.completion_tokens,
+                   request_history.total_tokens,
+                   request_history.warnings_json
+            FROM jobs
+            LEFT JOIN job_details ON job_details.job_id = jobs.job_id
+            LEFT JOIN request_history ON request_history.job_id = jobs.job_id
+            WHERE jobs.conversation_id = ?1
+            ORDER BY jobs.created_at ASC, jobs.job_id ASC
+            "#,
+        )?;
+        let rows = statement.query_map([conversation_id], |row| {
+            let job_id = row.get::<_, String>(0)?;
+            let status = parse_job_status(row.get::<_, String>(1)?.as_str());
+            let message = row.get::<_, Option<String>>(2)?;
+            let conversation_id = row.get::<_, Option<String>>(3)?;
+            let created_at = parse_timestamp(row.get::<_, String>(4)?)?;
+            let updated_at = parse_timestamp(row.get::<_, String>(5)?)?;
+            let kind = row.get::<_, Option<String>>(6)?;
+            let input_text = row.get::<_, Option<String>>(7)?;
+            let output_text = row.get::<_, Option<String>>(8)?;
+            let current_url = row.get::<_, Option<String>>(9)?;
+            let output_path = row.get::<_, Option<String>>(10)?;
+            let cancel_requested = row.get::<_, Option<i64>>(11)?.unwrap_or(0) != 0;
+            let interrupted_at = row.get::<_, Option<String>>(12)?;
+            let interruption_reason = row.get::<_, Option<String>>(13)?;
+            let recovered_at = row.get::<_, Option<String>>(14)?;
+            let recovery_reason = row.get::<_, Option<String>>(15)?;
+            let failed_at = row.get::<_, Option<String>>(16)?;
+            let failure_reason = row.get::<_, Option<String>>(17)?;
+            let recovery_trace_json = row.get::<_, Option<String>>(18)?;
+            let recovery_packet_json = row.get::<_, Option<String>>(19)?;
+            let request = map_optional_request_summary_row(row, 20)?;
+            Ok((
+                job_id,
+                status,
+                message,
+                conversation_id,
+                created_at,
+                updated_at,
+                kind,
+                input_text,
+                output_text,
+                current_url,
+                output_path,
+                cancel_requested,
+                interrupted_at,
+                interruption_reason,
+                recovered_at,
+                recovery_reason,
+                failed_at,
+                failure_reason,
+                recovery_trace_json,
+                recovery_packet_json,
+                request,
+            ))
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            let (
+                job_id,
+                status,
+                message,
+                conversation_id,
+                created_at,
+                updated_at,
+                kind,
+                input_text,
+                output_text,
+                current_url,
+                output_path,
+                cancel_requested,
+                interrupted_at,
+                interruption_reason,
+                recovered_at,
+                recovery_reason,
+                failed_at,
+                failure_reason,
+                recovery_trace_json,
+                recovery_packet_json,
+                request,
+            ) = row?;
+            let artifacts = self.job_artifacts(&job_id)?;
+            records.push(ConversationTurnRecord {
+                job: build_job_detail(
+                    job_id,
+                    status,
+                    message,
+                    conversation_id,
+                    created_at,
+                    updated_at,
+                    kind,
+                    input_text,
+                    output_text,
+                    current_url,
+                    output_path,
+                    cancel_requested,
+                    interrupted_at,
+                    interruption_reason,
+                    recovered_at,
+                    recovery_reason,
+                    failed_at,
+                    failure_reason,
+                    recovery_trace_json,
+                    recovery_packet_json,
+                    artifacts,
+                )?,
+                request,
+            });
+        }
+        Ok(records)
+    }
+
+    pub fn list_conversation_artifacts(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<ArtifactSummary>> {
+        let mut statement = self.conn.prepare(
+            r#"
+            SELECT artifact_id,
+                   conversation_id,
+                   message_id,
+                   file_name,
+                   content_type,
+                   size_bytes,
+                   sha256,
+                   storage_path,
+                   created_at
+            FROM artifacts
+            WHERE conversation_id = ?1
+            ORDER BY created_at DESC, artifact_id DESC
+            "#,
+        )?;
+        let rows = statement.query_map([conversation_id], map_artifact_row)?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
     }
 
     pub fn list_jobs(&self) -> Result<JobList> {
@@ -1093,29 +1321,29 @@ impl Database {
             return Ok(None);
         };
 
-        Ok(Some(JobDetail {
-            job_id: job_id.clone(),
-            kind: kind.as_deref().map(parse_job_kind).unwrap_or(JobKind::Ask),
+        Ok(Some(build_job_detail(
+            job_id.clone(),
             status,
             message,
             conversation_id,
             created_at,
             updated_at,
+            kind,
             input_text,
             output_text,
             current_url,
             output_path,
-            artifacts: self.job_artifacts(&job_id)?,
             cancel_requested,
-            interrupted_at: interrupted_at.map(parse_timestamp).transpose()?,
+            interrupted_at,
             interruption_reason,
-            recovered_at: recovered_at.map(parse_timestamp).transpose()?,
+            recovered_at,
             recovery_reason,
-            failed_at: failed_at.map(parse_timestamp).transpose()?,
+            failed_at,
             failure_reason,
-            recovery_trace: decode_optional_json(recovery_trace_json, 18)?,
-            recovery_packet: decode_optional_json(recovery_packet_json, 19)?,
-        }))
+            recovery_trace_json,
+            recovery_packet_json,
+            self.job_artifacts(&job_id)?,
+        )?))
     }
 
     pub fn fail_incomplete_jobs(&self, message: &str, updated_at: DateTime<Utc>) -> Result<()> {
@@ -1290,50 +1518,128 @@ fn map_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactSummary
 }
 
 fn map_request_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestSummary> {
-    let warnings_json = row.get::<_, String>(24)?;
+    map_request_summary_row_from_offset(row, 0)
+}
+
+fn map_optional_request_summary_row(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<Option<RequestSummary>> {
+    if row.get::<_, Option<String>>(offset)?.is_none() {
+        Ok(None)
+    } else {
+        map_request_summary_row_from_offset(row, offset).map(Some)
+    }
+}
+
+fn map_request_summary_row_from_offset(
+    row: &rusqlite::Row<'_>,
+    offset: usize,
+) -> rusqlite::Result<RequestSummary> {
+    let warnings_index = offset + 24;
+    let warnings_json = row.get::<_, String>(warnings_index)?;
     let warnings = serde_json::from_str(&warnings_json).map_err(|err| {
-        rusqlite::Error::FromSqlConversionFailure(24, rusqlite::types::Type::Text, Box::new(err))
+        rusqlite::Error::FromSqlConversionFailure(
+            warnings_index,
+            rusqlite::types::Type::Text,
+            Box::new(err),
+        )
     })?;
     Ok(RequestSummary {
-        request_id: row.get(0)?,
-        job_id: row.get(1)?,
-        model_id: row.get(2)?,
-        request_role: row.get(3)?,
-        parent_request_id: row.get(4)?,
-        execution_kind: parse_request_execution_kind(row.get::<_, String>(5)?.as_str()),
-        status: parse_job_status(row.get::<_, String>(6)?.as_str()),
-        cancelled: row.get::<_, i64>(7)? != 0,
-        start_time: parse_timestamp(row.get::<_, String>(8)?)?,
+        request_id: row.get(offset)?,
+        job_id: row.get(offset + 1)?,
+        model_id: row.get(offset + 2)?,
+        request_role: row.get(offset + 3)?,
+        parent_request_id: row.get(offset + 4)?,
+        execution_kind: parse_request_execution_kind(row.get::<_, String>(offset + 5)?.as_str()),
+        status: parse_job_status(row.get::<_, String>(offset + 6)?.as_str()),
+        cancelled: row.get::<_, i64>(offset + 7)? != 0,
+        start_time: parse_timestamp(row.get::<_, String>(offset + 8)?)?,
         end_time: row
-            .get::<_, Option<String>>(9)?
+            .get::<_, Option<String>>(offset + 9)?
             .map(parse_timestamp)
             .transpose()?,
-        duration_ms: row.get(10)?,
-        queue_wait_ms: row.get::<_, i64>(11)?.max(0) as u64,
+        duration_ms: row.get(offset + 10)?,
+        queue_wait_ms: row.get::<_, i64>(offset + 11)?.max(0) as u64,
         interrupted_at: row
-            .get::<_, Option<String>>(12)?
+            .get::<_, Option<String>>(offset + 12)?
             .map(parse_timestamp)
             .transpose()?,
-        interruption_reason: row.get(13)?,
+        interruption_reason: row.get(offset + 13)?,
         recovered_at: row
-            .get::<_, Option<String>>(14)?
+            .get::<_, Option<String>>(offset + 14)?
             .map(parse_timestamp)
             .transpose()?,
-        recovery_reason: row.get(15)?,
+        recovery_reason: row.get(offset + 15)?,
         failed_at: row
-            .get::<_, Option<String>>(16)?
+            .get::<_, Option<String>>(offset + 16)?
             .map(parse_timestamp)
             .transpose()?,
-        failure_reason: row.get(17)?,
-        recovery_trace: decode_optional_json(row.get::<_, Option<String>>(18)?, 18)?,
-        recovery_packet: decode_optional_json(row.get::<_, Option<String>>(19)?, 19)?,
+        failure_reason: row.get(offset + 17)?,
+        recovery_trace: decode_optional_json(
+            row.get::<_, Option<String>>(offset + 18)?,
+            offset + 18,
+        )?,
+        recovery_packet: decode_optional_json(
+            row.get::<_, Option<String>>(offset + 19)?,
+            offset + 19,
+        )?,
         usage: RequestUsage {
-            status: row.get(20)?,
-            prompt_tokens: row.get(21)?,
-            completion_tokens: row.get(22)?,
-            total_tokens: row.get(23)?,
+            status: row.get(offset + 20)?,
+            prompt_tokens: row.get(offset + 21)?,
+            completion_tokens: row.get(offset + 22)?,
+            total_tokens: row.get(offset + 23)?,
         },
         warnings,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_job_detail(
+    job_id: String,
+    status: JobStatus,
+    message: Option<String>,
+    conversation_id: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    kind: Option<String>,
+    input_text: Option<String>,
+    output_text: Option<String>,
+    current_url: Option<String>,
+    output_path: Option<String>,
+    cancel_requested: bool,
+    interrupted_at: Option<String>,
+    interruption_reason: Option<String>,
+    recovered_at: Option<String>,
+    recovery_reason: Option<String>,
+    failed_at: Option<String>,
+    failure_reason: Option<String>,
+    recovery_trace_json: Option<String>,
+    recovery_packet_json: Option<String>,
+    artifacts: Vec<ArtifactSummary>,
+) -> Result<JobDetail> {
+    Ok(JobDetail {
+        job_id,
+        kind: kind.as_deref().map(parse_job_kind).unwrap_or(JobKind::Ask),
+        status,
+        message,
+        conversation_id,
+        created_at,
+        updated_at,
+        input_text,
+        output_text,
+        current_url,
+        output_path,
+        artifacts,
+        cancel_requested,
+        interrupted_at: interrupted_at.map(parse_timestamp).transpose()?,
+        interruption_reason,
+        recovered_at: recovered_at.map(parse_timestamp).transpose()?,
+        recovery_reason,
+        failed_at: failed_at.map(parse_timestamp).transpose()?,
+        failure_reason,
+        recovery_trace: decode_optional_json(recovery_trace_json, 18)?,
+        recovery_packet: decode_optional_json(recovery_packet_json, 19)?,
     })
 }
 

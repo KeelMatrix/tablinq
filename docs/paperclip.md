@@ -56,6 +56,10 @@ Paperclip is a good fit when you want file-backed browser automation, research-s
 - set `tablinq_new_conversation = true` for isolated report or batch jobs
 - reuse `tablinq_conversation_id` only when later work should inherit that context
 - persist `request_id`, `tablinq_session_id`, and `tablinq_conversation_id` from responses client-side
+- use `GET /v1/conversations/{conversation_id}` for direct metadata, latest known request or job IDs, and recovery-manifest summary
+- use `GET /v1/conversations/{conversation_id}/messages` for agent-readable history instead of stitching requests manually
+- use `GET /v1/conversations/{conversation_id}/snapshot` when Paperclip needs replay-safe continuation context or durable file and artifact context
+- use `GET /v1/conversations` for discovery only, and `POST /v1/conversations/select` only when the active browser thread must change
 
 ## Cancellation and recovery guidance
 
@@ -63,6 +67,7 @@ Paperclip is a good fit when you want file-backed browser automation, research-s
 - cancel through `POST /v1/requests/{request_id}/cancel`
 - if the client drops mid-run, inspect request status before retrying
 - do not assume a disconnected research job is lost; it may complete upstream and reconcile as `recovered`
+- for recovery-aware continuation, prefer `GET /v1/conversations/{conversation_id}/snapshot` over replaying from request status alone
 
 For request-scoped evidence capture and how to consume `GET /v1/requests/{request_id}/evidence`, use the centralized guidance in [provider-mode.md#evidence-workflow](provider-mode.md#evidence-workflow).
 

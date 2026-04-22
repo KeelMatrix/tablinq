@@ -197,4 +197,10 @@ This is stronger than the earlier single-turn summary path, but it is still not 
 - request status and cancellation
 - sessions and provider metadata
 
+It also exposes a local-only read-only conversation inspection and recovery surface over the same persisted daemon state:
+
+- conversation detail and metadata
+- normalized conversation history with explicit provenance
+- replay-safe conversation snapshots built from durable recovery state
+
 The gateway keeps browser usage stable with queueing and concurrency controls rather than pretending the system is horizontally scalable.

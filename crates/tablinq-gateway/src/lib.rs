@@ -30,9 +30,9 @@ use gptd::{AppConfig, CoreService};
 use serde_json::{Value, json};
 use shared_protocol::{
     ArtifactSummary, AuthSource, BrowserConnectionMode, BrowserOpenRequest, BrowserOwner,
-    BrowserStatusSnapshot, ConversationSelectCommand, ConversationSelection, ConversationSummary,
-    DaemonRequest, DaemonResponse, DoctorReport, ErrorCode, GatewayRequestContext, HealthCheck,
-    JobStatus,
+    BrowserStatusSnapshot, ConversationDetail, ConversationSelectCommand, ConversationSelection,
+    ConversationSnapshot, ConversationSummary, DaemonRequest, DaemonResponse, DoctorReport,
+    ErrorCode, GatewayRequestContext, HealthCheck, JobStatus,
 };
 use std::collections::BTreeMap;
 use std::fs;
@@ -72,10 +72,13 @@ const V1_REQUESTS_PATH: &str = "/v1/requests";
 const V1_CONVERSATIONS_PATH: &str = "/v1/conversations";
 const V1_CONVERSATIONS_SELECT_PATH: &str = "/v1/conversations/select";
 const V1_USAGE_PATH: &str = "/v1/usage";
+const V1_SESSIONS_PREFIX: &str = "/v1/sessions/";
+const V1_CONVERSATIONS_PREFIX: &str = "/v1/conversations/";
 const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 const STAGED_UPLOAD_RETENTION_SECS: i64 = 24 * 60 * 60;
 const REQUEST_SUMMARY_LIMIT: usize = 50;
 const REQUEST_LIST_MAX_LIMIT: usize = 100;
+const CONVERSATION_MESSAGE_LIST_DEFAULT_LIMIT: usize = 50;
 
 #[derive(Debug)]
 struct RequestContext {
@@ -112,6 +115,12 @@ struct RequestListQuery {
     limit: usize,
     offset: usize,
     status: Option<JobStatus>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ConversationMessageQuery {
+    limit: usize,
+    offset: usize,
 }
 
 fn daemon_health_snapshot(config: &AppConfig) -> Option<HealthCheck> {
@@ -455,6 +464,12 @@ fn handle_connection(
             Ok(()) => handle_sessions_request(core, &context.request_id)?,
             Err(response) => response,
         },
+        ("GET", _) if session_conversations_id_from_path(&context.request.path).is_some() => {
+            match authorize_request(config, &context.request, false) {
+                Ok(()) => handle_session_conversations_request(core, &context)?,
+                Err(response) => response,
+            }
+        }
         ("GET", V1_REQUESTS_PATH) => match authorize_request(config, &context.request, false) {
             Ok(()) => handle_requests_request(core, &context)?,
             Err(response) => response,
@@ -462,6 +477,24 @@ fn handle_connection(
         ("GET", V1_CONVERSATIONS_PATH) => {
             match authorize_request(config, &context.request, false) {
                 Ok(()) => handle_conversations_request(core, &context.request_id)?,
+                Err(response) => response,
+            }
+        }
+        ("GET", _) if conversation_messages_id_from_path(&context.request.path).is_some() => {
+            match authorize_request(config, &context.request, false) {
+                Ok(()) => handle_conversation_messages_request(core, &context)?,
+                Err(response) => response,
+            }
+        }
+        ("GET", _) if conversation_snapshot_id_from_path(&context.request.path).is_some() => {
+            match authorize_request(config, &context.request, false) {
+                Ok(()) => handle_conversation_snapshot_request(core, &context)?,
+                Err(response) => response,
+            }
+        }
+        ("GET", _) if conversation_id_from_path(&context.request.path).is_some() => {
+            match authorize_request(config, &context.request, false) {
+                Ok(()) => handle_conversation_detail_request(core, &context)?,
                 Err(response) => response,
             }
         }
@@ -917,6 +950,43 @@ fn handle_sessions_request(core: &CoreService, request_id: &str) -> Result<HttpR
     ))
 }
 
+fn handle_session_conversations_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(session_id) = session_conversations_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+    let Some(session_conversations) = core.list_session_conversations(session_id)? else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.session_conversation_list",
+            "request_id": context.request_id,
+            "session": session_conversations.session,
+            "data": session_conversations
+                .conversations
+                .into_iter()
+                .map(conversation_summary_object)
+                .collect::<Vec<_>>(),
+        }),
+    ))
+}
+
 fn handle_conversations_request(core: &CoreService, request_id: &str) -> Result<HttpResponse> {
     let conversations = core.list_conversations()?;
     Ok(json_response(
@@ -929,6 +999,108 @@ fn handle_conversations_request(core: &CoreService, request_id: &str) -> Result<
                 .into_iter()
                 .map(conversation_summary_object)
                 .collect::<Vec<_>>(),
+        }),
+    ))
+}
+
+fn handle_conversation_detail_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(conversation_id) = conversation_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+    let Some(detail) = core.find_conversation_detail(conversation_id)? else {
+        return Ok(conversation_not_found_response(
+            &context.request_id,
+            conversation_id,
+        ));
+    };
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.conversation",
+            "request_id": context.request_id,
+            "data": conversation_detail_object(detail),
+        }),
+    ))
+}
+
+fn handle_conversation_messages_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(conversation_id) = conversation_messages_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+    let query = match parse_conversation_message_query(&context.request.path, &context.request_id) {
+        Ok(query) => query,
+        Err(response) => return Ok(response),
+    };
+    let Some(history) =
+        core.list_conversation_history(conversation_id, query.limit, query.offset)?
+    else {
+        return Ok(conversation_not_found_response(
+            &context.request_id,
+            conversation_id,
+        ));
+    };
+    Ok(json_response(200, {
+        let conversation_id = history.conversation_id.clone();
+        json!({
+            "object": "tablinq.conversation_message_list",
+            "request_id": context.request_id,
+            "conversation_id": conversation_id.clone(),
+            "tablinq_conversation_id": conversation_id,
+            "data": history.messages,
+            "pagination": {
+                "limit": history.limit,
+                "offset": history.offset,
+                "next_offset": history.next_offset,
+                "has_more": history.next_offset.is_some(),
+                "total_items": history.total_items,
+            },
+        })
+    }))
+}
+
+fn handle_conversation_snapshot_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(conversation_id) = conversation_snapshot_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+    let Some(snapshot) = core.conversation_snapshot(conversation_id)? else {
+        return Ok(conversation_not_found_response(
+            &context.request_id,
+            conversation_id,
+        ));
+    };
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.conversation_snapshot",
+            "request_id": context.request_id,
+            "data": conversation_snapshot_object(snapshot),
         }),
     ))
 }
@@ -1003,16 +1175,17 @@ fn handle_conversation_select_request(
 }
 
 fn conversation_summary_object(summary: ConversationSummary) -> Value {
-    let conversation_id = summary.conversation_id;
+    let conversation_id = summary.conversation_id.clone();
     json!({
         "conversation_id": conversation_id.clone(),
-        "tablinq_conversation_id": conversation_id,
+        "tablinq_conversation_id": conversation_id.clone(),
         "session_id": summary.session_id,
         "label": summary.label,
         "tab_url": summary.tab_url,
         "last_prompt": summary.last_prompt,
         "last_response": summary.last_response,
         "last_seen_at": summary.last_seen_at,
+        "routes": conversation_route_hints_object(&conversation_id, None),
     })
 }
 
@@ -1025,6 +1198,37 @@ fn conversation_selection_object(selection: ConversationSelection) -> Value {
         "current_url": selection.current_url,
         "browser": selection.browser,
     })
+}
+
+fn conversation_detail_object(detail: ConversationDetail) -> Value {
+    let conversation_id = detail.summary.conversation_id.clone();
+    let mut value = serde_json::to_value(detail).unwrap_or_else(|_| json!({}));
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "tablinq_conversation_id".to_owned(),
+            Value::String(conversation_id),
+        );
+    }
+    value
+}
+
+fn conversation_snapshot_object(snapshot: ConversationSnapshot) -> Value {
+    let mut value = serde_json::to_value(snapshot).unwrap_or_else(|_| json!({}));
+    if let Some(object) = value.as_object_mut()
+        && let Some(conversation) = object
+            .get_mut("conversation")
+            .and_then(Value::as_object_mut)
+        && let Some(conversation_id) = conversation
+            .get("conversation_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+    {
+        conversation.insert(
+            "tablinq_conversation_id".to_owned(),
+            Value::String(conversation_id),
+        );
+    }
+    value
 }
 
 fn handle_request_summary_request(
@@ -1506,6 +1710,57 @@ fn parse_request_list_query(
     Ok(query)
 }
 
+fn parse_conversation_message_query(
+    path: &str,
+    request_id: &str,
+) -> std::result::Result<ConversationMessageQuery, HttpResponse> {
+    let mut query = ConversationMessageQuery {
+        limit: CONVERSATION_MESSAGE_LIST_DEFAULT_LIMIT,
+        offset: 0,
+    };
+    for (key, value) in request_query_pairs(path) {
+        match key {
+            "limit" => {
+                let parsed = value.parse::<usize>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": "limit must be a positive integer",
+                        }),
+                    )
+                })?;
+                if parsed == 0 || parsed > REQUEST_LIST_MAX_LIMIT {
+                    return Err(json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
+                        }),
+                    ));
+                }
+                query.limit = parsed;
+            }
+            "offset" => {
+                query.offset = value.parse::<usize>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": "offset must be a non-negative integer",
+                        }),
+                    )
+                })?;
+            }
+            _ => {}
+        }
+    }
+    Ok(query)
+}
+
 fn normalized_request_path(path: &str) -> &str {
     path.split_once('?').map(|(base, _)| base).unwrap_or(path)
 }
@@ -1544,6 +1799,61 @@ fn artifact_id_from_path(path: &str) -> Option<(&str, bool)> {
     } else {
         Some((suffix, false))
     }
+}
+
+fn session_conversations_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_SESSIONS_PREFIX)?;
+    suffix
+        .strip_suffix("/conversations")
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+}
+
+fn conversation_messages_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_CONVERSATIONS_PREFIX)?;
+    suffix
+        .strip_suffix("/messages")
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+}
+
+fn conversation_snapshot_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_CONVERSATIONS_PREFIX)?;
+    suffix
+        .strip_suffix("/snapshot")
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+}
+
+fn conversation_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_CONVERSATIONS_PREFIX)?;
+    if suffix.is_empty() || suffix.contains('/') || suffix == "select" {
+        None
+    } else {
+        Some(suffix)
+    }
+}
+
+fn conversation_not_found_response(request_id: &str, conversation_id: &str) -> HttpResponse {
+    json_response(
+        404,
+        json!({
+            "request_id": request_id,
+            "error": "conversation_not_found",
+            "message": format!("conversation {conversation_id} was not found"),
+        }),
+    )
+}
+
+fn conversation_route_hints_object(
+    conversation_id: &str,
+    latest_request_id: Option<&str>,
+) -> Value {
+    json!({
+        "detail": format!("/v1/conversations/{conversation_id}"),
+        "messages": format!("/v1/conversations/{conversation_id}/messages"),
+        "snapshot": format!("/v1/conversations/{conversation_id}/snapshot"),
+        "select": V1_CONVERSATIONS_SELECT_PATH,
+        "latest_request": latest_request_id.map(|request_id| format!("/v1/requests/{request_id}")),
+        "latest_request_evidence": latest_request_id.map(|request_id| format!("/v1/requests/{request_id}/evidence")),
+    })
 }
 
 fn handle_cancel_request(
