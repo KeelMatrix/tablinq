@@ -57,6 +57,7 @@ impl Drop for TestChild {
 }
 
 fn spawn_daemon(state_root: &Path) -> TestChild {
+    seed_test_config(state_root);
     let mut command = Command::new(env!("CARGO_BIN_EXE_gptd"));
     command
         .arg("serve")
@@ -66,6 +67,16 @@ fn spawn_daemon(state_root: &Path) -> TestChild {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     TestChild::spawn(command)
+}
+
+fn seed_test_config(state_root: &Path) {
+    let config_dir = state_root.join("config");
+    fs::create_dir_all(&config_dir).expect("create test config dir");
+    fs::write(
+        config_dir.join("config.toml"),
+        "version = 2\nbrowser_submit_jitter_min_ms = 0\nbrowser_submit_jitter_max_ms = 0\n",
+    )
+    .expect("write daemon test config");
 }
 
 fn wait_until_ready(state_root: &Path) {

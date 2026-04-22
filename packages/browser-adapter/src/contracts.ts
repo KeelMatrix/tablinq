@@ -91,6 +91,7 @@ export interface AskExecutionCommand {
   conversationId?: string | null;
   newConversation?: boolean;
   timeoutMs?: number;
+  submitJitterMs?: number;
   mode?: "normal" | "search" | "research";
   modelClass?: "instant" | "thinking" | null;
   effort?: "none" | "standard" | "extended" | null;
@@ -104,6 +105,7 @@ export interface ResearchExecutionCommand {
   files?: string[];
   outputDir?: string | null;
   timeoutMs?: number;
+  submitJitterMs?: number;
 }
 
 export interface ArtifactMetadataSnapshot {
