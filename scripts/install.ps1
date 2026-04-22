@@ -15,6 +15,13 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $packageScriptPath = Join-Path $PSScriptRoot "package.ps1"
+$explicitPackageRoot = $PSBoundParameters.ContainsKey("PackageRoot")
+if ($explicitPackageRoot -and (Test-Path $PackageRoot)) {
+  $PackageRoot = (Resolve-Path $PackageRoot).Path
+}
+$usePrebuiltPackage = $explicitPackageRoot -and (Test-Path $PackageRoot)
+$effectiveSkipDependencyInstall = $SkipDependencyInstall -or $usePrebuiltPackage
+$effectiveSkipPackageBuild = $SkipPackageBuild -or $usePrebuiltPackage
 $daemonTaskName = "Tablinq Daemon"
 $gatewayTaskName = "Tablinq Gateway"
 $legacyDaemonLaunchers = @("Tablinq Daemon.cmd")
@@ -22,10 +29,10 @@ $legacyGatewayLaunchers = @("Tablinq Gateway.cmd")
 $script:InstallProgressId = 8701
 $script:CurrentPhase = 0
 $script:TotalPhases = 3
-if (-not $SkipDependencyInstall) {
+if (-not $effectiveSkipDependencyInstall) {
   $script:TotalPhases += 1
 }
-if (-not $SkipPackageBuild) {
+if (-not $effectiveSkipPackageBuild) {
   $script:TotalPhases += 1
 }
 if (-not $NoLaunchAfterInstall) {
@@ -906,10 +913,18 @@ function Write-ManualSteps {
 
 Write-Host "Installing Tablinq on Windows..."
 Write-Host "Defaults: launch now = yes, autostart on login = no"
+if ($usePrebuiltPackage) {
+  Write-Host ("Package source: prebuilt bundle ({0})" -f $PackageRoot)
+}
 Start-InstallPhase -Title "Checking prerequisites"
-Assert-CommandAvailable -CommandName "cargo" -InstallHint "Install Rust and make sure cargo is on PATH."
-Assert-CommandAvailable -CommandName "node" -InstallHint "Install Node.js 20 or newer and make sure node is on PATH."
-Assert-CommandAvailable -CommandName "pnpm" -InstallHint "Install pnpm and make sure it is on PATH."
+if (-not $effectiveSkipPackageBuild) {
+  Assert-CommandAvailable -CommandName "cargo" -InstallHint "Install Rust and make sure cargo is on PATH."
+  Assert-CommandAvailable -CommandName "node" -InstallHint "Install Node.js 20 or newer and make sure node is on PATH."
+  Assert-CommandAvailable -CommandName "pnpm" -InstallHint "Install pnpm and make sure it is on PATH."
+}
+elseif (-not $effectiveSkipDependencyInstall) {
+  Assert-CommandAvailable -CommandName "pnpm" -InstallHint "Install pnpm and make sure it is on PATH."
+}
 $powerShellExecutable = Resolve-PowerShellExecutable
 
 $browserSelection = Resolve-BrowserSelection
@@ -937,12 +952,12 @@ if (-not $SkipRegistry) {
   Assert-RegistryWritable -KeyPath "HKCU\Software"
 }
 
-if (-not $SkipDependencyInstall) {
+if (-not $effectiveSkipDependencyInstall) {
   Start-InstallPhase -Title "Installing workspace dependencies"
   Invoke-Step -Label "pnpm install" -FilePath "pnpm" -ArgumentList @("install") -WorkingDirectory $repoRoot -LogPath (Join-Path $installLogDir "install-pnpm")
 }
 
-if (-not $SkipPackageBuild) {
+if (-not $effectiveSkipPackageBuild) {
   Start-InstallPhase -Title "Building package"
   Invoke-Step -FilePath $powerShellExecutable -ArgumentList @(
     "-ExecutionPolicy",
