@@ -44,8 +44,8 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace --locked
 
-  typescript:
-    name: TypeScript checks
+  typescript-core:
+    name: TypeScript core checks
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -75,5 +75,42 @@ jobs:
       - name: Build TypeScript packages
         run: pnpm build
 
-      - name: Run TypeScript tests
-        run: pnpm exec vitest run --reporter=dot
+      - name: Run fast TypeScript tests
+        run: pnpm run test:ts:fast
+
+  typescript-browser-adapter:
+    name: TypeScript browser adapter (${{ matrix.shard }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: foundation
+            script: test:browser-adapter:foundation
+          - shard: ask
+            script: test:browser-adapter:ask
+          - shard: research
+            script: test:browser-adapter:research
+          - shard: recovery
+            script: test:browser-adapter:recovery
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Run browser-adapter shard
+        run: pnpm run ${{ matrix.script }}

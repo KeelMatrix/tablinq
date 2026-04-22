@@ -9,6 +9,11 @@
   },
   "scripts": {
     "build": "pnpm -r --if-present build",
+    "test:browser-adapter:ask": "pnpm exec vitest run packages/browser-adapter/test/browser-adapter.ask.test.ts --reporter=dot",
+    "test:browser-adapter:foundation": "pnpm exec vitest run packages/browser-adapter/test/browser-adapter.foundation.test.ts --reporter=dot",
+    "test:browser-adapter:recovery": "pnpm exec vitest run packages/browser-adapter/test/browser-adapter.recovery.test.ts --reporter=dot",
+    "test:browser-adapter:research": "pnpm exec vitest run packages/browser-adapter/test/browser-adapter.research.test.ts --reporter=dot",
+    "test:ts:fast": "pnpm exec vitest run packages/browser-adapter/test/protocol-schemas.test.ts packages/browser-adapter/test/selector-pack.test.ts packages/extension/test/probe.test.ts packages/extension/test/content-script.test.ts --reporter=dot",
     "ci:local": "powershell -ExecutionPolicy Bypass -File scripts/ci-local.ps1 -Job all",
     "ci:local:package-smoke": "powershell -ExecutionPolicy Bypass -File scripts/ci-local.ps1 -Job package-smoke",
     "ci:local:rust": "powershell -ExecutionPolicy Bypass -File scripts/ci-local.ps1 -Job rust",
