@@ -36,6 +36,8 @@ export type AskRuntimeState = {
   doneStreak: number;
   knownConversationId: string | null;
   knownMessageId: string | null;
+  pendingMessageId: string | null;
+  pendingMessageText: string;
   askBaseline: AskBaseline | null;
   pendingTextReconciliation: boolean;
   lastProgressAt: number;

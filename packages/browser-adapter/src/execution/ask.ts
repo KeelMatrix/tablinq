@@ -133,6 +133,8 @@ export async function runAsk(
       conversationIdFromUrl(safePageUrl(page)) ??
       null,
     knownMessageId: null,
+    pendingMessageId: null,
+    pendingMessageText: "",
     askBaseline,
     pendingTextReconciliation: false,
     lastProgressAt: Date.now(),

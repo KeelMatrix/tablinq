@@ -10,6 +10,7 @@ export interface AskSnapshot {
   retryVisible: boolean;
   conversationId: string | null;
   messageId: string | null;
+  thoughtDividerBeforeMessage?: boolean;
   currentUrl: string;
 }
 
@@ -331,6 +332,7 @@ export function normalizeAskSnapshot(snapshot: AskSnapshot): AskSnapshot {
       normalizeOptionalString(snapshot.conversationId) ??
       conversationIdFromUrl(snapshot.currentUrl),
     messageId: normalizeOptionalString(snapshot.messageId),
+    thoughtDividerBeforeMessage: Boolean(snapshot.thoughtDividerBeforeMessage),
   };
 }
 

@@ -37,6 +37,7 @@ function withHarnessUrl(
       | "submit-upload-trap-no-keyboard"
       | "submit-upload-stale-recover"
       | "followup-rich-text"
+      | "thinking-artifact-messages"
       | "followup-stale"
       | "done-early"
       | "stall-recover"
@@ -1125,6 +1126,47 @@ describe("browser adapter", () => {
     expect(secondChunks.join("")).not.toContain(
       `${first.output_text}\n${first.output_text}`,
     );
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("suppresses thought artifact messages and streams the actual reply", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "thinking-artifact-messages",
+    });
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const chunks: string[] = [];
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-thinking-artifact-messages",
+        prompt: "reason carefully about this tradeoff",
+      },
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+    );
+
+    expect(result.output_text).toBe(
+      "Fake response for: reason carefully about this tradeoff",
+    );
+    expect(chunks.join("")).toBe(result.output_text);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).not.toContain("I’m reconstructing the prior context");
+    expect(chunks.join("")).not.toContain("The comparison is narrowing");
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);
