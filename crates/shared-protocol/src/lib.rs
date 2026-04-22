@@ -15,6 +15,10 @@ pub const APP_NAME: &str = "Tablinq";
 pub const CHROME_ATTACH_PROFILE_DIR_NAME: &str = "chrome-attach-profile";
 pub const CHROME_ATTACH_PROFILE_NOTE: &str = "Chrome attach-first uses a dedicated persistent real profile under the Tablinq state root. Sign in once in that profile before attaching.";
 
+pub fn default_auto_recover_provider_generation_failure() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BuildMetadata {
@@ -63,6 +67,7 @@ pub enum ErrorCode {
     DownloadFailed,
     UploadFailed,
     ResearchJobFailed,
+    ProviderGenerationFailedNonretryable,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -243,6 +248,8 @@ pub struct AskCommand {
     pub model_class: Option<ModelClass>,
     pub effort: Option<Effort>,
     pub files: Vec<String>,
+    #[serde(default = "default_auto_recover_provider_generation_failure")]
+    pub auto_recover_provider_generation_failure: bool,
 }
 
 impl AskCommand {
@@ -940,6 +947,42 @@ pub struct RequestUsage {
     pub total_tokens: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryStrategy {
+    ReloadNewConversationReplayWithContext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryTrace {
+    pub recovery_available: bool,
+    pub recovery_attempted: bool,
+    pub recovery_strategy: Option<RecoveryStrategy>,
+    pub failure_code: Option<ErrorCode>,
+    pub failure_bundle_id: Option<String>,
+    pub prior_request_id: Option<String>,
+    pub replacement_request_id: Option<String>,
+    pub prior_conversation_id: Option<String>,
+    pub replacement_conversation_id: Option<String>,
+    pub recovery_attempt_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryPacket {
+    pub original_input: String,
+    pub mode: Mode,
+    pub model_class: Option<ModelClass>,
+    pub effort: Option<Effort>,
+    pub files: Vec<String>,
+    pub context_summary: Option<String>,
+    pub prior_request_id: Option<String>,
+    pub prior_conversation_id: Option<String>,
+    pub failure_code: ErrorCode,
+    pub recovery_attempt_count: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RequestSummary {
@@ -961,6 +1004,10 @@ pub struct RequestSummary {
     pub recovery_reason: Option<String>,
     pub failed_at: Option<DateTime<Utc>>,
     pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub recovery_trace: Option<RecoveryTrace>,
+    #[serde(default)]
+    pub recovery_packet: Option<RecoveryPacket>,
     pub usage: RequestUsage,
     pub warnings: Vec<String>,
 }
@@ -1041,6 +1088,10 @@ pub struct JobDetail {
     pub recovery_reason: Option<String>,
     pub failed_at: Option<DateTime<Utc>>,
     pub failure_reason: Option<String>,
+    #[serde(default)]
+    pub recovery_trace: Option<RecoveryTrace>,
+    #[serde(default)]
+    pub recovery_packet: Option<RecoveryPacket>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1055,6 +1106,10 @@ pub struct AskResult {
     pub current_url: String,
     #[serde(default)]
     pub low_confidence: bool,
+    #[serde(default)]
+    pub recovery_trace: Option<RecoveryTrace>,
+    #[serde(default)]
+    pub recovery_packet: Option<RecoveryPacket>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1104,6 +1159,10 @@ pub struct ArtifactPullResult {
 pub struct DaemonErrorResponse {
     pub error_code: ErrorCode,
     pub message: String,
+    #[serde(default)]
+    pub recovery_trace: Option<RecoveryTrace>,
+    #[serde(default)]
+    pub recovery_packet: Option<RecoveryPacket>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1386,6 +1445,7 @@ mod tests {
                 model_class: Some(ModelClass::Thinking),
                 effort: Some(Effort::Standard),
                 files: vec!["fixtures/a.pdf".to_owned()],
+                auto_recover_provider_generation_failure: true,
             }),
         };
 
@@ -1465,6 +1525,7 @@ mod tests {
             files: (0..10)
                 .map(|index| format!("fixtures/input-{index}.txt"))
                 .collect(),
+            auto_recover_provider_generation_failure: true,
         };
 
         command.validate().unwrap();
@@ -1506,6 +1567,7 @@ mod tests {
             model_class: Some(ModelClass::Instant),
             effort: None,
             files: vec![path.display().to_string()],
+            auto_recover_provider_generation_failure: true,
         };
 
         let err = command.validate().unwrap_err();

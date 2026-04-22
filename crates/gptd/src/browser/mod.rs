@@ -1,4 +1,5 @@
 mod adapter_process;
+mod error;
 mod protocol;
 mod recovery;
 mod runtime;
@@ -7,6 +8,9 @@ use crate::config::AppConfig;
 use crate::logging::JsonLogger;
 use adapter_process::AdapterProcess;
 use anyhow::{Context, Result};
+pub use error::{
+    ExecutionErrorMetadata, adapter_error_code, execution_error, execution_error_metadata,
+};
 use protocol::AdapterRequest;
 use recovery::{
     derive_recovery_conversation_id, idle_snapshot, is_recoverable_adapter_error,
@@ -99,6 +103,7 @@ impl BrowserManager {
                 target_url,
                 browser_path,
                 headless,
+                force_reload: false,
             }) {
             Ok(snapshot) => {
                 let snapshot = normalize_snapshot(&self.config, snapshot);
@@ -157,6 +162,39 @@ impl BrowserManager {
             .as_mut()
             .expect("browser adapter process missing")
             .diagnostics(bundle_dir)
+    }
+
+    pub fn reload_target_page(&mut self) -> Result<BrowserStatusSnapshot> {
+        self.ensure_process()?;
+
+        let target_url = self.current_target();
+        let browser_path = self.last_snapshot.browser_path.clone();
+        let request_browser_path = browser_path.clone();
+        match self
+            .process
+            .as_mut()
+            .expect("browser adapter process missing")
+            .request(AdapterRequest::Open {
+                target_url,
+                browser_path,
+                headless: false,
+                force_reload: true,
+            }) {
+            Ok(snapshot) => {
+                let snapshot = normalize_snapshot(&self.config, snapshot);
+                self.last_snapshot = snapshot.clone();
+                Ok(snapshot)
+            }
+            Err(err) => {
+                self.teardown_process();
+                self.last_snapshot = idle_snapshot(
+                    &self.config,
+                    Some(self.current_target()),
+                    request_browser_path,
+                );
+                Err(err)
+            }
+        }
     }
 
     pub fn ask<F>(

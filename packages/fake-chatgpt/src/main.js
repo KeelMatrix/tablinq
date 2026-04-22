@@ -28,6 +28,10 @@ const usesDeepResearchFrame =
     scenario === "research-failure" ||
     scenario === "research-reload" ||
     usesDeepResearchStartingShell);
+const usesProviderGenerationFailureRecovery =
+  scenario === "provider-generation-failure-recover";
+const usesProviderGenerationFailureTwice =
+  scenario === "provider-generation-failure-twice";
 const keyboardSubmitEnabled =
   scenario !== "submit-upload-trap-no-keyboard" &&
   scenario !== "submit-never-ready" &&
@@ -118,6 +122,7 @@ document.body.dataset.lastMessageId = "";
 document.body.dataset.uploadPopoverOpen = "false";
 document.body.dataset.lastSubmissionMethod = "";
 document.body.dataset.staleSubmitClicks = "0";
+document.body.dataset.retryClicks = "0";
 document.body.dataset.keyboardSubmitReady = keyboardSubmitEnabled
   ? "true"
   : "false";
@@ -942,6 +947,64 @@ function resetArtifactLink() {
   artifactLink.setAttribute("data-artifact-ready", "false");
 }
 
+function clearAskFailureState() {
+  delete document.body.dataset.askFailureCode;
+  delete document.body.dataset.askFailureMessage;
+}
+
+function providerGenerationFailureMessage() {
+  return "Something went wrong while generating the response. If this issue persists please contact us through our help center.";
+}
+
+function providerFailureStorageKey(name) {
+  return `tablinq-provider-failure:${scenario}:${name}`;
+}
+
+function nextProviderFailureAttempt() {
+  const key = providerFailureStorageKey("attempt");
+  const next = Number.parseInt(localStorage.getItem(key) || "0", 10) + 1;
+  localStorage.setItem(key, String(next));
+  return next;
+}
+
+function renderProviderGenerationFailure(promptText) {
+  const conversationId = currentConversationId();
+  const messageId = uniqueId("msg");
+  const failureMessage = providerGenerationFailureMessage();
+  const retryMarkup =
+    '<button type="button" data-testid="retry-button">Retry</button>';
+
+  writeConversationState(conversationId, messageId);
+  localStorage.setItem(
+    providerFailureStorageKey("priorConversationId"),
+    conversationId,
+  );
+  localStorage.setItem(providerFailureStorageKey("priorPrompt"), promptText);
+  clearState(conversationId);
+  clearAskFailureState();
+  document.body.dataset.askFailureCode =
+    "provider_generation_failed_nonretryable";
+  document.body.dataset.askFailureMessage = failureMessage;
+  if (messageArticle instanceof HTMLElement) {
+    messageArticle.hidden = false;
+    messageArticle.setAttribute("data-message-author-role", "assistant");
+    messageArticle.setAttribute("data-message-id", messageId);
+  }
+  if (messageMarkdown instanceof HTMLElement) {
+    messageMarkdown.innerHTML = `<p>${escapeHtml(failureMessage)}</p>${retryMarkup}`;
+  } else if (message) {
+    message.innerHTML = `<p>${escapeHtml(failureMessage)}</p>${retryMarkup}`;
+  }
+  setStreamState("failed");
+  setStreamingControls(false);
+}
+
+function retryButtonClicked() {
+  document.body.dataset.retryClicks = String(
+    Number.parseInt(document.body.dataset.retryClicks || "0", 10) + 1,
+  );
+}
+
 function submitPrompt(method) {
   if (!composer || !message) {
     return;
@@ -951,6 +1014,7 @@ function submitPrompt(method) {
   }
 
   stopTimer();
+  clearAskFailureState();
   setUploadPopoverOpen(false);
   document.body.dataset.lastSubmissionMethod = method;
   const promptText =
@@ -1424,6 +1488,24 @@ function startStream(promptText) {
     return;
   }
 
+  if (
+    usesProviderGenerationFailureRecovery ||
+    usesProviderGenerationFailureTwice
+  ) {
+    const attempt = nextProviderFailureAttempt();
+    const isRecoveryReplay =
+      promptText.includes("Recovery note:") &&
+      promptText.includes("Original user request:");
+    if (
+      usesProviderGenerationFailureTwice ||
+      attempt === 1 ||
+      !isRecoveryReplay
+    ) {
+      renderProviderGenerationFailure(promptText);
+      return;
+    }
+  }
+
   const conversationId = currentConversationId();
   const messageId = uniqueId("msg");
   const askNumber = nextAskNumber(conversationId);
@@ -1478,6 +1560,7 @@ function startStream(promptText) {
   }
 
   writeConversationState(conversationId, messageId);
+  clearAskFailureState();
   message.textContent = "";
   renderChunk(state);
   persistState(state);
@@ -1775,6 +1858,16 @@ composer?.addEventListener("keydown", (event) => {
 
 stopButton?.addEventListener("click", () => {
   window.__tablinqCancelStream();
+});
+
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+  if (target.closest("[data-testid='retry-button']")) {
+    retryButtonClicked();
+  }
 });
 
 if (onDeepResearchLanding()) {

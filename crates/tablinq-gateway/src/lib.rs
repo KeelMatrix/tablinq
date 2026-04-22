@@ -23,6 +23,7 @@ use crate::scheduler::{CancelDisposition, GatewayScheduler, SchedulerSnapshot};
 use crate::uploads::{StagedFileMetadata, UploadStore};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
+use gptd::browser::execution_error_metadata;
 use gptd::core::error_code_for_message;
 use gptd::logging::JsonLogger;
 use gptd::{AppConfig, CoreService};
@@ -609,6 +610,8 @@ fn handle_connection(
                             recovery_reason: None,
                             failed_at: None,
                             failure_reason: None,
+                            recovery_trace: None,
+                            recovery_packet: None,
                         },
                     ));
                     log_response(logger, &context.request_id, response.status_code)?;
@@ -1779,6 +1782,7 @@ fn map_openai_error(
     failure_bundle_id: Option<&str>,
 ) -> HttpResponse {
     let (status, error_type, code, message) = map_openai_error_parts(err);
+    let execution_metadata = execution_error_metadata(err);
     json_response(
         status,
         annotate_openai_error_value(
@@ -1791,6 +1795,7 @@ fn map_openai_error(
             ),
             code,
             failure_bundle_id,
+            execution_metadata.as_ref(),
         ),
     )
 }
@@ -1801,11 +1806,13 @@ fn map_openai_error_value(
     failure_bundle_id: Option<&str>,
 ) -> Value {
     let (status, error_type, code, message) = map_openai_error_parts(err);
+    let execution_metadata = execution_error_metadata(err);
     annotate_openai_error_value(
         request_id,
         openai_error(status, error_type, code, &message),
         code,
         failure_bundle_id,
+        execution_metadata.as_ref(),
     )
 }
 
@@ -1814,10 +1821,41 @@ fn annotate_openai_error_value(
     mut value: Value,
     code: &str,
     failure_bundle_id: Option<&str>,
+    execution_metadata: Option<&gptd::browser::ExecutionErrorMetadata>,
 ) -> Value {
     value["request_id"] = Value::String(request_id.to_owned());
-    if let Some(bundle_id) = failure_bundle_id {
+    let recovery_trace = execution_metadata.and_then(|item| item.recovery_trace.as_ref());
+    if let Some(bundle_id) = recovery_trace
+        .and_then(|trace| trace.failure_bundle_id.as_deref())
+        .or(failure_bundle_id)
+    {
         value["tablinq_failure_bundle_id"] = Value::String(bundle_id.to_owned());
+    }
+    value["tablinq_recovery_available"] =
+        Value::Bool(recovery_trace.map(|trace| trace.recovery_available).unwrap_or(false));
+    value["tablinq_recovery_attempted"] =
+        Value::Bool(recovery_trace.map(|trace| trace.recovery_attempted).unwrap_or(false));
+    if let Some(strategy) = recovery_trace
+        .and_then(|trace| trace.recovery_strategy.as_ref())
+        .map(recovery_strategy_name)
+    {
+        value["tablinq_recovery_strategy"] = Value::String(strategy.to_owned());
+    }
+    if let Some(prior_request_id) = recovery_trace.and_then(|trace| trace.prior_request_id.as_deref())
+    {
+        value["tablinq_prior_request_id"] = Value::String(prior_request_id.to_owned());
+    }
+    if let Some(replacement_request_id) = recovery_trace
+        .and_then(|trace| trace.replacement_request_id.as_deref())
+    {
+        value["tablinq_replacement_request_id"] =
+            Value::String(replacement_request_id.to_owned());
+    }
+    if let Some(replacement_conversation_id) = recovery_trace
+        .and_then(|trace| trace.replacement_conversation_id.as_deref())
+    {
+        value["tablinq_replacement_conversation_id"] =
+            Value::String(replacement_conversation_id.to_owned());
     }
     let guidance = provider_guidance_for_code(code);
     if !guidance.is_empty() {
@@ -1830,6 +1868,20 @@ fn annotate_openai_error_value(
 }
 
 fn map_openai_error_parts(err: &anyhow::Error) -> (u16, &'static str, &'static str, String) {
+    if let Some(metadata) = execution_error_metadata(err)
+        && matches!(
+            metadata.error_code,
+            ErrorCode::ProviderGenerationFailedNonretryable
+        )
+    {
+        return (
+            502,
+            "provider_error",
+            "provider_generation_failed_nonretryable",
+            metadata.message,
+        );
+    }
+
     let message = format!("{err:#}");
     if message.contains("cancelled") {
         return (409, "invalid_request_error", "cancelled", message);
@@ -1857,6 +1909,12 @@ fn map_openai_error_parts(err: &anyhow::Error) -> (u16, &'static str, &'static s
             message,
         ),
         ErrorCode::ActionTimeout => (504, "timeout_error", "upstream_timeout", message),
+        ErrorCode::ProviderGenerationFailedNonretryable => (
+            502,
+            "provider_error",
+            "provider_generation_failed_nonretryable",
+            message,
+        ),
         ErrorCode::UiDrift => (502, "provider_error", "ui_drift", message),
         ErrorCode::ResearchJobFailed => (502, "provider_error", "research_job_failed", message),
         ErrorCode::UploadFailed => (400, "invalid_request_error", "upload_failed", message),
@@ -1871,6 +1929,14 @@ fn map_openai_error_parts(err: &anyhow::Error) -> (u16, &'static str, &'static s
             } else {
                 (500, "server_error", "transport_error", message)
             }
+        }
+    }
+}
+
+fn recovery_strategy_name(strategy: &shared_protocol::RecoveryStrategy) -> &'static str {
+    match strategy {
+        shared_protocol::RecoveryStrategy::ReloadNewConversationReplayWithContext => {
+            "reload_new_conversation_replay_with_context"
         }
     }
 }

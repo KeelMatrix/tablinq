@@ -49,6 +49,8 @@ function withHarnessUrl(
       | "recover-same-message-rewrite"
       | "recover-mismatch"
       | "recover-wrong-conversation"
+      | "provider-generation-failure-recover"
+      | "provider-generation-failure-twice"
       | "research-success"
       | "research-starting-shell"
       | "research-failure"
@@ -3771,6 +3773,50 @@ describe("browser adapter", () => {
     );
     expect(diagnostics.screenshot_path).toContain("failure.png");
     expect(diagnostics.dom_snapshot).toContain("dom_text");
+
+    await adapter.shutdown();
+    await stopFakeChatGptServer(server.process);
+  });
+
+  it("classifies provider generation failures without clicking Retry", async () => {
+    const server = await startTrackedFakeChatGptServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "provider-generation-failure-twice",
+    });
+    const root = await mkdtemp(path.join(os.tmpdir(), "tablinq-browser-"));
+    const adapter = trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    let error: any = null;
+    try {
+      await adapter.ask(
+        {
+          jobId: "job-ask-provider-generation-failure",
+          prompt: "reason carefully about this tradeoff",
+        },
+        () => {},
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeTruthy();
+    expect(error.code).toBe("provider_generation_failed_nonretryable");
+    expect(error.retryVisible).toBe(true);
+    expect(await adapter.getManagedPageForTest()!.evaluate(() => ({
+      askFailureCode: document.body.dataset.askFailureCode ?? null,
+      retryClicks: document.body.dataset.retryClicks ?? "0",
+    }))).toEqual({
+      askFailureCode: "provider_generation_failed_nonretryable",
+      retryClicks: "0",
+    });
 
     await adapter.shutdown();
     await stopFakeChatGptServer(server.process);

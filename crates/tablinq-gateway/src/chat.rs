@@ -2,12 +2,14 @@ use crate::openai::{self, ChatCompletionsRequest, RequestRole, request_role_name
 use crate::uploads::UploadStore;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gptd::browser::execution_error_metadata;
 use gptd::CoreService;
 use gptd::core::{PreparedAskJob, PreparedResearchJob};
 use gptd::logging::JsonLogger;
 use serde_json::{Value, json};
 use shared_protocol::{
-    EventPayload, JobStatus, RequestExecutionKind, RequestSummary, RequestUsage, StreamChunkKind,
+    EventPayload, JobStatus, RecoveryPacket, RecoveryTrace, RequestExecutionKind, RequestSummary,
+    RequestUsage, StreamChunkKind,
 };
 use std::net::TcpStream;
 
@@ -73,6 +75,8 @@ pub(crate) struct RequestOutcome {
     pub(crate) recovery_reason: Option<String>,
     pub(crate) failed_at: Option<DateTime<Utc>>,
     pub(crate) failure_reason: Option<String>,
+    pub(crate) recovery_trace: Option<RecoveryTrace>,
+    pub(crate) recovery_packet: Option<RecoveryPacket>,
 }
 
 pub(crate) fn prepare_chat_completions_request(
@@ -113,6 +117,8 @@ pub(crate) fn prepare_chat_completions_request(
             model_class: model.model_class,
             effort: model.effort,
             files,
+            auto_recover_provider_generation_failure:
+                request.tablinq_auto_recover_provider_generation_failure,
         })?)
     };
 
@@ -219,7 +225,14 @@ pub(crate) fn execute_chat_completions_request(
                     }
                     Ok(())
                 })
-                .map(|result| (result.conversation_id, result.low_confidence)),
+                .map(|result| {
+                    (
+                        result.conversation_id,
+                        result.low_confidence,
+                        None,
+                        None,
+                    )
+                }),
             PreparedChatJob::Ask(job) => core
                 .execute_prepared_ask(job, |event| {
                     if downstream_interrupted.is_some() {
@@ -249,13 +262,28 @@ pub(crate) fn execute_chat_completions_request(
                     }
                     Ok(())
                 })
-                .map(|result| (result.conversation_id, result.low_confidence)),
+                .map(|result| {
+                    (
+                        result.conversation_id,
+                        result.low_confidence,
+                        result.recovery_trace,
+                        result.recovery_packet,
+                    )
+                }),
         };
 
         match result {
-            Ok((conversation_id, low_confidence)) => {
+            Ok((conversation_id, low_confidence, recovery_trace, recovery_packet)) => {
+                let recovered_at = recovery_trace
+                    .as_ref()
+                    .filter(|trace| trace.recovery_attempted)
+                    .map(|_| Utc::now());
+                let recovery_reason = recovery_trace
+                    .as_ref()
+                    .filter(|trace| trace.recovery_attempted)
+                    .and_then(recovery_reason_for_trace);
                 if let Some((interrupted_at, interruption_reason)) = downstream_interrupted.take() {
-                    let recovered_at = Utc::now();
+                    let downstream_recovered_at = Utc::now();
                     let recovery_reason =
                         "gateway client disconnected, but the upstream request completed"
                             .to_owned();
@@ -277,10 +305,12 @@ pub(crate) fn execute_chat_completions_request(
                         conversation_id: Some(conversation_id),
                         interrupted_at: Some(interrupted_at),
                         interruption_reason: Some(interruption_reason),
-                        recovered_at: Some(recovered_at),
+                        recovered_at: Some(downstream_recovered_at),
                         recovery_reason: Some(recovery_reason),
                         failed_at: None,
                         failure_reason: None,
+                        recovery_trace,
+                        recovery_packet,
                     });
                 }
 
@@ -331,6 +361,8 @@ pub(crate) fn execute_chat_completions_request(
                             recovery_reason: Some(recovery_reason),
                             failed_at: None,
                             failure_reason: None,
+                            recovery_trace: recovery_trace.clone(),
+                            recovery_packet: recovery_packet.clone(),
                         });
                     }
                     return Err(err);
@@ -365,6 +397,8 @@ pub(crate) fn execute_chat_completions_request(
                             recovery_reason: Some(recovery_reason),
                             failed_at: None,
                             failure_reason: None,
+                            recovery_trace: recovery_trace.clone(),
+                            recovery_packet: recovery_packet.clone(),
                         });
                     }
                     return Err(err);
@@ -387,10 +421,12 @@ pub(crate) fn execute_chat_completions_request(
                     conversation_id: Some(conversation_id),
                     interrupted_at: None,
                     interruption_reason: None,
-                    recovered_at: None,
-                    recovery_reason: None,
+                    recovered_at,
+                    recovery_reason,
                     failed_at: None,
                     failure_reason: None,
+                    recovery_trace,
+                    recovery_packet,
                 })
             }
             Err(err) => {
@@ -417,7 +453,8 @@ pub(crate) fn execute_chat_completions_request(
             }
         }
     } else {
-        let (response, conversation_id, low_confidence) = match &prepared.job {
+        let (response, conversation_id, low_confidence, recovery_trace, recovery_packet) =
+            match &prepared.job {
             PreparedChatJob::Research(job) => {
                 let result = core.execute_prepared_research(job, |_event| Ok(()))?;
                 let conversation = core.find_conversation(&result.conversation_id)?;
@@ -432,9 +469,12 @@ pub(crate) fn execute_chat_completions_request(
                         conversation.as_ref().map(|item| item.session_id.as_str()),
                         &result.report_text,
                         "stop",
+                        None,
                     ),
                     Some(result.conversation_id),
                     result.low_confidence,
+                    None,
+                    None,
                 )
             }
             PreparedChatJob::Ask(job) => {
@@ -451,9 +491,12 @@ pub(crate) fn execute_chat_completions_request(
                         conversation.as_ref().map(|item| item.session_id.as_str()),
                         &result.output_text,
                         "stop",
+                        result.recovery_trace.as_ref(),
                     ),
                     Some(result.conversation_id),
                     result.low_confidence,
+                    result.recovery_trace,
+                    result.recovery_packet,
                 )
             }
         };
@@ -487,10 +530,20 @@ pub(crate) fn execute_chat_completions_request(
                     recovery_reason: Some(recovery_reason),
                     failed_at: None,
                     failure_reason: None,
+                    recovery_trace,
+                    recovery_packet,
                 });
             }
             return Err(err);
         }
+        let recovered_at = recovery_trace
+            .as_ref()
+            .filter(|trace| trace.recovery_attempted)
+            .map(|_| Utc::now());
+        let recovery_reason = recovery_trace
+            .as_ref()
+            .filter(|trace| trace.recovery_attempted)
+            .and_then(recovery_reason_for_trace);
         Ok(RequestOutcome {
             kind: if low_confidence {
                 RequestOutcomeKind::Recovered
@@ -501,10 +554,12 @@ pub(crate) fn execute_chat_completions_request(
             conversation_id,
             interrupted_at: None,
             interruption_reason: None,
-            recovered_at: None,
-            recovery_reason: None,
+            recovered_at,
+            recovery_reason,
             failed_at: None,
             failure_reason: None,
+            recovery_trace,
+            recovery_packet,
         })
     }
 }
@@ -544,6 +599,8 @@ pub(crate) fn build_request_summary(
         recovery_reason: outcome.recovery_reason,
         failed_at: outcome.failed_at,
         failure_reason: outcome.failure_reason,
+        recovery_trace: outcome.recovery_trace,
+        recovery_packet: outcome.recovery_packet,
         usage: RequestUsage {
             status: "unknown".to_owned(),
             prompt_tokens: None,
@@ -557,7 +614,11 @@ pub(crate) fn build_request_summary(
 }
 
 pub(crate) fn outcome_from_error(err: &anyhow::Error) -> RequestOutcome {
-    let message = format!("{err:#}");
+    let metadata = execution_error_metadata(err);
+    let message = metadata
+        .as_ref()
+        .map(|item| item.message.clone())
+        .unwrap_or_else(|| format!("{err:#}"));
     RequestOutcome {
         kind: if message.contains("cancelled") {
             RequestOutcomeKind::Cancelled
@@ -580,6 +641,10 @@ pub(crate) fn outcome_from_error(err: &anyhow::Error) -> RequestOutcome {
         } else {
             Some(message)
         },
+        recovery_trace: metadata
+            .as_ref()
+            .and_then(|item| item.recovery_trace.clone()),
+        recovery_packet: metadata.and_then(|item| item.recovery_packet),
     }
 }
 
@@ -634,6 +699,7 @@ fn build_chat_completion_response(
     session_id: Option<&str>,
     content: &str,
     finish_reason: &str,
+    recovery_trace: Option<&RecoveryTrace>,
 ) -> HttpResponse {
     json_response(
         200,
@@ -648,6 +714,13 @@ fn build_chat_completion_response(
             "tablinq_parent_request_id": parent_request_id,
             "tablinq_conversation_id": conversation_id,
             "tablinq_session_id": session_id,
+            "tablinq_recovery_available": recovery_trace.map(|trace| trace.recovery_available).unwrap_or(false),
+            "tablinq_recovery_attempted": recovery_trace.map(|trace| trace.recovery_attempted).unwrap_or(false),
+            "tablinq_recovery_strategy": recovery_trace.and_then(|trace| trace.recovery_strategy.as_ref()).map(recovery_strategy_name),
+            "tablinq_prior_request_id": recovery_trace.and_then(|trace| trace.prior_request_id.as_deref()),
+            "tablinq_replacement_request_id": recovery_trace.and_then(|trace| trace.replacement_request_id.as_deref()),
+            "tablinq_replacement_conversation_id": recovery_trace.and_then(|trace| trace.replacement_conversation_id.as_deref()),
+            "tablinq_failure_bundle_id": recovery_trace.and_then(|trace| trace.failure_bundle_id.as_deref()),
             "choices": [{
                 "index": 0,
                 "message": {
@@ -660,4 +733,20 @@ fn build_chat_completion_response(
             "warnings": ["usage is unavailable for the browser-backed provider"],
         }),
     )
+}
+
+fn recovery_strategy_name(strategy: &shared_protocol::RecoveryStrategy) -> &'static str {
+    match strategy {
+        shared_protocol::RecoveryStrategy::ReloadNewConversationReplayWithContext => {
+            "reload_new_conversation_replay_with_context"
+        }
+    }
+}
+
+fn recovery_reason_for_trace(trace: &RecoveryTrace) -> Option<String> {
+    trace
+        .recovery_strategy
+        .as_ref()
+        .map(recovery_strategy_name)
+        .map(|strategy| format!("provider generation failure recovered via {strategy}"))
 }

@@ -5,6 +5,9 @@ export interface AskSnapshot {
   hasAssistantMessage: boolean;
   text: string;
   state: string;
+  failureCode: string | null;
+  failureMessage: string | null;
+  retryVisible: boolean;
   conversationId: string | null;
   messageId: string | null;
   currentUrl: string;
@@ -110,6 +113,9 @@ export function sameAskCompletionSnapshot(
   return (
     left.state === right.state &&
     left.text === right.text &&
+    left.failureCode === right.failureCode &&
+    left.failureMessage === right.failureMessage &&
+    left.retryVisible === right.retryVisible &&
     left.conversationId === right.conversationId &&
     left.messageId === right.messageId &&
     left.currentUrl === right.currentUrl

@@ -217,7 +217,7 @@ fn daemon_creates_config_and_applies_db_migrations() {
     assert!(config.paths.db_path.exists());
 
     let db = Database::open(&config.paths.db_path).unwrap();
-    assert_eq!(db.migration_count().unwrap(), 7);
+    assert_eq!(db.migration_count().unwrap(), 8);
 
     stop_daemon(dir.path(), &mut child);
 }
@@ -430,6 +430,7 @@ fn daemon_streams_ask_responses_and_persists_conversations() {
             model_class: None,
             effort: None,
             files: vec![],
+            auto_recover_provider_generation_failure: true,
         }),
         |event| {
             match event {
@@ -510,6 +511,7 @@ fn daemon_reports_timeout_errors_for_stalled_asks() {
             model_class: None,
             effort: None,
             files: vec![],
+            auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),
     )
@@ -589,6 +591,7 @@ fn stuck_ask_does_not_block_later_status_or_doctor() {
                     model_class: None,
                     effort: None,
                     files: vec![],
+                    auto_recover_provider_generation_failure: true,
                 }),
                 |_event| Ok(()),
             )
@@ -676,6 +679,7 @@ fn stuck_ask_does_not_block_later_browser_attach() {
                     model_class: None,
                     effort: None,
                     files: vec![],
+                    auto_recover_provider_generation_failure: true,
                 }),
                 |_event| Ok(()),
             )
@@ -756,6 +760,7 @@ fn client_disconnect_during_ask_cancels_the_job() {
         model_class: None,
         effort: None,
         files: vec![],
+        auto_recover_provider_generation_failure: true,
     }))
     .unwrap();
     stream.write_all(raw.as_bytes()).unwrap();
@@ -869,6 +874,7 @@ fn cancelled_ask_releases_browser_capacity() {
                     model_class: None,
                     effort: None,
                     files: vec![],
+                    auto_recover_provider_generation_failure: true,
                 }),
                 |event| {
                     if let EventPayload::JobState(state) = event
@@ -953,6 +959,7 @@ fn daemon_handles_configured_asks_on_renamed_controls() {
             model_class: Some(ModelClass::Thinking),
             effort: Some(Effort::Extended),
             files: vec![],
+            auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),
     )
@@ -1005,6 +1012,7 @@ fn daemon_reports_capability_missing_errors_for_unavailable_modes() {
             model_class: None,
             effort: None,
             files: vec![],
+            auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),
     )
@@ -1061,6 +1069,7 @@ fn daemon_persists_uploaded_artifacts_and_pulls_them_locally() {
             model_class: None,
             effort: None,
             files: vec![upload_fixture.display().to_string()],
+            auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),
     )
@@ -1149,6 +1158,7 @@ fn daemon_reports_upload_errors_when_attachment_controls_are_missing() {
             model_class: None,
             effort: None,
             files: vec![upload_fixture.display().to_string()],
+            auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),
     )

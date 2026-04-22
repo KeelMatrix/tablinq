@@ -15,4 +15,5 @@ tablinq-gateway = { path = "../tablinq-gateway" }
 thiserror.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 tempfile.workspace = true

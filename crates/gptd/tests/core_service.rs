@@ -1,8 +1,9 @@
 use gptd::{AppConfig, CoreService};
+use gptd::browser::execution_error_metadata;
 use shared_protocol::{
     AskCommand, BrowserConnectionMode, BrowserOpenRequest, CancelJobCommand, EventPayload,
-    GatewayRequestContext, JobKind, JobStatus, Mode, PullArtifactCommand, ResearchCommand,
-    StreamChunkKind,
+    ErrorCode, GatewayRequestContext, JobKind, JobStatus, Mode, PullArtifactCommand,
+    ResearchCommand, StreamChunkKind,
 };
 use std::fs;
 use std::net::TcpListener;
@@ -137,6 +138,7 @@ fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
                 model_class: None,
                 effort: None,
                 files: vec![upload_fixture.display().to_string()],
+                auto_recover_provider_generation_failure: true,
             },
             |event| {
                 if let EventPayload::StreamChunk(chunk) = event
@@ -251,6 +253,195 @@ fn core_service_runs_research_jobs_without_cli() {
 }
 
 #[test]
+fn core_service_recovers_provider_generation_failure_with_fresh_conversation_replay() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed core_service test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+
+    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let core = CoreService::new(config).unwrap();
+    core.browser_open(BrowserOpenRequest {
+        target_url: Some(format!(
+            "{fake_url}/?variant=live&scenario=provider-generation-failure-recover"
+        )),
+        browser_path: None,
+        headless: Some(true),
+    })
+    .unwrap();
+
+    let result = core
+        .ask(
+            AskCommand {
+                prompt: "reason carefully about this tradeoff".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
+                mode: Mode::Normal,
+                model_class: None,
+                effort: None,
+                files: vec![],
+                auto_recover_provider_generation_failure: true,
+            },
+            |_event| Ok(()),
+        )
+        .unwrap();
+
+    assert!(result.low_confidence);
+    assert!(result.output_text.contains("Recovery note:"));
+    assert!(result.output_text.contains("Original user request:"));
+    assert!(result.output_text.contains("reason carefully about this tradeoff"));
+
+    let trace = result.recovery_trace.as_ref().expect("recovery trace");
+    assert!(trace.recovery_available);
+    assert!(trace.recovery_attempted);
+    assert_eq!(
+        trace.failure_code,
+        Some(ErrorCode::ProviderGenerationFailedNonretryable)
+    );
+    assert!(trace.prior_request_id.is_some());
+    assert!(trace.replacement_request_id.is_some());
+    assert!(trace.prior_conversation_id.is_some());
+    assert!(trace.replacement_conversation_id.is_some());
+    assert_ne!(trace.prior_conversation_id, trace.replacement_conversation_id);
+
+    let packet = result.recovery_packet.as_ref().expect("recovery packet");
+    assert_eq!(packet.original_input, "reason carefully about this tradeoff");
+    assert_eq!(
+        packet.failure_code,
+        ErrorCode::ProviderGenerationFailedNonretryable
+    );
+    assert_eq!(packet.recovery_attempt_count, 1);
+    assert!(packet.context_summary.as_deref().is_some());
+
+    let detail = core.job_detail(&result.job_id).unwrap();
+    assert_eq!(detail.recovery_trace, result.recovery_trace);
+    assert_eq!(detail.recovery_packet, result.recovery_packet);
+
+    let _ = core.browser_close();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn core_service_stops_after_second_provider_generation_failure() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed core_service test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+
+    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let core = CoreService::new(config).unwrap();
+    core.browser_open(BrowserOpenRequest {
+        target_url: Some(format!(
+            "{fake_url}/?variant=live&scenario=provider-generation-failure-twice"
+        )),
+        browser_path: None,
+        headless: Some(true),
+    })
+    .unwrap();
+
+    let err = core
+        .ask(
+            AskCommand {
+                prompt: "reason carefully about this tradeoff".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
+                mode: Mode::Normal,
+                model_class: None,
+                effort: None,
+                files: vec![],
+                auto_recover_provider_generation_failure: true,
+            },
+            |_event| Ok(()),
+        )
+        .unwrap_err();
+
+    let metadata = execution_error_metadata(&err).expect("typed provider failure");
+    assert_eq!(
+        metadata.error_code,
+        ErrorCode::ProviderGenerationFailedNonretryable
+    );
+    let trace = metadata.recovery_trace.as_ref().expect("recovery trace");
+    assert!(trace.recovery_attempted);
+    assert_eq!(trace.recovery_attempt_count, 1);
+    assert!(trace.replacement_request_id.is_some());
+    let packet = metadata.recovery_packet.as_ref().expect("recovery packet");
+    assert_eq!(packet.recovery_attempt_count, 1);
+
+    let _ = core.browser_close();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn core_service_can_disable_provider_generation_failure_auto_recovery() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed core_service test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+
+    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let core = CoreService::new(config).unwrap();
+    core.browser_open(BrowserOpenRequest {
+        target_url: Some(format!(
+            "{fake_url}/?variant=live&scenario=provider-generation-failure-recover"
+        )),
+        browser_path: None,
+        headless: Some(true),
+    })
+    .unwrap();
+
+    let err = core
+        .ask(
+            AskCommand {
+                prompt: "reason carefully about this tradeoff".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
+                mode: Mode::Normal,
+                model_class: None,
+                effort: None,
+                files: vec![],
+                auto_recover_provider_generation_failure: false,
+            },
+            |_event| Ok(()),
+        )
+        .unwrap_err();
+
+    let metadata = execution_error_metadata(&err).expect("typed provider failure");
+    assert_eq!(
+        metadata.error_code,
+        ErrorCode::ProviderGenerationFailedNonretryable
+    );
+    let trace = metadata.recovery_trace.as_ref().expect("recovery trace");
+    assert!(!trace.recovery_attempted);
+    assert!(trace.replacement_request_id.is_none());
+    let packet = metadata.recovery_packet.as_ref().expect("recovery packet");
+    assert_eq!(packet.original_input, "reason carefully about this tradeoff");
+
+    let _ = core.browser_close();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
 fn prepared_jobs_persist_across_restart() {
     let _guard = integration_lock();
     let dir = tempdir().unwrap();
@@ -266,6 +457,7 @@ fn prepared_jobs_persist_across_restart() {
             model_class: None,
             effort: None,
             files: vec![],
+            auto_recover_provider_generation_failure: true,
         })
         .unwrap();
     drop(core);
@@ -332,6 +524,7 @@ fn cancelled_jobs_report_cancelled_status_in_job_detail() {
             model_class: None,
             effort: None,
             files: vec![],
+            auto_recover_provider_generation_failure: true,
         })
         .unwrap();
 

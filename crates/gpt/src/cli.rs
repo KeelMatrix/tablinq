@@ -207,6 +207,7 @@ pub(crate) fn build_ask_command(args: &AskArgs) -> AskCommand {
             .iter()
             .map(|path| path.display().to_string())
             .collect(),
+        auto_recover_provider_generation_failure: true,
     }
 }
 
@@ -516,6 +517,7 @@ mod tests {
         assert_eq!(command.files, vec!["notes.txt".to_owned()]);
         assert_eq!(command.conversation_id.as_deref(), Some("conv-7"));
         assert!(!command.new_conversation);
+        assert!(command.auto_recover_provider_generation_failure);
     }
 
     #[test]
@@ -532,6 +534,7 @@ mod tests {
 
         let command = build_ask_command(&args);
         assert_eq!(command.model_class, Some(ModelClass::Instant));
+        assert!(command.auto_recover_provider_generation_failure);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use crate::config::AppConfig;
 use crate::core::{CoreService, error_code_for_message};
+use crate::browser::execution_error_metadata;
 use crate::ipc;
 use crate::lockfile;
 use crate::logging::JsonLogger;
@@ -263,10 +264,20 @@ fn handle_request(core: &CoreService, request: DaemonRequest) -> Result<DaemonRe
 }
 
 fn map_error(err: anyhow::Error) -> DaemonResponse {
+    if let Some(metadata) = execution_error_metadata(&err) {
+        return DaemonResponse::Error(DaemonErrorResponse {
+            error_code: metadata.error_code,
+            message: metadata.message,
+            recovery_trace: metadata.recovery_trace,
+            recovery_packet: metadata.recovery_packet,
+        });
+    }
     let message = format!("{err:#}");
     DaemonResponse::Error(DaemonErrorResponse {
         error_code: error_code_for_message(&message),
         message,
+        recovery_trace: None,
+        recovery_packet: None,
     })
 }
 

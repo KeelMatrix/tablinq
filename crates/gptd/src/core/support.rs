@@ -7,9 +7,10 @@ use crate::db::Database;
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Utc};
 use shared_protocol::{
-    BrowserConnectionMode, BrowserStatusSnapshot, ErrorCode, EventPayload, HealthCheck,
-    HealthStatus, JobState, JobStatus, ResearchCommand, SelectorPackSummary, StreamChunk,
-    StreamChunkKind,
+    BrowserConnectionMode, BrowserStatusSnapshot, ConversationSummary, Effort, ErrorCode,
+    EventPayload, HealthCheck, HealthStatus, JobState, JobStatus, Mode, ModelClass,
+    RecoveryPacket, RecoveryStrategy, RecoveryTrace, ResearchCommand, SelectorPackSummary,
+    StreamChunk, StreamChunkKind,
 };
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -17,6 +18,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use url::Url;
+
+const PROVIDER_GENERATION_FAILURE_MARKER: &str =
+    "something went wrong while generating the response";
 
 impl CoreService {
     pub(super) fn open_db(&self) -> Result<Database> {
@@ -89,7 +93,10 @@ impl CoreService {
 }
 
 pub fn error_code_for_message(message: &str) -> ErrorCode {
-    if message.contains("profile locked") || message.contains("SingletonLock") {
+    let message_lower = message.to_ascii_lowercase();
+    if message_lower.contains(PROVIDER_GENERATION_FAILURE_MARKER) {
+        ErrorCode::ProviderGenerationFailedNonretryable
+    } else if message.contains("profile locked") || message.contains("SingletonLock") {
         ErrorCode::ProfileLocked
     } else if message.contains("auth required") {
         ErrorCode::AuthRequired
@@ -116,6 +123,130 @@ pub fn error_code_for_message(message: &str) -> ErrorCode {
     } else {
         ErrorCode::Transport
     }
+}
+
+pub(super) fn should_auto_recover_provider_generation_failure(
+    auto_recover: bool,
+    recovery_attempt_count: u32,
+) -> bool {
+    auto_recover && recovery_attempt_count < 1
+}
+
+pub(super) fn provider_recovery_attempt_request_id(job_id: &str, attempt: u32) -> String {
+    format!("{job_id}:provider-attempt-{attempt}")
+}
+
+pub(super) fn build_provider_generation_recovery_packet(
+    original_input: &str,
+    mode: Mode,
+    model_class: Option<ModelClass>,
+    effort: Option<Effort>,
+    files: &[String],
+    context_summary: Option<String>,
+    prior_request_id: Option<String>,
+    prior_conversation_id: Option<String>,
+    recovery_attempt_count: u32,
+) -> RecoveryPacket {
+    RecoveryPacket {
+        original_input: original_input.to_owned(),
+        mode,
+        model_class,
+        effort,
+        files: files.to_vec(),
+        context_summary,
+        prior_request_id,
+        prior_conversation_id,
+        failure_code: ErrorCode::ProviderGenerationFailedNonretryable,
+        recovery_attempt_count,
+    }
+}
+
+pub(super) fn build_provider_generation_recovery_trace(
+    failure_bundle_id: Option<String>,
+    prior_request_id: Option<String>,
+    prior_conversation_id: Option<String>,
+    recovery_attempt_count: u32,
+    recovery_attempted: bool,
+) -> RecoveryTrace {
+    RecoveryTrace {
+        recovery_available: true,
+        recovery_attempted,
+        recovery_strategy: Some(RecoveryStrategy::ReloadNewConversationReplayWithContext),
+        failure_code: Some(ErrorCode::ProviderGenerationFailedNonretryable),
+        failure_bundle_id,
+        prior_request_id,
+        replacement_request_id: None,
+        prior_conversation_id,
+        replacement_conversation_id: None,
+        recovery_attempt_count,
+    }
+}
+
+pub(super) fn build_provider_generation_context_summary(
+    conversation: Option<&ConversationSummary>,
+    prior_conversation_id: Option<&str>,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(conversation_id) = prior_conversation_id
+        && !conversation_id.trim().is_empty()
+    {
+        parts.push(format!("Prior conversation id: {}", conversation_id.trim()));
+    }
+    if let Some(conversation) = conversation {
+        if let Some(last_prompt) = conversation.last_prompt.as_deref()
+            && !last_prompt.trim().is_empty()
+        {
+            parts.push(format!(
+                "Previous prompt: {}",
+                truncate_recovery_text(last_prompt, 240)
+            ));
+        }
+        if let Some(last_response) = conversation.last_response.as_deref()
+            && !last_response.trim().is_empty()
+        {
+            parts.push(format!(
+                "Previous assistant response: {}",
+                truncate_recovery_text(last_response, 360)
+            ));
+        }
+    }
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
+pub(super) fn build_provider_generation_replay_prompt(
+    original_input: &str,
+    context_summary: Option<&str>,
+) -> String {
+    let mut prompt = String::from(
+        "Recovery note: The previous provider generation failed. Continue this request in a fresh conversation using the preserved context below.",
+    );
+    if let Some(summary) = context_summary.map(str::trim).filter(|value| !value.is_empty()) {
+        prompt.push_str("\n\nPreserved context:\n");
+        prompt.push_str(summary);
+    }
+    prompt.push_str("\n\nOriginal user request:\n");
+    prompt.push_str(original_input.trim());
+    prompt
+}
+
+fn truncate_recovery_text(text: &str, limit: usize) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let trimmed = collapsed.trim();
+    if trimmed.chars().count() <= limit {
+        return trimmed.to_owned();
+    }
+
+    let mut output = String::new();
+    for ch in trimmed.chars().take(limit.saturating_sub(1)) {
+        output.push(ch);
+    }
+    output.push('…');
+    output
 }
 
 pub(super) fn lock_browser<'a>(
@@ -184,6 +315,19 @@ pub(super) fn resolve_conversation_target_url(base_url: &str, conversation_id: &
     drop(path_segments);
 
     url.to_string()
+}
+
+pub(super) fn conversation_id_from_url(raw_url: &str) -> Option<String> {
+    let marker = "/c/";
+    let start = raw_url.find(marker)? + marker.len();
+    let rest = &raw_url[start..];
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let conversation_id = rest[..end].trim();
+    if conversation_id.is_empty() {
+        None
+    } else {
+        Some(conversation_id.to_owned())
+    }
 }
 
 pub(super) fn busy_health_snapshot() -> HealthCheck {
@@ -578,14 +722,16 @@ pub(super) fn unique_destination_path(destination_dir: &Path, file_name: &Path) 
 #[cfg(test)]
 mod tests {
     use super::{
-        browser_session_identity, current_url_requires_login_or_challenge, recovery_guidance,
-        resolve_conversation_target_url,
+        browser_session_identity, build_provider_generation_context_summary,
+        build_provider_generation_replay_prompt, current_url_requires_login_or_challenge,
+        error_code_for_message, recovery_guidance, resolve_conversation_target_url,
+        should_auto_recover_provider_generation_failure,
     };
     use crate::{AppConfig, Database, core::CoreService};
     use chrono::Utc;
     use shared_protocol::{
         AskCommand, AuthSource, BrowserConnectionMode, BrowserOwner, BrowserStatusSnapshot, Mode,
-        ResearchCommand,
+        ConversationSummary, ErrorCode, ResearchCommand,
     };
 
     fn seed_conversation(config: &AppConfig, conversation_id: &str) {
@@ -739,6 +885,7 @@ mod tests {
                 files: vec![],
                 conversation_id: None,
                 new_conversation: false,
+                auto_recover_provider_generation_failure: true,
             })
             .unwrap();
 
@@ -762,6 +909,7 @@ mod tests {
                 files: vec![],
                 conversation_id: None,
                 new_conversation: true,
+                auto_recover_provider_generation_failure: true,
             })
             .unwrap();
 
@@ -788,5 +936,55 @@ mod tests {
 
         assert_eq!(prepared.command.conversation_id, None);
         assert!(!prepared.command.new_conversation);
+    }
+
+    #[test]
+    fn error_code_for_message_classifies_provider_generation_failure() {
+        assert_eq!(
+            error_code_for_message(
+                "Something went wrong while generating the response. If this issue persists please contact us through our help center."
+            ),
+            ErrorCode::ProviderGenerationFailedNonretryable
+        );
+    }
+
+    #[test]
+    fn provider_generation_context_summary_uses_prior_conversation_snapshot() {
+        let summary = build_provider_generation_context_summary(
+            Some(&ConversationSummary {
+                conversation_id: "conv-123".to_owned(),
+                session_id: "session-1".to_owned(),
+                label: "Browser conversation".to_owned(),
+                tab_url: Some("https://chatgpt.com/c/conv-123".to_owned()),
+                last_prompt: Some("Explain the current system state in detail".to_owned()),
+                last_response: Some("The current system state includes attached files and a partially completed workflow.".to_owned()),
+                last_seen_at: Utc::now(),
+            }),
+            Some("conv-123"),
+        )
+        .unwrap();
+
+        assert!(summary.contains("Prior conversation id: conv-123"));
+        assert!(summary.contains("Previous prompt: Explain the current system state in detail"));
+        assert!(summary.contains("Previous assistant response: The current system state includes attached files"));
+    }
+
+    #[test]
+    fn provider_generation_replay_prompt_wraps_context_and_original_request() {
+        let prompt = build_provider_generation_replay_prompt(
+            "reason carefully about this tradeoff",
+            Some("Prior conversation id: conv-123\nPrevious assistant response: partial answer"),
+        );
+
+        assert!(prompt.contains("Recovery note: The previous provider generation failed."));
+        assert!(prompt.contains("Preserved context:\nPrior conversation id: conv-123"));
+        assert!(prompt.ends_with("Original user request:\nreason carefully about this tradeoff"));
+    }
+
+    #[test]
+    fn provider_generation_recovery_policy_attempts_once() {
+        assert!(should_auto_recover_provider_generation_failure(true, 0));
+        assert!(!should_auto_recover_provider_generation_failure(true, 1));
+        assert!(!should_auto_recover_provider_generation_failure(false, 0));
     }
 }

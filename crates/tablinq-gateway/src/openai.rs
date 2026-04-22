@@ -82,6 +82,8 @@ pub struct ChatCompletionsRequest {
     pub tablinq_conversation_id: Option<String>,
     #[serde(default)]
     pub tablinq_new_conversation: bool,
+    #[serde(default = "shared_protocol::default_auto_recover_provider_generation_failure")]
+    pub tablinq_auto_recover_provider_generation_failure: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]

@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::de::DeserializeOwned;
 use shared_protocol::{
     ArtifactList, ArtifactMetadata, ArtifactSummary, ConversationList, ConversationSummary,
     FailureBundle, JobDetail, JobKind, JobList, JobStatus, JobSummary, RequestExecutionKind,
-    RequestHistory, RequestListEntry, RequestListPage, RequestSummary, RequestUsage, SessionList,
-    SessionSummary,
+    RequestHistory, RequestListEntry, RequestListPage, RequestSummary, RequestUsage,
+    RecoveryPacket, RecoveryTrace, SessionList, SessionSummary,
 };
 use std::fs;
 use std::path::Path;
@@ -152,6 +153,16 @@ const MIGRATIONS: &[(&str, &str)] = &[
         ALTER TABLE job_details ADD COLUMN failure_reason TEXT;
         "#,
     ),
+    (
+        "0008_request_recovery_metadata",
+        r#"
+        ALTER TABLE request_history ADD COLUMN recovery_trace_json TEXT;
+        ALTER TABLE request_history ADD COLUMN recovery_packet_json TEXT;
+
+        ALTER TABLE job_details ADD COLUMN recovery_trace_json TEXT;
+        ALTER TABLE job_details ADD COLUMN recovery_packet_json TEXT;
+        "#,
+    ),
 ];
 
 const REQUEST_HISTORY_LIMIT: usize = 200;
@@ -268,12 +279,12 @@ impl Database {
                 request_id, job_id, model_id, request_role, parent_request_id, execution_kind,
                 status, cancelled, start_time, end_time, duration_ms, queue_wait_ms,
                 interrupted_at, interruption_reason, recovered_at, recovery_reason, failed_at,
-                failure_reason, usage_status, prompt_tokens, completion_tokens, total_tokens,
-                warnings_json
+                failure_reason, recovery_trace_json, recovery_packet_json, usage_status,
+                prompt_tokens, completion_tokens, total_tokens, warnings_json
             )
             VALUES (
                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-                ?19, ?20, ?21, ?22, ?23
+                ?19, ?20, ?21, ?22, ?23, ?24, ?25
             )
             ON CONFLICT(request_id) DO UPDATE SET
                 job_id = excluded.job_id,
@@ -293,6 +304,8 @@ impl Database {
                 recovery_reason = excluded.recovery_reason,
                 failed_at = excluded.failed_at,
                 failure_reason = excluded.failure_reason,
+                recovery_trace_json = excluded.recovery_trace_json,
+                recovery_packet_json = excluded.recovery_packet_json,
                 usage_status = excluded.usage_status,
                 prompt_tokens = excluded.prompt_tokens,
                 completion_tokens = excluded.completion_tokens,
@@ -318,6 +331,16 @@ impl Database {
                 summary.recovery_reason,
                 summary.failed_at.map(|value| value.to_rfc3339()),
                 summary.failure_reason,
+                summary
+                    .recovery_trace
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
+                summary
+                    .recovery_packet
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
                 summary.usage.status,
                 summary.usage.prompt_tokens,
                 summary.usage.completion_tokens,
@@ -351,6 +374,8 @@ impl Database {
                        recovery_reason,
                        failed_at,
                        failure_reason,
+                       recovery_trace_json,
+                       recovery_packet_json,
                        usage_status,
                        prompt_tokens,
                        completion_tokens,
@@ -387,6 +412,8 @@ impl Database {
                    recovery_reason,
                    failed_at,
                    failure_reason,
+                   recovery_trace_json,
+                   recovery_packet_json,
                    usage_status,
                    prompt_tokens,
                    completion_tokens,
@@ -429,6 +456,8 @@ impl Database {
                    recovery_reason,
                    failed_at,
                    failure_reason,
+                   recovery_trace_json,
+                   recovery_packet_json,
                    usage_status,
                    prompt_tokens,
                    completion_tokens,
@@ -662,6 +691,38 @@ impl Database {
                 failure_reason = excluded.failure_reason
             "#,
             params![job_id, current_url, failed_at.to_rfc3339(), failure_reason],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_job_recovery_metadata(
+        &self,
+        job_id: &str,
+        recovery_trace: Option<&RecoveryTrace>,
+        recovery_packet: Option<&RecoveryPacket>,
+    ) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO job_details (
+                job_id, job_kind, input_text, output_text, current_url, output_path,
+                cancel_requested, recovery_trace_json, recovery_packet_json
+            )
+            VALUES (?1, 'ask', NULL, NULL, NULL, NULL, 0, ?2, ?3)
+            ON CONFLICT(job_id) DO UPDATE SET
+                recovery_trace_json = COALESCE(
+                    excluded.recovery_trace_json,
+                    job_details.recovery_trace_json
+                ),
+                recovery_packet_json = COALESCE(
+                    excluded.recovery_packet_json,
+                    job_details.recovery_packet_json
+                )
+            "#,
+            params![
+                job_id,
+                recovery_trace.map(serde_json::to_string).transpose()?,
+                recovery_packet.map(serde_json::to_string).transpose()?,
+            ],
         )?;
         Ok(())
     }
@@ -939,7 +1000,9 @@ impl Database {
                        job_details.recovered_at,
                        job_details.recovery_reason,
                        job_details.failed_at,
-                       job_details.failure_reason
+                       job_details.failure_reason,
+                       job_details.recovery_trace_json,
+                       job_details.recovery_packet_json
                 FROM jobs
                 LEFT JOIN job_details ON job_details.job_id = jobs.job_id
                 WHERE jobs.job_id = ?1
@@ -965,6 +1028,8 @@ impl Database {
                         row.get::<_, Option<String>>(15)?,
                         row.get::<_, Option<String>>(16)?,
                         row.get::<_, Option<String>>(17)?,
+                        row.get::<_, Option<String>>(18)?,
+                        row.get::<_, Option<String>>(19)?,
                     ))
                 },
             )
@@ -989,6 +1054,8 @@ impl Database {
             recovery_reason,
             failed_at,
             failure_reason,
+            recovery_trace_json,
+            recovery_packet_json,
         )) = row
         else {
             return Ok(None);
@@ -1014,6 +1081,8 @@ impl Database {
             recovery_reason,
             failed_at: failed_at.map(parse_timestamp).transpose()?,
             failure_reason,
+            recovery_trace: decode_optional_json(recovery_trace_json, 18)?,
+            recovery_packet: decode_optional_json(recovery_packet_json, 19)?,
         }))
     }
 
@@ -1189,9 +1258,9 @@ fn map_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ArtifactSummary
 }
 
 fn map_request_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestSummary> {
-    let warnings_json = row.get::<_, String>(22)?;
+    let warnings_json = row.get::<_, String>(24)?;
     let warnings = serde_json::from_str(&warnings_json).map_err(|err| {
-        rusqlite::Error::FromSqlConversionFailure(22, rusqlite::types::Type::Text, Box::new(err))
+        rusqlite::Error::FromSqlConversionFailure(24, rusqlite::types::Type::Text, Box::new(err))
     })?;
     Ok(RequestSummary {
         request_id: row.get(0)?,
@@ -1224,14 +1293,33 @@ fn map_request_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RequestS
             .map(parse_timestamp)
             .transpose()?,
         failure_reason: row.get(17)?,
+        recovery_trace: decode_optional_json(row.get::<_, Option<String>>(18)?, 18)?,
+        recovery_packet: decode_optional_json(row.get::<_, Option<String>>(19)?, 19)?,
         usage: RequestUsage {
-            status: row.get(18)?,
-            prompt_tokens: row.get(19)?,
-            completion_tokens: row.get(20)?,
-            total_tokens: row.get(21)?,
+            status: row.get(20)?,
+            prompt_tokens: row.get(21)?,
+            completion_tokens: row.get(22)?,
+            total_tokens: row.get(23)?,
         },
         warnings,
     })
+}
+
+fn decode_optional_json<T>(value: Option<String>, column: usize) -> rusqlite::Result<Option<T>>
+where
+    T: DeserializeOwned,
+{
+    value
+        .map(|json| {
+            serde_json::from_str(&json).map_err(|err| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    column,
+                    rusqlite::types::Type::Text,
+                    Box::new(err),
+                )
+            })
+        })
+        .transpose()
 }
 
 fn parse_job_status(value: &str) -> JobStatus {
@@ -1321,6 +1409,8 @@ mod tests {
                 recovery_reason: None,
                 failed_at: None,
                 failure_reason: None,
+                recovery_trace: None,
+                recovery_packet: None,
                 usage: RequestUsage {
                     status: "unknown".to_owned(),
                     prompt_tokens: None,
@@ -1344,6 +1434,89 @@ mod tests {
         );
         assert_eq!(history.requests.last().unwrap().request_id, "req-5");
         assert!(db.request_summary("req-0").unwrap().is_none());
+    }
+
+    #[test]
+    fn recovery_metadata_roundtrips_through_request_history_and_job_detail() {
+        let dir = tempdir().unwrap();
+        let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
+        let now = Utc::now();
+        let recovery_trace = RecoveryTrace {
+            recovery_available: true,
+            recovery_attempted: true,
+            recovery_strategy: Some(shared_protocol::RecoveryStrategy::ReloadNewConversationReplayWithContext),
+            failure_code: Some(shared_protocol::ErrorCode::ProviderGenerationFailedNonretryable),
+            failure_bundle_id: Some("bundle-1".to_owned()),
+            prior_request_id: Some("job-1:provider-attempt-0".to_owned()),
+            replacement_request_id: Some("job-1:provider-attempt-1".to_owned()),
+            prior_conversation_id: Some("conv-old".to_owned()),
+            replacement_conversation_id: Some("conv-new".to_owned()),
+            recovery_attempt_count: 1,
+        };
+        let recovery_packet = RecoveryPacket {
+            original_input: "reason carefully about this tradeoff".to_owned(),
+            mode: shared_protocol::Mode::Normal,
+            model_class: Some(shared_protocol::ModelClass::Thinking),
+            effort: Some(shared_protocol::Effort::Extended),
+            files: vec!["C:\\input.txt".to_owned()],
+            context_summary: Some("Prior conversation id: conv-old".to_owned()),
+            prior_request_id: Some("job-1:provider-attempt-0".to_owned()),
+            prior_conversation_id: Some("conv-old".to_owned()),
+            failure_code: shared_protocol::ErrorCode::ProviderGenerationFailedNonretryable,
+            recovery_attempt_count: 1,
+        };
+
+        db.upsert_request_summary(&RequestSummary {
+            request_id: "req-1".to_owned(),
+            job_id: "job-1".to_owned(),
+            model_id: Some("tablinq-thinking-extended".to_owned()),
+            request_role: Some("primary".to_owned()),
+            parent_request_id: None,
+            execution_kind: RequestExecutionKind::Ask,
+            status: JobStatus::Recovered,
+            cancelled: false,
+            start_time: now,
+            end_time: Some(now),
+            duration_ms: Some(100),
+            queue_wait_ms: 0,
+            interrupted_at: None,
+            interruption_reason: None,
+            recovered_at: Some(now),
+            recovery_reason: Some("fresh conversation replay succeeded".to_owned()),
+            failed_at: Some(now),
+            failure_reason: Some("provider generation failed".to_owned()),
+            recovery_trace: Some(recovery_trace.clone()),
+            recovery_packet: Some(recovery_packet.clone()),
+            usage: RequestUsage {
+                status: "unknown".to_owned(),
+                prompt_tokens: None,
+                completion_tokens: None,
+                total_tokens: None,
+            },
+            warnings: vec![],
+        })
+        .unwrap();
+        db.insert_job(
+            "job-1",
+            JobStatus::Recovered,
+            Some("ask recovered"),
+            Some("conv-new"),
+            now,
+            now,
+        )
+        .unwrap();
+        db.upsert_job_detail("job-1", JobKind::Ask, Some("input"), None)
+            .unwrap();
+        db.update_job_recovery_metadata("job-1", Some(&recovery_trace), Some(&recovery_packet))
+            .unwrap();
+
+        let request = db.request_summary("req-1").unwrap().unwrap();
+        assert_eq!(request.recovery_trace, Some(recovery_trace.clone()));
+        assert_eq!(request.recovery_packet, Some(recovery_packet.clone()));
+
+        let job = db.job_detail("job-1").unwrap().unwrap();
+        assert_eq!(job.recovery_trace, Some(recovery_trace));
+        assert_eq!(job.recovery_packet, Some(recovery_packet));
     }
 
     #[test]
