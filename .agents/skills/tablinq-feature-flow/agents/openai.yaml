@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tablinq Feature Flow"
+  short_description: "Implement features with the correct owner and minimal cross-layer churn"
+  default_prompt: "Implement this Tablinq feature starting from the correct user-facing entrypoint and keep the change as local as possible."

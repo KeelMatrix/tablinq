@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tablinq Failure Bundle Review"
+  short_description: "Interpret crash bundles, logs, and UI evidence before changing code"
+  default_prompt: "Review this Tablinq failure bundle and identify the strongest evidence for the likely root cause."

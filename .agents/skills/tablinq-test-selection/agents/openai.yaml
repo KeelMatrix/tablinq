@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tablinq Test Selection"
+  short_description: "Pick the smallest valid test or validation loop"
+  default_prompt: "Choose and run the smallest meaningful validation command for this Tablinq change."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tablinq Gateway Surface"
+  short_description: "Work on the OpenAI-compatible HTTP gateway with minimal spillover"
+  default_prompt: "Work on this Tablinq gateway issue by tracing the HTTP contract into daemon behavior and keeping the fix local if possible."
