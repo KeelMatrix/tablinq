@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tablinq Bug Triage"
+  short_description: "Route a Tablinq bug to the owning layer quickly"
+  default_prompt: "Triage this Tablinq failure, identify the owning layer, and validate with the narrowest useful command."

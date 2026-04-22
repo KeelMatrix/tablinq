@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tablinq Browser Debug"
+  short_description: "Debug adapter and extension issues in the attach-first browser path"
+  default_prompt: "Debug this Tablinq browser-path issue with focus on the attach-first adapter and extension boundaries."

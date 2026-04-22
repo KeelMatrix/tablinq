@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tablinq Daemon Debug"
+  short_description: "Debug request lifecycle, persistence, and recovery in gptd"
+  default_prompt: "Debug this Tablinq daemon issue by tracing the request lifecycle through gptd and validating the narrowest path."
