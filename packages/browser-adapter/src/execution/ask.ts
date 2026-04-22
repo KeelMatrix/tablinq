@@ -40,6 +40,22 @@ import type {
   StateSink,
 } from "./types";
 
+const PROVIDER_GENERATION_FAILURE_CODE =
+  "provider_generation_failed_nonretryable";
+
+class AskProviderFailure extends Error {
+  readonly code = PROVIDER_GENERATION_FAILURE_CODE;
+  readonly currentUrl: string;
+  readonly retryVisible: boolean;
+
+  constructor(message: string, currentUrl: string, retryVisible: boolean) {
+    super(message);
+    this.name = "AskProviderFailure";
+    this.currentUrl = currentUrl;
+    this.retryVisible = retryVisible;
+  }
+}
+
 export async function runAsk(
   host: BrowserExecutionHost,
   command: AskExecutionCommand,
@@ -170,6 +186,15 @@ export async function runAsk(
         continue;
       }
       throw error;
+    }
+
+    if (snapshot.failureCode === PROVIDER_GENERATION_FAILURE_CODE) {
+      throw new AskProviderFailure(
+        snapshot.failureMessage ??
+          "Something went wrong while generating the response. If this issue persists please contact us through our help center.",
+        snapshot.currentUrl,
+        snapshot.retryVisible,
+      );
     }
 
     rememberAskSnapshot(host, state, snapshot);

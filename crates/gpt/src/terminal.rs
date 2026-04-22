@@ -60,10 +60,12 @@ pub(crate) fn execute_ask_with_terminal_presentation(
 
     let mut stdout = io::stdout();
     let stream_responses = stdout.is_terminal();
+    let mut stderr = io::stderr();
     let mut response_stream = ResponseStreamState::default();
     let green_responses = ansi_green_enabled_for_stdout();
     let started_at = Instant::now();
     let mut current_job_id: Option<String> = None;
+    let mut last_status: Option<JobStatusLine> = None;
     thread::spawn(move || {
         let request = DaemonRequest::Ask(command);
         let result = gptd::send_request_stream(&worker_endpoint, &request, |event| {
@@ -118,7 +120,14 @@ pub(crate) fn execute_ask_with_terminal_presentation(
                     }
                 }
                 EventPayload::JobState(state) => {
-                    current_job_id = Some(state.job_id);
+                    current_job_id = Some(state.job_id.clone());
+                    if let Some(next) = ask_progress_status_line(&state) {
+                        if last_status.as_ref() != Some(&next) {
+                            writeln!(stderr, "{}", next.message)?;
+                            stderr.flush()?;
+                            last_status = Some(next);
+                        }
+                    }
                 }
                 _ => {}
             },
@@ -769,6 +778,23 @@ fn windows_console_background_is_black() -> Option<bool> {
     Some(console_attributes_background_is_black(info.w_attributes))
 }
 
+fn ask_progress_status_line(state: &shared_protocol::JobState) -> Option<JobStatusLine> {
+    let message = state.message.as_deref()?.trim();
+    if !matches!(
+        message,
+        "Provider generation failed. Page Retry disabled."
+            | "Reloading tab and starting a fresh conversation..."
+            | "Replaying request with preserved context snapshot..."
+    ) {
+        return None;
+    }
+
+    Some(JobStatusLine {
+        status: format!("{:?}", state.status).to_lowercase(),
+        message: message.to_owned(),
+    })
+}
+
 #[cfg(windows)]
 fn console_attributes_background_is_black(attributes: u16) -> bool {
     const BACKGROUND_MASK: u16 = 0x00F0;
@@ -860,6 +886,35 @@ mod tests {
             "0;15".to_owned()
         )]));
         assert!(!shell_background_is_black(&[]));
+    }
+
+    #[test]
+    fn ask_progress_status_line_only_emits_provider_recovery_messages() {
+        let state = shared_protocol::JobState {
+            job_id: "job-1".to_owned(),
+            status: shared_protocol::JobStatus::Running,
+            message: Some("Reloading tab and starting a fresh conversation...".to_owned()),
+            conversation_id: None,
+            updated_at: chrono::Utc::now(),
+            artifacts: vec![],
+        };
+        assert_eq!(
+            ask_progress_status_line(&state),
+            Some(JobStatusLine {
+                status: "running".to_owned(),
+                message: "Reloading tab and starting a fresh conversation...".to_owned(),
+            })
+        );
+
+        let ignored = shared_protocol::JobState {
+            job_id: "job-1".to_owned(),
+            status: shared_protocol::JobStatus::Running,
+            message: Some("drafting answer".to_owned()),
+            conversation_id: None,
+            updated_at: chrono::Utc::now(),
+            artifacts: vec![],
+        };
+        assert_eq!(ask_progress_status_line(&ignored), None);
     }
 
     fn render_reconciled_response(

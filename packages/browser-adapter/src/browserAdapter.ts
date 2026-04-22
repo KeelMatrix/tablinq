@@ -280,13 +280,14 @@ export class BrowserAdapter {
     const targetUrl = command.targetUrl || this.defaultTargetUrl;
     const browserPath = command.browserPath ?? this.defaultBrowserPath;
     const headless = command.headless ?? false;
+    const forceReload = command.forceReload ?? false;
 
     this.currentTargetUrl = targetUrl;
     this.currentBrowserPath = browserPath ?? null;
 
     await this.ensureContext(headless, browserPath ?? undefined);
 
-    const page = await this.ensureManagedPage(targetUrl);
+    const page = await this.ensureManagedPage(targetUrl, forceReload);
     await this.refreshCapabilities(page);
     return this.health();
   }
@@ -685,7 +686,10 @@ export class BrowserAdapter {
     return this.execution.reconcileAskAfterInterruptionForTest(...args);
   }
 
-  private async ensureManagedPage(targetUrl: string): Promise<Page> {
+  private async ensureManagedPage(
+    targetUrl: string,
+    forceReload = false,
+  ): Promise<Page> {
     await this.recoverManagedPage();
     let page = this.managedPage;
 
@@ -705,7 +709,7 @@ export class BrowserAdapter {
     }
 
     try {
-      await this.navigateTargetPage(page, targetUrl);
+      await this.navigateTargetPage(page, targetUrl, forceReload);
     } catch (error) {
       if (!isRecoverableTargetPageError(error)) {
         throw error;
@@ -713,7 +717,7 @@ export class BrowserAdapter {
 
       await this.discardAttachedTargetPage(page);
       page = await this.createTargetPage(targetUrl);
-      await this.navigateTargetPage(page, targetUrl);
+      await this.navigateTargetPage(page, targetUrl, forceReload);
     }
 
     if (this.cdpAttached) {
@@ -1022,15 +1026,16 @@ export class BrowserAdapter {
   private async navigateTargetPage(
     page: Page,
     targetUrl: string,
+    forceReload = false,
   ): Promise<void> {
-    if (this.cdpAttached && matchesTargetLocation(page.url(), targetUrl)) {
+    if (!forceReload && this.cdpAttached && matchesTargetLocation(page.url(), targetUrl)) {
       await page.waitForLoadState("domcontentloaded", {
         timeout: NAVIGATION_TIMEOUT_MS,
       });
       return;
     }
 
-    if (page.url() !== targetUrl) {
+    if (forceReload || page.url() !== targetUrl) {
       await page.goto(targetUrl, {
         waitUntil: "domcontentloaded",
         timeout: NAVIGATION_TIMEOUT_MS,

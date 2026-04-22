@@ -29,6 +29,7 @@ type AdapterRequest =
       target_url: string;
       browser_path?: string | null;
       headless?: boolean;
+      force_reload?: boolean;
     }
   | {
       type: "ask";
@@ -91,6 +92,7 @@ type AdapterFrame =
       ok: boolean;
       state: BrowserStatusSnapshot;
       error?: string;
+      error_code?: string;
     }
   | { type: "stream_chunk"; chunk: StreamChunkSnapshot }
   | { type: "request_state"; update: RequestStateSnapshot }
@@ -311,6 +313,13 @@ async function main() {
         ok: false,
         state,
         error: error instanceof Error ? error.message : String(error),
+        error_code:
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          typeof error.code === "string"
+            ? error.code
+            : undefined,
       } satisfies AdapterFrame;
       writeFrame(response);
     }
@@ -334,6 +343,7 @@ async function handleRequest(
         targetUrl: request.target_url,
         browserPath: request.browser_path,
         headless: request.headless,
+        forceReload: request.force_reload,
       });
     case "health":
       return adapter.health();

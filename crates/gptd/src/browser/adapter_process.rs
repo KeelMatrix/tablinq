@@ -5,9 +5,12 @@ use super::protocol::{
 use super::runtime::{
     AdapterLauncher, browser_connection_mode_name, node_command, resolve_adapter_runtime,
 };
-use super::{BrowserDiagnosticsSnapshot, RequestLifecycleUpdate, ResearchUpdate};
+use super::{
+    BrowserDiagnosticsSnapshot, RequestLifecycleUpdate, ResearchUpdate, adapter_error_code,
+    execution_error, ExecutionErrorMetadata,
+};
 use crate::config::AppConfig;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use shared_protocol::{
     AskCommand, AskResult, BrowserStatusSnapshot, EventPayload, ResearchCommand, ResearchResult,
     StreamChunk, StreamChunkKind,
@@ -89,16 +92,21 @@ impl AdapterProcess {
 
         let response = self.next_frame_blocking("response")?;
         match response {
-            AdapterFrame::Response { ok, state, error } => {
+            AdapterFrame::Response {
+                ok,
+                state,
+                error,
+                error_code,
+            } => {
                 if ok {
                     Ok(state)
                 } else {
-                    bail!(
-                        "{}",
-                        error.unwrap_or_else(|| {
-                            "browser adapter returned an unknown error".to_owned()
-                        })
-                    );
+                    Err(adapter_frame_error(
+                        error_code,
+                        error,
+                        state.current_url,
+                        "browser adapter returned an unknown error",
+                    ))
                 }
             }
             other => bail!("unexpected adapter frame for request: {other:?}"),
@@ -248,22 +256,25 @@ impl AdapterProcess {
                             result.context("adapter ask finished without a result")?,
                         ));
                     }
-                    bail!(
-                        "{}",
-                        error.unwrap_or_else(|| {
-                            "browser adapter returned an unknown ask error".to_owned()
-                        })
-                    );
+                    return Err(adapter_frame_error(
+                        None,
+                        error,
+                        state.current_url,
+                        "browser adapter returned an unknown ask error",
+                    ));
                 }
                 AdapterFrame::Response {
-                    ok: false, error, ..
+                    ok: false,
+                    state,
+                    error,
+                    error_code,
                 } => {
-                    bail!(
-                        "{}",
-                        error.unwrap_or_else(|| {
-                            "browser adapter returned an unknown ask error".to_owned()
-                        })
-                    );
+                    return Err(adapter_frame_error(
+                        error_code,
+                        error,
+                        state.current_url,
+                        "browser adapter returned an unknown ask error",
+                    ));
                 }
                 AdapterFrame::Response { .. } => {
                     bail!("unexpected adapter response while asking")
@@ -470,6 +481,19 @@ impl AdapterProcess {
             let _ = reader_thread.join();
         }
     }
+}
+
+fn adapter_frame_error(
+    error_code: Option<String>,
+    error: Option<String>,
+    current_url: Option<String>,
+    fallback_message: &str,
+) -> anyhow::Error {
+    let message = error.unwrap_or_else(|| fallback_message.to_owned());
+    if let Some(code) = error_code.as_deref().and_then(adapter_error_code) {
+        return execution_error(ExecutionErrorMetadata::new(code, message, current_url));
+    }
+    anyhow!(message)
 }
 
 fn map_stream_chunk(chunk: AdapterStreamChunk) -> StreamChunk {

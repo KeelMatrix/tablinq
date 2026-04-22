@@ -1317,7 +1317,64 @@ export function createTablinqPageAdapterRuntime() {
     return null;
   };
 
+  const PROVIDER_GENERATION_FAILURE_CODE =
+    "provider_generation_failed_nonretryable";
+  const PROVIDER_GENERATION_FAILURE_MARKER =
+    "something went wrong while generating the response";
+  const PROVIDER_GENERATION_FAILURE_HELP_CENTER = "help center";
+
+  const readAskFailureState = (article) => {
+    const explicitCode = datasetValue(document.body.dataset.askFailureCode);
+    const explicitMessage = datasetValue(document.body.dataset.askFailureMessage);
+    const retryVisible = Boolean(
+      findByAliases({
+        aliases: ["retry"],
+        fallbackTokens: ["retry"],
+      }),
+    );
+
+    if (explicitCode === PROVIDER_GENERATION_FAILURE_CODE) {
+      return {
+        failureCode: explicitCode,
+        failureMessage:
+          explicitMessage ??
+          "Something went wrong while generating the response. If this issue persists please contact us through our help center.",
+        retryVisible,
+      };
+    }
+
+    const candidateTexts = uniqueCollapsed([
+      explicitMessage,
+      article?.textContent ?? "",
+      ...queryVisible([
+        "[role='alert']",
+        "[aria-live='assertive']",
+        "[data-slot='error']",
+        "[data-testid*='error']",
+      ]).map((element) => element.textContent ?? ""),
+      document.body.innerText ?? "",
+    ]);
+    const failureMessage =
+      candidateTexts.find((value) => {
+        const normalized = normalizeText(value);
+        return (
+          normalized.includes(PROVIDER_GENERATION_FAILURE_MARKER) &&
+          normalized.includes(PROVIDER_GENERATION_FAILURE_HELP_CENTER)
+        );
+      }) ?? null;
+
+    return {
+      failureCode: failureMessage ? PROVIDER_GENERATION_FAILURE_CODE : null,
+      failureMessage,
+      retryVisible,
+    };
+  };
+
   const inferAskState = (text, article) => {
+    const failure = readAskFailureState(article);
+    if (failure.failureCode) {
+      return "failed";
+    }
     const explicitState =
       article?.getAttribute("data-stream-state") ??
       document.body.dataset.streamState;
@@ -2174,10 +2231,14 @@ export function createTablinqPageAdapterRuntime() {
     readAskSnapshot({ baseline } = {}) {
       const article = resolveAskArticle(baseline ?? null);
       const text = article ? collectText(article) : "";
+      const failure = readAskFailureState(article);
       return {
         hasAssistantMessage: Boolean(article),
         text,
         state: inferAskState(text, article),
+        failureCode: failure.failureCode,
+        failureMessage: failure.failureMessage,
+        retryVisible: failure.retryVisible,
         conversationId:
           datasetValue(document.body.dataset.conversationId) ??
           parseConversationIdFromUrl(),

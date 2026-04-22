@@ -82,6 +82,7 @@ export interface BrowserOpenCommand {
   targetUrl: string;
   browserPath?: string | null;
   headless?: boolean;
+  forceReload?: boolean;
 }
 
 export interface AskExecutionCommand {

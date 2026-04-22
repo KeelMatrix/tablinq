@@ -12,6 +12,7 @@ pub(super) enum AdapterRequest {
         target_url: String,
         browser_path: Option<String>,
         headless: bool,
+        force_reload: bool,
     },
     Health,
     Ask {
@@ -74,6 +75,7 @@ pub(super) enum AdapterFrame {
         ok: bool,
         state: BrowserStatusSnapshot,
         error: Option<String>,
+        error_code: Option<String>,
     },
     StreamChunk {
         chunk: AdapterStreamChunk,
