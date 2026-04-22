@@ -294,6 +294,26 @@ pub(crate) fn reconcile_streamed_response(
     green_responses: bool,
     response_color_active: &mut bool,
 ) -> Result<()> {
+    reconcile_streamed_response_with_rewrite_safety(
+        stdout,
+        streamed_text,
+        final_text,
+        printed_any,
+        green_responses,
+        response_color_active,
+        rewrite_response_line_is_safe(streamed_text, final_text),
+    )
+}
+
+fn reconcile_streamed_response_with_rewrite_safety(
+    stdout: &mut impl Write,
+    streamed_text: &str,
+    final_text: &str,
+    printed_any: bool,
+    green_responses: bool,
+    response_color_active: &mut bool,
+    rewrite_in_place_safe: bool,
+) -> Result<()> {
     if !printed_any {
         if !final_text.is_empty() {
             write_complete_response(stdout, final_text, green_responses)?;
@@ -312,7 +332,7 @@ pub(crate) fn reconcile_streamed_response(
         return finish_terminal_stream(stdout, true, response_color_active);
     }
 
-    if can_rewrite_response_line(streamed_text, final_text) {
+    if rewrite_in_place_safe {
         return rewrite_response_line(
             stdout,
             streamed_text,
@@ -327,6 +347,10 @@ pub(crate) fn reconcile_streamed_response(
         write_complete_response(stdout, final_text, green_responses)?;
     }
     Ok(())
+}
+
+fn rewrite_response_line_is_safe(streamed_text: &str, final_text: &str) -> bool {
+    can_rewrite_response_line(streamed_text, final_text) && !cfg!(windows)
 }
 
 fn can_rewrite_response_line(streamed_text: &str, final_text: &str) -> bool {
@@ -674,6 +698,20 @@ mod tests {
         final_text: &str,
         green_responses: bool,
     ) -> String {
+        render_reconciled_response_with_rewrite_safety(
+            streamed_chunks,
+            final_text,
+            green_responses,
+            rewrite_response_line_is_safe(&streamed_chunks.concat(), final_text),
+        )
+    }
+
+    fn render_reconciled_response_with_rewrite_safety(
+        streamed_chunks: &[&str],
+        final_text: &str,
+        green_responses: bool,
+        rewrite_in_place_safe: bool,
+    ) -> String {
         let mut stdout = Vec::new();
         let mut response_color_active = false;
         let mut streamed_text = String::new();
@@ -691,13 +729,14 @@ mod tests {
             printed_any = true;
         }
 
-        reconcile_streamed_response(
+        reconcile_streamed_response_with_rewrite_safety(
             &mut stdout,
             &streamed_text,
             final_text,
             printed_any,
             green_responses,
             &mut response_color_active,
+            rewrite_in_place_safe,
         )
         .unwrap();
 
@@ -714,6 +753,9 @@ mod tests {
 
     #[test]
     fn reconcile_streamed_response_rewrites_duplicate_single_line_chunks() {
+        if cfg!(windows) {
+            return;
+        }
         assert_eq!(
             render_reconciled_response(&["ASK_", "ASK_"], "ASK_OK", false),
             "ASK_ASK_\rASK_OK  \n"
@@ -722,6 +764,9 @@ mod tests {
 
     #[test]
     fn reconcile_streamed_response_rewrites_divergent_single_line_chunks() {
+        if cfg!(windows) {
+            return;
+        }
         assert_eq!(
             render_reconciled_response(&["WRONG"], "ASK_OK", false),
             "WRONG\rASK_OK\n"
@@ -731,6 +776,33 @@ mod tests {
     #[test]
     fn reconcile_streamed_response_prints_final_output_when_no_chunks_stream() {
         assert_eq!(render_reconciled_response(&[], "ASK_OK", false), "ASK_OK\n");
+    }
+
+    #[test]
+    fn reconcile_streamed_response_falls_back_when_rewrite_is_unsafe() {
+        assert_eq!(
+            render_reconciled_response_with_rewrite_safety(&["WRONG"], "ASK_OK", false, false),
+            "WRONG\nASK_OK\n"
+        );
+    }
+
+    #[test]
+    fn reconcile_streamed_response_fallback_resets_green_output_before_printing_final_text() {
+        assert_eq!(
+            render_reconciled_response_with_rewrite_safety(&["WRONG"], "ASK_OK", true, false),
+            format!("{ANSI_GREEN}WRONG{ANSI_RESET}\n{ANSI_GREEN}ASK_OK{ANSI_RESET}\n")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reconcile_streamed_response_falls_back_for_width_boundary_on_windows() {
+        let streamed_text = format!("{}B", "A".repeat(79));
+        let final_text = format!("{}C", "A".repeat(79));
+        assert_eq!(
+            render_reconciled_response(&[streamed_text.as_str()], &final_text, false),
+            format!("{streamed_text}\n{final_text}\n")
+        );
     }
 
     #[cfg(windows)]
