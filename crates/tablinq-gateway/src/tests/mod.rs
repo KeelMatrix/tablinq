@@ -232,6 +232,8 @@ mod capabilities_provider;
 
 mod chat_requests;
 
+mod conversation_inspection;
+
 mod failure_recovery_status;
 
 mod gateway_process;

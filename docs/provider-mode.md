@@ -50,7 +50,11 @@ Recommended posture:
 - `GET /v1/requests/{request_id}`
 - `GET /v1/requests/{request_id}/evidence`
 - `GET /v1/conversations`
+- `GET /v1/conversations/{conversation_id}`
+- `GET /v1/conversations/{conversation_id}/messages`
+- `GET /v1/conversations/{conversation_id}/snapshot`
 - `POST /v1/conversations/select`
+- `GET /v1/sessions/{session_id}/conversations`
 - `POST /v1/chat/completions`
 - `POST /v1/files`
 - `GET /v1/files`
@@ -122,10 +126,26 @@ Also:
 
 - create: send `POST /v1/chat/completions` with `tablinq_new_conversation = true` when the next task must not inherit browser context
 - persist: store `tablinq_conversation_id`, `tablinq_session_id`, and `request_id` from chat responses client-side
-- inspect: use `GET /v1/conversations` to list reusable conversation IDs; each item also echoes `tablinq_conversation_id` for direct chat reuse
-- select: call `POST /v1/conversations/select` with either `{ "conversation_id": "..." }` to switch to an existing thread or `{ "new_conversation": true }` to clear the active selection
-- reuse: pass the stored `tablinq_conversation_id` back to `POST /v1/chat/completions` only when follow-up context matters
-- fall back: use `GET /v1/sessions` when you need the broader recent-session view rather than the direct conversation list
+- discover: use `GET /v1/conversations` only to list recent reusable conversation IDs and route hints
+- inspect metadata: use `GET /v1/conversations/{conversation_id}` for direct conversation detail, counts, latest known request or job IDs, session info, and recovery-manifest metadata
+- inspect history: use `GET /v1/conversations/{conversation_id}/messages?limit=<n>&offset=<n>` for normalized agent-facing history with explicit provenance and fallback summaries when exact provider transcript data is unavailable
+- reuse safely: use `GET /v1/conversations/{conversation_id}/snapshot` when an agent needs the best preserved replay-safe context packet for continuing or replaying work in a fresh conversation
+- select active browser thread: call `POST /v1/conversations/select` only when you need the browser to switch to an existing thread or clear the active selection; do not use it for history retrieval
+- reuse in-place: pass the stored `tablinq_conversation_id` back to `POST /v1/chat/completions` only when follow-up context should stay in that browser conversation
+- session scope: use `GET /v1/sessions/{session_id}/conversations` when you need conversations for one attached browser session rather than the global list
+
+Small examples:
+
+```bash
+curl -H "Authorization: Bearer $TABLINQ_API_KEY" \
+  http://127.0.0.1:3847/v1/conversations/conv-123
+
+curl -H "Authorization: Bearer $TABLINQ_API_KEY" \
+  "http://127.0.0.1:3847/v1/conversations/conv-123/messages?limit=20&offset=0"
+
+curl -H "Authorization: Bearer $TABLINQ_API_KEY" \
+  http://127.0.0.1:3847/v1/conversations/conv-123/snapshot
+```
 
 ## Files and artifacts
 
@@ -160,6 +180,12 @@ The replay wrapper currently includes:
 The current durable recovery manifest is richer than a single-turn snapshot. It is refreshed after each completed turn and stores archived context, recent turn summaries, tracked input attachments, and tracked generated artifacts. On provider-generation recovery, Tablinq may also upload a generated recovery-manifest attachment and a bounded set of recent durable context files into the fresh conversation.
 
 This is still not a full raw chat dump. If clients need exact transcript reconstruction or provider-only thread state, they should still persist their own higher-fidelity context in addition to `request_id` and conversation ids.
+
+For agent inspection, Tablinq now exposes the same durable state through `GET /v1/conversations/{conversation_id}/messages` and `GET /v1/conversations/{conversation_id}/snapshot`. Those endpoints are intentionally honest about provenance:
+
+- exact request or job text is surfaced as exact request-detail history
+- preserved manifest turns are surfaced as recovery-manifest history
+- older summarized context stays summarized instead of being promoted to a fake exact transcript
 
 Persist `request_id` and inspect request status when a client connection drops unexpectedly.
 
