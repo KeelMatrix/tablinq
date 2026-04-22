@@ -119,8 +119,10 @@ import {
   STABLE_DONE_POLLS,
   SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
   deepResearchStartDelayMs,
+  interactionJitterMs,
 } from "./timing";
 export { deepResearchStartDelayMs } from "./timing";
+export { interactionJitterMs } from "./timing";
 export { MAX_UPLOAD_FILE_BYTES, uploadAckTimeoutMsForFiles } from "./timing";
 import {
   buildTargetPageId,

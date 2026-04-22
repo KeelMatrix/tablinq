@@ -10,6 +10,9 @@ export {
 export {
   resetConversationIdentity,
   sleep,
+  pauseForInteraction,
+  clickWithInteractionJitter,
+  pressShortcutWithInteractionJitter,
   isTransientPageError,
 } from "./pageRuntime/common";
 export {
