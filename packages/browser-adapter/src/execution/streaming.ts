@@ -23,9 +23,6 @@ export function rememberAskSnapshot(
   if (conversationId) {
     state.knownConversationId = conversationId;
   }
-  if (snapshot.messageId) {
-    state.knownMessageId = snapshot.messageId;
-  }
 }
 
 export function rememberResearchSnapshot(
@@ -49,7 +46,70 @@ export function rememberResearchSnapshot(
 
 export async function applyAskSnapshot(
   command: AskExecutionCommand,
-  state: { emittedText: string; nextSeq: number },
+  state: {
+    emittedText: string;
+    nextSeq: number;
+    knownMessageId: string | null;
+    pendingMessageId: string | null;
+    pendingMessageText: string;
+  },
+  snapshot: AskSnapshot,
+  onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+): Promise<boolean> {
+  const messageId = snapshot.messageId;
+
+  if (!messageId) {
+    clearPendingAskMessage(state);
+    return emitAskDeltaFromSnapshot(command, state, snapshot, onChunk);
+  }
+
+  if (state.knownMessageId === messageId) {
+    clearPendingAskMessage(state);
+    return emitAskDeltaFromSnapshot(command, state, snapshot, onChunk);
+  }
+
+  if (state.pendingMessageId !== messageId) {
+    state.pendingMessageId = messageId;
+    state.pendingMessageText = snapshot.text;
+    if (
+      snapshot.thoughtDividerBeforeMessage &&
+      snapshot.text.length > 0
+    ) {
+      return commitPendingAskMessage(command, state, snapshot, onChunk);
+    }
+    if (snapshot.state === "done" && snapshot.text.length > 0) {
+      return commitPendingAskMessage(command, state, snapshot, onChunk);
+    }
+    return false;
+  }
+
+  const pendingAdvanced =
+    snapshot.text.length > state.pendingMessageText.length &&
+    snapshot.text.startsWith(state.pendingMessageText);
+  state.pendingMessageText =
+    snapshot.text.length >= state.pendingMessageText.length
+      ? snapshot.text
+      : state.pendingMessageText;
+
+  if (pendingAdvanced) {
+    return commitPendingAskMessage(command, state, snapshot, onChunk);
+  }
+  if (
+    (snapshot.thoughtDividerBeforeMessage || snapshot.state === "done") &&
+    snapshot.text.length > 0
+  ) {
+    return commitPendingAskMessage(command, state, snapshot, onChunk);
+  }
+  return false;
+}
+
+async function emitAskDeltaFromSnapshot(
+  command: AskExecutionCommand,
+  state: {
+    emittedText: string;
+    nextSeq: number;
+    knownMessageId: string | null;
+  },
   snapshot: AskSnapshot,
   onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
 ): Promise<boolean> {
@@ -59,6 +119,9 @@ export async function applyAskSnapshot(
   ) {
     const delta = snapshot.text.slice(state.emittedText.length);
     state.emittedText = snapshot.text;
+    if (snapshot.messageId) {
+      state.knownMessageId = snapshot.messageId;
+    }
     await onChunk({
       job_id: command.jobId,
       conversation_id: snapshot.conversationId,
@@ -71,6 +134,44 @@ export async function applyAskSnapshot(
     return true;
   }
   return false;
+}
+
+async function commitPendingAskMessage(
+  command: AskExecutionCommand,
+  state: {
+    emittedText: string;
+    nextSeq: number;
+    knownMessageId: string | null;
+    pendingMessageId: string | null;
+    pendingMessageText: string;
+  },
+  snapshot: AskSnapshot,
+  onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+): Promise<boolean> {
+  if (!snapshot.messageId || snapshot.text.length === 0) {
+    return false;
+  }
+  state.emittedText = snapshot.text;
+  state.knownMessageId = snapshot.messageId;
+  clearPendingAskMessage(state);
+  await onChunk({
+    job_id: command.jobId,
+    conversation_id: snapshot.conversationId,
+    message_id: snapshot.messageId,
+    seq: state.nextSeq,
+    kind: "delta",
+    text: snapshot.text,
+  });
+  state.nextSeq += 1;
+  return true;
+}
+
+function clearPendingAskMessage(state: {
+  pendingMessageId: string | null;
+  pendingMessageText: string;
+}): void {
+  state.pendingMessageId = null;
+  state.pendingMessageText = "";
 }
 
 export async function applyResearchSnapshot(

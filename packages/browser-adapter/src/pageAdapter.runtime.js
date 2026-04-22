@@ -870,6 +870,37 @@ export function createTablinqPageAdapterRuntime() {
     );
   };
 
+  const isThoughtDividerElement = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    const text = collapseText(element.textContent);
+    if (!isTransientAskStatusText(text)) {
+      return false;
+    }
+    return Boolean(element.querySelector("button")) || element.tagName === "BUTTON";
+  };
+
+  const visibleSibling = (element, direction) => {
+    let current =
+      direction === "previous"
+        ? element?.previousElementSibling
+        : element?.nextElementSibling;
+    while (current) {
+      if (isVisible(current)) {
+        return current;
+      }
+      current =
+        direction === "previous"
+          ? current.previousElementSibling
+          : current.nextElementSibling;
+    }
+    return null;
+  };
+
+  const thoughtDividerBeforeMessage = (element) =>
+    isThoughtDividerElement(visibleSibling(element, "previous"));
+
   const findMessageContentRoot = (root) => {
     if (!(root instanceof HTMLElement)) {
       return null;
@@ -2248,6 +2279,7 @@ export function createTablinqPageAdapterRuntime() {
             ? datasetValue(document.body.dataset.lastMessageId)
             : null) ??
           null,
+        thoughtDividerBeforeMessage: thoughtDividerBeforeMessage(article),
         currentUrl: window.location.href,
       };
     },

@@ -1191,6 +1191,15 @@ function renderChunk(state) {
     return;
   }
 
+  if (
+    scenario === "thinking-artifact-messages" &&
+    variant === "live" &&
+    Array.isArray(state.reasoningArtifacts)
+  ) {
+    renderThinkingArtifactSequence(state);
+    return;
+  }
+
   const text = state.responseText.slice(0, state.index);
   if (
     scenario === "followup-rich-text" &&
@@ -1218,6 +1227,84 @@ function renderChunk(state) {
     message.textContent = text;
   }
   messageArticle?.setAttribute("data-message-id", state.messageId);
+}
+
+function transcriptContainer() {
+  return messageArticle?.parentElement ?? document.querySelector(".transcript");
+}
+
+function clearThinkingArtifactNodes() {
+  transcriptContainer()
+    ?.querySelectorAll(
+      "[data-tablinq-thinking-artifact], [data-tablinq-thought-divider]",
+    )
+    .forEach((node) => node.remove());
+}
+
+function createThinkingArtifactMessage(text, messageId) {
+  const article = document.createElement("div");
+  article.dataset.tablinqThinkingArtifact = "true";
+  article.setAttribute("data-message-author-role", "assistant");
+  article.setAttribute("data-message-id", messageId);
+  article.className = "message";
+  const markdown = document.createElement("div");
+  markdown.className = "markdown";
+  const paragraph = document.createElement("p");
+  paragraph.textContent = text;
+  markdown.appendChild(paragraph);
+  article.appendChild(markdown);
+  return article;
+}
+
+function createThoughtDivider(text) {
+  const divider = document.createElement("div");
+  divider.dataset.tablinqThoughtDivider = "true";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = text;
+  divider.appendChild(button);
+  return divider;
+}
+
+function renderThinkingArtifactSequence(state) {
+  const transcript = transcriptContainer();
+  if (!(transcript instanceof HTMLElement) || !(messageArticle instanceof HTMLElement)) {
+    return;
+  }
+
+  clearThinkingArtifactNodes();
+  messageArticle.hidden = state.phase !== "answer";
+  if (state.phase === "answer") {
+    messageArticle.setAttribute("data-message-author-role", "assistant");
+    messageArticle.setAttribute("data-message-id", state.messageId);
+    messageArticle.setAttribute("data-turn-start-message", "true");
+    message.textContent = state.responseText.slice(0, state.index);
+  } else {
+    messageArticle.removeAttribute("data-message-author-role");
+    messageArticle.removeAttribute("data-message-id");
+    messageArticle.removeAttribute("data-turn-start-message");
+    message.textContent = "";
+  }
+
+  const fragment = document.createDocumentFragment();
+  const artifactCount = state.phase === "prelude-1" ? 1 : 2;
+  for (let index = 0; index < artifactCount; index += 1) {
+    fragment.appendChild(
+      createThinkingArtifactMessage(
+        state.reasoningArtifacts[index],
+        state.reasoningArtifactMessageIds[index],
+      ),
+    );
+  }
+  if (state.phase !== "prelude-1") {
+    fragment.appendChild(createThoughtDivider("Thought for 59s"));
+  }
+  transcript.insertBefore(fragment, messageArticle);
+
+  document.body.dataset.lastMessageId =
+    state.phase === "answer"
+      ? state.messageId
+      : state.reasoningArtifactMessageIds[artifactCount - 1];
 }
 
 function renderRichRecoveryChunk(state) {
@@ -1415,6 +1502,27 @@ function startResearch(promptText) {
 
 function tickStream(state) {
   stopTimer();
+  if (
+    scenario === "thinking-artifact-messages" &&
+    variant === "live" &&
+    Array.isArray(state.reasoningArtifacts)
+  ) {
+    if (state.phase === "prelude-1") {
+      state.phase = "prelude-2";
+      renderChunk(state);
+      persistState(state);
+      activeTimer = setTimeout(() => tickStream(state), 220);
+      return;
+    }
+    if (state.phase === "prelude-2") {
+      state.phase = "answer";
+      state.index = Math.min(state.responseText.length, state.index + 6);
+      renderChunk(state);
+      persistState(state);
+      scheduleNextTick(state);
+      return;
+    }
+  }
   state.index = Math.min(state.responseText.length, state.index + 6);
   renderChunk(state);
 
@@ -1532,6 +1640,13 @@ function startStream(promptText) {
     scenario === "recover-rich-markdown"
       ? ["Goal", "Inputs", "Constraints", "Output"]
       : null;
+  const reasoningArtifacts =
+    scenario === "thinking-artifact-messages" && variant === "live"
+      ? [
+          "I’m reconstructing the prior context from the recovery note and turning it into a compact comparison that makes the tradeoff explicit rather than just listing features.",
+          "The comparison is narrowing to one core distinction: Rust optimizes for correctness under low-level constraints, while TypeScript optimizes for speed and safety of application development. I’m turning that into a decision-oriented visual instead of a feature list.",
+        ]
+      : null;
   const state = {
     conversationId,
     messageId,
@@ -1550,10 +1665,15 @@ function startStream(promptText) {
     responseBlocks,
     richRecoveryPrompt,
     richRecoveryOutline,
+    reasoningArtifacts,
+    reasoningArtifactMessageIds: reasoningArtifacts
+      ? reasoningArtifacts.map(() => uniqueId("msg"))
+      : [],
     index: 0,
     askNumber,
     didReload: false,
     pendingStart: false,
+    phase: reasoningArtifacts ? "prelude-1" : "answer",
   };
 
   setStreamState("running");
@@ -1571,7 +1691,10 @@ function startStream(promptText) {
     return;
   }
 
-  writeConversationState(conversationId, messageId);
+  writeConversationState(
+    conversationId,
+    reasoningArtifacts ? state.reasoningArtifactMessageIds[0] : messageId,
+  );
   clearAskFailureState();
   message.textContent = "";
   renderChunk(state);
