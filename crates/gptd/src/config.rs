@@ -183,7 +183,10 @@ impl AppConfig {
 
     pub fn browser_submit_jitter_max_ms(&self) -> u64 {
         let min = self.browser_submit_jitter_min_ms();
-        self.file.browser_submit_jitter_max_ms.unwrap_or(5_000).max(min)
+        self.file
+            .browser_submit_jitter_max_ms
+            .unwrap_or(5_000)
+            .max(min)
     }
 
     pub fn gateway_host(&self) -> &str {

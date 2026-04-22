@@ -878,7 +878,9 @@ export function createTablinqPageAdapterRuntime() {
     if (!isTransientAskStatusText(text)) {
       return false;
     }
-    return Boolean(element.querySelector("button")) || element.tagName === "BUTTON";
+    return (
+      Boolean(element.querySelector("button")) || element.tagName === "BUTTON"
+    );
   };
 
   const visibleSibling = (element, direction) => {
@@ -1356,7 +1358,9 @@ export function createTablinqPageAdapterRuntime() {
 
   const readAskFailureState = (article) => {
     const explicitCode = datasetValue(document.body.dataset.askFailureCode);
-    const explicitMessage = datasetValue(document.body.dataset.askFailureMessage);
+    const explicitMessage = datasetValue(
+      document.body.dataset.askFailureMessage,
+    );
     const retryVisible = Boolean(
       findByAliases({
         aliases: ["retry"],

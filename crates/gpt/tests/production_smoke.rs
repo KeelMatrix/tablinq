@@ -240,11 +240,7 @@ fn wait_for_job_id(state_root: &Path) -> String {
     panic!("job id was not created in time");
 }
 
-fn wait_for_job_status(
-    state_root: &Path,
-    job_id: &str,
-    expected: shared_protocol::JobStatus,
-) {
+fn wait_for_job_status(state_root: &Path, job_id: &str, expected: shared_protocol::JobStatus) {
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         let response = gptd::send_request(

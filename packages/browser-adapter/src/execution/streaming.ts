@@ -71,10 +71,7 @@ export async function applyAskSnapshot(
   if (state.pendingMessageId !== messageId) {
     state.pendingMessageId = messageId;
     state.pendingMessageText = snapshot.text;
-    if (
-      snapshot.thoughtDividerBeforeMessage &&
-      snapshot.text.length > 0
-    ) {
+    if (snapshot.thoughtDividerBeforeMessage && snapshot.text.length > 0) {
       return commitPendingAskMessage(command, state, snapshot, onChunk);
     }
     if (snapshot.state === "done" && snapshot.text.length > 0) {

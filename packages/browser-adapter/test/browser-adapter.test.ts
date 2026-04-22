@@ -1183,7 +1183,9 @@ describe("browser adapter", () => {
     );
     expect(chunks.join("")).toBe(result.output_text);
     expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.join("")).not.toContain("I’m reconstructing the prior context");
+    expect(chunks.join("")).not.toContain(
+      "I’m reconstructing the prior context",
+    );
     expect(chunks.join("")).not.toContain("The comparison is narrowing");
 
     await adapter.shutdown();
@@ -3871,10 +3873,12 @@ describe("browser adapter", () => {
     expect(error).toBeTruthy();
     expect(error.code).toBe("provider_generation_failed_nonretryable");
     expect(error.retryVisible).toBe(true);
-    expect(await adapter.getManagedPageForTest()!.evaluate(() => ({
-      askFailureCode: document.body.dataset.askFailureCode ?? null,
-      retryClicks: document.body.dataset.retryClicks ?? "0",
-    }))).toEqual({
+    expect(
+      await adapter.getManagedPageForTest()!.evaluate(() => ({
+        askFailureCode: document.body.dataset.askFailureCode ?? null,
+        retryClicks: document.body.dataset.retryClicks ?? "0",
+      })),
+    ).toEqual({
       askFailureCode: "provider_generation_failed_nonretryable",
       retryClicks: "0",
     });

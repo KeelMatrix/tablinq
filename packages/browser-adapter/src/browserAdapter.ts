@@ -1030,7 +1030,11 @@ export class BrowserAdapter {
     targetUrl: string,
     forceReload = false,
   ): Promise<void> {
-    if (!forceReload && this.cdpAttached && matchesTargetLocation(page.url(), targetUrl)) {
+    if (
+      !forceReload &&
+      this.cdpAttached &&
+      matchesTargetLocation(page.url(), targetUrl)
+    ) {
       await page.waitForLoadState("domcontentloaded", {
         timeout: NAVIGATION_TIMEOUT_MS,
       });

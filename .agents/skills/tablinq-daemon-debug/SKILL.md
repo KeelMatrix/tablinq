@@ -36,6 +36,7 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds d
 ## Output
 
 Report:
+
 - lifecycle stage affected
 - suspected daemon subsystem
 - persistence or recovery implications

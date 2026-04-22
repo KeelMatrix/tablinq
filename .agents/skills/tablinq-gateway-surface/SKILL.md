@@ -26,6 +26,7 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds g
 ## Output
 
 State:
+
 - endpoint or contract under change
 - whether the fix stayed gateway-local
 - exact validation run
