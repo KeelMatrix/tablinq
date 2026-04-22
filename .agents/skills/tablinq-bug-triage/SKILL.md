@@ -38,6 +38,7 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds t
 ## Output
 
 Report:
+
 - owning layer
 - likely cause
 - exact files inspected or changed

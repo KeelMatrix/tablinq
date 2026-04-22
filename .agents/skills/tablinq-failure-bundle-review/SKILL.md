@@ -27,6 +27,7 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds f
 ## Output
 
 Summarize:
+
 - likely failure class
 - strongest evidence from the bundle
 - most likely owning layer

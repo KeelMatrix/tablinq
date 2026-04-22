@@ -40,6 +40,7 @@ Decide which browser-side boundary is failing:
 ## Output
 
 State:
+
 - failing browser boundary
 - owning package
 - whether the root cause is transport, extension, selector, or provider-page behavior

@@ -35,6 +35,7 @@ Before editing, confirm:
 ## Output
 
 State:
+
 - owning layer chosen
 - whether any cross-layer contract changed
 - exact validation run

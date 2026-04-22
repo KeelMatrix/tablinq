@@ -1268,7 +1268,10 @@ function createThoughtDivider(text) {
 
 function renderThinkingArtifactSequence(state) {
   const transcript = transcriptContainer();
-  if (!(transcript instanceof HTMLElement) || !(messageArticle instanceof HTMLElement)) {
+  if (
+    !(transcript instanceof HTMLElement) ||
+    !(messageArticle instanceof HTMLElement)
+  ) {
     return;
   }
 

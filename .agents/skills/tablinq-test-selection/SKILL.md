@@ -33,5 +33,6 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds v
 ## Output
 
 State:
+
 - why the chosen command is the smallest valid loop
 - whether broader validation is still outstanding
