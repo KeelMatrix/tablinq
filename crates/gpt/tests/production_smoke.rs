@@ -188,7 +188,7 @@ fn spawn_fake_chatgpt_with_url() -> (Child, String) {
         .join("packages")
         .join("fake-chatgpt")
         .join("server.mjs");
-    let child = Command::new("node")
+    let mut child = Command::new("node")
         .arg(server_path)
         .env("PORT", port.to_string())
         .stdin(Stdio::null())
@@ -206,6 +206,8 @@ fn spawn_fake_chatgpt_with_url() -> (Child, String) {
         thread::sleep(Duration::from_millis(100));
     }
 
+    let _ = child.kill();
+    let _ = child.wait();
     panic!("fake-chatgpt did not become ready on port {port}");
 }
 

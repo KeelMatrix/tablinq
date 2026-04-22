@@ -32,7 +32,13 @@ export type InteractionJitterKind =
   | "keyboard_submit"
   | "upload_entry";
 
-export function deepResearchStartDelayMs(randomValue = Math.random()): number {
+export function deepResearchStartDelayMs(
+  randomValue = Math.random(),
+  enabled = shortInteractionJitterEnabled(),
+): number {
+  if (!enabled) {
+    return 0;
+  }
   const jitter = Math.min(1, Math.max(0, randomValue));
   return (
     DEEP_RESEARCH_START_DELAY_MIN_MS +
@@ -43,7 +49,11 @@ export function deepResearchStartDelayMs(randomValue = Math.random()): number {
 export function interactionJitterMs(
   kind: InteractionJitterKind,
   randomValue = Math.random(),
+  enabled = shortInteractionJitterEnabled(),
 ): number {
+  if (!enabled) {
+    return 0;
+  }
   const jitter = Math.min(1, Math.max(0, randomValue));
   switch (kind) {
     case "chip_clear":
@@ -61,6 +71,10 @@ export function interactionJitterMs(
     case "button_click":
       return 70 + Math.round(jitter * 100);
   }
+}
+
+export function shortInteractionJitterEnabled(): boolean {
+  return process.env.VITEST !== "true";
 }
 
 export function uploadAckTimeoutMsForFiles(fileSizes: number[]): number {

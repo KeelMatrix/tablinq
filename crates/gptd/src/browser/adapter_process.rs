@@ -139,7 +139,7 @@ impl AdapterProcess {
                 error,
             } => {
                 if ok {
-                    diagnostics.context("adapter diagnostics finished without a result")
+                    (*diagnostics).context("adapter diagnostics finished without a result")
                 } else {
                     bail!(
                         "{}",
@@ -259,7 +259,7 @@ impl AdapterProcess {
                     if ok {
                         return Ok((
                             state,
-                            result.context("adapter ask finished without a result")?,
+                            (*result).context("adapter ask finished without a result")?,
                         ));
                     }
                     return Err(adapter_frame_error(
@@ -397,7 +397,7 @@ impl AdapterProcess {
                     if ok {
                         return Ok((
                             state,
-                            result.context("adapter research finished without a result")?,
+                            (*result).context("adapter research finished without a result")?,
                         ));
                     }
                     bail!(

@@ -30,7 +30,11 @@ export async function pauseForInteraction(
   if (boundedMaxMs === 0) {
     return;
   }
-  await sleep(Math.min(interactionJitterMs(kind), boundedMaxMs));
+  const delayMs = Math.min(interactionJitterMs(kind), boundedMaxMs);
+  if (delayMs <= 0) {
+    return;
+  }
+  await sleep(delayMs);
 }
 
 export async function clickWithInteractionJitter(

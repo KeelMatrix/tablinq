@@ -5,6 +5,7 @@ import type {
   AskResultSnapshot,
   ResearchExecutionCommand,
   ResearchResultSnapshot,
+  StreamChunkSnapshot,
 } from "../contracts";
 import {
   collectArtifacts,
@@ -80,16 +81,9 @@ export async function finalizeAsk(
   host: BrowserExecutionHost,
   command: AskExecutionCommand,
   page: Page,
-  state: { nextSeq: number },
+  state: { emittedText?: string; nextSeq: number },
   snapshot: AskSnapshot,
-  onChunk: (chunk: {
-    job_id: string;
-    conversation_id: string | null;
-    message_id: string | null;
-    seq: number;
-    kind: "done";
-    text: string;
-  }) => Promise<void> | void,
+  onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
 ): Promise<AskResultSnapshot> {
   const artifacts = await collectArtifacts(
     page,
@@ -100,6 +94,21 @@ export async function finalizeAsk(
   await host.ensureManagedPage(
     host.resolveConversationTarget(snapshot.conversationId),
   );
+  const emittedText = state.emittedText ?? "";
+  if (
+    snapshot.text.length > emittedText.length &&
+    snapshot.text.startsWith(emittedText)
+  ) {
+    await onChunk({
+      job_id: command.jobId,
+      conversation_id: snapshot.conversationId,
+      message_id: snapshot.messageId,
+      seq: state.nextSeq,
+      kind: "delta",
+      text: snapshot.text.slice(emittedText.length),
+    });
+    state.nextSeq += 1;
+  }
   await onChunk({
     job_id: command.jobId,
     conversation_id: snapshot.conversationId,

@@ -15,13 +15,13 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 pub use support::error_code_for_message;
 use support::{
-    apply_research_update, browser_session_identity, build_provider_generation_context_summary,
-    build_provider_generation_recovery_packet, build_provider_generation_recovery_trace,
-    build_provider_generation_replay_files, build_provider_generation_replay_prompt,
-    conversation_id_from_url, is_cancelled_message, lock_browser, lock_cancel_registry,
-    maybe_write_research_output, provider_recovery_attempt_request_id,
-    should_auto_recover_provider_generation_failure, update_conversation_recovery_manifest,
-    write_provider_generation_recovery_manifest_attachment,
+    ProviderGenerationRecoveryPacketInput, apply_research_update, browser_session_identity,
+    build_provider_generation_context_summary, build_provider_generation_recovery_packet,
+    build_provider_generation_recovery_trace, build_provider_generation_replay_files,
+    build_provider_generation_replay_prompt, conversation_id_from_url, is_cancelled_message,
+    lock_browser, lock_cancel_registry, maybe_write_research_output,
+    provider_recovery_attempt_request_id, should_auto_recover_provider_generation_failure,
+    update_conversation_recovery_manifest, write_provider_generation_recovery_manifest_attachment,
 };
 
 const ARTIFACT_RETENTION_LIMIT: usize = 100;
@@ -384,18 +384,20 @@ impl CoreService {
                             .and_then(conversation_id_from_url);
                     }
                     let packet = build_provider_generation_recovery_packet(
-                        &prepared.command.prompt,
-                        prepared.command.mode,
-                        prepared.command.model_class,
-                        prepared.command.effort,
-                        &prepared.command.files,
-                        context_summary.clone(),
-                        prior_manifest.clone(),
-                        recovery_manifest_path.clone(),
-                        replay_files.clone(),
-                        prior_request_id,
-                        prior_conversation_id.clone(),
-                        effective_attempt_count,
+                        ProviderGenerationRecoveryPacketInput {
+                            original_input: &prepared.command.prompt,
+                            mode: prepared.command.mode,
+                            model_class: prepared.command.model_class,
+                            effort: prepared.command.effort,
+                            files: &prepared.command.files,
+                            context_summary: context_summary.clone(),
+                            context_manifest: prior_manifest.clone(),
+                            recovery_manifest_path: recovery_manifest_path.clone(),
+                            replay_files: replay_files.clone(),
+                            prior_request_id,
+                            prior_conversation_id: prior_conversation_id.clone(),
+                            recovery_attempt_count: effective_attempt_count,
+                        },
                     );
                     recovery_trace = Some(trace.clone());
                     recovery_packet = Some(packet.clone());
