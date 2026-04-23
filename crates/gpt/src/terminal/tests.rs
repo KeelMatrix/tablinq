@@ -301,6 +301,35 @@ fn buffer_response_chunk_streams_completed_block_lines_immediately() {
 }
 
 #[test]
+fn buffer_response_chunk_treats_whitespace_after_trailing_construct_as_unstable_tail() {
+    assert_stream_split(&["Lead **bold**   "], "Lead **bold", "**   ");
+}
+
+#[test]
+fn buffer_response_chunk_streams_newline_terminated_trailing_constructs() {
+    assert_stream_split(
+        &["Lead [link](https://example.com)\n"],
+        "Lead [link](https://example.com)\n",
+        "",
+    );
+}
+
+#[test]
+fn buffer_response_chunk_ignores_escaped_delimiters_and_non_construct_angles() {
+    assert_stream_split(
+        &[r"Literal \*asterisks\* stay plain"],
+        r"Literal \*asterisks\* stay plain",
+        "",
+    );
+    assert_stream_split(
+        &[r"Literal \`code\` stays plain"],
+        r"Literal \`code\` stays plain",
+        "",
+    );
+    assert_stream_split(&["Math: 2 < 3 > 1"], "Math: 2 < 3 > 1", "");
+}
+
+#[test]
 fn reconcile_streamed_response_prints_partial_bold_response_once_on_windows_safe_path() {
     let final_text = "The core tradeoff is this: **TypeScript optimizes for tool authoring speed**";
     assert_eq!(
@@ -320,6 +349,34 @@ fn reconcile_streamed_response_prints_revised_trailing_markdown_once_on_windows_
     assert_eq!(
         render_reconciled_response_with_rewrite_safety(
             &["C++ is a **low-l**"],
+            final_text,
+            false,
+            false
+        ),
+        format!("{final_text}\n")
+    );
+}
+
+#[test]
+fn reconcile_streamed_response_finishes_pending_construct_without_reprinting() {
+    let final_text = "Answer: **bold**";
+    assert_eq!(
+        render_reconciled_response_with_rewrite_safety(
+            &["Answer: **bold**"],
+            final_text,
+            false,
+            false
+        ),
+        format!("{final_text}\n")
+    );
+}
+
+#[test]
+fn reconcile_streamed_response_finishes_pending_construct_with_following_whitespace_once() {
+    let final_text = "Answer: **bold**   ";
+    assert_eq!(
+        render_reconciled_response_with_rewrite_safety(
+            &["Answer: **bold**   "],
             final_text,
             false,
             false
@@ -354,6 +411,23 @@ fn buffer_response_chunk_releases_withheld_markdown_after_following_plain_text_a
 }
 
 #[test]
+fn buffer_response_chunk_releases_multiple_adjacent_withheld_constructs_together() {
+    let (output, response_stream) = render_streamed_chunks(
+        &["Mix **bold** `code` [link](https://example.com)", " tail"],
+        false,
+    );
+    assert_eq!(
+        output,
+        "Mix **bold** `code` [link](https://example.com) tail"
+    );
+    assert_eq!(
+        response_stream.printed_text,
+        "Mix **bold** `code` [link](https://example.com) tail"
+    );
+    assert!(response_stream.pending_text.is_empty());
+}
+
+#[test]
 fn buffer_response_chunk_withholds_only_the_unstable_tail_of_mixed_sequences() {
     assert_stream_split(&["Mix **bold** `code`"], "Mix ", "**bold** `code`");
 
@@ -377,6 +451,9 @@ fn buffer_response_chunk_treats_nested_and_unmatched_delimiters_as_unstable() {
         ("Edge <tag", "Edge ", "<tag"),
         ("Edge **bold _italic", "Edge ", "**bold _italic"),
         ("Edge ~~**mix**", "Edge ", "~~**mix**"),
+        ("Edge [text][ref", "Edge [text]", "[ref"),
+        ("Edge ![alt](image", "Edge ", "![alt](image"),
+        ("Edge <https://example.com", "Edge ", "<https://example.com"),
     ] {
         assert_stream_split(&[input], expected_prefix, expected_pending);
     }
