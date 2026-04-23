@@ -14,6 +14,7 @@ import {
   uploadAckTimeoutMsForFiles,
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
+import { applyAskSnapshot } from "../src/execution/streaming";
 import {
   createBrowserIntegrationHarness,
   createIsolatedTempDir,
@@ -867,6 +868,95 @@ describe("browser adapter", () => {
     );
 
     expect(snapshot.text).toBe(expected);
+    dom.window.close();
+  });
+
+  it("ignores transient hidden inline nodes so ask streaming can keep a stable prefix", async () => {
+    const runtimeSource = await readFile(
+      path.join(
+        process.cwd(),
+        "packages/browser-adapter/src/pageAdapter.runtime.js",
+      ),
+      "utf8",
+    );
+    const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+      url: "http://127.0.0.1:3847/?variant=live",
+      runScripts: "outside-only",
+    });
+    const { window } = dom;
+    const article = window.document.createElement("article");
+    article.setAttribute("data-slot", "assistant-message");
+    article.hidden = false;
+    article.setAttribute("data-message-author-role", "assistant");
+    article.setAttribute("data-message-id", "msg-streaming-rich");
+    article.innerHTML = `
+      <div class="markdown prose dark:prose-invert w-full wrap-break-word light markdown-new-styling">
+        <h1>🧩 Backe<span hidden> </span>nd Programming Languages — Deep Comparison (2025)</h1>
+        <p>Below is a </p>
+      </div>
+    `;
+    window.document.body.append(article);
+    window.document.body.dataset.conversationId = "conv-streaming-rich";
+    window.document.body.dataset.lastMessageId = "msg-streaming-rich";
+    window.document.body.dataset.streamState = "running";
+
+    const readAskSnapshot = () =>
+      window.eval(
+        `${runtimeSource.replace(
+          /^export\s+/gm,
+          "",
+        )}\ncreateTablinqPageAdapterRuntime().readAskSnapshot();`,
+      );
+
+    const firstSnapshot = readAskSnapshot();
+    expect(firstSnapshot.text).toBe(
+      "# 🧩 Backend Programming Languages — Deep Comparison (2025)\n\nBelow is a",
+    );
+
+    article.innerHTML = `
+      <div class="markdown prose dark:prose-invert w-full wrap-break-word light markdown-new-styling">
+        <h1>🧩 Backend Programming Languages — Deep Comparison (2025)</h1>
+        <p>Below is a <strong>structured, nested comparison</strong> of the most widely used backend languages.</p>
+      </div>
+    `;
+
+    const secondSnapshot = readAskSnapshot();
+    const chunks: string[] = [];
+    const state = {
+      emittedText: "",
+      nextSeq: 0,
+      knownMessageId: null,
+      pendingMessageId: null,
+      pendingMessageText: "",
+    };
+    const command = {
+      jobId: "job-streaming-rich",
+    } as Parameters<typeof applyAskSnapshot>[0];
+
+    const firstProgressed = await applyAskSnapshot(
+      command,
+      state,
+      firstSnapshot,
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+    );
+    const secondProgressed = await applyAskSnapshot(
+      command,
+      state,
+      secondSnapshot,
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+    );
+
+    expect(firstProgressed).toBe(false);
+    expect(secondProgressed).toBe(true);
+    expect(chunks.join("")).toBe(secondSnapshot.text);
     dom.window.close();
   });
 });

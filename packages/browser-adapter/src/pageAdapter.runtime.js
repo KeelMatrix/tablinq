@@ -1012,6 +1012,9 @@ export function createTablinqPageAdapterRuntime() {
     if (!(node instanceof HTMLElement)) {
       return "";
     }
+    if (!isVisible(node)) {
+      return "";
+    }
     if (isIgnoredMessageChrome(node)) {
       return "";
     }
