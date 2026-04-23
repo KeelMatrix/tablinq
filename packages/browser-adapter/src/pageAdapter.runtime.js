@@ -921,6 +921,62 @@ export function createTablinqPageAdapterRuntime() {
     return root;
   };
 
+  const readMessageIdentity = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return null;
+    }
+    return (
+      datasetValue(element.getAttribute("data-message-id")) ??
+      datasetValue(element.getAttribute("data-testid")) ??
+      datasetValue(element.id) ??
+      null
+    );
+  };
+
+  const isModernAssistantTurn = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    const testId = datasetValue(element.getAttribute("data-testid"));
+    if (!testId || !/^conversation-turn(?:-[a-z0-9_-]+)?$/i.test(testId)) {
+      return false;
+    }
+    if (element.querySelector(".markdown, [data-message-content]")) {
+      return true;
+    }
+    const labels = uniqueCollapsed([
+      element.getAttribute("aria-label"),
+      ...Array.from(
+        element.querySelectorAll("h1, h2, h3, h4, h5, h6, .sr-only, [aria-label]"),
+      ).map((candidate) =>
+        candidate instanceof HTMLElement
+          ? (candidate.getAttribute("aria-label") ?? candidate.textContent ?? "")
+          : "",
+      ),
+    ]);
+    return labels.some((value) => hasToken(value, ["chatgpt", "assistant"]));
+  };
+
+  const isAssistantMessageElement = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    const explicitRole = normalizeText(
+      datasetValue(element.getAttribute("data-message-author-role")) ?? "",
+    );
+    if (explicitRole === "assistant") {
+      return true;
+    }
+    const slot = normalizeText(datasetValue(element.getAttribute("data-slot")) ?? "");
+    if (slot === "assistant-message") {
+      return true;
+    }
+    if (element.matches("article.assistant")) {
+      return true;
+    }
+    return isModernAssistantTurn(element);
+  };
+
   const collectCodeBlockText = (element) => {
     if (!(element instanceof HTMLElement)) {
       return "";
@@ -1273,9 +1329,10 @@ export function createTablinqPageAdapterRuntime() {
           "[data-slot='assistant-message']",
           "[data-message-author-role='assistant']",
           "article.assistant",
+          "section[data-testid^='conversation-turn']",
         ].join(", "),
       ),
-    );
+    ).filter((element) => isAssistantMessageElement(element));
     if (direct.length > 0) {
       return direct;
     }
@@ -1296,9 +1353,10 @@ export function createTablinqPageAdapterRuntime() {
           "article[data-stream-state]",
           "article.message",
           "article",
+          "section[data-testid^='conversation-turn']",
         ].join(", "),
       ),
-    );
+    ).filter((element) => isAssistantMessageElement(element));
   };
 
   const findLatestAssistantMessage = () => {
@@ -1316,9 +1374,7 @@ export function createTablinqPageAdapterRuntime() {
     }
 
     const latest = messages[messages.length - 1] ?? null;
-    const latestMessageId = datasetValue(
-      latest?.getAttribute("data-message-id"),
-    );
+    const latestMessageId = readMessageIdentity(latest);
     const latestText = latest ? collectText(latest) : "";
     const currentConversationId =
       datasetValue(document.body.dataset.conversationId) ??
@@ -1517,7 +1573,7 @@ export function createTablinqPageAdapterRuntime() {
       datasetValue(document.body.dataset.conversationId) ??
       parseConversationIdFromUrl();
     const messageId =
-      datasetValue(article?.getAttribute("data-message-id")) ??
+      readMessageIdentity(article) ??
       datasetValue(document.body.dataset.lastMessageId) ??
       null;
     const submitted =
@@ -2261,8 +2317,7 @@ export function createTablinqPageAdapterRuntime() {
         conversationId:
           datasetValue(document.body.dataset.conversationId) ??
           parseConversationIdFromUrl(),
-        messageId:
-          datasetValue(article?.getAttribute("data-message-id")) ?? null,
+        messageId: readMessageIdentity(article),
         text: article ? collectText(article) : "",
       };
     },
@@ -2281,10 +2336,8 @@ export function createTablinqPageAdapterRuntime() {
           datasetValue(document.body.dataset.conversationId) ??
           parseConversationIdFromUrl(),
         messageId:
-          datasetValue(article?.getAttribute("data-message-id")) ??
-          (article
-            ? datasetValue(document.body.dataset.lastMessageId)
-            : null) ??
+          readMessageIdentity(article) ??
+          (article ? datasetValue(document.body.dataset.lastMessageId) : null) ??
           null,
         thoughtDividerBeforeMessage: thoughtDividerBeforeMessage(article),
         currentUrl: window.location.href,

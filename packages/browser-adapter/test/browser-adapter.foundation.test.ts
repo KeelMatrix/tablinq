@@ -960,6 +960,121 @@ describe("browser adapter", () => {
     dom.window.close();
   });
 
+  it("reads modern section-based assistant turns and synthesizes a stable turn id for streaming", async () => {
+    const runtimeSource = await readFile(
+      path.join(
+        process.cwd(),
+        "packages/browser-adapter/src/pageAdapter.runtime.js",
+      ),
+      "utf8",
+    );
+    const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
+      url: "https://chatgpt.com/c/conv-section-stream",
+      runScripts: "outside-only",
+    });
+    const { window } = dom;
+    const main = window.document.querySelector("main");
+    if (!(main instanceof window.HTMLElement)) {
+      throw new Error("expected main element");
+    }
+
+    main.innerHTML = `
+      <section data-testid="conversation-turn-1">
+        <h4 class="sr-only">You said:</h4>
+        <div class="user-message-bubble-color">
+          <div>compare martial arts</div>
+        </div>
+      </section>
+      <section data-testid="conversation-turn-2">
+        <h4 class="sr-only">ChatGPT said:</h4>
+        <div class="markdown">
+          <p>Earlier answer.</p>
+        </div>
+      </section>
+    `;
+    window.document.body.dataset.streamState = "idle";
+
+    const adapter = window.eval(
+      `${runtimeSource.replace(/^export\s+/gm, "")}\ncreateTablinqPageAdapterRuntime();`,
+    );
+    const baseline = adapter.readAskBaseline();
+    expect(baseline.assistantMessageCount).toBe(1);
+    expect(baseline.messageId).toBe("conversation-turn-2");
+    expect(baseline.text).toBe("Earlier answer.");
+
+    main.insertAdjacentHTML(
+      "beforeend",
+      `
+        <section data-testid="conversation-turn-3">
+          <h4 class="sr-only">You said:</h4>
+          <div class="user-message-bubble-color">
+            <div>give me a shorter comparison</div>
+          </div>
+        </section>
+        <section data-testid="conversation-turn-4">
+          <h4 class="sr-only">ChatGPT said:</h4>
+          <div class="markdown">
+            <p>High-level</p>
+          </div>
+        </section>
+      `,
+    );
+    window.document.body.dataset.streamState = "running";
+
+    const firstSnapshot = adapter.readAskSnapshot({ baseline });
+    expect(firstSnapshot.messageId).toBe("conversation-turn-4");
+    expect(firstSnapshot.text).toBe("High-level");
+    expect(firstSnapshot.state).toBe("running");
+
+    const chunks: string[] = [];
+    const state = {
+      emittedText: "",
+      nextSeq: 0,
+      knownMessageId: null,
+      pendingMessageId: null,
+      pendingMessageText: "",
+    };
+    const command = {
+      jobId: "job-section-turn-streaming",
+    } as Parameters<typeof applyAskSnapshot>[0];
+
+    const firstProgressed = await applyAskSnapshot(
+      command,
+      state,
+      firstSnapshot,
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+    );
+    expect(firstProgressed).toBe(false);
+
+    const latestTurn = main.querySelector("[data-testid='conversation-turn-4'] .markdown");
+    if (!(latestTurn instanceof window.HTMLElement)) {
+      throw new Error("expected latest assistant markdown");
+    }
+    latestTurn.innerHTML = "<p>High-level comparison</p>";
+
+    const secondSnapshot = adapter.readAskSnapshot({ baseline });
+    const secondProgressed = await applyAskSnapshot(
+      command,
+      state,
+      secondSnapshot,
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          chunks.push(chunk.text);
+        }
+      },
+    );
+
+    expect(secondSnapshot.messageId).toBe("conversation-turn-4");
+    expect(secondSnapshot.text).toBe("High-level comparison");
+    expect(secondProgressed).toBe(true);
+    expect(chunks.join("")).toBe("High-level comparison");
+    dom.window.close();
+  });
+
   it("holds provisional ask text without a message id until the identified snapshot stabilizes it", async () => {
     const command = {
       jobId: "job-provisional-ask-message-id",
