@@ -196,22 +196,16 @@ fn reconcile_streamed_response_appends_missing_suffix_and_resets_green_output() 
 
 #[test]
 fn reconcile_streamed_response_rewrites_duplicate_single_line_chunks() {
-    if cfg!(windows) {
-        return;
-    }
     assert_eq!(
-        render_reconciled_response(&["ASK_", "ASK_"], "ASK_OK", false),
-        "ASK_ASK_\rASK_OK  \n"
+        render_reconciled_response_with_rewrite_safety(&["ASKX", "ASKX"], "ASK_OK", false, true),
+        "ASKXASKX\rASK_OK  \n"
     );
 }
 
 #[test]
 fn reconcile_streamed_response_rewrites_divergent_single_line_chunks() {
-    if cfg!(windows) {
-        return;
-    }
     assert_eq!(
-        render_reconciled_response(&["WRONG"], "ASK_OK", false),
+        render_reconciled_response_with_rewrite_safety(&["WRONG"], "ASK_OK", false, true),
         "WRONG\rASK_OK\n"
     );
 }
