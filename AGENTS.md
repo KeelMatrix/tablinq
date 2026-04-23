@@ -2,7 +2,7 @@
 
 - Bug: start at failing command surface: `crates/gpt/src/*` -> `crates/gptd/src/*` -> `packages/browser-adapter/src/*` -> `packages/extension/src/*`
 - Feature: start at user-facing entry: CLI in `crates/gpt`, daemon flow in `crates/gptd`, gateway in `crates/tablinq-gateway`, native host in `crates/tablinq-host`, browser/runtime in `packages/browser-adapter`, page bridge in `packages/extension`
-- CLI/task routing: `crates/gpt/src/main.rs`, `crates/gpt/src/lib.rs`
+- CLI/task routing and terminal presentation: `crates/gpt/src/main.rs`, `crates/gpt/src/lib.rs`, `crates/gpt/src/terminal/*`
 - Daemon/state/browser orchestration: `crates/gptd/src/*`
 - Gateway HTTP surface: `crates/tablinq-gateway/src/*`
 - Native messaging bridge: `crates/tablinq-host/src/*`
