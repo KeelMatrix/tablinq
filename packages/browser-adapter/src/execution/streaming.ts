@@ -4,10 +4,16 @@ import type {
   StreamChunkSnapshot,
 } from "../contracts";
 import type { AskSnapshot, ResearchSnapshot } from "../snapshotState";
-import { normalizeOptionalString } from "../snapshotState";
+import {
+  markdownCompatibleRecoveredText,
+  normalizeOptionalString,
+  placeholderCompatibleText,
+} from "../snapshotState";
 import { conversationIdFromUrl } from "../urls";
 
 import type { BrowserExecutionHost } from "./types";
+
+const PROVISIONAL_PENDING_MESSAGE_ID = "__tablinq_provisional_message__";
 
 export function rememberAskSnapshot(
   host: BrowserExecutionHost,
@@ -59,6 +65,13 @@ export async function applyAskSnapshot(
   const messageId = snapshot.messageId;
 
   if (!messageId) {
+    if (!state.knownMessageId) {
+      rememberProvisionalAskMessage(state, snapshot.text);
+      if (snapshot.state === "done" && snapshot.text.length > 0) {
+        return emitWholeAskSnapshot(command, state, snapshot, onChunk);
+      }
+      return false;
+    }
     clearPendingAskMessage(state);
     return emitAskDeltaFromSnapshot(command, state, snapshot, onChunk);
   }
@@ -68,9 +81,16 @@ export async function applyAskSnapshot(
     return emitAskDeltaFromSnapshot(command, state, snapshot, onChunk);
   }
 
+  const provisionalPendingCompatible =
+    state.pendingMessageId === PROVISIONAL_PENDING_MESSAGE_ID &&
+    provisionalAskTextCompatible(state.pendingMessageText, snapshot.text);
+
   if (state.pendingMessageId !== messageId) {
     state.pendingMessageId = messageId;
     state.pendingMessageText = snapshot.text;
+    if (provisionalPendingCompatible && snapshot.text.length > 0) {
+      return commitPendingAskMessage(command, state, snapshot, onChunk);
+    }
     if (snapshot.thoughtDividerBeforeMessage && snapshot.text.length > 0) {
       return commitPendingAskMessage(command, state, snapshot, onChunk);
     }
@@ -169,6 +189,71 @@ function clearPendingAskMessage(state: {
 }): void {
   state.pendingMessageId = null;
   state.pendingMessageText = "";
+}
+
+function rememberProvisionalAskMessage(
+  state: {
+    pendingMessageId: string | null;
+    pendingMessageText: string;
+  },
+  text: string,
+): void {
+  state.pendingMessageId = PROVISIONAL_PENDING_MESSAGE_ID;
+  state.pendingMessageText =
+    text.length >= state.pendingMessageText.length ? text : state.pendingMessageText;
+}
+
+function provisionalAskTextCompatible(
+  pendingText: string,
+  snapshotText: string,
+): boolean {
+  if (!pendingText || !snapshotText) {
+    return false;
+  }
+  if (
+    snapshotText.startsWith(pendingText) ||
+    placeholderCompatibleText(pendingText, snapshotText) ||
+    markdownCompatibleRecoveredText(pendingText, snapshotText)
+  ) {
+    return true;
+  }
+
+  const compactPending = pendingText.replace(/\s+/g, "");
+  const compactSnapshot = snapshotText.replace(/\s+/g, "");
+  return (
+    compactPending.length >= 4 &&
+    compactSnapshot.length >= compactPending.length &&
+    compactSnapshot.startsWith(compactPending)
+  );
+}
+
+async function emitWholeAskSnapshot(
+  command: AskExecutionCommand,
+  state: {
+    emittedText: string;
+    nextSeq: number;
+    knownMessageId: string | null;
+    pendingMessageId: string | null;
+    pendingMessageText: string;
+  },
+  snapshot: AskSnapshot,
+  onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+): Promise<boolean> {
+  state.emittedText = snapshot.text;
+  if (snapshot.messageId) {
+    state.knownMessageId = snapshot.messageId;
+  }
+  clearPendingAskMessage(state);
+  await onChunk({
+    job_id: command.jobId,
+    conversation_id: snapshot.conversationId,
+    message_id: snapshot.messageId,
+    seq: state.nextSeq,
+    kind: "delta",
+    text: snapshot.text,
+  });
+  state.nextSeq += 1;
+  return true;
 }
 
 export async function applyResearchSnapshot(

@@ -959,6 +959,143 @@ describe("browser adapter", () => {
     expect(chunks.join("")).toBe(secondSnapshot.text);
     dom.window.close();
   });
+
+  it("holds provisional ask text without a message id until the identified snapshot stabilizes it", async () => {
+    const command = {
+      jobId: "job-provisional-ask-message-id",
+    } as Parameters<typeof applyAskSnapshot>[0];
+    const state = {
+      emittedText: "",
+      nextSeq: 0,
+      knownMessageId: null,
+      pendingMessageId: null,
+      pendingMessageText: "",
+    };
+    const chunks: string[] = [];
+    const onChunk = (chunk: { kind: string; text: string }) => {
+      if (chunk.kind === "delta") {
+        chunks.push(chunk.text);
+      }
+    };
+    const provisionalSnapshot = {
+      hasAssistantMessage: true,
+      text: "## 🧩 M ovement Modalities Comparison",
+      state: "running",
+      failureCode: null,
+      failureMessage: null,
+      retryVisible: false,
+      conversationId: "conv-modalities",
+      messageId: null,
+      thoughtDividerBeforeMessage: false,
+      currentUrl: "https://chatgpt.com/c/conv-modalities",
+    };
+    const identifiedSnapshot = {
+      ...provisionalSnapshot,
+      text: [
+        "## 🧩 Movement Modalities Comparison",
+        "",
+        "```",
+        "Physical Activity",
+        "├── 🧘 Stretching",
+        "└── 🏋️ Gym Workout",
+        "```",
+      ].join("\n"),
+      messageId: "msg-modalities",
+    };
+    const advancedSnapshot = {
+      ...identifiedSnapshot,
+      text: [
+        identifiedSnapshot.text,
+        "",
+        "## 📊 Side-by-Side Attribute Matrix",
+        "",
+        "| Attribute | Stretching | Gym Workout |",
+      ].join("\n"),
+    };
+
+    const provisionalProgressed = await applyAskSnapshot(
+      command,
+      state,
+      provisionalSnapshot,
+      onChunk,
+    );
+    const identifiedProgressed = await applyAskSnapshot(
+      command,
+      state,
+      identifiedSnapshot,
+      onChunk,
+    );
+    const advancedProgressed = await applyAskSnapshot(
+      command,
+      state,
+      advancedSnapshot,
+      onChunk,
+    );
+
+    expect(provisionalProgressed).toBe(false);
+    expect(identifiedProgressed).toBe(true);
+    expect(advancedProgressed).toBe(true);
+    expect(chunks).toEqual([
+      identifiedSnapshot.text,
+      advancedSnapshot.text.slice(identifiedSnapshot.text.length),
+    ]);
+    expect(chunks.join("")).toBe(advancedSnapshot.text);
+  });
+
+  it("emits a completed provisional ask snapshot once when no message id ever arrives", async () => {
+    const command = {
+      jobId: "job-provisional-ask-done",
+    } as Parameters<typeof applyAskSnapshot>[0];
+    const state = {
+      emittedText: "",
+      nextSeq: 0,
+      knownMessageId: null,
+      pendingMessageId: null,
+      pendingMessageText: "",
+    };
+    const chunks: string[] = [];
+    const onChunk = (chunk: { kind: string; text: string }) => {
+      if (chunk.kind === "delta") {
+        chunks.push(chunk.text);
+      }
+    };
+    const runningSnapshot = {
+      hasAssistantMessage: true,
+      text: "Reply",
+      state: "running",
+      failureCode: null,
+      failureMessage: null,
+      retryVisible: false,
+      conversationId: "conv-provisional-done",
+      messageId: null,
+      thoughtDividerBeforeMessage: false,
+      currentUrl: "https://chatgpt.com/c/conv-provisional-done",
+    };
+    const doneSnapshot = {
+      ...runningSnapshot,
+      text: "Reply exactly with ASK_OK",
+      state: "done",
+    };
+
+    const runningProgressed = await applyAskSnapshot(
+      command,
+      state,
+      runningSnapshot,
+      onChunk,
+    );
+    const doneProgressed = await applyAskSnapshot(
+      command,
+      state,
+      doneSnapshot,
+      onChunk,
+    );
+
+    expect(runningProgressed).toBe(false);
+    expect(doneProgressed).toBe(true);
+    expect(chunks).toEqual([doneSnapshot.text]);
+    expect(state.emittedText).toBe(doneSnapshot.text);
+    expect(state.knownMessageId).toBeNull();
+  });
 });
 
 describe("browser launch config", () => {
