@@ -12,7 +12,6 @@ pub(super) fn find_unstable_suffix_start(text: &str) -> Option<usize> {
         find_unclosed_link_or_image_start(text),
         find_unclosed_angle_construct_start(text),
         find_trailing_construct_sequence_start(text),
-        find_trailing_block_construct_start(text),
         find_trailing_delimiter_run_start(text),
     ]
     .into_iter()
@@ -337,31 +336,6 @@ fn match_trailing_emphasis_start(text: &str, end: usize) -> Option<usize> {
     None
 }
 
-fn find_trailing_block_construct_start(text: &str) -> Option<usize> {
-    let end = trim_trailing_whitespace(text, text.len());
-    if end == 0 {
-        return None;
-    }
-
-    let line_start = text[..end].rfind(['\n', '\r']).map_or(0, |idx| idx + 1);
-    let line = &text[line_start..end];
-    let trimmed = line.trim_start();
-
-    if trimmed.starts_with('>') {
-        return Some(line_start);
-    }
-
-    if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
-        return Some(line_start);
-    }
-
-    if starts_with_ordered_list_marker(trimmed) || line.contains('|') {
-        return Some(line_start);
-    }
-
-    None
-}
-
 fn find_trailing_delimiter_run_start(text: &str) -> Option<usize> {
     let end = trim_trailing_whitespace(text, text.len());
     let start = previous_char_boundary(text, end)?;
@@ -425,11 +399,6 @@ fn trim_trailing_whitespace(text: &str, mut end: usize) -> usize {
 
 fn has_non_whitespace_content(text: &str, start: usize, end: usize) -> bool {
     text[start..end].chars().any(|ch| !ch.is_whitespace())
-}
-
-fn starts_with_ordered_list_marker(line: &str) -> bool {
-    let digits_len = line.chars().take_while(|ch| ch.is_ascii_digit()).count();
-    digits_len > 0 && line[digits_len..].starts_with(". ")
 }
 
 fn include_image_bang(text: &str, open_bracket: usize) -> usize {
