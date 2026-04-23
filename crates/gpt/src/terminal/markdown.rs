@@ -76,15 +76,14 @@ fn find_unclosed_emphasis_start(text: &str) -> Option<usize> {
             };
 
             if run_len > 0 {
-                if can_close_emphasis(text, i, run_len) {
-                    if let Some(position) = open_delimiters
+                if can_close_emphasis(text, i, run_len)
+                    && let Some(position) = open_delimiters
                         .iter()
                         .rposition(|run| run.ch == ch && run.len == run_len)
-                    {
-                        open_delimiters.remove(position);
-                        i += run_len;
-                        continue;
-                    }
+                {
+                    open_delimiters.remove(position);
+                    i += run_len;
+                    continue;
                 }
 
                 if can_open_emphasis(text, i, run_len) {
@@ -136,7 +135,7 @@ fn find_unclosed_link_or_image_start(text: &str) -> Option<usize> {
         }
 
         if ch == '[' && !is_escaped_markdown_delimiter(text, i) {
-            if i == 0 || text[..i].chars().next_back() != Some('!') {
+            if i == 0 || !text[..i].ends_with('!') {
                 open_brackets.push(i);
             }
             i += ch.len_utf8();
@@ -169,12 +168,12 @@ fn find_unclosed_link_destination_start(text: &str) -> Option<usize> {
         let ch = char_at(text, i);
         if ch == ']' && !is_escaped_markdown_delimiter(text, i) {
             let open_paren = i + ch.len_utf8();
-            if open_paren < text.len() && text[open_paren..].starts_with('(') {
-                if let Some(open_bracket) = find_matching_open_bracket(text, i) {
-                    if find_matching_close_paren(text, open_paren).is_none() {
-                        candidate = Some(include_image_bang(text, open_bracket));
-                    }
-                }
+            if open_paren < text.len()
+                && text[open_paren..].starts_with('(')
+                && let Some(open_bracket) = find_matching_open_bracket(text, i)
+                && find_matching_close_paren(text, open_paren).is_none()
+            {
+                candidate = Some(include_image_bang(text, open_bracket));
             }
         }
 
@@ -231,10 +230,7 @@ fn find_trailing_construct_sequence_start(text: &str) -> Option<usize> {
     let mut end = text.len();
     let mut last_start = None;
 
-    loop {
-        let Some(start) = match_trailing_complete_construct_start(text, end) else {
-            break;
-        };
+    while let Some(start) = match_trailing_complete_construct_start(text, end) {
         last_start = Some(start);
         end = start;
 
@@ -291,10 +287,10 @@ fn match_trailing_html_or_angle_start(text: &str, end: usize) -> Option<usize> {
         return None;
     }
 
-    if let Some((close_start, tag_name)) = trailing_html_closing_tag(text, end) {
-        if let Some(open_start) = find_previous_opening_tag_start(text, close_start, &tag_name) {
-            return Some(open_start);
-        }
+    if let Some((close_start, tag_name)) = trailing_html_closing_tag(text, end)
+        && let Some(open_start) = find_previous_opening_tag_start(text, close_start, &tag_name)
+    {
+        return Some(open_start);
     }
 
     let start = text[..end].rfind('<')?;
@@ -306,15 +302,13 @@ fn match_trailing_backtick_construct_start(text: &str, end: usize) -> Option<usi
     let delimiter = "`".repeat(run_len);
     let close_start = end - run_len;
 
-    for (candidate, _) in text[..close_start].rmatch_indices(&delimiter) {
-        if !is_escaped_markdown_delimiter(text, candidate)
-            && has_non_whitespace_content(text, candidate + run_len, close_start)
-        {
-            return Some(candidate);
-        }
-    }
-
-    None
+    text[..close_start]
+        .rmatch_indices(&delimiter)
+        .map(|(candidate, _)| candidate)
+        .find(|&candidate| {
+            !is_escaped_markdown_delimiter(text, candidate)
+                && has_non_whitespace_content(text, candidate + run_len, close_start)
+        })
 }
 
 fn match_trailing_emphasis_start(text: &str, end: usize) -> Option<usize> {
