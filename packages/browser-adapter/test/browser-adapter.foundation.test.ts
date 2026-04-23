@@ -871,6 +871,61 @@ describe("browser adapter", () => {
     dom.window.close();
   });
 
+  it("serializes mermaid preview blocks into explicit text instead of a bare mermaid label", async () => {
+    const runtimeSource = await readFile(
+      path.join(
+        process.cwd(),
+        "packages/browser-adapter/src/pageAdapter.runtime.js",
+      ),
+      "utf8",
+    );
+    const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+      url: "https://chatgpt.com/c/conv-mermaid-preview",
+      runScripts: "outside-only",
+    });
+    const { window } = dom;
+    const article = window.document.createElement("article");
+    article.setAttribute("data-slot", "assistant-message");
+    article.hidden = false;
+    article.setAttribute("data-message-author-role", "assistant");
+    article.setAttribute("data-message-id", "msg-mermaid-preview");
+    article.innerHTML = `
+      <div class="markdown">
+        <pre class="overflow-visible! px-0!">
+          <div class="sticky z-2 select-none top-(--sticky-padding-top)">
+            <div class="flex w-full items-center justify-between py-1.5 ps-4 pe-1.5 font-sans md:ps-5">
+              <div>Mermaid</div>
+              <div class="flex flex-row items-center gap-0.5 justify-self-end">
+                <button aria-label="Download PNG" type="button"></button>
+                <button aria-label="Code" type="button" aria-pressed="false"></button>
+                <button aria-label="Preview" type="button" aria-pressed="true"></button>
+              </div>
+            </div>
+          </div>
+          <div class="flex w-full flex-col items-center">
+            <img src="data:image/svg+xml;utf8,${encodeURIComponent(
+              '<svg xmlns="http://www.w3.org/2000/svg"><text>Exercise</text><text>Recovery Loop</text></svg>',
+            )}" />
+          </div>
+        </pre>
+      </div>
+    `;
+    window.document.body.append(article);
+    window.document.body.dataset.conversationId = "conv-mermaid-preview";
+    window.document.body.dataset.lastMessageId = "msg-mermaid-preview";
+    window.document.body.dataset.streamState = "done";
+
+    const snapshot = window.eval(
+      `${runtimeSource.replace(
+        /^export\s+/gm,
+        "",
+      )}\ncreateTablinqPageAdapterRuntime().readAskSnapshot();`,
+    );
+
+    expect(snapshot.text).toBe("Mermaid diagram preview: Exercise; Recovery Loop.");
+    dom.window.close();
+  });
+
   it("ignores transient hidden inline nodes so ask streaming can keep a stable prefix", async () => {
     const runtimeSource = await readFile(
       path.join(

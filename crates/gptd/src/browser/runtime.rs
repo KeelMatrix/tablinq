@@ -104,18 +104,18 @@ fn adapter_runtime_candidates() -> Vec<(PathBuf, PathBuf)> {
         repo_root
             .join("packages")
             .join("browser-adapter")
-            .join("dist")
             .join("src")
-            .join("service.js"),
+            .join("service.ts"),
         repo_root.clone(),
     ));
     candidates.push((
         repo_root
             .join("packages")
             .join("browser-adapter")
+            .join("dist")
             .join("src")
-            .join("service.ts"),
-        repo_root,
+            .join("service.js"),
+        repo_root.clone(),
     ));
 
     candidates
@@ -190,4 +190,29 @@ fn is_js_entry(path: &Path) -> bool {
         .and_then(|value| value.to_str())
         .map(|value| value.eq_ignore_ascii_case("js"))
         .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::adapter_runtime_candidates;
+
+    #[test]
+    fn repo_checkout_prefers_source_adapter_before_dist_output() {
+        let candidates = adapter_runtime_candidates();
+        let repo_tail = &candidates[candidates.len().saturating_sub(2)..];
+
+        assert_eq!(repo_tail.len(), 2, "expected repo source/dist candidates");
+        assert!(
+            repo_tail[0]
+                .0
+                .ends_with("packages/browser-adapter/src/service.ts"),
+            "repo checkout should prefer source adapter before stale dist output",
+        );
+        assert!(
+            repo_tail[1]
+                .0
+                .ends_with("packages/browser-adapter/dist/src/service.js"),
+            "repo checkout should keep dist output as the fallback candidate",
+        );
+    }
 }

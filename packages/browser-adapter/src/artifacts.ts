@@ -30,6 +30,17 @@ export function contentTypeForFile(path: string): string {
   switch (extname(path).toLowerCase()) {
     case ".txt":
       return "text/plain; charset=utf-8";
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".gif":
+      return "image/gif";
     case ".json":
       return "application/json";
     case ".csv":

@@ -1039,6 +1039,95 @@ export function createTablinqPageAdapterRuntime() {
     return "";
   };
 
+  const decodeDataUrlText = (url) => {
+    if (typeof url !== "string" || !url.toLowerCase().startsWith("data:")) {
+      return "";
+    }
+    const commaIndex = url.indexOf(",");
+    if (commaIndex < 0) {
+      return "";
+    }
+    const metadata = url.slice("data:".length, commaIndex);
+    const payload = url.slice(commaIndex + 1);
+    const isBase64 = metadata
+      .split(";")
+      .map((segment) => segment.trim().toLowerCase())
+      .includes("base64");
+    try {
+      if (isBase64) {
+        const binary = atob(payload);
+        const bytes = Uint8Array.from(binary, (value) =>
+          value.charCodeAt(0),
+        );
+        return new TextDecoder().decode(bytes);
+      }
+      return decodeURIComponent(payload);
+    } catch {
+      return "";
+    }
+  };
+
+  const collectMermaidSvgLabels = (svgText) => {
+    if (!svgText || typeof DOMParser !== "function") {
+      return [];
+    }
+    try {
+      const parsed = new DOMParser().parseFromString(svgText, "image/svg+xml");
+      return uniqueCollapsed(
+        Array.from(
+          parsed.querySelectorAll(
+            "text, tspan, foreignObject p, foreignObject span, .nodeLabel, .edgeLabel",
+          ),
+        )
+          .map((candidate) => candidate.textContent ?? "")
+          .filter(Boolean),
+      ).filter((label) => normalizeText(label) !== "mermaid");
+    } catch {
+      return [];
+    }
+  };
+
+  const isMermaidPreviewBlock = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (
+      element.querySelector("code") instanceof HTMLElement ||
+      element.querySelector(".cm-content") instanceof HTMLElement
+    ) {
+      return false;
+    }
+    const hasPreviewSurface = Boolean(
+      element.querySelector("img[src^='data:image/'], img[src^='blob:'], canvas"),
+    );
+    if (!hasPreviewSurface) {
+      return false;
+    }
+    const text = collapseInlineText(element.textContent);
+    return (
+      hasToken(text, ["mermaid"]) ||
+      (Boolean(element.querySelector("button[aria-label='Code']")) &&
+        Boolean(element.querySelector("button[aria-label='Preview']")))
+    );
+  };
+
+  const serializeMermaidPreviewBlock = (element) => {
+    if (!isMermaidPreviewBlock(element)) {
+      return "";
+    }
+    const previewImage = element.querySelector("img[src^='data:image/svg+xml']");
+    const svgText =
+      previewImage instanceof HTMLImageElement
+        ? decodeDataUrlText(previewImage.currentSrc || previewImage.src)
+        : "";
+    const labels = collectMermaidSvgLabels(svgText);
+    if (labels.length === 0) {
+      return "Mermaid diagram preview.";
+    }
+    const summary = labels.slice(0, 12).join("; ");
+    return `Mermaid diagram preview: ${summary}${labels.length > 12 ? "; ..." : "."}`;
+  };
+
   const isIgnoredMessageChrome = (element) => {
     if (!(element instanceof HTMLElement)) {
       return false;
@@ -1225,6 +1314,10 @@ export function createTablinqPageAdapterRuntime() {
       return content ? indentLines(content, "> ", ">") : "";
     }
     if (tag === "pre") {
+      const mermaidPreview = serializeMermaidPreviewBlock(element);
+      if (mermaidPreview) {
+        return mermaidPreview;
+      }
       const code = collectCodeBlockText(element);
       if (!code) {
         return "";
