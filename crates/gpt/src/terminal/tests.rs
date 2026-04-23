@@ -275,9 +275,29 @@ fn buffer_response_chunk_holds_closed_trailing_markdown_constructs_in_pending_te
 #[test]
 fn buffer_response_chunk_preserves_plain_prefix_before_unstable_tail() {
     assert_stream_split(&["C++ is a **low-level**"], "C++ is a ", "**low-level**");
-    assert_stream_split(&["Intro\n> quoted"], "Intro\n", "> quoted");
-    assert_stream_split(&["Items:\n- pending"], "Items:\n", "- pending");
-    assert_stream_split(&["Table:\n| a | b |"], "Table:\n", "| a | b |");
+    assert_stream_split(
+        &["Intro\n> quoted **tail**"],
+        "Intro\n> quoted ",
+        "**tail**",
+    );
+    assert_stream_split(
+        &["Items:\n- pending `code`"],
+        "Items:\n- pending ",
+        "`code`",
+    );
+}
+
+#[test]
+fn buffer_response_chunk_streams_completed_block_lines_immediately() {
+    for input in [
+        "Intro\n> quoted",
+        "Items:\n- pending",
+        "Table:\n| a | b |",
+        "Outline:\n1. numbered",
+        "# C vs C++ vs C#\n\n> ## At a glance\n>\n> - **C** -> minimal, procedural, close to hardware",
+    ] {
+        assert_stream_split(&[input], input, "");
+    }
 }
 
 #[test]
