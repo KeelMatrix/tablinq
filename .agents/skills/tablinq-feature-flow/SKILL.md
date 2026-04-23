@@ -9,7 +9,7 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds f
 
 Start from the user-facing entrypoint that owns the behavior:
 
-- CLI command or flags: `crates/gpt`
+- CLI command, flags, or terminal presentation: `crates/gpt`
 - durable execution, state, recovery, or orchestration: `crates/gptd`
 - HTTP API surface: `crates/tablinq-gateway`
 - native host behavior: `crates/tablinq-host`

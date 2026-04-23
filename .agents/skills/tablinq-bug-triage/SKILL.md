@@ -9,7 +9,7 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds t
 
 1. Start from the failing surface the user named, not from broad repo search.
 2. Classify the bug into one primary owner:
-   - CLI or command parsing: `crates/gpt`
+   - CLI, command parsing, or terminal presentation: `crates/gpt`
    - Daemon, persistence, recovery, browser orchestration: `crates/gptd`
    - OpenAI-compatible HTTP behavior: `crates/tablinq-gateway`
    - Native messaging host: `crates/tablinq-host`
@@ -21,6 +21,7 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds t
 ## Debugging heuristics
 
 - For command failures, start at the exact CLI command implementation before inspecting daemon internals.
+- For CLI streaming, formatting, or terminal output bugs, inspect `crates/gpt/src/terminal/*` immediately after the command entrypoint.
 - For browser failures, distinguish:
   - attach or tab selection problems
   - adapter action failures
