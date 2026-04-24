@@ -191,7 +191,14 @@ export async function reconcileResearchAfterInterruption(
     );
     return {
       page: recoveredPage,
-      result: await finalizeResearch(host, command, recoveredPage, stabilized),
+      result: await finalizeResearch(
+        host,
+        command,
+        recoveredPage,
+        state,
+        stabilized,
+        onUpdate,
+      ),
     };
   }
   return { page: recoveredPage };

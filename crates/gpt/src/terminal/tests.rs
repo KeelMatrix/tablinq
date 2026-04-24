@@ -179,6 +179,10 @@ fn render_reconciled_response_with_rewrite_safety(
     String::from_utf8(stdout).unwrap()
 }
 
+fn render_reconciled_research_response(streamed_chunks: &[&str], final_text: &str) -> String {
+    render_reconciled_response_with_rewrite_safety(streamed_chunks, final_text, false, false)
+}
+
 fn assert_stream_split(chunks: &[&str], expected_output: &str, expected_pending: &str) {
     let (output, response_stream) = render_streamed_chunks(chunks, false);
     assert_eq!(output, expected_output);
@@ -213,6 +217,39 @@ fn reconcile_streamed_response_rewrites_divergent_single_line_chunks() {
 #[test]
 fn reconcile_streamed_response_prints_final_output_when_no_chunks_stream() {
     assert_eq!(render_reconciled_response(&[], "ASK_OK", false), "ASK_OK\n");
+}
+
+#[test]
+fn research_reconciliation_prints_withheld_markdown_tail_once() {
+    let final_text = "Research result: **stable tail**";
+    assert_eq!(
+        render_reconciled_research_response(&["Research result: **stable"], final_text),
+        format!("{final_text}\n")
+    );
+}
+
+#[test]
+fn research_reconciliation_appends_final_suffix_once() {
+    assert_eq!(
+        render_reconciled_research_response(&["Research prefix"], "Research prefix suffix"),
+        "Research prefix suffix\n"
+    );
+}
+
+#[test]
+fn research_reconciliation_falls_back_without_rewriting_divergent_output() {
+    assert_eq!(
+        render_reconciled_research_response(&["Draft research"], "Final research"),
+        "Draft research\nFinal research\n"
+    );
+}
+
+#[test]
+fn research_reconciliation_prints_final_report_once_without_terminal_chunks() {
+    assert_eq!(
+        render_reconciled_research_response(&[], "Complete research report"),
+        "Complete research report\n"
+    );
 }
 
 #[test]

@@ -182,7 +182,10 @@ export async function runResearch(
         }
         await sleep(
           Math.min(
-            adaptivePollIntervalMs("recovery", Date.now() - state.lastProgressAt),
+            adaptivePollIntervalMs(
+              "recovery",
+              Date.now() - state.lastProgressAt,
+            ),
             Math.max(1, timeoutAt - Date.now()),
           ),
         );
@@ -220,7 +223,14 @@ export async function runResearch(
         state.lastProgressAt = Date.now();
       }
       if (stabilized.status === "done") {
-        return finalizeResearch(host, command, page, stabilized);
+        return finalizeResearch(
+          host,
+          command,
+          page,
+          state,
+          stabilized,
+          onUpdate,
+        );
       }
     }
 
