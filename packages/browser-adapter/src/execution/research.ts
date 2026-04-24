@@ -1,4 +1,5 @@
 import type {
+  RequestStateSnapshot,
   ResearchExecutionCommand,
   ResearchResultSnapshot,
 } from "../contracts";
@@ -117,6 +118,8 @@ export async function runResearch(
     announcedStart: false,
     submissionConfirmed: !options.submitPrompt,
     lastStatusAt: 0,
+    lastSnapshotSignature: null,
+    lastIdentityUpdateSignature: null,
   };
 
   if (submissionState) {
@@ -125,6 +128,12 @@ export async function runResearch(
       state,
       researchSubmissionStateToSnapshot(submissionState),
     );
+    await emitResearchIdentityUpdate(
+      state,
+      submissionState.currentUrl,
+      onState,
+      "observed research submission identity",
+    );
   }
   if (initialSnapshot) {
     rememberResearchSnapshot(host, state, initialSnapshot);
@@ -132,6 +141,12 @@ export async function runResearch(
       state,
       initialSnapshot,
       onUpdate,
+    );
+    await emitResearchIdentityUpdate(
+      state,
+      initialSnapshot.currentUrl,
+      onState,
+      "observed in-flight research identity",
     );
     state.submissionConfirmed = true;
     if (progressed) {
@@ -196,6 +211,12 @@ export async function runResearch(
 
     rememberResearchSnapshot(host, state, snapshot);
     const progressed = await applyResearchSnapshot(state, snapshot, onUpdate);
+    await emitResearchIdentityUpdate(
+      state,
+      snapshot.currentUrl,
+      onState,
+      "observed in-flight research identity",
+    );
     if (progressed) {
       state.lastProgressAt = Date.now();
     }
@@ -218,6 +239,12 @@ export async function runResearch(
         state,
         stabilized,
         onUpdate,
+      );
+      await emitResearchIdentityUpdate(
+        state,
+        stabilized.currentUrl,
+        onState,
+        "observed stabilized research identity",
       );
       if (stabilizedProgress) {
         state.lastProgressAt = Date.now();
@@ -265,6 +292,36 @@ export async function runResearch(
   }
 
   throw new Error("research job failed: timed out waiting for completion");
+}
+
+async function emitResearchIdentityUpdate(
+  state: {
+    knownConversationId: string | null;
+    knownMessageId: string | null;
+    lastIdentityUpdateSignature: string | null;
+  },
+  currentUrl: string | null,
+  onState: (update: RequestStateSnapshot) => Promise<void> | void,
+  reason: string,
+): Promise<void> {
+  const signature = JSON.stringify([
+    state.knownConversationId,
+    state.knownMessageId,
+    currentUrl,
+  ]);
+  if (state.lastIdentityUpdateSignature === signature) {
+    return;
+  }
+  state.lastIdentityUpdateSignature = signature;
+  await onState({
+    state: "running",
+    reason,
+    at: new Date().toISOString(),
+    conversation_id: state.knownConversationId,
+    message_id: state.knownMessageId,
+    current_url: currentUrl,
+    streaming_safe: false,
+  });
 }
 
 async function maybeApplySubmitJitter(

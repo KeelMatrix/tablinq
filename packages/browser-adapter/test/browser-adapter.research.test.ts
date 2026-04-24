@@ -65,7 +65,7 @@ function fakeResearchSnapshot(reportText: string): any {
 }
 
 describe("browser adapter", () => {
-  it("emits only the missing final research suffix during finalization", async () => {
+  it("emits the full final-safe research report during finalization", async () => {
     const updates: string[] = [];
     const state = {
       emittedText: "Research prefix",
@@ -88,7 +88,7 @@ describe("browser adapter", () => {
       },
     );
 
-    expect(updates).toEqual([" suffix"]);
+    expect(updates).toEqual(["Research prefix suffix"]);
     expect(state).toEqual({
       emittedText: "Research prefix suffix",
       nextSeq: 4,
@@ -127,7 +127,7 @@ describe("browser adapter", () => {
     expect(result.report_text).toBe("Research prefix suffix");
   });
 
-  it("returns divergent finalized research without streaming a replacement delta", async () => {
+  it("emits divergent finalized research as a final-safe full delta", async () => {
     const updates: string[] = [];
     const state = {
       emittedText: "Draft research text",
@@ -150,10 +150,10 @@ describe("browser adapter", () => {
       },
     );
 
-    expect(updates).toEqual([]);
+    expect(updates).toEqual(["Final research report"]);
     expect(state).toEqual({
-      emittedText: "Draft research text",
-      nextSeq: 3,
+      emittedText: "Final research report",
+      nextSeq: 4,
     });
     expect(result.report_text).toBe("Final research report");
   });

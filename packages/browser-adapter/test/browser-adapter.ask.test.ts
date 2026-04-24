@@ -325,7 +325,7 @@ describe("browser adapter", () => {
       "Fake response for: reason carefully about this tradeoff",
     );
     expect(chunks.join("")).toBe(result.output_text);
-    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks).toEqual([result.output_text]);
     expect(chunks.join("")).not.toContain(
       "I’m reconstructing the prior context",
     );
@@ -367,7 +367,7 @@ describe("browser adapter", () => {
     dom.window.close();
   });
 
-  it("streams live-style answer deltas after ignoring a thought artifact", async () => {
+  it("tracks live-style answer rewrites without emitting provisional chunks", async () => {
     const { adapter, dom, main } = await createAskRuntimeDom();
     const baseline = adapter.readAskBaseline();
     main.insertAdjacentHTML("beforeend", liveStyleReasoningTurn());
@@ -382,6 +382,7 @@ describe("browser adapter", () => {
       knownMessageId: null,
       pendingMessageId: null,
       pendingMessageText: "",
+      lastSnapshotSignature: null,
     };
     const chunks: string[] = [];
     const onChunk = (chunk: { kind: string; text?: string }) => {
@@ -426,15 +427,10 @@ describe("browser adapter", () => {
       onChunk,
     );
 
-    expect(artifactProgressed).toBe(false);
+    expect(artifactProgressed).toBe(true);
     expect(firstAnswerProgressed).toBe(true);
     expect(secondAnswerProgressed).toBe(true);
-    expect(chunks).toEqual([
-      "A lot.",
-      " Modern AI helps, but it does not remove the need for strong systems design.",
-    ]);
-    expect(chunks.join("")).toBe(liveActualAnswerText);
-    expect(chunks.join("")).not.toContain(liveThoughtArtifactText);
+    expect(chunks).toEqual([]);
     dom.window.close();
   });
 

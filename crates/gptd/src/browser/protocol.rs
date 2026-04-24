@@ -42,6 +42,12 @@ pub(super) enum AdapterRequest {
         files: Vec<String>,
         emitted_text: Option<String>,
         next_seq: Option<u64>,
+        known_conversation_id: Option<String>,
+        known_message_id: Option<String>,
+        baseline_conversation_id: Option<String>,
+        baseline_message_id: Option<String>,
+        baseline_assistant_message_count: Option<u64>,
+        baseline_text: Option<String>,
     },
     Research {
         job_id: String,
@@ -143,6 +149,14 @@ pub(super) struct AdapterRequestStateUpdate {
     pub message_id: Option<String>,
     pub current_url: Option<String>,
     pub streaming_safe: bool,
+    #[serde(default)]
+    pub baseline_conversation_id: Option<String>,
+    #[serde(default)]
+    pub baseline_message_id: Option<String>,
+    #[serde(default)]
+    pub baseline_assistant_message_count: Option<u64>,
+    #[serde(default)]
+    pub baseline_text: Option<String>,
 }
 
 pub(super) fn map_request_state_update(
@@ -150,6 +164,7 @@ pub(super) fn map_request_state_update(
 ) -> RequestLifecycleUpdate {
     let status = match update.state.as_str() {
         "recovered" => JobStatus::Recovered,
+        "running" => JobStatus::Running,
         _ => JobStatus::Interrupted,
     };
     RequestLifecycleUpdate {
@@ -163,5 +178,9 @@ pub(super) fn map_request_state_update(
         message_id: update.message_id,
         current_url: update.current_url,
         streaming_safe: update.streaming_safe,
+        baseline_conversation_id: update.baseline_conversation_id,
+        baseline_message_id: update.baseline_message_id,
+        baseline_assistant_message_count: update.baseline_assistant_message_count,
+        baseline_text: update.baseline_text,
     }
 }

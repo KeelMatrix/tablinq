@@ -14,6 +14,7 @@ import { reconcileAskAfterInterruption } from "./askRecovery";
 import { runAsk } from "./ask";
 import { runResearch } from "./research";
 import type { AskRuntimeState, BrowserExecutionHost } from "./types";
+import type { AskBaseline } from "../snapshotState";
 import { workspaceKeyFromUrl } from "../urls";
 
 export type { BrowserExecutionHost } from "./types";
@@ -70,7 +71,13 @@ export class BrowserExecutionController {
 
   async recoverAsk(
     command: AskExecutionCommand,
-    state: { emittedText: string; nextSeq: number },
+    state: {
+      emittedText: string;
+      nextSeq: number;
+      knownConversationId?: string | null;
+      knownMessageId?: string | null;
+      askBaseline?: AskBaseline | null;
+    },
     onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,
@@ -89,6 +96,9 @@ export class BrowserExecutionController {
           emittedText: state.emittedText,
           nextSeq: state.nextSeq,
           recoveryReason: "re-attached to the browser session",
+          knownConversationId: state.knownConversationId,
+          knownMessageId: state.knownMessageId,
+          askBaseline: state.askBaseline,
         }),
     );
   }

@@ -353,6 +353,36 @@ export async function collectArtifacts(
   return artifacts;
 }
 
+export async function readArtifactStabilitySignature(
+  page: Page,
+  messageId: string | null,
+): Promise<string> {
+  const artifactRoot = await resolveArtifactRoot(page, messageId);
+  const handles = await artifactRoot.locator(ARTIFACT_HANDLE_SELECTOR).all();
+  const entries = [];
+  for (let index = 0; index < handles.length; index += 1) {
+    const handle = handles[index]!;
+    const ready = await handle.evaluate(ARTIFACT_READY_EVALUATOR);
+    const descriptor = await handle.evaluate((element, position) => {
+      const htmlElement = element instanceof HTMLElement ? element : null;
+      return {
+        position,
+        tagName: element.tagName,
+        text: element.textContent?.trim() ?? "",
+        href: element.getAttribute("href"),
+        download: element.getAttribute("download"),
+        ariaLabel: element.getAttribute("aria-label"),
+        title: element.getAttribute("title"),
+        disabled:
+          htmlElement?.getAttribute("aria-disabled") ??
+          (htmlElement?.hasAttribute("disabled") ? "true" : null),
+      };
+    }, index);
+    entries.push({ ready, descriptor });
+  }
+  return JSON.stringify(entries);
+}
+
 async function resolveArtifactRoot(
   page: Page,
   messageId: string | null,

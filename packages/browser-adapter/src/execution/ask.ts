@@ -1,4 +1,8 @@
-import type { AskExecutionCommand, AskResultSnapshot } from "../contracts";
+import type {
+  AskExecutionCommand,
+  AskResultSnapshot,
+  RequestStateSnapshot,
+} from "../contracts";
 import {
   applyAskConfiguration,
   clickSubmit,
@@ -12,9 +16,7 @@ import {
   waitForSubmitReadyAfterUploads,
 } from "../pageRuntime";
 import {
-  canFinalizeRecoveredAskSnapshot,
   computeStallTimeoutMs,
-  textRelation,
 } from "../snapshotState";
 import {
   adaptivePollIntervalMs,
@@ -131,19 +133,29 @@ export async function runAsk(
     nextSeq: options.nextSeq,
     doneStreak: 0,
     knownConversationId:
+      options.knownConversationId ??
       command.conversationId ??
       askBaseline?.conversationId ??
       conversationIdFromUrl(safePageUrl(page)) ??
       null,
-    knownMessageId: null,
+    knownMessageId: options.knownMessageId ?? null,
     pendingMessageId: null,
     pendingMessageText: "",
-    askBaseline,
+    askBaseline: options.askBaseline ?? askBaseline,
     pendingTextReconciliation: false,
     lastProgressAt: Date.now(),
     recoveryAttempts: 0,
     lastStatusAt: 0,
+    lastSnapshotSignature: null,
+    lastIdentityUpdateSignature: null,
   };
+  await emitAskIdentityUpdate(
+    command,
+    state,
+    safePageUrl(page),
+    onState,
+    "observed ask baseline",
+  );
 
   if (!options.submitPrompt) {
     const recovered = await reconcileAskAfterInterruption(
@@ -217,17 +229,18 @@ export async function runAsk(
     }
 
     rememberAskSnapshot(host, state, snapshot);
-    if (
-      state.pendingTextReconciliation &&
-      textRelation(state.emittedText, snapshot.text) !== "mismatch"
-    ) {
-      state.pendingTextReconciliation = false;
-    }
     const progressed = await applyAskSnapshot(
       command,
       state,
       snapshot,
       onChunk,
+    );
+    await emitAskIdentityUpdate(
+      command,
+      state,
+      snapshot.currentUrl,
+      onState,
+      "observed in-flight assistant identity",
     );
     if (progressed) {
       state.lastProgressAt = Date.now();
@@ -253,22 +266,17 @@ export async function runAsk(
         snapshot,
         onChunk,
       );
+      await emitAskIdentityUpdate(
+        command,
+        state,
+        snapshot.currentUrl,
+        onState,
+        "observed stabilized assistant identity",
+      );
       if (stabilizedProgress) {
         state.lastProgressAt = Date.now();
       }
       if (snapshot.state === "done") {
-        if (
-          state.pendingTextReconciliation &&
-          !canFinalizeRecoveredAskSnapshot(
-            state.emittedText,
-            state.knownMessageId,
-            snapshot,
-          )
-        ) {
-          throw new Error(
-            "interrupted ask could not be reconciled against the live conversation",
-          );
-        }
         state.pendingTextReconciliation = false;
         return finalizeAsk(host, command, page, state, snapshot, onChunk);
       }
@@ -315,6 +323,52 @@ export async function runAsk(
   }
 
   throw new Error("ask timed out waiting for streamed response");
+}
+
+async function emitAskIdentityUpdate(
+  command: AskExecutionCommand,
+  state: {
+    knownConversationId: string | null;
+    knownMessageId: string | null;
+    askBaseline: {
+      assistantMessageCount: number;
+      conversationId: string | null;
+      messageId: string | null;
+      text: string;
+    } | null;
+    lastIdentityUpdateSignature: string | null;
+  },
+  currentUrl: string | null,
+  onState: (update: RequestStateSnapshot) => Promise<void> | void,
+  reason: string,
+): Promise<void> {
+  const signature = JSON.stringify([
+    state.knownConversationId,
+    state.knownMessageId,
+    currentUrl,
+    state.askBaseline?.conversationId ?? null,
+    state.askBaseline?.messageId ?? null,
+    state.askBaseline?.assistantMessageCount ?? null,
+    state.askBaseline?.text ?? null,
+  ]);
+  if (state.lastIdentityUpdateSignature === signature) {
+    return;
+  }
+  state.lastIdentityUpdateSignature = signature;
+  await onState({
+    state: "running",
+    reason,
+    at: new Date().toISOString(),
+    conversation_id: state.knownConversationId ?? command.conversationId ?? null,
+    message_id: state.knownMessageId,
+    current_url: currentUrl,
+    streaming_safe: false,
+    baseline_conversation_id: state.askBaseline?.conversationId ?? null,
+    baseline_message_id: state.askBaseline?.messageId ?? null,
+    baseline_assistant_message_count:
+      state.askBaseline?.assistantMessageCount ?? null,
+    baseline_text: state.askBaseline?.text ?? null,
+  });
 }
 
 async function maybeApplySubmitJitter(

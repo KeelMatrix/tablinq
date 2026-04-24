@@ -52,6 +52,10 @@ pub struct RequestLifecycleUpdate {
     pub message_id: Option<String>,
     pub current_url: Option<String>,
     pub streaming_safe: bool,
+    pub baseline_conversation_id: Option<String>,
+    pub baseline_message_id: Option<String>,
+    pub baseline_assistant_message_count: Option<u64>,
+    pub baseline_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -262,6 +266,7 @@ impl BrowserManager {
                     if recovery_command.conversation_id.is_some() {
                         recovery_command.new_conversation = false;
                     }
+                    let latest_update = latest_state.borrow().clone();
                     state_forwarding(RequestLifecycleUpdate {
                         status: JobStatus::Interrupted,
                         message: format!("ask interrupted: {err:#}"),
@@ -269,6 +274,18 @@ impl BrowserManager {
                         message_id: None,
                         current_url: recovery_current_url,
                         streaming_safe: false,
+                        baseline_conversation_id: latest_update
+                            .as_ref()
+                            .and_then(|update| update.baseline_conversation_id.clone()),
+                        baseline_message_id: latest_update
+                            .as_ref()
+                            .and_then(|update| update.baseline_message_id.clone()),
+                        baseline_assistant_message_count: latest_update
+                            .as_ref()
+                            .and_then(|update| update.baseline_assistant_message_count),
+                        baseline_text: latest_update
+                            .as_ref()
+                            .and_then(|update| update.baseline_text.clone()),
                     })?;
                     self.relaunch_for_recovery()?;
                     let (snapshot, result) = self
@@ -281,6 +298,13 @@ impl BrowserManager {
                             resolve_ask_timeout_ms(&self.config, &recovery_command),
                             emitted_text.borrow().as_str(),
                             next_seq.get(),
+                            latest_update
+                                .as_ref()
+                                .and_then(|update| update.conversation_id.as_deref()),
+                            latest_update
+                                .as_ref()
+                                .and_then(|update| update.message_id.as_deref()),
+                            latest_update.as_ref(),
                             &mut forwarding,
                             &mut state_forwarding,
                             &mut should_cancel,
@@ -375,6 +399,10 @@ impl BrowserManager {
                         message_id: None,
                         current_url: recovery_current_url,
                         streaming_safe: false,
+                        baseline_conversation_id: None,
+                        baseline_message_id: None,
+                        baseline_assistant_message_count: None,
+                        baseline_text: None,
                     })?;
                     self.relaunch_for_recovery()?;
                     let (snapshot, result) = self

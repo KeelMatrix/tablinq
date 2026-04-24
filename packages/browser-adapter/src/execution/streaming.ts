@@ -4,16 +4,10 @@ import type {
   StreamChunkSnapshot,
 } from "../contracts";
 import type { AskSnapshot, ResearchSnapshot } from "../snapshotState";
-import {
-  markdownCompatibleRecoveredText,
-  normalizeOptionalString,
-  placeholderCompatibleText,
-} from "../snapshotState";
+import { normalizeOptionalString } from "../snapshotState";
 import { conversationIdFromUrl } from "../urls";
 
 import type { BrowserExecutionHost } from "./types";
-
-const PROVISIONAL_PENDING_MESSAGE_ID = "__tablinq_provisional_message__";
 
 export function rememberAskSnapshot(
   host: BrowserExecutionHost,
@@ -28,6 +22,9 @@ export function rememberAskSnapshot(
     conversationIdFromUrl(snapshot.currentUrl);
   if (conversationId) {
     state.knownConversationId = conversationId;
+  }
+  if (snapshot.messageId) {
+    state.knownMessageId = snapshot.messageId;
   }
 }
 
@@ -58,204 +55,49 @@ export async function applyAskSnapshot(
     knownMessageId: string | null;
     pendingMessageId: string | null;
     pendingMessageText: string;
+    lastSnapshotSignature: string | null;
   },
   snapshot: AskSnapshot,
   onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
 ): Promise<boolean> {
-  const messageId = snapshot.messageId;
-
-  if (!messageId) {
-    if (!state.knownMessageId) {
-      rememberProvisionalAskMessage(state, snapshot.text);
-      if (snapshot.state === "done" && snapshot.text.length > 0) {
-        return emitWholeAskSnapshot(command, state, snapshot, onChunk);
-      }
-      return false;
-    }
-    clearPendingAskMessage(state);
-    return emitAskDeltaFromSnapshot(command, state, snapshot, onChunk);
-  }
-
-  if (state.knownMessageId === messageId) {
-    clearPendingAskMessage(state);
-    return emitAskDeltaFromSnapshot(command, state, snapshot, onChunk);
-  }
-
-  const provisionalPendingCompatible =
-    state.pendingMessageId === PROVISIONAL_PENDING_MESSAGE_ID &&
-    provisionalAskTextCompatible(state.pendingMessageText, snapshot.text);
-
-  if (state.pendingMessageId !== messageId) {
-    state.pendingMessageId = messageId;
-    state.pendingMessageText = snapshot.text;
-    if (provisionalPendingCompatible && snapshot.text.length > 0) {
-      return commitPendingAskMessage(command, state, snapshot, onChunk);
-    }
-    if (snapshot.thoughtDividerBeforeMessage && snapshot.text.length > 0) {
-      return commitPendingAskMessage(command, state, snapshot, onChunk);
-    }
-    if (snapshot.state === "done" && snapshot.text.length > 0) {
-      return commitPendingAskMessage(command, state, snapshot, onChunk);
-    }
-    return false;
-  }
-
-  const pendingAdvanced =
-    snapshot.text.length > state.pendingMessageText.length &&
-    snapshot.text.startsWith(state.pendingMessageText);
-  state.pendingMessageText =
-    snapshot.text.length >= state.pendingMessageText.length
-      ? snapshot.text
-      : state.pendingMessageText;
-
-  if (pendingAdvanced) {
-    return commitPendingAskMessage(command, state, snapshot, onChunk);
-  }
-  if (
-    (snapshot.thoughtDividerBeforeMessage || snapshot.state === "done") &&
-    snapshot.text.length > 0
-  ) {
-    return commitPendingAskMessage(command, state, snapshot, onChunk);
-  }
-  return false;
-}
-
-async function emitAskDeltaFromSnapshot(
-  command: AskExecutionCommand,
-  state: {
-    emittedText: string;
-    nextSeq: number;
-    knownMessageId: string | null;
-  },
-  snapshot: AskSnapshot,
-  onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
-): Promise<boolean> {
-  if (
-    snapshot.text.length > state.emittedText.length &&
-    snapshot.text.startsWith(state.emittedText)
-  ) {
-    const delta = snapshot.text.slice(state.emittedText.length);
-    state.emittedText = snapshot.text;
-    if (snapshot.messageId) {
-      state.knownMessageId = snapshot.messageId;
-    }
-    await onChunk({
-      job_id: command.jobId,
-      conversation_id: snapshot.conversationId,
-      message_id: snapshot.messageId,
-      seq: state.nextSeq,
-      kind: "delta",
-      text: delta,
-    });
-    state.nextSeq += 1;
-    return true;
-  }
-  return false;
-}
-
-async function commitPendingAskMessage(
-  command: AskExecutionCommand,
-  state: {
-    emittedText: string;
-    nextSeq: number;
-    knownMessageId: string | null;
-    pendingMessageId: string | null;
-    pendingMessageText: string;
-  },
-  snapshot: AskSnapshot,
-  onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
-): Promise<boolean> {
-  if (!snapshot.messageId || snapshot.text.length === 0) {
-    return false;
-  }
-  state.emittedText = snapshot.text;
-  state.knownMessageId = snapshot.messageId;
-  clearPendingAskMessage(state);
-  await onChunk({
-    job_id: command.jobId,
-    conversation_id: snapshot.conversationId,
-    message_id: snapshot.messageId,
-    seq: state.nextSeq,
-    kind: "delta",
-    text: snapshot.text,
-  });
-  state.nextSeq += 1;
-  return true;
-}
-
-function clearPendingAskMessage(state: {
-  pendingMessageId: string | null;
-  pendingMessageText: string;
-}): void {
-  state.pendingMessageId = null;
-  state.pendingMessageText = "";
-}
-
-function rememberProvisionalAskMessage(
-  state: {
-    pendingMessageId: string | null;
-    pendingMessageText: string;
-  },
-  text: string,
-): void {
-  state.pendingMessageId = PROVISIONAL_PENDING_MESSAGE_ID;
-  state.pendingMessageText =
-    text.length >= state.pendingMessageText.length
-      ? text
-      : state.pendingMessageText;
-}
-
-function provisionalAskTextCompatible(
-  pendingText: string,
-  snapshotText: string,
-): boolean {
-  if (!pendingText || !snapshotText) {
-    return false;
-  }
-  if (
-    snapshotText.startsWith(pendingText) ||
-    placeholderCompatibleText(pendingText, snapshotText) ||
-    markdownCompatibleRecoveredText(pendingText, snapshotText)
-  ) {
-    return true;
-  }
-
-  const compactPending = pendingText.replace(/\s+/g, "");
-  const compactSnapshot = snapshotText.replace(/\s+/g, "");
-  return (
-    compactPending.length >= 4 &&
-    compactSnapshot.length >= compactPending.length &&
-    compactSnapshot.startsWith(compactPending)
-  );
-}
-
-async function emitWholeAskSnapshot(
-  command: AskExecutionCommand,
-  state: {
-    emittedText: string;
-    nextSeq: number;
-    knownMessageId: string | null;
-    pendingMessageId: string | null;
-    pendingMessageText: string;
-  },
-  snapshot: AskSnapshot,
-  onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
-): Promise<boolean> {
-  state.emittedText = snapshot.text;
+  void command;
+  void onChunk;
   if (snapshot.messageId) {
     state.knownMessageId = snapshot.messageId;
+    state.pendingMessageId = null;
+    state.pendingMessageText = "";
+  } else if (!state.knownMessageId && snapshot.text.length > 0) {
+    state.pendingMessageId = "__tablinq_provisional_message__";
+    state.pendingMessageText = snapshot.text;
   }
-  clearPendingAskMessage(state);
-  await onChunk({
-    job_id: command.jobId,
-    conversation_id: snapshot.conversationId,
-    message_id: snapshot.messageId,
-    seq: state.nextSeq,
-    kind: "delta",
-    text: snapshot.text,
-  });
-  state.nextSeq += 1;
+  return noteAskSnapshotProgress(state, snapshot);
+}
+
+export function noteAskSnapshotProgress(
+  state: { lastSnapshotSignature: string | null },
+  snapshot: AskSnapshot,
+): boolean {
+  const signature = askSnapshotProgressSignature(snapshot);
+  if (state.lastSnapshotSignature === signature) {
+    return false;
+  }
+  state.lastSnapshotSignature = signature;
   return true;
+}
+
+export function askSnapshotProgressSignature(snapshot: AskSnapshot): string {
+  return JSON.stringify([
+    snapshot.hasAssistantMessage,
+    snapshot.text,
+    snapshot.state,
+    snapshot.failureCode,
+    snapshot.failureMessage,
+    snapshot.retryVisible,
+    snapshot.conversationId,
+    snapshot.messageId,
+    snapshot.thoughtDividerBeforeMessage ?? false,
+    snapshot.currentUrl,
+  ]);
 }
 
 export async function applyResearchSnapshot(
@@ -265,11 +107,12 @@ export async function applyResearchSnapshot(
     lastStatus: string;
     lastMessage: string;
     announcedStart: boolean;
+    lastSnapshotSignature: string | null;
   },
   snapshot: ResearchSnapshot,
   onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
 ): Promise<boolean> {
-  let progressed = false;
+  const progressed = noteResearchSnapshotProgress(state, snapshot);
   if (!state.announcedStart) {
     await onUpdate({
       status: "starting",
@@ -299,23 +142,30 @@ export async function applyResearchSnapshot(
       });
     }
   }
-  if (
-    snapshot.reportText.length > state.emittedText.length &&
-    snapshot.reportText.startsWith(state.emittedText)
-  ) {
-    const delta = snapshot.reportText.slice(state.emittedText.length);
-    state.emittedText = snapshot.reportText;
-    await onUpdate({
-      status: "running",
-      message: snapshot.statusMessage ?? undefined,
-      conversation_id: snapshot.conversationId,
-      message_id: snapshot.messageId,
-      current_url: snapshot.currentUrl,
-      chunk_kind: "delta",
-      chunk_text: delta,
-    });
-    state.nextSeq += 1;
-    progressed = true;
-  }
   return progressed;
+}
+
+export function noteResearchSnapshotProgress(
+  state: { lastSnapshotSignature: string | null },
+  snapshot: ResearchSnapshot,
+): boolean {
+  const signature = researchSnapshotProgressSignature(snapshot);
+  if (state.lastSnapshotSignature === signature) {
+    return false;
+  }
+  state.lastSnapshotSignature = signature;
+  return true;
+}
+
+export function researchSnapshotProgressSignature(
+  snapshot: ResearchSnapshot,
+): string {
+  return JSON.stringify([
+    snapshot.status,
+    snapshot.statusMessage,
+    snapshot.reportText,
+    snapshot.conversationId,
+    snapshot.messageId,
+    snapshot.currentUrl,
+  ]);
 }

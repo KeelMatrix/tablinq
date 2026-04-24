@@ -195,6 +195,9 @@ impl AdapterProcess {
         timeout_ms: u64,
         emitted_text: &str,
         next_seq: u64,
+        known_conversation_id: Option<&str>,
+        known_message_id: Option<&str>,
+        latest_update: Option<&RequestLifecycleUpdate>,
         on_event: &mut F,
         on_state: &mut impl FnMut(RequestLifecycleUpdate) -> Result<()>,
         should_cancel: &mut impl FnMut() -> bool,
@@ -216,6 +219,15 @@ impl AdapterProcess {
                 files: command.files.clone(),
                 emitted_text: Some(emitted_text.to_owned()),
                 next_seq: Some(next_seq),
+                known_conversation_id: known_conversation_id.map(ToOwned::to_owned),
+                known_message_id: known_message_id.map(ToOwned::to_owned),
+                baseline_conversation_id: latest_update
+                    .and_then(|update| update.baseline_conversation_id.clone()),
+                baseline_message_id: latest_update
+                    .and_then(|update| update.baseline_message_id.clone()),
+                baseline_assistant_message_count: latest_update
+                    .and_then(|update| update.baseline_assistant_message_count),
+                baseline_text: latest_update.and_then(|update| update.baseline_text.clone()),
             },
             "ask recovery",
             on_event,

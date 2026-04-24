@@ -1150,6 +1150,7 @@ describe("browser adapter", () => {
       knownMessageId: null,
       pendingMessageId: null,
       pendingMessageText: "",
+      lastSnapshotSignature: null,
     };
     const command = {
       jobId: "job-streaming-rich",
@@ -1176,13 +1177,13 @@ describe("browser adapter", () => {
       },
     );
 
-    expect(firstProgressed).toBe(false);
+    expect(firstProgressed).toBe(true);
     expect(secondProgressed).toBe(true);
-    expect(chunks.join("")).toBe(secondSnapshot.text);
+    expect(chunks).toEqual([]);
     dom.window.close();
   });
 
-  it("reads modern section-based assistant turns and synthesizes a stable turn id for streaming", async () => {
+  it("reads modern section-based assistant turns and tracks stable turn progress", async () => {
     const runtimeSource = await readFile(
       path.join(
         process.cwd(),
@@ -1258,6 +1259,7 @@ describe("browser adapter", () => {
       knownMessageId: null,
       pendingMessageId: null,
       pendingMessageText: "",
+      lastSnapshotSignature: null,
     };
     const command = {
       jobId: "job-section-turn-streaming",
@@ -1273,7 +1275,7 @@ describe("browser adapter", () => {
         }
       },
     );
-    expect(firstProgressed).toBe(false);
+    expect(firstProgressed).toBe(true);
 
     const latestTurn = main.querySelector(
       "[data-testid='conversation-turn-4'] .markdown",
@@ -1298,11 +1300,11 @@ describe("browser adapter", () => {
     expect(secondSnapshot.messageId).toBe("conversation-turn-4");
     expect(secondSnapshot.text).toBe("High-level comparison");
     expect(secondProgressed).toBe(true);
-    expect(chunks.join("")).toBe("High-level comparison");
+    expect(chunks).toEqual([]);
     dom.window.close();
   });
 
-  it("holds provisional ask text without a message id until the identified snapshot stabilizes it", async () => {
+  it("tracks provisional ask text without emitting chunks until finalization", async () => {
     const command = {
       jobId: "job-provisional-ask-message-id",
     } as Parameters<typeof applyAskSnapshot>[0];
@@ -1312,6 +1314,7 @@ describe("browser adapter", () => {
       knownMessageId: null,
       pendingMessageId: null,
       pendingMessageText: "",
+      lastSnapshotSignature: null,
     };
     const chunks: string[] = [];
     const onChunk = (chunk: { kind: string; text: string }) => {
@@ -1374,17 +1377,13 @@ describe("browser adapter", () => {
       onChunk,
     );
 
-    expect(provisionalProgressed).toBe(false);
+    expect(provisionalProgressed).toBe(true);
     expect(identifiedProgressed).toBe(true);
     expect(advancedProgressed).toBe(true);
-    expect(chunks).toEqual([
-      identifiedSnapshot.text,
-      advancedSnapshot.text.slice(identifiedSnapshot.text.length),
-    ]);
-    expect(chunks.join("")).toBe(advancedSnapshot.text);
+    expect(chunks).toEqual([]);
   });
 
-  it("emits a completed provisional ask snapshot once when no message id ever arrives", async () => {
+  it("tracks a completed provisional ask snapshot when no message id ever arrives", async () => {
     const command = {
       jobId: "job-provisional-ask-done",
     } as Parameters<typeof applyAskSnapshot>[0];
@@ -1394,6 +1393,7 @@ describe("browser adapter", () => {
       knownMessageId: null,
       pendingMessageId: null,
       pendingMessageText: "",
+      lastSnapshotSignature: null,
     };
     const chunks: string[] = [];
     const onChunk = (chunk: { kind: string; text: string }) => {
@@ -1432,10 +1432,11 @@ describe("browser adapter", () => {
       onChunk,
     );
 
-    expect(runningProgressed).toBe(false);
+    expect(runningProgressed).toBe(true);
     expect(doneProgressed).toBe(true);
-    expect(chunks).toEqual([doneSnapshot.text]);
-    expect(state.emittedText).toBe(doneSnapshot.text);
+    expect(chunks).toEqual([]);
+    expect(state.emittedText).toBe("");
+    expect(state.pendingMessageText).toBe(doneSnapshot.text);
     expect(state.knownMessageId).toBeNull();
   });
 });
