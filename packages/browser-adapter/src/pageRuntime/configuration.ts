@@ -216,9 +216,14 @@ export async function ensureConfiguredModelClass(
   );
   if (inlineOption) {
     if (!inlineOption.selected) {
-      await clickWithInteractionJitter(inlineOption.locator, "choice_select", {
-        force: true,
-      });
+      await clickWithInteractionJitter(
+        inlineOption.locator,
+        "choice_select",
+        {
+          force: true,
+        },
+        page,
+      );
       await page.waitForTimeout(150);
     }
     return;
@@ -241,9 +246,14 @@ export async function ensureConfiguredModelClass(
       : await findVisiblePopupChoicePoint(page, modelClass, 750);
   if (option) {
     if (option.checked !== "true") {
-      await clickWithInteractionJitter(option.locator, "choice_select", {
-        force: true,
-      });
+      await clickWithInteractionJitter(
+        option.locator,
+        "choice_select",
+        {
+          force: true,
+        },
+        page,
+      );
       await page.waitForTimeout(150);
     }
     return;
@@ -264,7 +274,7 @@ export async function ensureConfiguredModelClass(
     );
   }
 
-  await clickWithInteractionJitter(trigger, "picker_trigger");
+  await clickWithInteractionJitter(trigger, "picker_trigger", undefined, page);
   const reopenedPreferredOption = await waitForVisibleLocator(
     page.locator(`[data-testid='${preferredTestId}']`),
     1_000,
@@ -282,9 +292,14 @@ export async function ensureConfiguredModelClass(
     );
   }
   if (reopenedOption.checked !== "true") {
-    await clickWithInteractionJitter(reopenedOption.locator, "choice_select", {
-      force: true,
-    });
+    await clickWithInteractionJitter(
+      reopenedOption.locator,
+      "choice_select",
+      {
+        force: true,
+      },
+      page,
+    );
     if (modelClass === "thinking") {
       await findVisibleEffortTrigger(page, 2_500);
     } else {
@@ -315,9 +330,14 @@ export async function ensureConfiguredEffort(
   );
   if (inlineOption) {
     if (!inlineOption.selected) {
-      await clickWithInteractionJitter(inlineOption.locator, "choice_select", {
-        force: true,
-      });
+      await clickWithInteractionJitter(
+        inlineOption.locator,
+        "choice_select",
+        {
+          force: true,
+        },
+        page,
+      );
       await page.waitForTimeout(150);
     }
     return;
@@ -326,9 +346,14 @@ export async function ensureConfiguredEffort(
   let option = await findVisiblePopupChoicePoint(page, effort, 750);
   if (option) {
     if (option.checked !== "true") {
-      await clickWithInteractionJitter(option.locator, "choice_select", {
-        force: true,
-      });
+      await clickWithInteractionJitter(
+        option.locator,
+        "choice_select",
+        {
+          force: true,
+        },
+        page,
+      );
     }
     return;
   }
@@ -345,7 +370,7 @@ export async function ensureConfiguredEffort(
     );
   }
 
-  await clickWithInteractionJitter(trigger, "picker_trigger");
+  await clickWithInteractionJitter(trigger, "picker_trigger", undefined, page);
   option = await findVisiblePopupChoicePoint(page, effort);
   if (!option) {
     throw new Error(
@@ -353,9 +378,14 @@ export async function ensureConfiguredEffort(
     );
   }
   if (option.checked !== "true") {
-    await clickWithInteractionJitter(option.locator, "choice_select", {
-      force: true,
-    });
+    await clickWithInteractionJitter(
+      option.locator,
+      "choice_select",
+      {
+        force: true,
+      },
+      page,
+    );
   }
 }
 
@@ -436,7 +466,7 @@ export async function ensureConfiguredMode(
       .catch(() => false));
   if (!isActive) {
     if (requiresDeepResearchLandingWait) {
-      await activateModeControl(locator);
+      await activateModeControl(page, locator);
       const activatedPage = await waitForDeepResearchLanding(
         page,
         INTERACTION_TIMEOUT_MS,
@@ -457,7 +487,7 @@ export async function ensureConfiguredMode(
         window.location.assign(href);
       }, resolvedHref);
     } else {
-      await activateModeControl(locator);
+      await activateModeControl(page, locator);
     }
   }
   if (requiresDeepResearchLandingWait) {
@@ -505,9 +535,12 @@ export async function navigateDirectlyToDeepResearch(
   return landingPage;
 }
 
-export async function activateModeControl(locator: Locator): Promise<void> {
+export async function activateModeControl(
+  page: Page,
+  locator: Locator,
+): Promise<void> {
   try {
-    await clickWithInteractionJitter(locator, "mode_toggle");
+    await clickWithInteractionJitter(locator, "mode_toggle", undefined, page);
     return;
   } catch (error) {
     if (
@@ -519,7 +552,12 @@ export async function activateModeControl(locator: Locator): Promise<void> {
   }
 
   try {
-    await clickWithInteractionJitter(locator, "mode_toggle", { force: true });
+    await clickWithInteractionJitter(
+      locator,
+      "mode_toggle",
+      { force: true },
+      page,
+    );
     return;
   } catch {
     await pauseForInteraction("mode_toggle");

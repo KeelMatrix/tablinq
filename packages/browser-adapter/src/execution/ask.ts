@@ -17,12 +17,14 @@ import {
   textRelation,
 } from "../snapshotState";
 import {
+  adaptivePollIntervalMs,
   ASK_STALL_RECOVERY_GRACE_MS,
   ASK_TIMEOUT_MS,
   MAX_RECOVERY_ATTEMPTS,
-  SNAPSHOT_POLL_INTERVAL_MS,
   STABLE_DONE_POLLS,
   SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+  noteProviderPressure,
+  noteProviderPressureFromText,
 } from "../timing";
 import { conversationIdFromUrl } from "../urls";
 import { safePageUrl } from "../capabilityProbe";
@@ -170,6 +172,7 @@ export async function runAsk(
         isTransientPageError(error) &&
         state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
       ) {
+        noteProviderPressure("recovery_loop");
         const recovered = await reconcileAskAfterInterruption(
           host,
           page,
@@ -185,13 +188,23 @@ export async function runAsk(
           return recovered.result;
         }
         state.lastProgressAt = Date.now();
-        await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+        await sleep(
+          Math.min(
+            adaptivePollIntervalMs("recovery", Date.now() - state.lastProgressAt),
+            Math.max(1, timeoutAt - Date.now()),
+          ),
+        );
         continue;
       }
       throw error;
     }
 
     if (snapshot.failureCode === PROVIDER_GENERATION_FAILURE_CODE) {
+      noteProviderPressure("generation_failed");
+      if (snapshot.retryVisible) {
+        noteProviderPressure("retry_visible");
+      }
+      noteProviderPressureFromText(snapshot.failureMessage);
       throw new AskProviderFailure(
         snapshot.failureMessage ??
           "Something went wrong while generating the response. If this issue persists please contact us through our help center.",
@@ -272,6 +285,7 @@ export async function runAsk(
       state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS &&
       canRecoverFromAskStall
     ) {
+      noteProviderPressure("recovery_loop");
       const recovered = await reconcileAskAfterInterruption(
         host,
         page,
@@ -289,7 +303,12 @@ export async function runAsk(
       state.lastProgressAt = Date.now();
     }
 
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("generation", Date.now() - state.lastProgressAt),
+        Math.max(1, timeoutAt - Date.now()),
+      ),
+    );
   }
 
   throw new Error("ask timed out waiting for streamed response");

@@ -5,7 +5,7 @@ import {
   normalizePromptText,
   normalizeResearchSubmissionState,
 } from "../snapshotState";
-import { SNAPSHOT_POLL_INTERVAL_MS } from "../timing";
+import { adaptivePollIntervalMs } from "../timing";
 
 import { callPageAdapter, waitForPageAdapterCondition } from "./adapter";
 import {
@@ -16,6 +16,7 @@ import {
 import {
   pauseForInteraction,
   pressShortcutWithInteractionJitter,
+  prepareHighRiskInteraction,
   sleep,
 } from "./common";
 
@@ -35,6 +36,7 @@ export async function ensureResearchComposerFilled(
   query: string,
   timeoutMs: number,
 ): Promise<ResearchSubmissionStateSnapshot> {
+  const startedAt = Date.now();
   await fillComposer(page, query);
   const deadline = Date.now() + timeoutMs;
   const expected = normalizePromptText(query);
@@ -44,7 +46,12 @@ export async function ensureResearchComposerFilled(
     if (state && normalizePromptText(state.composerText) === expected) {
       return state;
     }
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("edge", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
   }
 
   throw new Error(
@@ -67,6 +74,7 @@ export async function submitResearch(
     );
   }
 
+  await prepareHighRiskInteraction(page, "final_submit");
   await pauseForInteraction("button_click");
   const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
   if (
