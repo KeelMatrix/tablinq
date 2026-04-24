@@ -79,6 +79,11 @@ const STAGED_UPLOAD_RETENTION_SECS: i64 = 24 * 60 * 60;
 const REQUEST_SUMMARY_LIMIT: usize = 50;
 const REQUEST_LIST_MAX_LIMIT: usize = 100;
 const CONVERSATION_MESSAGE_LIST_DEFAULT_LIMIT: usize = 50;
+const MAX_HTTP_REQUEST_LINE_BYTES: usize = 8 * 1024;
+const MAX_HTTP_HEADER_LINE_BYTES: usize = 8 * 1024;
+const MAX_HTTP_HEADER_BYTES: usize = 64 * 1024;
+const MAX_HTTP_HEADER_COUNT: usize = 100;
+const MAX_NON_UPLOAD_REQUEST_BODY_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug)]
 struct RequestContext {
@@ -106,9 +111,26 @@ struct HttpResponse {
 struct SimpleHttpResponse {
     status_code: u16,
     #[cfg(test)]
+    reason_phrase: String,
+    #[cfg(test)]
     headers: BTreeMap<String, String>,
     body: Vec<u8>,
 }
+
+#[derive(Debug)]
+struct HttpParseError {
+    status_code: u16,
+    client_error: &'static str,
+    message: String,
+}
+
+impl std::fmt::Display for HttpParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for HttpParseError {}
 
 #[derive(Debug, Clone, Copy)]
 struct RequestListQuery {
@@ -349,12 +371,12 @@ fn handle_connection(
         Ok(context) => context,
         Err(err) => {
             let request_id = next_request_id(request_counter);
-            let response = if format!("{err:#}").contains("upload exceeds 20 MiB limit") {
+            let response = if err.status_code == 413 {
                 json_response(
                     413,
                     json!({
                         "request_id": request_id,
-                        "error": "file exceeds 20 MiB limit",
+                        "error": err.client_error,
                     }),
                 )
             } else {
@@ -2062,9 +2084,8 @@ fn authorize_request(
     let Some(expected_api_key) = config.gateway_api_key() else {
         return Ok(());
     };
-    let expected = format!("Bearer {expected_api_key}");
     let provided = request.headers.get("authorization").map(String::as_str);
-    if provided == Some(expected.as_str()) {
+    if bearer_token_matches(provided, expected_api_key) {
         Ok(())
     } else if openai_shape {
         Err(json_response(
@@ -2084,6 +2105,27 @@ fn authorize_request(
             }),
         ))
     }
+}
+
+fn bearer_token_matches(provided: Option<&str>, expected_api_key: &str) -> bool {
+    let Some(provided) = provided else {
+        return false;
+    };
+    let Some(provided_token) = provided.strip_prefix("Bearer ") else {
+        return false;
+    };
+    constant_time_bytes_eq(provided_token.as_bytes(), expected_api_key.as_bytes())
+}
+
+fn constant_time_bytes_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut diff = left.len() ^ right.len();
+    let max_len = left.len().max(right.len());
+    for index in 0..max_len {
+        let left_byte = *left.get(index).unwrap_or(&0);
+        let right_byte = *right.get(index).unwrap_or(&0);
+        diff |= usize::from(left_byte ^ right_byte);
+    }
+    diff == 0
 }
 
 fn map_openai_error(
@@ -2339,6 +2381,7 @@ fn reason_phrase_for_status(status_code: u16) -> &'static str {
         401 => "Unauthorized",
         404 => "Not Found",
         409 => "Conflict",
+        413 => "Payload Too Large",
         429 => "Too Many Requests",
         500 => "Internal Server Error",
         502 => "Bad Gateway",
@@ -2348,58 +2391,83 @@ fn reason_phrase_for_status(status_code: u16) -> &'static str {
     }
 }
 
-fn parse_http_request(stream: &mut TcpStream, counter: &AtomicU64) -> Result<RequestContext> {
+fn parse_http_request(
+    stream: &mut TcpStream,
+    counter: &AtomicU64,
+) -> std::result::Result<RequestContext, HttpParseError> {
     let mut reader = BufReader::new(stream);
-    let mut request_line = String::new();
-    reader
-        .read_line(&mut request_line)
-        .context("read request line")?;
+    let request_line =
+        read_limited_http_line(&mut reader, MAX_HTTP_REQUEST_LINE_BYTES, "request line")?;
     if request_line.trim().is_empty() {
-        bail!("missing HTTP request line");
+        return Err(bad_http_request("missing HTTP request line"));
     }
 
     let mut request_line_parts = request_line.split_whitespace();
     let method = request_line_parts
         .next()
-        .context("missing HTTP method")?
+        .ok_or_else(|| bad_http_request("missing HTTP method"))?
         .to_ascii_uppercase();
     let path = request_line_parts
         .next()
-        .context("missing HTTP path")?
+        .ok_or_else(|| bad_http_request("missing HTTP path"))?
         .to_owned();
 
     let mut headers = BTreeMap::new();
+    let mut total_header_bytes = 0usize;
+    let mut header_count = 0usize;
     loop {
-        let mut line = String::new();
-        reader
-            .read_line(&mut line)
-            .context("read HTTP header line")?;
+        let line =
+            read_limited_http_line(&mut reader, MAX_HTTP_HEADER_LINE_BYTES, "HTTP header line")?;
+        total_header_bytes += line.len();
+        if total_header_bytes > MAX_HTTP_HEADER_BYTES {
+            return Err(bad_http_request("HTTP headers exceed gateway limit"));
+        }
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
             break;
         }
+        header_count += 1;
+        if header_count > MAX_HTTP_HEADER_COUNT {
+            return Err(bad_http_request("too many HTTP headers"));
+        }
         let (name, value) = trimmed
             .split_once(':')
-            .context("invalid HTTP header line")?;
+            .ok_or_else(|| bad_http_request("invalid HTTP header line"))?;
         headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
+    }
+
+    if headers.contains_key("transfer-encoding") {
+        return Err(bad_http_request("unsupported Transfer-Encoding"));
     }
 
     let content_length = headers
         .get("content-length")
-        .map(|value| value.parse::<usize>().context("parse Content-Length"))
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|err| bad_http_request(format!("parse Content-Length: {err}")))
+        })
         .transpose()?
         .unwrap_or(0);
-    if method == "POST"
-        && path == V1_FILES_PATH
-        && content_length > crate::uploads::MAX_STAGED_UPLOAD_BYTES
-    {
-        bail!("upload exceeds 20 MiB limit");
+    let request_path = normalized_request_path(&path);
+    if method == "POST" && request_path == V1_FILES_PATH {
+        if content_length > crate::uploads::MAX_STAGED_UPLOAD_BYTES {
+            return Err(payload_too_large(
+                "file exceeds 20 MiB limit",
+                "upload exceeds 20 MiB limit",
+            ));
+        }
+    } else if content_length > MAX_NON_UPLOAD_REQUEST_BODY_BYTES {
+        return Err(payload_too_large(
+            "request body exceeds gateway limit",
+            "non-upload body exceeds gateway limit",
+        ));
     }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
         reader
             .read_exact(&mut body)
-            .context("read HTTP request body")?;
+            .map_err(|err| bad_http_request(format!("read HTTP request body: {err}")))?;
     }
 
     let request_id = headers
@@ -2417,6 +2485,50 @@ fn parse_http_request(stream: &mut TcpStream, counter: &AtomicU64) -> Result<Req
             body,
         },
     })
+}
+
+fn read_limited_http_line<R: Read>(
+    reader: &mut R,
+    limit: usize,
+    label: &'static str,
+) -> std::result::Result<String, HttpParseError> {
+    let mut bytes = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let count = reader
+            .read(&mut byte)
+            .map_err(|err| bad_http_request(format!("read {label}: {err}")))?;
+        if count == 0 {
+            if bytes.is_empty() {
+                return Err(bad_http_request(format!("missing {label}")));
+            }
+            break;
+        }
+        bytes.push(byte[0]);
+        if bytes.len() > limit {
+            return Err(bad_http_request(format!("{label} exceeds gateway limit")));
+        }
+        if byte[0] == b'\n' {
+            break;
+        }
+    }
+    String::from_utf8(bytes).map_err(|err| bad_http_request(format!("decode {label}: {err}")))
+}
+
+fn bad_http_request(message: impl Into<String>) -> HttpParseError {
+    HttpParseError {
+        status_code: 400,
+        client_error: "bad_request",
+        message: message.into(),
+    }
+}
+
+fn payload_too_large(client_error: &'static str, message: impl Into<String>) -> HttpParseError {
+    HttpParseError {
+        status_code: 413,
+        client_error,
+        message: message.into(),
+    }
 }
 
 fn write_http_response(
@@ -2499,6 +2611,8 @@ fn http_request(
     let status_code = parts[1]
         .parse::<u16>()
         .context("parse gateway status code")?;
+    #[cfg(test)]
+    let reason_phrase = parts[2..].join(" ");
 
     let mut response_headers = BTreeMap::new();
     loop {
@@ -2538,6 +2652,8 @@ fn http_request(
 
     Ok(SimpleHttpResponse {
         status_code,
+        #[cfg(test)]
+        reason_phrase,
         #[cfg(test)]
         headers: response_headers,
         body: response_body,
@@ -2586,6 +2702,8 @@ fn http_request_with_declared_content_length(
     let status_code = parts[1]
         .parse::<u16>()
         .context("parse gateway status code")?;
+    #[cfg(test)]
+    let reason_phrase = parts[2..].join(" ");
 
     let mut response_headers = BTreeMap::new();
     loop {
@@ -2625,6 +2743,8 @@ fn http_request_with_declared_content_length(
 
     Ok(SimpleHttpResponse {
         status_code,
+        #[cfg(test)]
+        reason_phrase,
         #[cfg(test)]
         headers: response_headers,
         body: response_body,
