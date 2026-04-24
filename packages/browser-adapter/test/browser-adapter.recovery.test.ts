@@ -15,6 +15,7 @@ import {
   uploadAckTimeoutMsForFiles,
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
+import { markdownCompatibleRecoveredText } from "../src/snapshotState";
 import {
   createBrowserIntegrationHarness,
   createIsolatedTempDir,
@@ -41,6 +42,46 @@ describe("browser adapter", () => {
 
     expect(immediate).toBeLessThan(settled);
     expect(settled).toBeLessThan(prolonged);
+  });
+
+  it("treats inserted markdown list lead-ins as compatible during ask recovery", () => {
+    const emitted = [
+      "Here are notable bakeries in Đà Lạt with strong local popularity and reviews:",
+      "",
+      "### 🥐 Popular bakeries",
+      "",
+      "- Large, well-known local bakery chain with a wide",
+    ].join("\n");
+    const final = [
+      "Here are notable bakeries in Đà Lạt with strong local popularity and reviews:",
+      "",
+      "### 🥐 Popular bakeries",
+      "",
+      "- Lien Hoa Bakery",
+      "  Large, well-known local bakery chain with a wide selection of breads, cakes, and Vietnamese pastries.",
+    ].join("\n");
+
+    expect(markdownCompatibleRecoveredText(emitted, final)).toBe(true);
+  });
+
+  it("does not treat unrelated inserted markdown content as compatible recovery text", () => {
+    const emitted = [
+      "Here are notable bakeries in Đà Lạt with strong local popularity and reviews:",
+      "",
+      "### 🥐 Popular bakeries",
+      "",
+      "- Large, well-known local bakery chain with a wide",
+    ].join("\n");
+    const final = [
+      "Here are notable bakeries in Đà Lạt with strong local popularity and reviews:",
+      "",
+      "### 🥐 Popular bakeries",
+      "",
+      "- Unexpected Bakery",
+      "  Known only for coffee, not a wide bakery selection.",
+    ].join("\n");
+
+    expect(markdownCompatibleRecoveredText(emitted, final)).toBe(false);
   });
 
   it("continues ask streaming after a page reload", async () => {
