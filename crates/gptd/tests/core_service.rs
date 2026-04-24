@@ -89,6 +89,19 @@ fn browser_integration_prereqs_available() -> bool {
     gptd::browser::browser_integration_prereqs_available()
 }
 
+fn core_test_config(dir: &Path) -> AppConfig {
+    let mut config = AppConfig::load_or_create(Some(dir)).unwrap();
+    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    config.file.browser_submit_jitter_min_ms = Some(0);
+    config.file.browser_submit_jitter_max_ms = Some(0);
+    if let Some(gateway) = config.file.gateway.as_mut() {
+        gateway.ask_timeout_ms = Some(60_000);
+        gateway.extended_thinking_timeout_ms = Some(60_000);
+        gateway.research_timeout_ms = Some(120_000);
+    }
+    config
+}
+
 #[test]
 fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
     if !browser_integration_prereqs_available() {
@@ -103,8 +116,7 @@ fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
     let upload_fixture = dir.path().join("brief.txt");
     fs::write(&upload_fixture, "brief body").unwrap();
 
-    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
-    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let config = core_test_config(dir.path());
     let core = CoreService::new(config).unwrap();
 
     let open = core
@@ -199,8 +211,7 @@ fn core_service_runs_research_jobs_without_cli() {
     fs::write(&upload_fixture, "brief body").unwrap();
     fs::write(&second_upload_fixture, "col\nvalue").unwrap();
 
-    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
-    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let config = core_test_config(dir.path());
     let core = CoreService::new(config).unwrap();
     core.browser_open(BrowserOpenRequest {
         target_url: Some(format!(
@@ -264,8 +275,7 @@ fn core_service_recovers_provider_generation_failure_with_fresh_conversation_rep
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
 
-    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
-    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let config = core_test_config(dir.path());
     let core = CoreService::new(config).unwrap();
     core.browser_open(BrowserOpenRequest {
         target_url: Some(format!(
@@ -355,8 +365,7 @@ fn core_service_recovers_provider_generation_failure_with_durable_manifest_conte
     let upload_fixture = dir.path().join("brief.txt");
     fs::write(&upload_fixture, "brief body").unwrap();
 
-    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
-    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let config = core_test_config(dir.path());
     let core = CoreService::new(config).unwrap();
     core.browser_open(BrowserOpenRequest {
         target_url: Some(format!(
@@ -454,8 +463,7 @@ fn core_service_stops_after_second_provider_generation_failure() {
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
 
-    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
-    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let config = core_test_config(dir.path());
     let core = CoreService::new(config).unwrap();
     core.browser_open(BrowserOpenRequest {
         target_url: Some(format!(
@@ -511,8 +519,7 @@ fn core_service_can_disable_provider_generation_failure_auto_recovery() {
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let dir = tempdir().unwrap();
 
-    let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
-    config.file.browser_connection_mode = Some(BrowserConnectionMode::ManagedOnly);
+    let config = core_test_config(dir.path());
     let core = CoreService::new(config).unwrap();
     core.browser_open(BrowserOpenRequest {
         target_url: Some(format!(
