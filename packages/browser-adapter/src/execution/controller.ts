@@ -14,10 +14,13 @@ import { reconcileAskAfterInterruption } from "./askRecovery";
 import { runAsk } from "./ask";
 import { runResearch } from "./research";
 import type { AskRuntimeState, BrowserExecutionHost } from "./types";
+import { workspaceKeyFromUrl } from "../urls";
 
 export type { BrowserExecutionHost } from "./types";
 
 export class BrowserExecutionController {
+  private readonly activeInteractiveTargets = new Map<string, string>();
+
   constructor(private readonly host: BrowserExecutionHost) {}
 
   async ask(
@@ -26,12 +29,22 @@ export class BrowserExecutionController {
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,
   ): Promise<AskResultSnapshot> {
-    return runAsk(this.host, command, onChunk, onState, {
-      submitPrompt: true,
-      emittedText: "",
-      nextSeq: 0,
-      recoveryReason: null,
-    });
+    return this.runWithSingleFlight(
+      this.interactiveTargetKey(
+        this.host.resolveAskTarget(
+          command.conversationId,
+          command.newConversation,
+        ),
+      ),
+      "ask",
+      () =>
+        runAsk(this.host, command, onChunk, onState, {
+          submitPrompt: true,
+          emittedText: "",
+          nextSeq: 0,
+          recoveryReason: null,
+        }),
+    );
   }
 
   async research(
@@ -40,12 +53,19 @@ export class BrowserExecutionController {
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,
   ): Promise<ResearchResultSnapshot> {
-    return runResearch(this.host, command, onUpdate, onState, {
-      submitPrompt: true,
-      emittedText: "",
-      nextSeq: 0,
-      recoveryReason: null,
-    });
+    return this.runWithSingleFlight(
+      this.interactiveTargetKey(
+        this.host.resolveConversationTarget(command.conversationId),
+      ),
+      "research",
+      () =>
+        runResearch(this.host, command, onUpdate, onState, {
+          submitPrompt: true,
+          emittedText: "",
+          nextSeq: 0,
+          recoveryReason: null,
+        }),
+    );
   }
 
   async recoverAsk(
@@ -55,12 +75,22 @@ export class BrowserExecutionController {
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,
   ): Promise<AskResultSnapshot> {
-    return runAsk(this.host, command, onChunk, onState, {
-      submitPrompt: false,
-      emittedText: state.emittedText,
-      nextSeq: state.nextSeq,
-      recoveryReason: "re-attached to the browser session",
-    });
+    return this.runWithSingleFlight(
+      this.interactiveTargetKey(
+        this.host.resolveAskTarget(
+          command.conversationId,
+          command.newConversation,
+        ),
+      ),
+      "recover ask",
+      () =>
+        runAsk(this.host, command, onChunk, onState, {
+          submitPrompt: false,
+          emittedText: state.emittedText,
+          nextSeq: state.nextSeq,
+          recoveryReason: "re-attached to the browser session",
+        }),
+    );
   }
 
   async recoverResearch(
@@ -70,12 +100,19 @@ export class BrowserExecutionController {
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,
   ): Promise<ResearchResultSnapshot> {
-    return runResearch(this.host, command, onUpdate, onState, {
-      submitPrompt: false,
-      emittedText: state.emittedText,
-      nextSeq: state.nextSeq,
-      recoveryReason: "re-attached to the browser session",
-    });
+    return this.runWithSingleFlight(
+      this.interactiveTargetKey(
+        this.host.resolveConversationTarget(command.conversationId),
+      ),
+      "recover research",
+      () =>
+        runResearch(this.host, command, onUpdate, onState, {
+          submitPrompt: false,
+          emittedText: state.emittedText,
+          nextSeq: state.nextSeq,
+          recoveryReason: "re-attached to the browser session",
+        }),
+    );
   }
 
   async reconcileAskAfterInterruptionForTest(
@@ -97,5 +134,31 @@ export class BrowserExecutionController {
       reason,
       timeoutAt,
     );
+  }
+
+  private interactiveTargetKey(targetUrl: string): string {
+    return workspaceKeyFromUrl(targetUrl);
+  }
+
+  private async runWithSingleFlight<T>(
+    targetKey: string,
+    action: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const activeAction = this.activeInteractiveTargets.get(targetKey);
+    if (activeAction) {
+      throw new Error(
+        `browser surface busy: ${activeAction} is already running for workspace ${targetKey}`,
+      );
+    }
+
+    this.activeInteractiveTargets.set(targetKey, action);
+    try {
+      return await run();
+    } finally {
+      if (this.activeInteractiveTargets.get(targetKey) === action) {
+        this.activeInteractiveTargets.delete(targetKey);
+      }
+    }
   }
 }

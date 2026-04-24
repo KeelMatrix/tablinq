@@ -192,6 +192,66 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("does not duplicate research submit after a keyboard submit edge is detected", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "research-success",
+    });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      document.querySelector("[data-testid='send-button']")?.remove();
+      document.body.dataset.keyboardSubmitReady = "true";
+      let keyboardSubmits = 0;
+      document
+        .querySelector("#prompt-textarea")
+        ?.addEventListener("keydown", (event) => {
+          if (
+            event instanceof KeyboardEvent &&
+            event.key === "Enter" &&
+            (event.ctrlKey || event.metaKey)
+          ) {
+            keyboardSubmits += 1;
+            document.body.dataset.keyboardSubmitEvents =
+              String(keyboardSubmits);
+          }
+        });
+    });
+
+    const result = await adapter.research(
+      {
+        jobId: "job-research-keyboard-submit-single-edge",
+        query: "submit research through keyboard once",
+        timeoutMs: 8_000,
+      },
+      () => {},
+    );
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      keyboardSubmitEvents: document.body.dataset.keyboardSubmitEvents ?? "0",
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+      researchSubmitted: document.body.dataset.researchSubmitted,
+    }));
+
+    expect(result.report_text).toContain(
+      "Research report for: submit research through keyboard once",
+    );
+    expect(state).toEqual({
+      keyboardSubmitEvents: "1",
+      lastSubmissionMethod: "keyboard",
+      researchSubmitted: "true",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("runs a follow-up ask from a finished research conversation after clearing the active Deep research composer chip", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
