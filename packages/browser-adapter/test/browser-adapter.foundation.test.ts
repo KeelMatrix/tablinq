@@ -3,18 +3,25 @@ import path from "node:path";
 import { JSDOM } from "jsdom";
 import {
   BrowserAdapter,
+  adaptivePollIntervalMs,
   chooseUniqueArtifactPath,
   conversationIdFromUrl,
   deepResearchStartDelayMs,
   detectBrowserExecutable,
+  highRiskActionCooldownMs,
   interactionJitterMs,
   MAX_UPLOAD_FILE_BYTES,
+  noteProviderPressure,
+  noteProviderPressureFromText,
+  providerPressureCooldownMs,
+  resetProviderPressureForTest,
   resolveConversationUrl,
   resolveBrowserLaunchConfig,
   uploadAckTimeoutMsForFiles,
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
 import { applyAskSnapshot } from "../src/execution/streaming";
+import { waitForQuietInteractionSurface } from "../src/pageRuntime";
 import {
   createBrowserIntegrationHarness,
   createIsolatedTempDir,
@@ -27,9 +34,11 @@ let harness: ReturnType<typeof createBrowserIntegrationHarness>;
 
 beforeEach(() => {
   harness = createBrowserIntegrationHarness();
+  resetProviderPressureForTest();
 });
 
 afterEach(async () => {
+  resetProviderPressureForTest();
   await harness.cleanup();
 });
 
@@ -248,6 +257,102 @@ describe("browser adapter", () => {
   it("disables short interaction jitters under vitest by default", () => {
     expect(process.env.VITEST).toBe("true");
     expect(interactionJitterMs("button_click", 1)).toBe(0);
+  });
+
+  it("bounds high-risk pacing cooldowns and supports deterministic test pacing", () => {
+    const previousDeterministic = process.env.TABLINQ_PACING_DETERMINISTIC;
+
+    try {
+      expect(highRiskActionCooldownMs("picker_open", 0, true, 1_000)).toBe(70);
+      expect(highRiskActionCooldownMs("picker_open", 1, true, 1_000)).toBe(130);
+      expect(highRiskActionCooldownMs("final_submit", 0, true, 1_000)).toBe(
+        100,
+      );
+      expect(highRiskActionCooldownMs("retry_click", 1, true, 1_000)).toBe(
+        320,
+      );
+
+      process.env.TABLINQ_PACING_DETERMINISTIC = "true";
+      expect(highRiskActionCooldownMs("final_submit", 0, true, 1_000)).toBe(
+        140,
+      );
+    } finally {
+      if (previousDeterministic === undefined) {
+        delete process.env.TABLINQ_PACING_DETERMINISTIC;
+      } else {
+        process.env.TABLINQ_PACING_DETERMINISTIC = previousDeterministic;
+      }
+    }
+  });
+
+  it("widens cooldowns and adaptive polling under provider pressure and decays afterward", () => {
+    const baselineCooldown = highRiskActionCooldownMs(
+      "final_submit",
+      0.5,
+      true,
+      1_000,
+    );
+    const baselinePoll = adaptivePollIntervalMs("generation", 6_000, 1_000);
+
+    expect(providerPressureCooldownMs(1_000)).toBe(0);
+    noteProviderPressure("generation_failed", 1_000);
+    expect(providerPressureCooldownMs(1_001)).toBeGreaterThan(0);
+    expect(
+      highRiskActionCooldownMs("final_submit", 0.5, true, 1_001),
+    ).toBeGreaterThan(baselineCooldown);
+    expect(adaptivePollIntervalMs("generation", 6_000, 1_001)).toBeGreaterThan(
+      baselinePoll,
+    );
+
+    noteProviderPressureFromText("429 queue full, try again later", 1_500);
+    expect(providerPressureCooldownMs(1_501)).toBeGreaterThan(
+      providerPressureCooldownMs(21_001),
+    );
+    expect(providerPressureCooldownMs(60_000)).toBe(0);
+  });
+
+  it("waits for a quiet surface before a high-risk submit interaction", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+
+    await adapter.open({ targetUrl, headless: true });
+    const page = adapter.getManagedPageForTest()!;
+    await page.evaluate(() => {
+      const root = document.querySelector("[data-testid='composer-root']");
+      if (!(root instanceof HTMLElement)) {
+        throw new Error("composer root missing");
+      }
+
+      let tick = 0;
+      const interval = window.setInterval(() => {
+        root.dataset.quietProbe = String(tick);
+        tick += 1;
+        if (tick >= 4) {
+          window.clearInterval(interval);
+        }
+      }, 60);
+    });
+
+    const startedAt = Date.now();
+    const settled = await waitForQuietInteractionSurface(
+      page,
+      "final_submit",
+      undefined,
+      2_000,
+    );
+
+    expect(settled).toBe(true);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300);
+
+    await adapter.shutdown();
   });
 
   it("scales upload acknowledgment timeout nonlinearly by file size and additional files", () => {

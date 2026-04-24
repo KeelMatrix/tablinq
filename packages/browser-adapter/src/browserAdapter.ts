@@ -123,7 +123,16 @@ import {
 } from "./timing";
 export { deepResearchStartDelayMs } from "./timing";
 export { interactionJitterMs } from "./timing";
-export { MAX_UPLOAD_FILE_BYTES, uploadAckTimeoutMsForFiles } from "./timing";
+export {
+  MAX_UPLOAD_FILE_BYTES,
+  adaptivePollIntervalMs,
+  highRiskActionCooldownMs,
+  noteProviderPressure,
+  noteProviderPressureFromText,
+  providerPressureCooldownMs,
+  resetProviderPressureForTest,
+  uploadAckTimeoutMsForFiles,
+} from "./timing";
 import {
   buildTargetPageId,
   conversationIdFromUrl,

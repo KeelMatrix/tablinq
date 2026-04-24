@@ -2,9 +2,9 @@ import type { Page } from "playwright-core";
 
 import type { SubmitStateSnapshot } from "../snapshotState";
 import {
+  adaptivePollIntervalMs,
   INTERACTION_TIMEOUT_MS,
   NAVIGATION_TIMEOUT_MS,
-  SNAPSHOT_POLL_INTERVAL_MS,
   SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
   SUBMIT_START_TIMEOUT_MS,
 } from "../timing";
@@ -14,6 +14,7 @@ import {
   clickWithInteractionJitter,
   pauseForInteraction,
   pressShortcutWithInteractionJitter,
+  prepareHighRiskInteraction,
   sleep,
 } from "./common";
 
@@ -21,6 +22,7 @@ export async function waitForSubmitReadyAfterUploads(
   page: Page,
   timeoutMs = SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
 ): Promise<void> {
+  const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;
   let state: SubmitStateSnapshot | null = null;
 
@@ -37,7 +39,12 @@ export async function waitForSubmitReadyAfterUploads(
     ) {
       return;
     }
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("upload", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
   }
 
   state =
@@ -60,6 +67,7 @@ export async function waitForSubmitStarted(
   baseline: SubmitStateSnapshot,
   timeoutMs = SUBMIT_START_TIMEOUT_MS,
 ): Promise<boolean> {
+  const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const started = await callPageAdapter<boolean>(page, "submitStarted", {
@@ -68,7 +76,12 @@ export async function waitForSubmitStarted(
     if (started) {
       return true;
     }
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("edge", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
   }
   return callPageAdapter<boolean>(page, "submitStarted", { baseline }).catch(
     () => false,
@@ -127,6 +140,7 @@ export async function clickSubmit(page: Page): Promise<void> {
     page,
     "readSubmitState",
   );
+  await prepareHighRiskInteraction(page, "final_submit");
   await pauseForInteraction("button_click");
   const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
   if (clicked && (await waitForSubmitStarted(page, baseline))) {
@@ -188,6 +202,7 @@ export async function clickActiveComposerSubmit(page: Page): Promise<boolean> {
     if (!actionable) {
       continue;
     }
+    await prepareHighRiskInteraction(page, "final_submit", candidate);
     const clicked = await clickWithInteractionJitter(candidate, "button_click")
       .then(() => true)
       .catch(() => false);

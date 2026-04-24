@@ -12,9 +12,9 @@ import {
   scoreDeepResearchFrame,
 } from "../snapshotState";
 import {
+  adaptivePollIntervalMs,
   DEEP_RESEARCH_START_CONFIRM_TIMEOUT_MS,
   INTERACTION_TIMEOUT_MS,
-  SNAPSHOT_POLL_INTERVAL_MS,
   deepResearchStartDelayMs,
 } from "../timing";
 import { safePageUrl } from "../capabilityProbe";
@@ -27,12 +27,18 @@ export async function beginDeepResearchRun(
   page: Page,
   timeoutMs: number,
 ): Promise<ResearchSnapshot | null> {
+  const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const frameSnapshot = await readDeepResearchFrameSnapshot(page);
     if (frameSnapshot?.startVisible) {
       if (!frameSnapshot.startEnabled) {
-        await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+        await sleep(
+          Math.min(
+            adaptivePollIntervalMs("edge", Date.now() - startedAt),
+            Math.max(1, deadline - Date.now()),
+          ),
+        );
         continue;
       }
       await sleep(
@@ -81,7 +87,12 @@ export async function beginDeepResearchRun(
       return merged;
     }
 
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("generation", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
   }
 
   throw new Error(
@@ -145,6 +156,7 @@ export async function waitForDeepResearchLanding(
   timeoutMs: number,
   options: { throwOnTimeout?: boolean } = {},
 ): Promise<Page | null> {
+  const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     for (const candidate of await candidateDeepResearchPages(page)) {
@@ -164,7 +176,12 @@ export async function waitForDeepResearchLanding(
         return candidate;
       }
     }
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("generation", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
   }
   if (options.throwOnTimeout === false) {
     return null;
@@ -191,11 +208,17 @@ export async function waitForDeepResearchStartConfirmation(
   page: Page,
   timeoutMs: number,
 ): Promise<ResearchSnapshot | null> {
+  const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const frameSnapshot = await readDeepResearchFrameSnapshot(page);
     if (frameSnapshot?.startVisible) {
-      await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+      await sleep(
+        Math.min(
+          adaptivePollIntervalMs("edge", Date.now() - startedAt),
+          Math.max(1, deadline - Date.now()),
+        ),
+      );
       continue;
     }
     const snapshot = await readLiveResearchSnapshot(page).catch(() => null);
@@ -206,7 +229,12 @@ export async function waitForDeepResearchStartConfirmation(
     ) {
       return snapshot;
     }
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("generation", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
   }
   return null;
 }

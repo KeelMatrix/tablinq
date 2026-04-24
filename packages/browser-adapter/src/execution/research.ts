@@ -19,12 +19,14 @@ import {
   researchSubmissionStateToSnapshot,
 } from "../snapshotState";
 import {
+  adaptivePollIntervalMs,
   DEEP_RESEARCH_HANDOFF_TIMEOUT_MS,
   INTERACTION_TIMEOUT_MS,
   MAX_RECOVERY_ATTEMPTS,
   RESEARCH_SUBMISSION_START_TIMEOUT_MS,
   RESEARCH_TIMEOUT_MS,
-  SNAPSHOT_POLL_INTERVAL_MS,
+  noteProviderPressure,
+  noteProviderPressureFromText,
 } from "../timing";
 
 import { finalizeResearch, stabilizeResearchCompletion } from "./finalization";
@@ -163,6 +165,7 @@ export async function runResearch(
         isTransientPageError(error) &&
         state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
       ) {
+        noteProviderPressure("recovery_loop");
         const recovered = await reconcileResearchAfterInterruption(
           host,
           page,
@@ -177,7 +180,12 @@ export async function runResearch(
         if (recovered.result) {
           return recovered.result;
         }
-        await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+        await sleep(
+          Math.min(
+            adaptivePollIntervalMs("recovery", Date.now() - state.lastProgressAt),
+            Math.max(1, timeoutAt - Date.now()),
+          ),
+        );
         continue;
       }
       throw error;
@@ -190,6 +198,7 @@ export async function runResearch(
     }
 
     if (snapshot.status === "failed") {
+      noteProviderPressureFromText(snapshot.statusMessage);
       throw new Error(
         `research job failed: ${snapshot.statusMessage ?? "research failed"}`,
       );
@@ -220,6 +229,7 @@ export async function runResearch(
       Date.now() - state.lastProgressAt >= stallTimeoutMs &&
       state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
     ) {
+      noteProviderPressure("recovery_loop");
       const recovered = await reconcileResearchAfterInterruption(
         host,
         page,
@@ -236,7 +246,12 @@ export async function runResearch(
       }
     }
 
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("generation", Date.now() - state.lastProgressAt),
+        Math.max(1, timeoutAt - Date.now()),
+      ),
+    );
   }
 
   throw new Error("research job failed: timed out waiting for completion");
