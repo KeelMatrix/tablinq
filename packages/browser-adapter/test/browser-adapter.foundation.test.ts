@@ -976,6 +976,68 @@ describe("browser adapter", () => {
     dom.window.close();
   });
 
+  it("serializes complex markdown table cells without breaking table columns", async () => {
+    const runtimeSource = await readFile(
+      path.join(
+        process.cwd(),
+        "packages/browser-adapter/src/pageAdapter.runtime.js",
+      ),
+      "utf8",
+    );
+    const expected = [
+      "| Key | Value | Notes |",
+      "| --- | --- | --- |",
+      "| Simple | Alpha | Beta |",
+      "| Pipe | A \\| B | stays one cell |",
+      "| Code | `left \\| right` | inline code stays inline |",
+      "| Link | [Docs \\| API](https://example.test/docs\\|api) | link stays parseable |",
+      "| Multiline | first<br>second | still one cell |",
+      "| Ragged | fewer cells |",
+    ].join("\n");
+
+    const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+      url: "http://127.0.0.1:3847/?variant=live",
+      runScripts: "outside-only",
+    });
+    const { window } = dom;
+    const article = window.document.createElement("article");
+    article.setAttribute("data-slot", "assistant-message");
+    article.hidden = false;
+    article.setAttribute("data-message-author-role", "assistant");
+    article.setAttribute("data-message-id", "msg-complex-table");
+    article.innerHTML = `
+      <div class="markdown">
+        <table>
+          <thead>
+            <tr><th>Key</th><th>Value</th><th>Notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Simple</td><td>Alpha</td><td>Beta</td></tr>
+            <tr><td>Pipe</td><td>A | B</td><td>stays one cell</td></tr>
+            <tr><td>Code</td><td><code>left | right</code></td><td>inline code stays inline</td></tr>
+            <tr><td>Link</td><td><a href="https://example.test/docs|api">Docs | API</a></td><td>link stays parseable</td></tr>
+            <tr><td>Multiline</td><td>first<br>second</td><td>still one cell</td></tr>
+            <tr><td>Ragged</td><td>fewer cells</td></tr>
+          </tbody>
+        </table>
+      </div>
+    `;
+    window.document.body.append(article);
+    window.document.body.dataset.conversationId = "conv-complex-table";
+    window.document.body.dataset.lastMessageId = "msg-complex-table";
+    window.document.body.dataset.streamState = "done";
+
+    const snapshot = window.eval(
+      `${runtimeSource.replace(
+        /^export\s+/gm,
+        "",
+      )}\ncreateTablinqPageAdapterRuntime().readAskSnapshot();`,
+    );
+
+    expect(snapshot.text).toBe(expected);
+    dom.window.close();
+  });
+
   it("serializes mermaid preview blocks into explicit text instead of a bare mermaid label", async () => {
     const runtimeSource = await readFile(
       path.join(

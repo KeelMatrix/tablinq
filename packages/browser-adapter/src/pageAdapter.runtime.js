@@ -1213,6 +1213,11 @@ export function createTablinqPageAdapterRuntime() {
       .map((line) => (line ? `${prefix}${line}` : blankPrefix.trimEnd()))
       .join("\n");
 
+  const serializeMarkdownTableCell = (value) =>
+    normalizeInlineOutput(value)
+      .replace(/[ \t]*\n[ \t]*/g, "<br>")
+      .replace(/\|/g, "\\|");
+
   const serializeTable = (table) => {
     if (!(table instanceof HTMLElement)) {
       return "";
@@ -1220,7 +1225,7 @@ export function createTablinqPageAdapterRuntime() {
     const rows = Array.from(table.querySelectorAll("tr")).map((row) =>
       Array.from(row.children)
         .filter((cell) => cell instanceof HTMLElement)
-        .map((cell) => serializeInlineChildren(cell)),
+        .map((cell) => serializeMarkdownTableCell(serializeInlineChildren(cell))),
     );
     const header = rows[0] ?? [];
     if (header.length === 0) {
