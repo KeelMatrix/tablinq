@@ -185,7 +185,10 @@ export function markdownCompatibleRecoveredText(
   if (shorterLength < 4) {
     return false;
   }
-  return textRelation(normalizedEmitted, normalizedFinal) !== "mismatch";
+  if (textRelation(normalizedEmitted, normalizedFinal) !== "mismatch") {
+    return true;
+  }
+  return insertedMarkdownLeadInCompatible(emittedText, finalText);
 }
 
 export function normalizeRecoveredAskText(text: string): string {
@@ -203,6 +206,68 @@ export function normalizeRecoveredAskText(text: string): string {
     .replace(/\s*\|\s*/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function insertedMarkdownLeadInCompatible(
+  emittedText: string,
+  finalText: string,
+): boolean {
+  const emittedLines = normalizeRecoveredAskLines(emittedText);
+  const finalLines = normalizeRecoveredAskLines(finalText);
+  if (emittedLines.length === 0 || finalLines.length === 0) {
+    return false;
+  }
+
+  let finalIndex = 0;
+  let matched = 0;
+  for (const emittedLine of emittedLines) {
+    let found = false;
+    while (finalIndex < finalLines.length) {
+      const finalLine = finalLines[finalIndex];
+      const relation = textRelation(emittedLine, finalLine);
+      if (relation !== "mismatch") {
+        matched += 1;
+        finalIndex += 1;
+        found = true;
+        break;
+      }
+      if (matched === 0 || !isLikelyInsertedMarkdownLeadIn(finalLine)) {
+        return false;
+      }
+      finalIndex += 1;
+    }
+    if (!found) {
+      return false;
+    }
+  }
+  return matched === emittedLines.length;
+}
+
+function normalizeRecoveredAskLines(text: string): string[] {
+  return text
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^```[^\n]*$/, "")
+        .replace(/^#{1,6}\s+/, "")
+        .replace(/^>\s?/, "")
+        .replace(/^(\s*)(?:[-*+]|\d+\.)\s+/, "$1")
+        .replace(/`/g, "")
+        .replace(/[*_~]/g, "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .filter(Boolean);
+}
+
+function isLikelyInsertedMarkdownLeadIn(line: string): boolean {
+  return (
+    line.length > 0 &&
+    line.length <= 80 &&
+    !/[.!?。！？]$/.test(line) &&
+    !line.includes("\n")
+  );
 }
 
 export function placeholderCompatibleText(
