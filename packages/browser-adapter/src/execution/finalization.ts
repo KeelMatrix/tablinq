@@ -3,6 +3,7 @@ import type { Page } from "playwright-core";
 import type {
   AskExecutionCommand,
   AskResultSnapshot,
+  ResearchProgressSnapshot,
   ResearchExecutionCommand,
   ResearchResultSnapshot,
   StreamChunkSnapshot,
@@ -132,7 +133,9 @@ export async function finalizeResearch(
   host: BrowserExecutionHost,
   command: ResearchExecutionCommand,
   page: Page,
+  state: { emittedText?: string; nextSeq: number },
   snapshot: ResearchSnapshot,
+  onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
 ): Promise<ResearchResultSnapshot> {
   const artifacts = await collectArtifacts(
     page,
@@ -143,6 +146,23 @@ export async function finalizeResearch(
   await host.ensureManagedPage(
     host.resolveConversationTarget(snapshot.conversationId),
   );
+  const emittedText = state.emittedText ?? "";
+  if (
+    snapshot.reportText.length > emittedText.length &&
+    snapshot.reportText.startsWith(emittedText)
+  ) {
+    await onUpdate({
+      status: "running",
+      message: snapshot.statusMessage ?? undefined,
+      conversation_id: snapshot.conversationId,
+      message_id: snapshot.messageId,
+      current_url: snapshot.currentUrl,
+      chunk_kind: "delta",
+      chunk_text: snapshot.reportText.slice(emittedText.length),
+    });
+    state.emittedText = snapshot.reportText;
+    state.nextSeq += 1;
+  }
   return {
     job_id: command.jobId,
     conversation_id: snapshot.conversationId ?? `${command.jobId}-conversation`,

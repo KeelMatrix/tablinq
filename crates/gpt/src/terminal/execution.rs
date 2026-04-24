@@ -16,7 +16,8 @@ use std::time::{Duration, Instant};
 use super::ansi::ansi_green_enabled_for_stdout;
 use super::response::{
     ResponseStreamState, buffer_response_chunk, finish_terminal_stream,
-    reconcile_streamed_response_with_pending, write_complete_response, write_response_chunk,
+    reconcile_streamed_response_with_pending, reconcile_streamed_response_with_rewrite_safety,
+    write_complete_response,
 };
 
 const IPC_TIMEOUT_BUFFER: Duration = Duration::from_secs(30);
@@ -175,9 +176,8 @@ pub(crate) fn execute_research_with_terminal_presentation(
     let mut stdout = io::stdout();
     let stream_responses = stdout.is_terminal();
     let mut stderr = io::stderr();
-    let mut printed_any = false;
+    let mut response_stream = ResponseStreamState::default();
     let green_responses = ansi_green_enabled_for_stdout();
-    let mut response_color_active = false;
     let mut last_status: Option<JobStatusLine> = None;
     let started_at = Instant::now();
     let mut current_job_id: Option<String> = None;
@@ -194,7 +194,11 @@ pub(crate) fn execute_research_with_terminal_presentation(
 
     let response = loop {
         if interrupt_rx.try_recv().is_ok() {
-            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+            finish_terminal_stream(
+                &mut stdout,
+                response_stream.printed_any,
+                &mut response_stream.response_color_active,
+            )?;
             if let Some(job_id) = current_job_id.as_deref() {
                 let cancel_notice = request_job_cancellation(&endpoint, job_id).err();
                 if let Some(err) = cancel_notice {
@@ -208,7 +212,11 @@ pub(crate) fn execute_research_with_terminal_presentation(
         }
 
         let Some(remaining) = timeout.checked_sub(started_at.elapsed()) else {
-            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+            finish_terminal_stream(
+                &mut stdout,
+                response_stream.printed_any,
+                &mut response_stream.response_color_active,
+            )?;
             anyhow::bail!(
                 "research request timed out after {} ms",
                 timeout.as_millis()
@@ -220,21 +228,13 @@ pub(crate) fn execute_research_with_terminal_presentation(
                     StreamChunkKind::Delta if !chunk.text.is_empty() => {
                         current_job_id = Some(chunk.job_id.clone());
                         if stream_responses {
-                            write_response_chunk(
+                            buffer_response_chunk(
                                 &mut stdout,
                                 &chunk.text,
                                 green_responses,
-                                &mut response_color_active,
+                                &mut response_stream,
                             )?;
-                            printed_any = true;
                         }
-                    }
-                    StreamChunkKind::Done if printed_any => {
-                        finish_terminal_stream(
-                            &mut stdout,
-                            printed_any,
-                            &mut response_color_active,
-                        )?;
                     }
                     _ => {}
                 },
@@ -255,7 +255,11 @@ pub(crate) fn execute_research_with_terminal_presentation(
             Ok(CliStreamMessage::Done(result)) => break (*result)?,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+                finish_terminal_stream(
+                    &mut stdout,
+                    response_stream.printed_any,
+                    &mut response_stream.response_color_active,
+                )?;
                 anyhow::bail!("research request stream closed before a daemon response arrived");
             }
         }
@@ -263,13 +267,27 @@ pub(crate) fn execute_research_with_terminal_presentation(
 
     match response {
         DaemonResponse::Research(result) => {
-            if !printed_any && !result.report_text.is_empty() {
+            if stream_responses {
+                reconcile_streamed_response_with_rewrite_safety(
+                    &mut stdout,
+                    &response_stream.printed_text,
+                    &response_stream.pending_text,
+                    &result.report_text,
+                    green_responses,
+                    &mut response_stream.response_color_active,
+                    false,
+                )?;
+            } else if !result.report_text.is_empty() {
                 write_complete_response(&mut stdout, &result.report_text, green_responses)?;
             }
             Ok(())
         }
         DaemonResponse::Error(error) => {
-            finish_terminal_stream(&mut stdout, printed_any, &mut response_color_active)?;
+            finish_terminal_stream(
+                &mut stdout,
+                response_stream.printed_any,
+                &mut response_stream.response_color_active,
+            )?;
             bail!("{}", error.message)
         }
         other => bail!("unexpected research response: {other:?}"),
