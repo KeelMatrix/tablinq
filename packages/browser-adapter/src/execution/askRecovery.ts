@@ -10,7 +10,6 @@ import type {
 import { readAskSnapshot, sleep } from "../pageRuntime";
 import type { AskSnapshot } from "../snapshotState";
 import {
-  canFinalizeRecoveredAskSnapshot,
   isTransientAskStatusText,
   markdownCompatibleRecoveredText,
   normalizeOptionalString,
@@ -34,6 +33,12 @@ export function assessRecoveredAskSnapshot(
     emittedText: string;
     knownConversationId: string | null;
     knownMessageId: string | null;
+    askBaseline?: {
+      assistantMessageCount: number;
+      conversationId: string | null;
+      messageId: string | null;
+      text: string;
+    } | null;
   },
   candidate: AskSnapshot,
 ): AskRecoveryResolution {
@@ -65,33 +70,54 @@ export function assessRecoveredAskSnapshot(
   const hasAssistantSignal =
     candidate.hasAssistantMessage &&
     (candidate.messageId !== null || candidate.text.length > 0);
-  const sameMessageCompatible =
+  const askBaseline = state.askBaseline ?? null;
+  const postBaselineMessage =
+    askBaseline !== null &&
+    hasAssistantSignal &&
+    (snapshotMessageId === null ||
+      askBaseline.messageId === null ||
+      snapshotMessageId !== askBaseline.messageId ||
+      candidate.text !== askBaseline.text);
+  const sameMessageIdentity =
+    conversationMatches &&
+    messageMatches &&
+    (candidate.state === "running" || candidate.state === "done") &&
+    hasAssistantSignal;
+  const successorMessage =
+    conversationMatches &&
+    messageMismatch &&
+    (candidate.state === "running" || candidate.state === "done") &&
+    hasAssistantSignal;
+  const baselineSuccessorMessage =
+    conversationMatches &&
+    !commandMessageId &&
+    postBaselineMessage &&
+    (candidate.state === "running" || candidate.state === "done");
+  const identityCompatible =
+    sameMessageIdentity || successorMessage || baselineSuccessorMessage;
+  const legacyTextCompatible =
     relationIsUsable ||
     transientOnlyOutput ||
     placeholderCompatibleText(state.emittedText, candidate.text) ||
     markdownCompatibleRecoveredText(state.emittedText, candidate.text);
+  const sameMessageCompatible = identityCompatible || legacyTextCompatible;
   const sameMessageDrift =
     conversationMatches &&
     messageMatches &&
     sameMessageCompatible &&
     (candidate.state === "running" || candidate.state === "done") &&
     hasAssistantSignal;
-  const successorMessage =
-    conversationMatches &&
-    messageMismatch &&
-    relationIsUsable &&
-    (candidate.state === "running" || candidate.state === "done") &&
-    hasAssistantSignal;
   const awaitingLiveState =
     conversationMatches &&
-    messageMatches &&
+    (messageMatches || baselineSuccessorMessage) &&
     candidate.state === "idle" &&
     hasAssistantSignal &&
     state.emittedText.length === 0 &&
     candidate.text.length === 0;
   const canContinue =
     (conversationMatches &&
-      (relationIsUsable ||
+      (identityCompatible ||
+        relationIsUsable ||
         transientOnlyOutput ||
         sameMessageDrift ||
         successorMessage) &&
@@ -103,7 +129,8 @@ export function assessRecoveredAskSnapshot(
     (messageMatches &&
       candidate.state === "done" &&
       hasAssistantSignal &&
-      !sameMessageCompatible &&
+      !identityCompatible &&
+      !legacyTextCompatible &&
       !successorMessage);
   logRecoveryDecision("ask", {
     commandConversationId,
@@ -123,8 +150,11 @@ export function assessRecoveredAskSnapshot(
     hasAssistantMessage: candidate.hasAssistantMessage,
     transientOnlyOutput,
     sameMessageCompatible,
+    identityCompatible,
+    legacyTextCompatible,
     sameMessageDrift,
     successorMessage,
+    baselineSuccessorMessage,
     awaitingLiveState,
     hardMismatch,
     canContinue,
@@ -163,9 +193,6 @@ export async function tryResumeAskFromPage(
 
   let snapshot = resolution.candidate;
   rememberAskSnapshot(host, state, snapshot);
-  if (resolution.relation === "mismatch" && resolution.sameMessageDrift) {
-    state.pendingTextReconciliation = true;
-  }
   await onState({
     state: "recovered",
     reason:
@@ -205,16 +232,6 @@ export async function tryResumeAskFromPage(
     return { page };
   }
   state.doneStreak = STABLE_DONE_POLLS;
-  if (
-    state.pendingTextReconciliation &&
-    !canFinalizeRecoveredAskSnapshot(
-      state.emittedText,
-      state.knownMessageId,
-      snapshot,
-    )
-  ) {
-    return null;
-  }
   state.pendingTextReconciliation = false;
   return {
     page,
@@ -282,9 +299,6 @@ export async function reconcileAskAfterInterruption(
     );
     if (resolution.canContinue) {
       rememberAskSnapshot(host, state, resolution.candidate);
-      if (resolution.relation === "mismatch" && resolution.sameMessageDrift) {
-        state.pendingTextReconciliation = true;
-      }
       snapshot = resolution.candidate;
       break;
     }
@@ -343,18 +357,6 @@ export async function reconcileAskAfterInterruption(
   }
   if (snapshot.state === "done") {
     state.doneStreak = STABLE_DONE_POLLS;
-    if (
-      state.pendingTextReconciliation &&
-      !canFinalizeRecoveredAskSnapshot(
-        state.emittedText,
-        state.knownMessageId,
-        snapshot,
-      )
-    ) {
-      throw new Error(
-        "interrupted ask could not be reconciled against the live conversation",
-      );
-    }
     state.pendingTextReconciliation = false;
     return {
       page: recoveredPage,

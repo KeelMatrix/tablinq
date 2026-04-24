@@ -10,6 +10,7 @@ import type {
 } from "../contracts";
 import {
   collectArtifacts,
+  readArtifactStabilitySignature,
   readAskSnapshot,
   readLiveResearchSnapshot,
   sleep,
@@ -34,6 +35,10 @@ export async function stabilizeAskCompletion(
   timeoutAt: number,
 ): Promise<AskSnapshot> {
   let stableSnapshot = snapshot;
+  let stableArtifactSignature = await artifactSignatureForSnapshot(
+    page,
+    snapshot.messageId,
+  );
   let stableDonePolls = 0;
 
   while (Date.now() < timeoutAt && stableDonePolls < STABLE_DONE_POLLS) {
@@ -42,11 +47,19 @@ export async function stabilizeAskCompletion(
     if (candidate.state !== "done") {
       return candidate;
     }
-    if (sameAskCompletionSnapshot(stableSnapshot, candidate)) {
+    const artifactSignature = await artifactSignatureForSnapshot(
+      page,
+      candidate.messageId,
+    );
+    if (
+      sameAskCompletionSnapshot(stableSnapshot, candidate) &&
+      artifactSignature === stableArtifactSignature
+    ) {
       stableDonePolls += 1;
       continue;
     }
     stableSnapshot = candidate;
+    stableArtifactSignature = artifactSignature;
     stableDonePolls = 0;
   }
 
@@ -59,6 +72,10 @@ export async function stabilizeResearchCompletion(
   timeoutAt: number,
 ): Promise<ResearchSnapshot> {
   let stableSnapshot = snapshot;
+  let stableArtifactSignature = await artifactSignatureForSnapshot(
+    page,
+    snapshot.messageId,
+  );
   let stableDonePolls = 0;
 
   while (Date.now() < timeoutAt && stableDonePolls < STABLE_DONE_POLLS) {
@@ -67,15 +84,30 @@ export async function stabilizeResearchCompletion(
     if (candidate.status !== "done") {
       return candidate;
     }
-    if (sameResearchCompletionSnapshot(stableSnapshot, candidate)) {
+    const artifactSignature = await artifactSignatureForSnapshot(
+      page,
+      candidate.messageId,
+    );
+    if (
+      sameResearchCompletionSnapshot(stableSnapshot, candidate) &&
+      artifactSignature === stableArtifactSignature
+    ) {
       stableDonePolls += 1;
       continue;
     }
     stableSnapshot = candidate;
+    stableArtifactSignature = artifactSignature;
     stableDonePolls = 0;
   }
 
   return stableSnapshot;
+}
+
+async function artifactSignatureForSnapshot(
+  page: Page,
+  messageId: string | null,
+): Promise<string> {
+  return readArtifactStabilitySignature(page, messageId).catch(() => "");
 }
 
 export async function finalizeAsk(
@@ -96,18 +128,16 @@ export async function finalizeAsk(
     host.resolveConversationTarget(snapshot.conversationId),
   );
   const emittedText = state.emittedText ?? "";
-  if (
-    snapshot.text.length > emittedText.length &&
-    snapshot.text.startsWith(emittedText)
-  ) {
+  if (snapshot.text && emittedText !== snapshot.text) {
     await onChunk({
       job_id: command.jobId,
       conversation_id: snapshot.conversationId,
       message_id: snapshot.messageId,
       seq: state.nextSeq,
       kind: "delta",
-      text: snapshot.text.slice(emittedText.length),
+      text: snapshot.text,
     });
+    state.emittedText = snapshot.text;
     state.nextSeq += 1;
   }
   await onChunk({
@@ -147,10 +177,7 @@ export async function finalizeResearch(
     host.resolveConversationTarget(snapshot.conversationId),
   );
   const emittedText = state.emittedText ?? "";
-  if (
-    snapshot.reportText.length > emittedText.length &&
-    snapshot.reportText.startsWith(emittedText)
-  ) {
+  if (snapshot.reportText && emittedText !== snapshot.reportText) {
     await onUpdate({
       status: "running",
       message: snapshot.statusMessage ?? undefined,
@@ -158,7 +185,7 @@ export async function finalizeResearch(
       message_id: snapshot.messageId,
       current_url: snapshot.currentUrl,
       chunk_kind: "delta",
-      chunk_text: snapshot.reportText.slice(emittedText.length),
+      chunk_text: snapshot.reportText,
     });
     state.emittedText = snapshot.reportText;
     state.nextSeq += 1;

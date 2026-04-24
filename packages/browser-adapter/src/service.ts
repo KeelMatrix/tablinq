@@ -43,8 +43,6 @@ type AdapterRequest =
       model_class?: "instant" | "thinking" | null;
       effort?: "none" | "standard" | "extended" | null;
       files?: string[];
-      emitted_text?: string | null;
-      next_seq?: number | null;
     }
   | {
       type: "recover_ask";
@@ -60,6 +58,12 @@ type AdapterRequest =
       files?: string[];
       emitted_text?: string | null;
       next_seq?: number | null;
+      known_conversation_id?: string | null;
+      known_message_id?: string | null;
+      baseline_conversation_id?: string | null;
+      baseline_message_id?: string | null;
+      baseline_assistant_message_count?: number | null;
+      baseline_text?: string | null;
     }
   | {
       type: "research";
@@ -170,6 +174,19 @@ async function main() {
                 {
                   emittedText: request.emitted_text ?? "",
                   nextSeq: request.next_seq ?? 0,
+                  knownConversationId: request.known_conversation_id ?? null,
+                  knownMessageId: request.known_message_id ?? null,
+                  askBaseline:
+                    request.baseline_assistant_message_count == null
+                      ? null
+                      : {
+                          assistantMessageCount:
+                            request.baseline_assistant_message_count,
+                          conversationId:
+                            request.baseline_conversation_id ?? null,
+                          messageId: request.baseline_message_id ?? null,
+                          text: request.baseline_text ?? "",
+                        },
                 },
                 (chunk) => {
                   writeFrame({

@@ -648,7 +648,13 @@ export class BrowserAdapter {
 
   async recoverAsk(
     command: AskExecutionCommand,
-    state: { emittedText: string; nextSeq: number },
+    state: {
+      emittedText: string;
+      nextSeq: number;
+      knownConversationId?: string | null;
+      knownMessageId?: string | null;
+      askBaseline?: AskBaseline | null;
+    },
     onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,

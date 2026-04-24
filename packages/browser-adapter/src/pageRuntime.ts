@@ -6,6 +6,7 @@ export {
   collectArtifacts,
   clickAndCaptureDownload,
   persistDownload,
+  readArtifactStabilitySignature,
 } from "./pageRuntime/artifacts";
 export {
   resetConversationIdentity,

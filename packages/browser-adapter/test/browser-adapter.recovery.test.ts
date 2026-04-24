@@ -34,6 +34,22 @@ afterEach(async () => {
   await harness.cleanup();
 });
 
+async function maybeCloseManagedBrowserOnRunningIdentity(
+  adapter: BrowserAdapter,
+  update: { state: string; conversation_id?: string | null; message_id?: string | null },
+  alreadyClosed: boolean,
+): Promise<boolean> {
+  if (
+    alreadyClosed ||
+    update.state !== "running" ||
+    (!update.message_id && !update.conversation_id)
+  ) {
+    return alreadyClosed;
+  }
+  await adapter.getManagedPageForTest()!.context().browser()!.close();
+  return true;
+}
+
 describe("browser adapter", () => {
   it("backs off adaptive polling during longer recovery waits", () => {
     const immediate = adaptivePollIntervalMs("recovery", 100, 1_000);
@@ -138,14 +154,14 @@ describe("browser adapter", () => {
         prompt: "recover after browser disconnect",
         timeoutMs: 7000,
       },
-      async (chunk) => {
-        if (!closeTriggered && chunk.kind === "delta") {
-          closeTriggered = true;
-          await adapter.getManagedPageForTest()!.context().browser()!.close();
-        }
-      },
-      (update) => {
+      () => {},
+      async (update) => {
         states.push(update.state);
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
       },
     );
 
@@ -195,14 +211,15 @@ describe("browser adapter", () => {
       async (chunk) => {
         if (chunk.kind === "delta") {
           secondChunks.push(chunk.text);
-          if (!closeTriggered) {
-            closeTriggered = true;
-            await adapter.getManagedPageForTest()!.context().browser()!.close();
-          }
         }
       },
-      (update) => {
+      async (update) => {
         states.push(update.state);
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
       },
     );
 
@@ -275,8 +292,11 @@ describe("browser adapter", () => {
           text: "",
         },
         pendingTextReconciliation: false,
+        lastProgressAt: Date.now(),
         recoveryAttempts: 0,
         lastStatusAt: 0,
+        lastSnapshotSignature: null,
+        lastIdentityUpdateSignature: null,
       },
       (chunk: any) => {
         if (chunk.kind === "delta") {
@@ -418,13 +438,14 @@ describe("browser adapter", () => {
         prompt: "complete while disconnected",
         timeoutMs: 7000,
       },
-      async (chunk) => {
-        if (!closeTriggered && chunk.kind === "delta") {
-          closeTriggered = true;
-          await adapter.getManagedPageForTest()!.context().browser()!.close();
-        }
-      },
       () => {},
+      async (update) => {
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
+      },
     );
 
     const result = await request;
@@ -466,14 +487,14 @@ describe("browser adapter", () => {
         prompt: "Reply with exactly: ASK_OK",
         timeoutMs: 7000,
       },
-      async (chunk) => {
-        if (!closeTriggered && chunk.kind === "delta") {
-          closeTriggered = true;
-          await adapter.getManagedPageForTest()!.context().browser()!.close();
-        }
-      },
-      (update) => {
+      () => {},
+      async (update) => {
         states.push(update.state);
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
       },
     );
 
@@ -514,14 +535,14 @@ describe("browser adapter", () => {
         prompt: "recover after assistant message rotation",
         timeoutMs: 7000,
       },
-      async (chunk) => {
-        if (!closeTriggered && chunk.kind === "delta") {
-          closeTriggered = true;
-          await adapter.getManagedPageForTest()!.context().browser()!.close();
-        }
-      },
-      (update) => {
+      () => {},
+      async (update) => {
         states.push(update.state);
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
       },
     );
 
@@ -566,14 +587,15 @@ describe("browser adapter", () => {
       async (chunk) => {
         if (chunk.kind === "delta") {
           chunks.push(chunk.text);
-          if (!closeTriggered) {
-            closeTriggered = true;
-            await adapter.getManagedPageForTest()!.context().browser()!.close();
-          }
         }
       },
-      (update) => {
+      async (update) => {
         states.push(update.state);
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
       },
     );
 
@@ -620,13 +642,14 @@ describe("browser adapter", () => {
         if (chunk.kind === "delta") {
           chunks.push(chunk.text);
         }
-        if (chunk.kind === "delta" && !closeTriggered) {
-          closeTriggered = true;
-          await adapter.getManagedPageForTest()!.context().browser()!.close();
-        }
       },
-      (update) => {
+      async (update) => {
         states.push(update.state);
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
       },
     );
 
@@ -714,14 +737,14 @@ describe("browser adapter", () => {
         prompt: "recover copyable block after interruption",
         timeoutMs: 7000,
       },
-      async (chunk) => {
-        if (chunk.kind === "delta" && !closeTriggered) {
-          closeTriggered = true;
-          await adapter.getManagedPageForTest()!.context().browser()!.close();
-        }
-      },
-      (update) => {
+      () => {},
+      async (update) => {
         states.push(update.state);
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
       },
     );
 
@@ -745,7 +768,7 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
-  it("fails when an interrupted ask cannot be reconciled against the live conversation", async () => {
+  it("recovers an interrupted ask from same-conversation identity without emitted text", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
     const adapter = harness.trackAdapter(
@@ -763,22 +786,28 @@ describe("browser adapter", () => {
     });
 
     let closeTriggered = false;
+    const states: string[] = [];
     const request = adapter.ask(
       {
         jobId: "job-ask-recover-mismatch",
         prompt: "fail recovery on mismatched output",
         timeoutMs: 7000,
       },
-      async (chunk) => {
-        if (!closeTriggered && chunk.kind === "delta") {
-          closeTriggered = true;
-          await adapter.getManagedPageForTest()!.context().browser()!.close();
-        }
-      },
       () => {},
+      async (update) => {
+        states.push(update.state);
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
+      },
     );
 
-    await expect(request).rejects.toThrow(/could not be reconciled/i);
+    const result = await request;
+    expect(result.output_text).toBe("Unexpected response after interruption");
+    expect(states).toContain("interrupted");
+    expect(states).toContain("recovered");
 
     await adapter.shutdown();
   });
@@ -809,13 +838,14 @@ describe("browser adapter", () => {
         prompt: "fail recovery on wrong conversation",
         timeoutMs: 7000,
       },
-      async (chunk) => {
-        if (!closeTriggered && chunk.kind === "delta") {
-          closeTriggered = true;
-          await adapter.getManagedPageForTest()!.context().browser()!.close();
-        }
-      },
       () => {},
+      async (update) => {
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
+      },
     );
 
     await expect(request).rejects.toThrow(/could not be reconciled/i);
@@ -863,14 +893,14 @@ describe("browser adapter", () => {
         prompt: "recover after attach disconnect",
         timeoutMs: 7000,
       },
-      async (chunk) => {
-        if (!closeTriggered && chunk.kind === "delta") {
-          closeTriggered = true;
-          await adapter.getManagedPageForTest()!.context().browser()!.close();
-        }
-      },
-      (update) => {
+      () => {},
+      async (update) => {
         states.push(update.state);
+        closeTriggered = await maybeCloseManagedBrowserOnRunningIdentity(
+          adapter,
+          update,
+          closeTriggered,
+        );
       },
     );
 

@@ -192,6 +192,10 @@ mod tests {
             message_id: None,
             current_url: Some("https://chatgpt.com/c/abc-123?foo=bar".to_owned()),
             streaming_safe: false,
+            baseline_conversation_id: None,
+            baseline_message_id: None,
+            baseline_assistant_message_count: None,
+            baseline_text: None,
         };
 
         let derived = derive_recovery_conversation_id(None, Some(&update), None);

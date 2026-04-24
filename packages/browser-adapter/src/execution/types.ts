@@ -43,6 +43,8 @@ export type AskRuntimeState = {
   lastProgressAt: number;
   recoveryAttempts: number;
   lastStatusAt: number;
+  lastSnapshotSignature: string | null;
+  lastIdentityUpdateSignature: string | null;
 };
 
 export type ResearchRuntimeState = {
@@ -58,6 +60,8 @@ export type ResearchRuntimeState = {
   announcedStart: boolean;
   submissionConfirmed: boolean;
   lastStatusAt: number;
+  lastSnapshotSignature: string | null;
+  lastIdentityUpdateSignature: string | null;
 };
 
 export type AskExecutionOptions = {
@@ -65,6 +69,9 @@ export type AskExecutionOptions = {
   emittedText: string;
   nextSeq: number;
   recoveryReason: string | null;
+  knownConversationId?: string | null;
+  knownMessageId?: string | null;
+  askBaseline?: AskBaseline | null;
 };
 
 export type ResearchSelection = {

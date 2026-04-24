@@ -160,13 +160,17 @@ export interface StreamChunkSnapshot {
 }
 
 export interface RequestStateSnapshot {
-  state: "interrupted" | "recovered";
+  state: "running" | "interrupted" | "recovered";
   reason: string;
   at: string;
   conversation_id: string | null;
   message_id: string | null;
   current_url: string | null;
   streaming_safe: boolean;
+  baseline_conversation_id?: string | null;
+  baseline_message_id?: string | null;
+  baseline_assistant_message_count?: number | null;
+  baseline_text?: string | null;
 }
 
 export interface BrowserAdapterOptions {
