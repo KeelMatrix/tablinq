@@ -495,7 +495,7 @@ impl AdapterProcess {
     }
 
     pub(super) fn terminate(&mut self) {
-        let _ = self.child.kill();
+        terminate_child_process_tree(&mut self.child);
         let _ = self.child.wait();
         if let Some(reader_thread) = self.reader_thread.take() {
             let _ = reader_thread.join();
@@ -505,6 +505,22 @@ impl AdapterProcess {
     fn next_submit_jitter_ms(&self) -> u64 {
         bounded_submit_jitter_ms(self.submit_jitter_min_ms, self.submit_jitter_max_ms)
     }
+}
+
+#[cfg(windows)]
+fn terminate_child_process_tree(child: &mut Child) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+}
+
+#[cfg(not(windows))]
+fn terminate_child_process_tree(child: &mut Child) {
+    let _ = child.kill();
 }
 
 fn bounded_submit_jitter_ms(min_ms: u64, max_ms: u64) -> u64 {

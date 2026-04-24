@@ -31,8 +31,8 @@ export async function beginDeepResearchRun(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const frameSnapshot = await readDeepResearchFrameSnapshot(page);
-    if (frameSnapshot?.startVisible) {
-      if (!frameSnapshot.startEnabled) {
+    if (frameSnapshot?.startVisible || frameSnapshot?.phase === "planning") {
+      if (frameSnapshot.startVisible && !frameSnapshot.startEnabled) {
         await sleep(
           Math.min(
             adaptivePollIntervalMs("edge", Date.now() - startedAt),
@@ -290,176 +290,128 @@ export async function readDeepResearchFrameSnapshot(
 export async function inspectDeepResearchFrame(
   frame: Frame,
 ): Promise<DeepResearchFrameSnapshot | null> {
-  try {
-    const snapshot = await frame.evaluate(() => {
-      const normalize = (value: string | null | undefined): string =>
-        String(value ?? "")
-          .replace(/\u00a0/g, " ")
-          .replace(/\r/g, "")
-          .trim();
-      const nestedRootFrame = document.querySelector("iframe#root");
-      const nestedRootDocument =
-        nestedRootFrame instanceof HTMLIFrameElement
-          ? nestedRootFrame.contentDocument
-          : null;
-      const activeDocument =
-        nestedRootDocument?.body &&
-        nestedRootDocument.body.childElementCount > 0
-          ? nestedRootDocument
-          : document;
-      const activeWindow = activeDocument.defaultView ?? window;
-      const HTMLElementCtor =
-        activeWindow.HTMLElement ?? window.HTMLElement ?? HTMLElement;
-      const isVisible = (element: Element): boolean => {
-        if (!(element instanceof HTMLElementCtor) || element.hidden) {
-          return false;
-        }
-        const style = activeWindow.getComputedStyle(element);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          style.opacity !== "0"
-        );
-      };
-      const buttonName = (element: Element): string =>
-        normalize(
-          element.getAttribute("aria-label") ??
-            element.textContent ??
-            element.getAttribute("title"),
-        );
-      const buttons = Array.from(
-        activeDocument.querySelectorAll("button, [role='button']"),
-      ).filter(isVisible);
-      const buttonNames = buttons.map((element) =>
-        buttonName(element).toLowerCase(),
-      );
-      const startButton =
-        buttons.find((element) => /^start$/i.test(buttonName(element))) ?? null;
-      const startVisible = Boolean(startButton);
-      const startEnabled = startButton
-        ? !(
-            startButton.getAttribute("aria-disabled") === "true" ||
-            startButton.getAttribute("data-disabled") === "true" ||
-            ("disabled" in startButton &&
-              Boolean(
-                (startButton as HTMLButtonElement | HTMLInputElement).disabled,
-              ))
-          )
-        : false;
-      const hasPlannerControls =
-        buttonNames.includes("edit") || buttonNames.includes("cancel");
-      const stopResearchVisible = buttonNames.some(
-        (name) => name === "stop" || name === "stop research",
-      );
-      const explicitReportRoot =
-        activeDocument.querySelector("[data-deep-research-text]") ??
-        activeDocument.querySelector("[class*='reportPage']") ??
-        activeDocument.querySelector("article") ??
-        activeDocument.querySelector("[role='article']") ??
-        activeDocument.querySelector("[role='document']") ??
-        activeDocument.querySelector("pre");
-      const reportRoot =
-        explicitReportRoot ?? activeDocument.querySelector("main");
-      const statusRoot =
-        activeDocument.querySelector("[data-deep-research-status]") ??
-        activeDocument.querySelector("[class*='text-token-text-secondary']");
-      const bodyText = normalize(
-        reportRoot instanceof HTMLElementCtor
-          ? reportRoot.innerText
-          : (activeDocument.body?.innerText ?? ""),
-      );
-      const statusText = normalize(
-        statusRoot instanceof HTMLElementCtor ? statusRoot.innerText : "",
-      );
-      const lowerUrl = window.location.href.toLowerCase();
-      const lowerText = `${statusText}\n${bodyText}`.trim().toLowerCase();
-      const starting =
-        lowerText.includes("starting") ||
-        lowerText.includes("getting ready") ||
-        lowerText.includes("preparing");
-      const generatingReport = lowerText.includes(
-        "providing a comprehensive report for the user",
-      );
-      const plannerShell =
-        hasPlannerControls ||
-        lowerText.includes("proposed research plan") ||
-        lowerText.includes("review the proposed research plan") ||
-        lowerText.includes("review the research plan");
-      const candidate =
-        startVisible ||
-        lowerUrl.includes("deep_research") ||
-        lowerUrl.includes("oaiusercontent") ||
-        lowerText.includes("deep research") ||
-        stopResearchVisible ||
-        lowerText.includes("gathering sources") ||
-        lowerText.includes("drafting report") ||
-        lowerText.includes("edit") ||
-        lowerText.includes("cancel");
-      if (!candidate) {
-        return null;
-      }
-      const lines = bodyText
-        .split(/\n+/)
-        .map((line) => line.trim())
-        .filter(Boolean);
-      const waiting =
-        lowerText.includes("gathering sources") ||
-        lowerText.includes("collecting sources") ||
-        lowerText.includes("searching") ||
-        lowerText.includes("reviewing sources") ||
-        lowerText.includes("forming a plan");
-      const running =
-        lowerText.includes("drafting report") ||
-        lowerText.includes("writing report") ||
-        lowerText.includes("analyzing") ||
-        lowerText.includes("working") ||
-        generatingReport ||
-        stopResearchVisible;
-      const failed =
-        lowerText.includes("failed") ||
-        lowerText.includes("error") ||
-        lowerText.includes("retry");
-      const provisionalShell =
-        !explicitReportRoot &&
-        (plannerShell ||
-          starting ||
-          waiting ||
-          generatingReport ||
-          stopResearchVisible);
-      const reportText = startVisible || provisionalShell ? "" : bodyText;
-      const completed =
-        statusText.toLowerCase().includes("research completed") ||
-        lowerText.includes("research completed");
-      const phase: DeepResearchFrameSnapshot["phase"] = startVisible
-        ? "planning"
-        : plannerShell
-          ? "planning"
-          : failed
-            ? "failed"
-            : completed
-              ? "done"
-              : waiting
-                ? "waiting_for_sources"
-                : starting
-                  ? "running"
-                  : running
-                    ? "running"
-                    : reportText
-                      ? "done"
-                      : "running";
-      return {
-        phase,
-        statusMessage: startVisible
-          ? "awaiting start confirmation"
-          : statusText || (starting ? "starting research" : lines[0] || null),
-        reportText,
-        frameUrl: window.location.href,
-        startVisible,
-        startEnabled,
-      };
-    });
-    return snapshot ? normalizeDeepResearchFrameSnapshot(snapshot) : null;
-  } catch {
+  const normalize = (value: string | null | undefined): string =>
+    String(value ?? "")
+      .replace(/\u00a0/g, " ")
+      .replace(/\r/g, "")
+      .trim();
+  const visibleRole = async (name: RegExp): Promise<boolean> =>
+    frame.getByRole("button", { name }).first().isVisible().catch(() => false);
+
+  const startButton = frame.getByRole("button", { name: /^Start$/i }).first();
+  const startVisible = await startButton.isVisible().catch(() => false);
+  const startEnabled = startVisible
+    ? await startButton.isEnabled().catch(() => false)
+    : false;
+  const hasPlannerControls =
+    (await visibleRole(/^Edit$/i)) || (await visibleRole(/^Cancel$/i));
+  const stopResearchVisible =
+    (await visibleRole(/^Stop$/i)) || (await visibleRole(/^Stop research$/i));
+  const explicitReportRoot = frame
+    .locator(
+      "[data-deep-research-text], [class*='reportPage'], article, [role='article'], [role='document'], pre",
+    )
+    .first();
+  const explicitReportVisible = await explicitReportRoot
+    .isVisible()
+    .catch(() => false);
+  const reportRoot = explicitReportVisible
+    ? explicitReportRoot
+    : frame.locator("main, body").first();
+  const statusRoot = frame
+    .locator("[data-deep-research-status], [class*='text-token-text-secondary']")
+    .first();
+  const bodyText = normalize(
+    await reportRoot.innerText({ timeout: 100 }).catch(() => ""),
+  );
+  const statusText = normalize(
+    await statusRoot.innerText({ timeout: 100 }).catch(() => ""),
+  );
+  const lowerUrl = frame.url().toLowerCase();
+  const lowerText = `${statusText}\n${bodyText}`.trim().toLowerCase();
+  const starting =
+    lowerText.includes("starting") ||
+    lowerText.includes("getting ready") ||
+    lowerText.includes("preparing");
+  const generatingReport = lowerText.includes(
+    "providing a comprehensive report for the user",
+  );
+  const plannerShell =
+    hasPlannerControls ||
+    lowerText.includes("proposed research plan") ||
+    lowerText.includes("review the proposed research plan") ||
+    lowerText.includes("review the research plan");
+  const candidate =
+    startVisible ||
+    lowerUrl.includes("deep_research") ||
+    lowerUrl.includes("oaiusercontent") ||
+    lowerText.includes("deep research") ||
+    stopResearchVisible ||
+    lowerText.includes("gathering sources") ||
+    lowerText.includes("drafting report") ||
+    lowerText.includes("edit") ||
+    lowerText.includes("cancel");
+  if (!candidate) {
     return null;
   }
+  const lines = bodyText
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const waiting =
+    lowerText.includes("gathering sources") ||
+    lowerText.includes("collecting sources") ||
+    lowerText.includes("searching") ||
+    lowerText.includes("reviewing sources") ||
+    lowerText.includes("forming a plan");
+  const running =
+    lowerText.includes("drafting report") ||
+    lowerText.includes("writing report") ||
+    lowerText.includes("analyzing") ||
+    lowerText.includes("working") ||
+    generatingReport ||
+    stopResearchVisible;
+  const failed =
+    lowerText.includes("failed") ||
+    lowerText.includes("error") ||
+    lowerText.includes("retry");
+  const provisionalShell =
+    !explicitReportVisible &&
+    (plannerShell ||
+      starting ||
+      waiting ||
+      generatingReport ||
+      stopResearchVisible);
+  const reportText = startVisible || provisionalShell ? "" : bodyText;
+  const completed =
+    statusText.toLowerCase().includes("research completed") ||
+    lowerText.includes("research completed");
+  const phase: DeepResearchFrameSnapshot["phase"] = startVisible
+    ? "planning"
+    : plannerShell
+      ? "planning"
+      : failed
+        ? "failed"
+        : completed
+          ? "done"
+          : waiting
+            ? "waiting_for_sources"
+            : starting
+              ? "running"
+              : running
+                ? "running"
+                : reportText
+                  ? "done"
+                  : "running";
+
+  return normalizeDeepResearchFrameSnapshot({
+    phase,
+    statusMessage: startVisible
+      ? "awaiting start confirmation"
+      : statusText || (starting ? "starting research" : lines[0] || null),
+    reportText,
+    frameUrl: frame.url(),
+    startVisible,
+    startEnabled,
+  });
 }

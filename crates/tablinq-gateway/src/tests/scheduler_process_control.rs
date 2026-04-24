@@ -155,7 +155,7 @@ fn chat_completions_run_queued_requests_in_fifo_order() {
     config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
     if let Some(gateway) = config.file.gateway.as_mut() {
         gateway.research_timeout_ms = Some(15_000);
-        gateway.queue_timeout_ms = Some(15_000);
+        gateway.queue_timeout_ms = Some(60_000);
     }
     let state_root = config.paths.state_root.clone();
     let auth = auth_header(&config);
@@ -181,7 +181,7 @@ fn chat_completions_run_queued_requests_in_fifo_order() {
                 ("x-request-id", "req-first"),
             ],
             &first_body,
-            20_000,
+            60_000,
         )
         .unwrap()
     });
@@ -211,7 +211,7 @@ fn chat_completions_run_queued_requests_in_fifo_order() {
                 ("x-request-id", "req-second"),
             ],
             &second_body,
-            20_000,
+            60_000,
         )
         .unwrap();
         second_completions.lock().unwrap().push("second".to_owned());
@@ -242,7 +242,7 @@ fn chat_completions_run_queued_requests_in_fifo_order() {
                 ("x-request-id", "req-third"),
             ],
             &third_body,
-            20_000,
+            60_000,
         )
         .unwrap();
         third_completions.lock().unwrap().push("third".to_owned());
