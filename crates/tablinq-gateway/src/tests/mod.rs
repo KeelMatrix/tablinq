@@ -199,6 +199,56 @@ fn http_request_with_declared_content_length(
     .unwrap()
 }
 
+fn raw_http_request(snapshot: &GatewayStatusSnapshot, raw_request: &[u8]) -> SimpleHttpResponse {
+    let mut stream = TcpStream::connect((snapshot.host.as_str(), snapshot.port)).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_millis(5_000)))
+        .unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_millis(5_000)))
+        .unwrap();
+    stream.write_all(raw_request).unwrap();
+    stream.flush().unwrap();
+
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line).unwrap();
+    let parts: Vec<_> = status_line.split_whitespace().collect();
+    assert!(parts.len() >= 2, "invalid status line: {status_line:?}");
+    let status_code = parts[1].parse::<u16>().unwrap();
+    let reason_phrase = parts[2..].join(" ");
+
+    let mut headers = BTreeMap::new();
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            break;
+        }
+        let (name, value) = trimmed.split_once(':').unwrap();
+        headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
+    }
+
+    let content_length = headers
+        .get("content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    let mut body = vec![0u8; content_length];
+    if content_length > 0 {
+        reader.read_exact(&mut body).unwrap();
+    } else {
+        reader.read_to_end(&mut body).unwrap();
+    }
+
+    SimpleHttpResponse {
+        status_code,
+        reason_phrase,
+        headers,
+        body,
+    }
+}
+
 fn openclaude_request_body(
     model: &str,
     prompt: &str,
@@ -239,6 +289,8 @@ mod conversation_inspection;
 mod failure_recovery_status;
 
 mod gateway_process;
+
+mod request_parsing;
 
 mod scheduler_process_control;
 
