@@ -16,6 +16,8 @@ import {
   uploadAckTimeoutMsForFiles,
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
+import { finalizeAsk } from "../src/execution/finalization";
+import { applyAskSnapshot } from "../src/execution/streaming";
 import {
   createBrowserIntegrationHarness,
   createIsolatedTempDir,
@@ -35,6 +37,85 @@ afterEach(async () => {
   resetProviderPressureForTest();
   await harness.cleanup();
 });
+
+const liveThoughtArtifactText =
+  "I\u2019ll frame this as a practical production plan: world generation layers, AI components, runtime architecture, team/cost drivers, and the risks that usually dominate.";
+const liveActualAnswerText =
+  "A lot. Modern AI helps, but it does not remove the need for strong systems design.";
+
+async function createAskRuntimeDom() {
+  const runtimeSource = await readFile(
+    path.join(
+      process.cwd(),
+      "packages/browser-adapter/src/pageAdapter.runtime.js",
+    ),
+    "utf8",
+  );
+  const dom = new JSDOM(
+    `<!doctype html><html><body><main>
+      <section data-testid="conversation-turn-1">
+        <h4 class="sr-only">You said:</h4>
+        <div class="user-message-bubble-color">earlier prompt</div>
+      </section>
+      <section data-testid="conversation-turn-2">
+        <h4 class="sr-only">ChatGPT said:</h4>
+        <div class="markdown"><p>Earlier answer.</p></div>
+      </section>
+    </main></body></html>`,
+    {
+      url: "https://chatgpt.com/c/conv-live-reasoning",
+      runScripts: "outside-only",
+    },
+  );
+  const adapter = dom.window.eval(
+    `${runtimeSource.replace(/^export\s+/gm, "")}\ncreateTablinqPageAdapterRuntime();`,
+  );
+  const main = dom.window.document.querySelector("main");
+  if (!(main instanceof dom.window.HTMLElement)) {
+    throw new Error("expected main element");
+  }
+  return { adapter, dom, main };
+}
+
+function liveStyleReasoningTurn(answerText = "") {
+  return `
+    <section data-testid="conversation-turn-4"
+      class="text-token-text-primary w-full focus:outline-none [--shadow-height:45px] R6Vx5W_threadScrollVars">
+      <h4 class="sr-only">ChatGPT said:</h4>
+      <div class="text-base my-auto mx-auto pb-10">
+        <div class="[--thread-content-max-width:40rem] mx-auto agent-turn">
+          <div id="live-reasoning-grow" class="flex max-w-full flex-col gap-4 grow">
+            <div data-message-author-role="assistant"
+              data-message-id="reasoning-artifact-msg"
+              class="min-h-8 text-message relative flex w-full flex-col items-end gap-2 text-start break-words whitespace-normal outline-none keyboard-focused:focus-ring [.text-message+&]:mt-1">
+              <div class="flex w-full flex-col gap-1">
+                <div class="markdown prose dark:prose-invert w-full wrap-break-word dark markdown-new-styling">
+                  <p>${liveThoughtArtifactText}</p>
+                </div>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <button type="button" class="text-token-text-tertiary flex items-center gap-0.5 text-start cursor-default">Thought for 6s</button>
+            </div>
+            ${answerText ? liveStyleAnswerMessage(answerText) : ""}
+          </div>
+        </div>
+      </div>
+    </section>`;
+}
+
+function liveStyleAnswerMessage(answerText: string) {
+  return `
+    <div data-message-author-role="assistant"
+      data-message-id="actual-answer-msg"
+      class="min-h-8 text-message relative flex w-full flex-col items-end gap-2 text-start break-words whitespace-normal outline-none keyboard-focused:focus-ring [.text-message+&]:mt-1">
+      <div class="flex w-full flex-col gap-1">
+        <div class="markdown prose dark:prose-invert w-full wrap-break-word dark markdown-new-styling">
+          <p>${answerText}</p>
+        </div>
+      </div>
+    </div>`;
+}
 
 describe("browser adapter", () => {
   it("streams ask responses to completion", async () => {
@@ -251,6 +332,165 @@ describe("browser adapter", () => {
     expect(chunks.join("")).not.toContain("The comparison is narrowing");
 
     await adapter.shutdown();
+  });
+
+  it("ignores a live-style thought artifact before the answer starts", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML("beforeend", liveStyleReasoningTurn());
+    dom.window.document.body.dataset.streamState = "running";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.text).toBe("");
+    expect(snapshot.text).not.toContain(liveThoughtArtifactText);
+    dom.window.close();
+  });
+
+  it("reads only the live-style actual answer after a thought artifact", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML(
+      "beforeend",
+      liveStyleReasoningTurn(liveActualAnswerText),
+    );
+    dom.window.document.body.dataset.streamState = "done";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.messageId).toBe("actual-answer-msg");
+    expect(snapshot.text).toBe(liveActualAnswerText);
+    expect(snapshot.text).not.toContain(liveThoughtArtifactText);
+    expect(snapshot.text).not.toBe(
+      `${liveActualAnswerText}\n\n${liveActualAnswerText}`,
+    );
+    dom.window.close();
+  });
+
+  it("streams live-style answer deltas after ignoring a thought artifact", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML("beforeend", liveStyleReasoningTurn());
+    dom.window.document.body.dataset.streamState = "running";
+
+    const command = { jobId: "job-live-style-reasoning-stream" } as Parameters<
+      typeof applyAskSnapshot
+    >[0];
+    const state = {
+      emittedText: "",
+      nextSeq: 0,
+      knownMessageId: null,
+      pendingMessageId: null,
+      pendingMessageText: "",
+    };
+    const chunks: string[] = [];
+    const onChunk = (chunk: { kind: string; text?: string }) => {
+      if (chunk.kind === "delta") {
+        chunks.push(chunk.text ?? "");
+      }
+    };
+
+    const artifactSnapshot = adapter.readAskSnapshot({ baseline });
+    const artifactProgressed = await applyAskSnapshot(
+      command,
+      state,
+      artifactSnapshot,
+      onChunk,
+    );
+
+    const grow = dom.window.document.querySelector("#live-reasoning-grow");
+    if (!(grow instanceof dom.window.HTMLElement)) {
+      throw new Error("expected live reasoning container");
+    }
+    grow.insertAdjacentHTML("beforeend", liveStyleAnswerMessage("A lot."));
+    const firstAnswerSnapshot = adapter.readAskSnapshot({ baseline });
+    const firstAnswerProgressed = await applyAskSnapshot(
+      command,
+      state,
+      firstAnswerSnapshot,
+      onChunk,
+    );
+
+    const answerMarkdown = dom.window.document.querySelector(
+      "[data-message-id='actual-answer-msg'] .markdown",
+    );
+    if (!(answerMarkdown instanceof dom.window.HTMLElement)) {
+      throw new Error("expected answer markdown");
+    }
+    answerMarkdown.innerHTML = `<p>${liveActualAnswerText}</p>`;
+    const secondAnswerSnapshot = adapter.readAskSnapshot({ baseline });
+    const secondAnswerProgressed = await applyAskSnapshot(
+      command,
+      state,
+      secondAnswerSnapshot,
+      onChunk,
+    );
+
+    expect(artifactProgressed).toBe(false);
+    expect(firstAnswerProgressed).toBe(true);
+    expect(secondAnswerProgressed).toBe(true);
+    expect(chunks).toEqual([
+      "A lot.",
+      " Modern AI helps, but it does not remove the need for strong systems design.",
+    ]);
+    expect(chunks.join("")).toBe(liveActualAnswerText);
+    expect(chunks.join("")).not.toContain(liveThoughtArtifactText);
+    dom.window.close();
+  });
+
+  it("finalizes output_text from the cleaned live-style answer snapshot", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML(
+      "beforeend",
+      liveStyleReasoningTurn(liveActualAnswerText),
+    );
+    dom.window.document.body.dataset.streamState = "done";
+    const snapshot = adapter.readAskSnapshot({ baseline });
+    const emitted: string[] = [];
+    const fakeLocator = {
+      first() {
+        return this;
+      },
+      async count() {
+        return 0;
+      },
+      async all() {
+        return [];
+      },
+    };
+    const fakePage = {
+      locator() {
+        return fakeLocator;
+      },
+    };
+    const fakeHost = {
+      getDownloadsDir() {
+        return process.cwd();
+      },
+      resolveConversationTarget(conversationId: string | null) {
+        return `https://chatgpt.com/c/${conversationId ?? "conv-live-reasoning"}`;
+      },
+      async ensureManagedPage() {},
+    };
+
+    const result = await finalizeAsk(
+      fakeHost as any,
+      { jobId: "job-live-style-finalize" } as any,
+      fakePage as any,
+      { emittedText: "", nextSeq: 0 },
+      snapshot,
+      (chunk) => {
+        if (chunk.kind === "delta") {
+          emitted.push(chunk.text);
+        }
+      },
+    );
+
+    expect(result.output_text).toBe(liveActualAnswerText);
+    expect(result.output_text).not.toContain(liveThoughtArtifactText);
+    expect(emitted.join("")).toBe(liveActualAnswerText);
+    dom.window.close();
   });
 
   it("refuses asks when the managed page is a signed-out local login screen", async () => {

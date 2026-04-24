@@ -883,6 +883,11 @@ export function createTablinqPageAdapterRuntime() {
     );
   };
 
+  const explicitAssistantRole = (element) =>
+    normalizeText(
+      datasetValue(element?.getAttribute?.("data-message-author-role")) ?? "",
+    ) === "assistant";
+
   const visibleSibling = (element, direction) => {
     let current =
       direction === "previous"
@@ -903,6 +908,46 @@ export function createTablinqPageAdapterRuntime() {
   const thoughtDividerBeforeMessage = (element) =>
     isThoughtDividerElement(visibleSibling(element, "previous"));
 
+  const hasFollowingThoughtDivider = (element) => {
+    let current = visibleSibling(element, "next");
+    while (current) {
+      if (isThoughtDividerElement(current)) {
+        return true;
+      }
+      current = visibleSibling(current, "next");
+    }
+    return false;
+  };
+
+  const isReasoningArtifactMessage = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (
+      isTransientAskStatusElement(element) ||
+      isThoughtDividerElement(element)
+    ) {
+      return true;
+    }
+    if (!explicitAssistantRole(element)) {
+      return false;
+    }
+    return (
+      Boolean(element.querySelector(".markdown, [data-message-content]")) &&
+      hasFollowingThoughtDivider(element)
+    );
+  };
+
+  const isInsideReasoningArtifactMessage = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    const message = element.closest("[data-message-author-role='assistant']");
+    return (
+      message instanceof HTMLElement && isReasoningArtifactMessage(message)
+    );
+  };
+
   const findMessageContentRoot = (root) => {
     if (!(root instanceof HTMLElement)) {
       return null;
@@ -911,11 +956,17 @@ export function createTablinqPageAdapterRuntime() {
       root.querySelectorAll(".markdown, [data-message-content]"),
     ).filter((candidate) => candidate instanceof HTMLElement);
     for (const candidate of candidates) {
-      if (!isTransientAskStatusElement(candidate)) {
+      if (
+        !isTransientAskStatusElement(candidate) &&
+        !isInsideReasoningArtifactMessage(candidate)
+      ) {
         return candidate;
       }
     }
-    if (isTransientAskStatusElement(root)) {
+    if (candidates.length > 0) {
+      return null;
+    }
+    if (isTransientAskStatusElement(root) || isReasoningArtifactMessage(root)) {
       return null;
     }
     return root;
@@ -965,10 +1016,10 @@ export function createTablinqPageAdapterRuntime() {
     if (!(element instanceof HTMLElement)) {
       return false;
     }
-    const explicitRole = normalizeText(
-      datasetValue(element.getAttribute("data-message-author-role")) ?? "",
-    );
-    if (explicitRole === "assistant") {
+    if (isReasoningArtifactMessage(element)) {
+      return false;
+    }
+    if (explicitAssistantRole(element)) {
       return true;
     }
     const slot = normalizeText(
