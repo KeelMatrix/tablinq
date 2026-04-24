@@ -17,7 +17,7 @@ import {
   placeholderCompatibleText,
   textRelation,
 } from "../snapshotState";
-import { SNAPSHOT_POLL_INTERVAL_MS, STABLE_DONE_POLLS } from "../timing";
+import { adaptivePollIntervalMs, STABLE_DONE_POLLS } from "../timing";
 import { conversationIdFromUrl } from "../urls";
 
 import { finalizeAsk, stabilizeAskCompletion } from "./finalization";
@@ -273,6 +273,7 @@ export async function reconcileAskAfterInterruption(
   }
 
   let snapshot: AskSnapshot | null = null;
+  const recoveryWaitStartedAt = Date.now();
   while (Date.now() < timeoutAt) {
     const resolution = assessRecoveredAskSnapshot(
       command,
@@ -292,7 +293,12 @@ export async function reconcileAskAfterInterruption(
         "interrupted ask could not be reconciled against the live conversation",
       );
     }
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("recovery", Date.now() - recoveryWaitStartedAt),
+        Math.max(1, timeoutAt - Date.now()),
+      ),
+    );
   }
   if (!snapshot) {
     throw new Error(

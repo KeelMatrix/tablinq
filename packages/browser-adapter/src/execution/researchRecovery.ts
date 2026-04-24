@@ -15,9 +15,9 @@ import {
 import type { ResearchSnapshot } from "../snapshotState";
 import { normalizeOptionalString, textRelation } from "../snapshotState";
 import {
+  adaptivePollIntervalMs,
   DEEP_RESEARCH_HANDOFF_TIMEOUT_MS,
   NAVIGATION_TIMEOUT_MS,
-  SNAPSHOT_POLL_INTERVAL_MS,
 } from "../timing";
 import {
   conversationIdFromUrl,
@@ -72,6 +72,7 @@ export async function reconcileResearchAfterInterruption(
   }
 
   let snapshot: ResearchSnapshot | null = null;
+  const recoveryWaitStartedAt = Date.now();
   while (Date.now() < timeoutAt) {
     const candidate = await readLiveResearchSnapshot(recoveredPage);
     rememberResearchSnapshot(host, state, candidate);
@@ -139,7 +140,12 @@ export async function reconcileResearchAfterInterruption(
         "interrupted research job could not be reconciled against the live conversation",
       );
     }
-    await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("recovery", Date.now() - recoveryWaitStartedAt),
+        Math.max(1, timeoutAt - Date.now()),
+      ),
+    );
   }
   if (!snapshot) {
     throw new Error(

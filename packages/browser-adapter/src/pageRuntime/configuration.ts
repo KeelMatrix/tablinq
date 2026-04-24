@@ -156,6 +156,50 @@ async function readToggleState(locator: Locator): Promise<boolean> {
   return false;
 }
 
+async function selectedChoiceMatches(
+  page: Page,
+  tokens: readonly string[],
+): Promise<boolean> {
+  const expectedTokens = tokens
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  if (expectedTokens.length === 0) {
+    return false;
+  }
+
+  return page
+    .evaluate((tokensToMatch) => {
+      const selected = Array.from(
+        document.querySelectorAll(
+          [
+            "[aria-pressed='true']",
+            "[aria-checked='true']",
+            "[data-selected='true']",
+            "[data-state='checked']",
+          ].join(", "),
+        ),
+      );
+      for (const element of selected) {
+        const text = [
+          element.textContent ?? "",
+          element.getAttribute("aria-label") ?? "",
+          element.getAttribute("data-model") ?? "",
+          element.getAttribute("data-effort") ?? "",
+          element.getAttribute("data-mode") ?? "",
+        ]
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+        if (tokensToMatch.some((token) => text.includes(token))) {
+          return true;
+        }
+      }
+      return false;
+    }, expectedTokens)
+    .catch(() => false);
+}
+
 async function findVisibleInlineChoicePoint(
   page: Page,
   selectors: string,
@@ -204,6 +248,9 @@ export async function ensureConfiguredModelClass(
     modelClass,
     ...(report.aliases.model_classes[modelClass] ?? []),
   ];
+  if (await selectedChoiceMatches(page, aliasTokens)) {
+    return;
+  }
   const inlineOption = await findVisibleInlineChoicePoint(
     page,
     [
@@ -318,6 +365,9 @@ export async function ensureConfiguredEffort(
   }
 
   const aliasTokens = [effort, ...(report.aliases.efforts[effort] ?? [])];
+  if (await selectedChoiceMatches(page, aliasTokens)) {
+    return;
+  }
   const inlineOption = await findVisibleInlineChoicePoint(
     page,
     [

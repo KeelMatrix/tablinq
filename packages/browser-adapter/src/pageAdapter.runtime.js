@@ -947,10 +947,14 @@ export function createTablinqPageAdapterRuntime() {
     const labels = uniqueCollapsed([
       element.getAttribute("aria-label"),
       ...Array.from(
-        element.querySelectorAll("h1, h2, h3, h4, h5, h6, .sr-only, [aria-label]"),
+        element.querySelectorAll(
+          "h1, h2, h3, h4, h5, h6, .sr-only, [aria-label]",
+        ),
       ).map((candidate) =>
         candidate instanceof HTMLElement
-          ? (candidate.getAttribute("aria-label") ?? candidate.textContent ?? "")
+          ? (candidate.getAttribute("aria-label") ??
+            candidate.textContent ??
+            "")
           : "",
       ),
     ]);
@@ -967,7 +971,9 @@ export function createTablinqPageAdapterRuntime() {
     if (explicitRole === "assistant") {
       return true;
     }
-    const slot = normalizeText(datasetValue(element.getAttribute("data-slot")) ?? "");
+    const slot = normalizeText(
+      datasetValue(element.getAttribute("data-slot")) ?? "",
+    );
     if (slot === "assistant-message") {
       return true;
     }
@@ -1056,9 +1062,7 @@ export function createTablinqPageAdapterRuntime() {
     try {
       if (isBase64) {
         const binary = atob(payload);
-        const bytes = Uint8Array.from(binary, (value) =>
-          value.charCodeAt(0),
-        );
+        const bytes = Uint8Array.from(binary, (value) => value.charCodeAt(0));
         return new TextDecoder().decode(bytes);
       }
       return decodeURIComponent(payload);
@@ -1098,7 +1102,9 @@ export function createTablinqPageAdapterRuntime() {
       return false;
     }
     const hasPreviewSurface = Boolean(
-      element.querySelector("img[src^='data:image/'], img[src^='blob:'], canvas"),
+      element.querySelector(
+        "img[src^='data:image/'], img[src^='blob:'], canvas",
+      ),
     );
     if (!hasPreviewSurface) {
       return false;
@@ -1115,7 +1121,9 @@ export function createTablinqPageAdapterRuntime() {
     if (!isMermaidPreviewBlock(element)) {
       return "";
     }
-    const previewImage = element.querySelector("img[src^='data:image/svg+xml']");
+    const previewImage = element.querySelector(
+      "img[src^='data:image/svg+xml']",
+    );
     const svgText =
       previewImage instanceof HTMLImageElement
         ? decodeDataUrlText(previewImage.currentSrc || previewImage.src)
@@ -2316,25 +2324,6 @@ export function createTablinqPageAdapterRuntime() {
       if (button && clickControl(button)) {
         return true;
       }
-
-      const composer = findComposer();
-      if (!(composer instanceof HTMLElement)) {
-        return false;
-      }
-      composer.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          bubbles: true,
-          key: "Enter",
-          ctrlKey: true,
-        }),
-      );
-      composer.dispatchEvent(
-        new KeyboardEvent("keydown", {
-          bubbles: true,
-          key: "Enter",
-          metaKey: true,
-        }),
-      );
       return false;
     },
     async applyAskConfiguration({ report, request }) {
@@ -2430,7 +2419,9 @@ export function createTablinqPageAdapterRuntime() {
           parseConversationIdFromUrl(),
         messageId:
           readMessageIdentity(article) ??
-          (article ? datasetValue(document.body.dataset.lastMessageId) : null) ??
+          (article
+            ? datasetValue(document.body.dataset.lastMessageId)
+            : null) ??
           null,
         thoughtDividerBeforeMessage: thoughtDividerBeforeMessage(article),
         currentUrl: window.location.href,

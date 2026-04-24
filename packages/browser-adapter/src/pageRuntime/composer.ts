@@ -88,6 +88,14 @@ export async function waitForSubmitStarted(
   );
 }
 
+async function submitEdgeDetected(
+  page: Page,
+  baseline: SubmitStateSnapshot,
+  timeoutMs = SUBMIT_START_TIMEOUT_MS,
+): Promise<boolean> {
+  return waitForSubmitStarted(page, baseline, timeoutMs);
+}
+
 export async function waitForInteractionSurface(page: Page): Promise<void> {
   await page.waitForLoadState("domcontentloaded", {
     timeout: NAVIGATION_TIMEOUT_MS,
@@ -127,10 +135,19 @@ export async function focusComposer(page: Page): Promise<void> {
     ].join(", "),
   );
   if ((await composer.count()) > 0) {
-    await composer
-      .first()
-      .focus()
-      .catch(() => undefined);
+    const first = composer.first();
+    const alreadyActive = await first
+      .evaluate((element) => {
+        const active = document.activeElement;
+        return (
+          active === element ||
+          (element instanceof HTMLElement && element.contains(active))
+        );
+      })
+      .catch(() => false);
+    if (!alreadyActive) {
+      await first.focus().catch(() => undefined);
+    }
   }
 }
 
@@ -142,23 +159,26 @@ export async function clickSubmit(page: Page): Promise<void> {
   );
   await prepareHighRiskInteraction(page, "final_submit");
   await pauseForInteraction("button_click");
-  const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
-  if (clicked && (await waitForSubmitStarted(page, baseline))) {
+  await callPageAdapter<boolean>(page, "clickSubmit");
+  if (await submitEdgeDetected(page, baseline)) {
     return;
   }
 
   const clickedActiveComposerSubmit = await clickActiveComposerSubmit(page);
   if (
     clickedActiveComposerSubmit &&
-    (await waitForSubmitStarted(page, baseline))
+    (await submitEdgeDetected(page, baseline))
   ) {
+    return;
+  }
+  if (await submitEdgeDetected(page, baseline, 250)) {
     return;
   }
 
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await focusComposer(page);
   await pressShortcutWithInteractionJitter(page, `${modifier}+Enter`);
-  const submitted = await waitForSubmitStarted(page, baseline);
+  const submitted = await submitEdgeDetected(page, baseline);
   if (!submitted) {
     throw new Error(
       "submit failed: prompt was not sent after clicking submit controls or using the keyboard shortcut",

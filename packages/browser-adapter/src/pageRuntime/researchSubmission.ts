@@ -7,7 +7,7 @@ import {
 } from "../snapshotState";
 import { adaptivePollIntervalMs } from "../timing";
 
-import { callPageAdapter, waitForPageAdapterCondition } from "./adapter";
+import { callPageAdapter } from "./adapter";
 import {
   fillComposer,
   focusComposer,
@@ -76,32 +76,25 @@ export async function submitResearch(
 
   await prepareHighRiskInteraction(page, "final_submit");
   await pauseForInteraction("button_click");
-  const clicked = await callPageAdapter<boolean>(page, "clickSubmit");
+  await callPageAdapter<boolean>(page, "clickSubmit");
   if (
-    clicked &&
-    (await waitForPageAdapterCondition(
-      page,
-      "researchSubmissionStarted",
-      { baseline, prompt: query },
-      timeoutMs,
-    )
-      .then(() => true)
-      .catch(() => false))
+    await waitForResearchSubmissionStarted(page, query, baseline, timeoutMs)
   ) {
+    return readResearchSubmissionState(page);
+  }
+  if (await waitForResearchSubmissionStarted(page, query, baseline, 250)) {
     return readResearchSubmissionState(page);
   }
 
   const modifier = process.platform === "darwin" ? "Meta" : "Control";
   await focusComposer(page);
   await pressShortcutWithInteractionJitter(page, `${modifier}+Enter`);
-  const submitted = await waitForPageAdapterCondition(
+  const submitted = await waitForResearchSubmissionStarted(
     page,
-    "researchSubmissionStarted",
-    { baseline, prompt: query },
+    query,
+    baseline,
     timeoutMs,
-  )
-    .then(() => true)
-    .catch(() => false);
+  );
   if (submitted) {
     return readResearchSubmissionState(page);
   }
@@ -122,4 +115,45 @@ export async function submitResearch(
   throw new Error(
     "research submit failed: query was filled but research never started",
   );
+}
+
+async function waitForResearchSubmissionStarted(
+  page: Page,
+  query: string,
+  baseline: ResearchSubmissionStateSnapshot,
+  timeoutMs: number,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  const deadline = Date.now() + timeoutMs;
+  const expected = normalizePromptText(query);
+
+  while (Date.now() < deadline) {
+    const submitted = await callPageAdapter<boolean>(
+      page,
+      "researchSubmissionStarted",
+      { baseline, prompt: query },
+    ).catch(() => false);
+    if (submitted) {
+      return true;
+    }
+    const current = await readResearchSubmissionState(page).catch(() => null);
+    if (
+      current &&
+      current.submitted &&
+      normalizePromptText(current.composerText) === expected
+    ) {
+      return true;
+    }
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("edge", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
+  }
+
+  return callPageAdapter<boolean>(page, "researchSubmissionStarted", {
+    baseline,
+    prompt: query,
+  }).catch(() => false);
 }

@@ -4,13 +4,18 @@ import type { Page } from "playwright-core";
 
 import type { CapabilityReportPayload } from "../contracts";
 import {
+  adaptivePollIntervalMs,
   INTERACTION_TIMEOUT_MS,
   MAX_UPLOAD_FILE_BYTES,
   uploadAckTimeoutMsForFiles,
 } from "../timing";
 
-import { waitForPageAdapterCondition } from "./adapter";
-import { clickWithInteractionJitter } from "./common";
+import { callPageAdapter } from "./adapter";
+import {
+  clickWithInteractionJitter,
+  prepareHighRiskInteraction,
+  sleep,
+} from "./common";
 
 export async function uploadAttachments(
   page: Page,
@@ -59,6 +64,7 @@ export async function uploadAttachments(
 
   const fileInput = page.locator("input[type='file']").first();
   if ((await fileInput.count()) > 0) {
+    await prepareHighRiskInteraction(page, "upload_entry", fileInput);
     await fileInput.setInputFiles(
       resolvedFiles.map((item) => item.absolutePath),
     );
@@ -80,7 +86,12 @@ export async function uploadAttachments(
     const chooserPromise = page.waitForEvent("filechooser", {
       timeout: INTERACTION_TIMEOUT_MS,
     });
-    await clickWithInteractionJitter(uploadEntry, "upload_entry", undefined, page);
+    await clickWithInteractionJitter(
+      uploadEntry,
+      "upload_entry",
+      undefined,
+      page,
+    );
     const chooser = await chooserPromise.catch(() => null);
     if (!chooser) {
       throw new Error("upload failed: file chooser did not open");
@@ -91,16 +102,42 @@ export async function uploadAttachments(
   const expectedNames = resolvedFiles.map((file) =>
     basename(file.absolutePath),
   );
-  await waitForPageAdapterCondition(
+  const acknowledged = await waitForUploadAcknowledged(
     page,
-    "uploadAcknowledged",
-    {
-      names: expectedNames,
-    },
+    expectedNames,
     uploadAckTimeoutMsForFiles(resolvedFiles.map((file) => file.sizeBytes)),
-  ).catch(() => {
+  );
+  if (!acknowledged) {
     throw new Error(
       `upload failed: the page did not acknowledge uploaded files: ${expectedNames.join(", ")}`,
     );
-  });
+  }
+}
+
+async function waitForUploadAcknowledged(
+  page: Page,
+  names: string[],
+  timeoutMs: number,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const acknowledged = await callPageAdapter<boolean>(
+      page,
+      "uploadAcknowledged",
+      { names },
+    ).catch(() => false);
+    if (acknowledged) {
+      return true;
+    }
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("upload", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
+  }
+  return callPageAdapter<boolean>(page, "uploadAcknowledged", {
+    names,
+  }).catch(() => false);
 }

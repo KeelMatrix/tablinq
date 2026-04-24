@@ -9,6 +9,8 @@ import {
   detectBrowserExecutable,
   interactionJitterMs,
   MAX_UPLOAD_FILE_BYTES,
+  providerPressureCooldownMs,
+  resetProviderPressureForTest,
   resolveConversationUrl,
   resolveBrowserLaunchConfig,
   uploadAckTimeoutMsForFiles,
@@ -26,9 +28,11 @@ let harness: ReturnType<typeof createBrowserIntegrationHarness>;
 
 beforeEach(() => {
   harness = createBrowserIntegrationHarness();
+  resetProviderPressureForTest();
 });
 
 afterEach(async () => {
+  resetProviderPressureForTest();
   await harness.cleanup();
 });
 
@@ -1363,6 +1367,175 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("does not duplicate submit after a keyboard submit edge is detected", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: withHarnessUrl(server.url, { variant: "live" }),
+      }),
+    );
+    await adapter.open({
+      targetUrl: withHarnessUrl(server.url, { variant: "live" }),
+      headless: true,
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const send = document.querySelector("[data-testid='send-button']");
+      if (send instanceof HTMLElement) {
+        send.remove();
+      }
+      document.body.dataset.keyboardSubmitReady = "true";
+      let keyboardSubmits = 0;
+      document
+        .querySelector("#prompt-textarea")
+        ?.addEventListener("keydown", (event) => {
+          if (
+            event instanceof KeyboardEvent &&
+            event.key === "Enter" &&
+            (event.ctrlKey || event.metaKey)
+          ) {
+            keyboardSubmits += 1;
+            document.body.dataset.keyboardSubmitEvents =
+              String(keyboardSubmits);
+          }
+        });
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-keyboard-submit-single-edge",
+        prompt: "submit through keyboard once",
+        timeoutMs: 7_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      keyboardSubmitEvents: document.body.dataset.keyboardSubmitEvents ?? "0",
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+    }));
+
+    expect(result.output_text).toBe(
+      "Fake response for: submit through keyboard once",
+    );
+    expect(state).toEqual({
+      keyboardSubmitEvents: "1",
+      lastSubmissionMethod: "keyboard",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("waits for the quiet surface before a high-risk submit click", async () => {
+    const previousPacing = process.env.TABLINQ_HIGH_RISK_PACING;
+    process.env.TABLINQ_HIGH_RISK_PACING = "true";
+
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+
+    try {
+      await adapter.open({ targetUrl, headless: true });
+      await adapter.getManagedPageForTest()!.evaluate(() => {
+        const rootElement = document.querySelector(
+          "[data-testid='composer-root']",
+        );
+        const send = document.querySelector("[data-testid='send-button']");
+        if (
+          !(rootElement instanceof HTMLElement) ||
+          !(send instanceof HTMLElement)
+        ) {
+          throw new Error("composer surface missing");
+        }
+
+        let tick = 0;
+        const interval = window.setInterval(() => {
+          rootElement.dataset.quietSubmitProbe = String(tick);
+          tick += 1;
+          if (tick >= 12) {
+            document.body.dataset.quietMutationEnd = String(performance.now());
+            window.clearInterval(interval);
+          }
+        }, 40);
+        send.addEventListener("click", () => {
+          document.body.dataset.submitClickAt = String(performance.now());
+        });
+      });
+
+      await adapter.ask(
+        {
+          jobId: "job-ask-quiet-surface-submit",
+          prompt: "wait before submitting",
+          timeoutMs: 8_000,
+        },
+        () => {},
+      );
+
+      const timing = await adapter.getManagedPageForTest()!.evaluate(() => ({
+        mutationEnd: Number(document.body.dataset.quietMutationEnd ?? "0"),
+        submitClickAt: Number(document.body.dataset.submitClickAt ?? "0"),
+      }));
+
+      expect(timing.mutationEnd).toBeGreaterThan(0);
+      expect(timing.submitClickAt - timing.mutationEnd).toBeGreaterThanOrEqual(
+        150,
+      );
+    } finally {
+      if (previousPacing === undefined) {
+        delete process.env.TABLINQ_HIGH_RISK_PACING;
+      } else {
+        process.env.TABLINQ_HIGH_RISK_PACING = previousPacing;
+      }
+      await adapter.shutdown();
+    }
+  });
+
+  it("rejects overlapping interactive actions on the same browser surface", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, { scenario: "timeout" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const first = adapter.ask(
+      {
+        jobId: "job-ask-single-flight-first",
+        prompt: "hold the browser surface",
+        timeoutMs: 600,
+      },
+      () => {},
+    );
+    const second = adapter.ask(
+      {
+        jobId: "job-ask-single-flight-second",
+        prompt: "overlap on the same surface",
+        timeoutMs: 600,
+      },
+      () => {},
+    );
+
+    await expect(second).rejects.toThrow(/browser surface busy/i);
+    await expect(first).rejects.toThrow(/timed out/i);
+
+    await adapter.shutdown();
+  });
+
   it("classifies provider generation failures without clicking Retry", async () => {
     const server = await harness.startServer();
     const targetUrl = withHarnessUrl(server.url, {
@@ -1395,6 +1568,7 @@ describe("browser adapter", () => {
     expect(error).toBeTruthy();
     expect(error.code).toBe("provider_generation_failed_nonretryable");
     expect(error.retryVisible).toBe(true);
+    expect(providerPressureCooldownMs()).toBeGreaterThan(0);
     expect(
       await adapter.getManagedPageForTest()!.evaluate(() => ({
         askFailureCode: document.body.dataset.askFailureCode ?? null,

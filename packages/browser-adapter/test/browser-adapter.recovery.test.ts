@@ -2,6 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { JSDOM } from "jsdom";
 import {
+  adaptivePollIntervalMs,
   BrowserAdapter,
   chooseUniqueArtifactPath,
   conversationIdFromUrl,
@@ -33,6 +34,15 @@ afterEach(async () => {
 });
 
 describe("browser adapter", () => {
+  it("backs off adaptive polling during longer recovery waits", () => {
+    const immediate = adaptivePollIntervalMs("recovery", 100, 1_000);
+    const settled = adaptivePollIntervalMs("recovery", 2_000, 1_000);
+    const prolonged = adaptivePollIntervalMs("recovery", 6_000, 1_000);
+
+    expect(immediate).toBeLessThan(settled);
+    expect(settled).toBeLessThan(prolonged);
+  });
+
   it("continues ask streaming after a page reload", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
