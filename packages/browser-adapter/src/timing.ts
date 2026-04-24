@@ -121,11 +121,16 @@ export function interactionJitterMs(
 }
 
 export function shortInteractionJitterEnabled(): boolean {
-  return readBooleanEnv("TABLINQ_SHORT_INTERACTION_JITTER") ?? process.env.VITEST !== "true";
+  return (
+    readBooleanEnv("TABLINQ_SHORT_INTERACTION_JITTER") ??
+    process.env.VITEST !== "true"
+  );
 }
 
 export function highRiskPacingEnabled(): boolean {
-  return readBooleanEnv("TABLINQ_HIGH_RISK_PACING") ?? process.env.VITEST !== "true";
+  return (
+    readBooleanEnv("TABLINQ_HIGH_RISK_PACING") ?? process.env.VITEST !== "true"
+  );
 }
 
 export function highRiskActionForInteractionKind(
@@ -305,7 +310,8 @@ export function noteProviderPressure(
 
   const durationMs = Math.min(
     MAX_PRESSURE_COOLDOWN_MS,
-    PRESSURE_SIGNAL_DURATIONS_MS[signal] + (pressureState.signalCount - 1) * 2_000,
+    PRESSURE_SIGNAL_DURATIONS_MS[signal] +
+      (pressureState.signalCount - 1) * 2_000,
   );
   pressureState.untilMs = Math.max(pressureState.untilMs, now + durationMs);
   return providerPressureCooldownMs(now);

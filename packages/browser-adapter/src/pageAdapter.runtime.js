@@ -1225,7 +1225,9 @@ export function createTablinqPageAdapterRuntime() {
     const rows = Array.from(table.querySelectorAll("tr")).map((row) =>
       Array.from(row.children)
         .filter((cell) => cell instanceof HTMLElement)
-        .map((cell) => serializeMarkdownTableCell(serializeInlineChildren(cell))),
+        .map((cell) =>
+          serializeMarkdownTableCell(serializeInlineChildren(cell)),
+        ),
     );
     const header = rows[0] ?? [];
     if (header.length === 0) {

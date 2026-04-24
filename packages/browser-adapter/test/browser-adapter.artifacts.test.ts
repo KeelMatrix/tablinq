@@ -67,7 +67,9 @@ class FakePage {
   ) {}
 
   locator(selector: string): FakeLocator {
-    return new FakeLocator(Array.from(this.document.querySelectorAll(selector)));
+    return new FakeLocator(
+      Array.from(this.document.querySelectorAll(selector)),
+    );
   }
 
   async waitForEvent(): Promise<never> {
