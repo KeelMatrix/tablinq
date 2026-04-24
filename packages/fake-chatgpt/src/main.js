@@ -1569,7 +1569,7 @@ function tickStream(state) {
       setStreamingControls(true);
       renderChunk(state);
       scheduleNextTick(state);
-    }, 2400);
+    }, 3800);
     return;
   }
 

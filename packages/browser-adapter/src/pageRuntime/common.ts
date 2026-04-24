@@ -172,7 +172,9 @@ export function isTransientPageError(error: unknown): boolean {
   );
 }
 
-async function isLocatorActionable(locator: Locator | undefined): Promise<boolean> {
+async function isLocatorActionable(
+  locator: Locator | undefined,
+): Promise<boolean> {
   if (!locator) {
     return true;
   }
@@ -216,7 +218,8 @@ async function readQuietSurfaceSnapshot(
     };
 
     const now =
-      typeof performance !== "undefined" && typeof performance.now === "function"
+      typeof performance !== "undefined" &&
+      typeof performance.now === "function"
         ? performance.now()
         : Date.now();
 
@@ -274,7 +277,11 @@ async function readQuietSurfaceSnapshot(
 
     const currentUrl = window.location.href;
     const previous = globalState.__tablinqQuietSurfaceState__;
-    if (!previous || previous.root !== observedRoot || !observedRoot.isConnected) {
+    if (
+      !previous ||
+      previous.root !== observedRoot ||
+      !observedRoot.isConnected
+    ) {
       previous?.observer?.disconnect();
       const state = {
         root: observedRoot,

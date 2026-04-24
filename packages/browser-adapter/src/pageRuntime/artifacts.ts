@@ -430,7 +430,10 @@ async function persistInlineArtifact(
 ): Promise<ArtifactMetadataSnapshot> {
   const suggestedName =
     artifact.suggestedFileName || `artifact-${index + 1}.bin`;
-  const storagePath = await chooseUniqueArtifactPath(downloadsDir, suggestedName);
+  const storagePath = await chooseUniqueArtifactPath(
+    downloadsDir,
+    suggestedName,
+  );
   await mkdir(dirname(storagePath), { recursive: true });
   if (typeof artifact.bodyText === "string") {
     await writeFile(storagePath, artifact.bodyText, "utf8");

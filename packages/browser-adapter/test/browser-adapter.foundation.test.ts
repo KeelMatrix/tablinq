@@ -268,9 +268,7 @@ describe("browser adapter", () => {
       expect(highRiskActionCooldownMs("final_submit", 0, true, 1_000)).toBe(
         100,
       );
-      expect(highRiskActionCooldownMs("retry_click", 1, true, 1_000)).toBe(
-        320,
-      );
+      expect(highRiskActionCooldownMs("retry_click", 1, true, 1_000)).toBe(320);
 
       process.env.TABLINQ_PACING_DETERMINISTIC = "true";
       expect(highRiskActionCooldownMs("final_submit", 0, true, 1_000)).toBe(
@@ -1089,7 +1087,9 @@ describe("browser adapter", () => {
       )}\ncreateTablinqPageAdapterRuntime().readAskSnapshot();`,
     );
 
-    expect(snapshot.text).toBe("Mermaid diagram preview: Exercise; Recovery Loop.");
+    expect(snapshot.text).toBe(
+      "Mermaid diagram preview: Exercise; Recovery Loop.",
+    );
     dom.window.close();
   });
 
@@ -1190,10 +1190,13 @@ describe("browser adapter", () => {
       ),
       "utf8",
     );
-    const dom = new JSDOM("<!doctype html><html><body><main></main></body></html>", {
-      url: "https://chatgpt.com/c/conv-section-stream",
-      runScripts: "outside-only",
-    });
+    const dom = new JSDOM(
+      "<!doctype html><html><body><main></main></body></html>",
+      {
+        url: "https://chatgpt.com/c/conv-section-stream",
+        runScripts: "outside-only",
+      },
+    );
     const { window } = dom;
     const main = window.document.querySelector("main");
     if (!(main instanceof window.HTMLElement)) {
@@ -1272,7 +1275,9 @@ describe("browser adapter", () => {
     );
     expect(firstProgressed).toBe(false);
 
-    const latestTurn = main.querySelector("[data-testid='conversation-turn-4'] .markdown");
+    const latestTurn = main.querySelector(
+      "[data-testid='conversation-turn-4'] .markdown",
+    );
     if (!(latestTurn instanceof window.HTMLElement)) {
       throw new Error("expected latest assistant markdown");
     }

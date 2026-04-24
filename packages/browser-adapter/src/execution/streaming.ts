@@ -200,7 +200,9 @@ function rememberProvisionalAskMessage(
 ): void {
   state.pendingMessageId = PROVISIONAL_PENDING_MESSAGE_ID;
   state.pendingMessageText =
-    text.length >= state.pendingMessageText.length ? text : state.pendingMessageText;
+    text.length >= state.pendingMessageText.length
+      ? text
+      : state.pendingMessageText;
 }
 
 function provisionalAskTextCompatible(

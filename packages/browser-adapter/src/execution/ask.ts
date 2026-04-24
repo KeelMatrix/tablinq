@@ -190,7 +190,10 @@ export async function runAsk(
         state.lastProgressAt = Date.now();
         await sleep(
           Math.min(
-            adaptivePollIntervalMs("recovery", Date.now() - state.lastProgressAt),
+            adaptivePollIntervalMs(
+              "recovery",
+              Date.now() - state.lastProgressAt,
+            ),
             Math.max(1, timeoutAt - Date.now()),
           ),
         );
