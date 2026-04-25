@@ -14,7 +14,6 @@ import {
   waitForInteractionSurface,
 } from "./composer";
 import {
-  pauseForInteraction,
   pressShortcutWithInteractionJitter,
   prepareHighRiskInteraction,
   sleep,
@@ -75,7 +74,6 @@ export async function submitResearch(
   }
 
   await prepareHighRiskInteraction(page, "final_submit");
-  await pauseForInteraction("button_click");
   await callPageAdapter<boolean>(page, "clickSubmit");
   if (
     await waitForResearchSubmissionStarted(page, query, baseline, timeoutMs)

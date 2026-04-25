@@ -15,9 +15,7 @@ import {
   uploadAttachments,
   waitForSubmitReadyAfterUploads,
 } from "../pageRuntime";
-import {
-  computeStallTimeoutMs,
-} from "../snapshotState";
+import { computeStallTimeoutMs } from "../snapshotState";
 import {
   adaptivePollIntervalMs,
   ASK_STALL_RECOVERY_GRACE_MS,
@@ -359,7 +357,8 @@ async function emitAskIdentityUpdate(
     state: "running",
     reason,
     at: new Date().toISOString(),
-    conversation_id: state.knownConversationId ?? command.conversationId ?? null,
+    conversation_id:
+      state.knownConversationId ?? command.conversationId ?? null,
     message_id: state.knownMessageId,
     current_url: currentUrl,
     streaming_safe: false,

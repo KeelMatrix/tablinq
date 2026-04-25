@@ -13,8 +13,10 @@ import {
   MAX_UPLOAD_FILE_BYTES,
   noteProviderPressure,
   noteProviderPressureFromText,
+  pacingRandomValueFromSeed,
   providerPressureCooldownMs,
   resetProviderPressureForTest,
+  resetSessionRhythmForTest,
   resolveConversationUrl,
   resolveBrowserLaunchConfig,
   uploadAckTimeoutMsForFiles,
@@ -35,10 +37,12 @@ let harness: ReturnType<typeof createBrowserIntegrationHarness>;
 beforeEach(() => {
   harness = createBrowserIntegrationHarness();
   resetProviderPressureForTest();
+  resetSessionRhythmForTest();
 });
 
 afterEach(async () => {
   resetProviderPressureForTest();
+  resetSessionRhythmForTest();
   await harness.cleanup();
 });
 
@@ -227,9 +231,12 @@ describe("browser adapter", () => {
   });
 
   it("bounds the Deep Research start delay jitter to the real user range", () => {
-    expect(deepResearchStartDelayMs(0, true)).toBe(4_000);
-    expect(deepResearchStartDelayMs(0.5, true)).toBe(7_000);
-    expect(deepResearchStartDelayMs(1, true)).toBe(10_000);
+    resetSessionRhythmForTest();
+    expect(deepResearchStartDelayMs(0, true, 1_000)).toBe(4_000);
+    resetSessionRhythmForTest();
+    expect(deepResearchStartDelayMs(0.5, true, 1_000)).toBe(7_000);
+    resetSessionRhythmForTest();
+    expect(deepResearchStartDelayMs(1, true, 1_000)).toBe(10_000);
   });
 
   it("disables the Deep Research start delay under vitest by default", () => {
@@ -238,20 +245,28 @@ describe("browser adapter", () => {
   });
 
   it("bounds short interaction jitters to human-scale ranges", () => {
-    expect(interactionJitterMs("chip_clear", 0, true)).toBe(30);
-    expect(interactionJitterMs("chip_clear", 1, true)).toBe(80);
-    expect(interactionJitterMs("keyboard_submit", 0, true)).toBe(35);
-    expect(interactionJitterMs("keyboard_submit", 1, true)).toBe(80);
-    expect(interactionJitterMs("picker_trigger", 0, true)).toBe(45);
-    expect(interactionJitterMs("picker_trigger", 1, true)).toBe(120);
-    expect(interactionJitterMs("choice_select", 0, true)).toBe(55);
-    expect(interactionJitterMs("choice_select", 1, true)).toBe(145);
-    expect(interactionJitterMs("mode_toggle", 0, true)).toBe(60);
-    expect(interactionJitterMs("mode_toggle", 1, true)).toBe(150);
-    expect(interactionJitterMs("upload_entry", 0, true)).toBe(70);
-    expect(interactionJitterMs("upload_entry", 1, true)).toBe(160);
-    expect(interactionJitterMs("button_click", 0, true)).toBe(70);
-    expect(interactionJitterMs("button_click", 1, true)).toBe(170);
+    const jitter = (
+      kind: Parameters<typeof interactionJitterMs>[0],
+      randomValue: number,
+    ) => {
+      resetSessionRhythmForTest();
+      return interactionJitterMs(kind, randomValue, true, 1_000);
+    };
+
+    expect(jitter("chip_clear", 0)).toBe(30);
+    expect(jitter("chip_clear", 1)).toBe(80);
+    expect(jitter("keyboard_submit", 0)).toBe(35);
+    expect(jitter("keyboard_submit", 1)).toBe(80);
+    expect(jitter("picker_trigger", 0)).toBe(45);
+    expect(jitter("picker_trigger", 1)).toBe(120);
+    expect(jitter("choice_select", 0)).toBe(55);
+    expect(jitter("choice_select", 1)).toBe(145);
+    expect(jitter("mode_toggle", 0)).toBe(60);
+    expect(jitter("mode_toggle", 1)).toBe(150);
+    expect(jitter("upload_entry", 0)).toBe(70);
+    expect(jitter("upload_entry", 1)).toBe(160);
+    expect(jitter("button_click", 0)).toBe(70);
+    expect(jitter("button_click", 1)).toBe(170);
   });
 
   it("disables short interaction jitters under vitest by default", () => {
@@ -259,21 +274,38 @@ describe("browser adapter", () => {
     expect(interactionJitterMs("button_click", 1)).toBe(0);
   });
 
-  it("bounds high-risk pacing cooldowns and supports deterministic test pacing", () => {
+  it("bounds profile-based high-risk pacing and supports deterministic seeds", () => {
     const previousDeterministic = process.env.TABLINQ_PACING_DETERMINISTIC;
+    const cooldown = (
+      action: Parameters<typeof highRiskActionCooldownMs>[0],
+      randomValue: number | string,
+    ) => {
+      resetSessionRhythmForTest();
+      return highRiskActionCooldownMs(action, randomValue, true, 1_000);
+    };
 
     try {
-      expect(highRiskActionCooldownMs("picker_open", 0, true, 1_000)).toBe(70);
-      expect(highRiskActionCooldownMs("picker_open", 1, true, 1_000)).toBe(130);
-      expect(highRiskActionCooldownMs("final_submit", 0, true, 1_000)).toBe(
-        100,
+      expect(cooldown("picker_open", 0)).toBe(150);
+      expect(cooldown("picker_open", 1)).toBe(350);
+      expect(cooldown("option_select", 0)).toBe(250);
+      expect(cooldown("option_select", 1)).toBe(700);
+      expect(cooldown("mode_toggle", 0)).toBe(300);
+      expect(cooldown("mode_toggle", 1)).toBe(900);
+      expect(cooldown("upload_entry", 0)).toBe(500);
+      expect(cooldown("upload_entry", 1)).toBe(1_200);
+      expect(cooldown("final_submit", 0)).toBe(700);
+      expect(cooldown("final_submit", 1)).toBe(1_800);
+      expect(cooldown("retry_click", 0)).toBe(1_500);
+      expect(cooldown("retry_click", 1)).toBe(5_000);
+
+      expect(cooldown("final_submit", "job-abc")).toBe(
+        cooldown("final_submit", "job-abc"),
       );
-      expect(highRiskActionCooldownMs("retry_click", 1, true, 1_000)).toBe(320);
+      expect(pacingRandomValueFromSeed("job-abc")).toBeGreaterThanOrEqual(0);
+      expect(pacingRandomValueFromSeed("job-abc")).toBeLessThanOrEqual(1);
 
       process.env.TABLINQ_PACING_DETERMINISTIC = "true";
-      expect(highRiskActionCooldownMs("final_submit", 0, true, 1_000)).toBe(
-        140,
-      );
+      expect(cooldown("final_submit", 0)).toBe(1_250);
     } finally {
       if (previousDeterministic === undefined) {
         delete process.env.TABLINQ_PACING_DETERMINISTIC;
@@ -283,21 +315,65 @@ describe("browser adapter", () => {
     }
   });
 
+  it("adds a small session rhythm multiplier that decays after idle time", () => {
+    resetSessionRhythmForTest();
+    const first = highRiskActionCooldownMs("final_submit", 0, true, 1_000);
+    const second = highRiskActionCooldownMs("final_submit", 0, true, 1_400);
+    const third = highRiskActionCooldownMs("final_submit", 0, true, 1_800);
+    const decayed = highRiskActionCooldownMs("final_submit", 0, true, 5_000);
+
+    expect(first).toBe(700);
+    expect(second).toBeGreaterThan(first);
+    expect(third).toBeGreaterThan(second);
+    expect(third).toBeLessThanOrEqual(1_800);
+    expect(decayed).toBe(700);
+  });
+
   it("widens cooldowns and adaptive polling under provider pressure and decays afterward", () => {
+    resetSessionRhythmForTest();
     const baselineCooldown = highRiskActionCooldownMs(
       "final_submit",
       0.5,
       true,
       1_000,
     );
+    resetSessionRhythmForTest();
+    const baselinePickerCooldown = highRiskActionCooldownMs(
+      "picker_open",
+      0.5,
+      true,
+      1_000,
+    );
     const baselinePoll = adaptivePollIntervalMs("generation", 6_000, 1_000);
+    resetSessionRhythmForTest();
+    const baselineRetryCooldown = highRiskActionCooldownMs(
+      "retry_click",
+      0.5,
+      true,
+      1_000,
+    );
+    resetSessionRhythmForTest();
+    const baselineResearchDelay = deepResearchStartDelayMs(0.5, true, 1_000);
 
     expect(providerPressureCooldownMs(1_000)).toBe(0);
     noteProviderPressure("generation_failed", 1_000);
     expect(providerPressureCooldownMs(1_001)).toBeGreaterThan(0);
+    resetSessionRhythmForTest();
     expect(
       highRiskActionCooldownMs("final_submit", 0.5, true, 1_001),
     ).toBeGreaterThan(baselineCooldown);
+    resetSessionRhythmForTest();
+    expect(highRiskActionCooldownMs("picker_open", 0.5, true, 1_001)).toBe(
+      baselinePickerCooldown,
+    );
+    resetSessionRhythmForTest();
+    expect(
+      highRiskActionCooldownMs("retry_click", 0.5, true, 1_001),
+    ).toBeGreaterThan(baselineRetryCooldown);
+    resetSessionRhythmForTest();
+    expect(deepResearchStartDelayMs(0.5, true, 1_001)).toBeGreaterThan(
+      baselineResearchDelay,
+    );
     expect(adaptivePollIntervalMs("generation", 6_000, 1_001)).toBeGreaterThan(
       baselinePoll,
     );
@@ -307,6 +383,17 @@ describe("browser adapter", () => {
       providerPressureCooldownMs(21_001),
     );
     expect(providerPressureCooldownMs(60_000)).toBe(0);
+  });
+
+  it("keeps non-pressure pacing bounded without excessive timeout consumption", () => {
+    resetSessionRhythmForTest();
+    expect(highRiskActionCooldownMs("final_submit", 1, true, 1_000)).toBe(
+      1_800,
+    );
+    resetSessionRhythmForTest();
+    expect(highRiskActionCooldownMs("retry_click", 1, true, 1_000)).toBe(5_000);
+    resetSessionRhythmForTest();
+    expect(interactionJitterMs("keyboard_submit", 1, true, 1_000)).toBe(80);
   });
 
   it("waits for a quiet surface before a high-risk submit interaction", async () => {
