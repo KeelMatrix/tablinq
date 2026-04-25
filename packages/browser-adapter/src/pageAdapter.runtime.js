@@ -1,231 +1,4 @@
-function createTextUtilsModule(deps) {
-  return {
-    normalizeText: deps.normalizeText,
-    collapseText: deps.collapseText,
-    unique: deps.unique,
-    uniqueCollapsed: deps.uniqueCollapsed,
-    datasetValue: deps.datasetValue,
-    hasToken: deps.hasToken,
-    collapseInlineText: deps.collapseInlineText,
-    normalizeInlineOutput: deps.normalizeInlineOutput,
-    indentLines: deps.indentLines,
-  };
-}
-
-function createDomUtilsModule(deps) {
-  return {
-    getComputed: deps.getComputed,
-    isVisible: deps.isVisible,
-    firstVisible: deps.firstVisible,
-    accessibleName: deps.accessibleName,
-    queryFirstVisible: deps.queryFirstVisible,
-    queryVisible: deps.queryVisible,
-    actionableSelector: deps.actionableSelector,
-    actionableElements: deps.actionableElements,
-    latestVisible: deps.latestVisible,
-    visibleUnique: deps.visibleUnique,
-    isSelected: deps.isSelected,
-    isDisabled: deps.isDisabled,
-    findByAliases: deps.findByAliases,
-    clickControl: deps.clickControl,
-  };
-}
-
-function createComposerRuntimeModule(deps) {
-  return {
-    findComposer: deps.findComposer,
-    composerContainers: deps.composerContainers,
-    isComposerAdjacent: deps.isComposerAdjacent,
-    findComposerAdjacentControl: deps.findComposerAdjacentControl,
-    readComposerText: deps.readComposerText,
-    composerDisabled: deps.composerDisabled,
-    findSubmitButton: deps.findSubmitButton,
-    readSubmitControlState: deps.readSubmitControlState,
-    keyboardSubmitReady: deps.keyboardSubmitReady,
-    submitButtonEnabled: deps.submitButtonEnabled,
-    submitReady: deps.submitReady,
-    stopButtonVisible: deps.stopButtonVisible,
-    readSubmitState: deps.readSubmitState,
-    submitStarted: deps.submitStarted,
-    attachmentsStillProcessing: deps.attachmentsStillProcessing,
-    setComposerValue: deps.setComposerValue,
-    uploadAcknowledged: deps.uploadAcknowledged,
-  };
-}
-
-function createArtifactRuntimeModule(deps) {
-  return {
-    isReasoningArtifactMessage: deps.isReasoningArtifactMessage,
-    isInsideReasoningArtifactMessage: deps.isInsideReasoningArtifactMessage,
-    isMermaidPreviewBlock: deps.isMermaidPreviewBlock,
-    serializeMermaidPreviewBlock: deps.serializeMermaidPreviewBlock,
-    collectMermaidSvgLabels: deps.collectMermaidSvgLabels,
-  };
-}
-
-function createMessageRuntimeModule(deps) {
-  return {
-    artifactRuntime: deps.artifactRuntime,
-    findAssistantMessages: deps.findAssistantMessages,
-    findLatestAssistantMessage: deps.findLatestAssistantMessage,
-    resolveAskArticle: deps.resolveAskArticle,
-    readAskFailureState: deps.readAskFailureState,
-    inferAskState: deps.inferAskState,
-    readMessageIdentity: deps.readMessageIdentity,
-    collectText: deps.collectText,
-    thoughtDividerBeforeMessage: deps.thoughtDividerBeforeMessage,
-  };
-}
-
-function createCapabilityRuntimeModule(deps) {
-  return {
-    expandAliases: deps.expandAliases,
-    controlStateDetail: deps.controlStateDetail,
-    throwCapabilityMissing: deps.throwCapabilityMissing,
-    throwUiDrift: deps.throwUiDrift,
-    mergeAliasBuckets: deps.mergeAliasBuckets,
-    ensureMode: deps.ensureMode,
-    ensureModelClass: deps.ensureModelClass,
-    ensureEffort: deps.ensureEffort,
-    discoverVisibleModelAliases: deps.discoverVisibleModelAliases,
-    discoverVisibleEffortAliases: deps.discoverVisibleEffortAliases,
-  };
-}
-
-function createConversationRuntimeModule(deps) {
-  return {
-    parseConversationIdFromUrl: deps.parseConversationIdFromUrl,
-    currentPathname: deps.currentPathname,
-    readResearchStatusMessage: deps.readResearchStatusMessage,
-    onDeepResearchLanding: deps.onDeepResearchLanding,
-    normalizeResearchReportText: deps.normalizeResearchReportText,
-    findResearchReportArticle: deps.findResearchReportArticle,
-    inferResearchStatus: deps.inferResearchStatus,
-    readResearchSubmissionState: deps.readResearchSubmissionState,
-    researchSubmissionStarted: deps.researchSubmissionStarted,
-  };
-}
-
-function createCommandRuntime({
-  textUtils,
-  domUtils,
-  composerRuntime,
-  messageRuntime,
-  capabilityRuntime,
-  conversationRuntime,
-}) {
-  return {
-    composerReady() {
-      return Boolean(composerRuntime.findComposer());
-    },
-    fillComposer({ prompt }) {
-      composerRuntime.setComposerValue(composerRuntime.findComposer(), prompt);
-      return true;
-    },
-    clickSubmit() {
-      const button = composerRuntime.findSubmitButton();
-      if (button && domUtils.clickControl(button)) {
-        return true;
-      }
-      return false;
-    },
-    async applyAskConfiguration({ report, request }) {
-      if (
-        !request.modelClass &&
-        !request.effort &&
-        (!request.mode || request.mode === "normal")
-      ) {
-        return true;
-      }
-      if (!report) {
-        throw new Error(
-          "capability missing: no capability report is available for model or mode selection",
-        );
-      }
-      if (request.modelClass) {
-        await capabilityRuntime.ensureModelClass(report, request.modelClass);
-      }
-      if (request.effort) {
-        await capabilityRuntime.ensureEffort(report, request.effort);
-      }
-      if (request.mode) {
-        capabilityRuntime.ensureMode(report, request.mode);
-      }
-      return true;
-    },
-    uploadAcknowledged(payload) {
-      return composerRuntime.uploadAcknowledged(payload);
-    },
-    readAskBaseline() {
-      const article = messageRuntime.findLatestAssistantMessage();
-      const messages = messageRuntime.findAssistantMessages();
-      return {
-        assistantMessageCount: messages.length,
-        conversationId:
-          textUtils.datasetValue(document.body.dataset.conversationId) ??
-          conversationRuntime.parseConversationIdFromUrl(),
-        messageId: messageRuntime.readMessageIdentity(article),
-        text: article ? messageRuntime.collectText(article) : "",
-      };
-    },
-    readAskSnapshot({ baseline } = {}) {
-      const article = messageRuntime.resolveAskArticle(baseline ?? null);
-      const text = article ? messageRuntime.collectText(article) : "";
-      const failure = messageRuntime.readAskFailureState(article);
-      return {
-        hasAssistantMessage: Boolean(article),
-        text,
-        state: messageRuntime.inferAskState(text, article),
-        failureCode: failure.failureCode,
-        failureMessage: failure.failureMessage,
-        retryVisible: failure.retryVisible,
-        conversationId:
-          textUtils.datasetValue(document.body.dataset.conversationId) ??
-          conversationRuntime.parseConversationIdFromUrl(),
-        messageId:
-          messageRuntime.readMessageIdentity(article) ??
-          (article
-            ? textUtils.datasetValue(document.body.dataset.lastMessageId)
-            : null) ??
-          null,
-        thoughtDividerBeforeMessage:
-          messageRuntime.thoughtDividerBeforeMessage(article),
-        currentUrl: window.location.href,
-      };
-    },
-    readResearchSnapshot() {
-      const submission = conversationRuntime.readResearchSubmissionState();
-      return {
-        status: submission.status,
-        statusMessage: submission.statusMessage,
-        reportText: submission.reportText,
-        conversationId: submission.conversationId,
-        messageId: submission.messageId,
-        currentUrl: submission.currentUrl,
-      };
-    },
-    readResearchSubmissionState() {
-      return conversationRuntime.readResearchSubmissionState();
-    },
-    researchSubmissionStarted() {
-      return conversationRuntime.researchSubmissionStarted();
-    },
-    readSubmitState() {
-      return composerRuntime.readSubmitState();
-    },
-    submitReady() {
-      return composerRuntime.submitReady();
-    },
-    attachmentsStillProcessing() {
-      return composerRuntime.attachmentsStillProcessing();
-    },
-    submitStarted(payload) {
-      return composerRuntime.submitStarted(payload ?? {});
-    },
-  };
-}
-
-export function createTablinqPageAdapterRuntime() {
+function createTextUtilsModule() {
   const normalizeText = (value) =>
     (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
   const collapseText = (value) => (value ?? "").replace(/\s+/g, " ").trim();
@@ -272,6 +45,34 @@ export function createTablinqPageAdapterRuntime() {
       ).test(normalized),
     );
   };
+  const collapseInlineText = (value) =>
+    (value ?? "").replace(/\s+/g, " ").trim();
+
+  const normalizeInlineOutput = (value) =>
+    (value ?? "")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n[ \t]+/g, "\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+
+  return {
+    normalizeText,
+    collapseText,
+    unique,
+    uniqueCollapsed,
+    datasetValue,
+    hasToken,
+    collapseInlineText,
+    normalizeInlineOutput,
+  };
+}
+
+function createDomUtilsModule({ textUtils }) {
+  const {
+    normalizeText,
+    unique,
+    hasToken,
+  } = textUtils;
 
   const getComputed = (element) => {
     if (
@@ -430,9 +231,6 @@ export function createTablinqPageAdapterRuntime() {
     return output;
   };
 
-  const expandAliases = (report, bucket, key, defaults) =>
-    unique([...(report?.aliases?.[bucket]?.[key] ?? []), ...defaults]);
-
   const isSelected = (element) =>
     element.getAttribute("aria-pressed") === "true" ||
     element.getAttribute("aria-checked") === "true" ||
@@ -552,6 +350,25 @@ export function createTablinqPageAdapterRuntime() {
     return true;
   };
 
+  return {
+    getComputed,
+    isVisible,
+    firstVisible,
+    accessibleName,
+    queryFirstVisible,
+    queryVisible,
+    actionableSelector,
+    actionableElements,
+    latestVisible,
+    visibleUnique,
+    isSelected,
+    isDisabled,
+    findByAliases,
+    clickControl,
+  };
+}
+
+function createConversationRuntimeModule() {
   const parseConversationIdFromUrl = () => {
     try {
       const url = new URL(window.location.href);
@@ -569,6 +386,35 @@ export function createTablinqPageAdapterRuntime() {
       return "";
     }
   };
+
+  return {
+    parseConversationIdFromUrl,
+    currentPathname,
+  };
+}
+
+function createComposerRuntimeModule({ textUtils, domUtils, getMessageRuntime }) {
+  const {
+    normalizeText,
+    collapseText,
+    unique,
+    hasToken,
+  } = textUtils;
+  const {
+    isVisible,
+    firstVisible,
+    accessibleName,
+    queryFirstVisible,
+    queryVisible,
+    actionableSelector,
+    visibleUnique,
+    isDisabled,
+    findByAliases,
+  } = domUtils;
+  const findAssistantMessages = () =>
+    getMessageRuntime()?.findAssistantMessages?.() ?? [];
+  const findLatestAssistantMessage = () =>
+    getMessageRuntime()?.findLatestAssistantMessage?.() ?? null;
 
   const findComposer = () =>
     queryFirstVisible([
@@ -1044,15 +890,130 @@ export function createTablinqPageAdapterRuntime() {
     );
   };
 
-  const collapseInlineText = (value) =>
-    (value ?? "").replace(/\s+/g, " ").trim();
+  const setComposerValue = (element, value) => {
+    if (!(element instanceof HTMLElement)) {
+      throw new Error("composer not found");
+    }
 
-  const normalizeInlineOutput = (value) =>
-    (value ?? "")
-      .replace(/[ \t]+\n/g, "\n")
-      .replace(/\n[ \t]+/g, "\n")
-      .replace(/[ \t]{2,}/g, " ")
-      .trim();
+    element.focus();
+    if (
+      element instanceof HTMLTextAreaElement ||
+      element instanceof HTMLInputElement
+    ) {
+      const descriptor =
+        Object.getOwnPropertyDescriptor(
+          Object.getPrototypeOf(element),
+          "value",
+        ) ??
+        Object.getOwnPropertyDescriptor(
+          HTMLTextAreaElement.prototype,
+          "value",
+        ) ??
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      if (descriptor?.set) {
+        descriptor.set.call(element, value);
+      } else {
+        element.value = value;
+      }
+      element.dispatchEvent(new Event("input", { bubbles: true }));
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+
+    if (element.isContentEditable) {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.deleteContents();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      if (typeof document.execCommand === "function") {
+        document.execCommand("insertText", false, value);
+      } else {
+        element.textContent = value;
+      }
+      element.dispatchEvent(
+        new InputEvent("input", { bubbles: true, data: value }),
+      );
+      return;
+    }
+
+    element.textContent = value;
+    element.dispatchEvent(
+      new InputEvent("input", { bubbles: true, data: value }),
+    );
+  };
+
+  const uploadAcknowledged = ({ names }) => {
+    const expected = unique(names);
+    const fromDataset = unique(
+      (document.body.dataset.uploadedFiles ?? "").split("|"),
+    );
+    if (expected.every((name) => fromDataset.includes(normalizeText(name)))) {
+      return true;
+    }
+
+    const candidates = unique(
+      Array.from(
+        document.querySelectorAll(
+          [
+            "[data-slot='uploaded-file']",
+            "[data-slot='upload-entry-name']",
+            "[data-testid='upload-chip']",
+            "[data-testid*='attachment']",
+            "[aria-label*='Attached file']",
+            "[aria-label*='attachment']",
+            "button",
+            "span",
+            "div",
+            "li",
+          ].join(", "),
+        ),
+      )
+        .filter(isVisible)
+        .flatMap((element) => [
+          accessibleName(element),
+          normalizeText(element.textContent),
+        ]),
+    );
+
+    return expected.every(
+      (name) =>
+        candidates.includes(normalizeText(name)) ||
+        candidates.some((candidate) => candidate.includes(normalizeText(name))),
+    );
+  };
+
+  return {
+    findComposer,
+    composerContainers,
+    isComposerAdjacent,
+    findComposerAdjacentControl,
+    readComposerText,
+    composerDisabled,
+    findSubmitButton,
+    readSubmitControlState,
+    keyboardSubmitReady,
+    submitButtonEnabled,
+    submitReady,
+    stopButtonVisible,
+    readSubmitState,
+    submitStarted,
+    attachmentsStillProcessing,
+    setComposerValue,
+    uploadAcknowledged,
+  };
+}
+
+function createMessageFilterRuntimeModule({ textUtils, domUtils }) {
+  const {
+    normalizeText,
+    collapseText,
+    uniqueCollapsed,
+    datasetValue,
+    hasToken,
+  } = textUtils;
+  const { isVisible } = domUtils;
 
   const isTransientAskStatusText = (value) =>
     /^thought for\b/i.test(collapseText(value));
@@ -1211,55 +1172,34 @@ export function createTablinqPageAdapterRuntime() {
     );
   };
 
-  const isModernAssistantTurn = (element) => {
-    if (!(element instanceof HTMLElement)) {
-      return false;
-    }
-    const testId = datasetValue(element.getAttribute("data-testid"));
-    if (!testId || !/^conversation-turn(?:-[a-z0-9_-]+)?$/i.test(testId)) {
-      return false;
-    }
-    if (element.querySelector(".markdown, [data-message-content]")) {
-      return true;
-    }
-    const labels = uniqueCollapsed([
-      element.getAttribute("aria-label"),
-      ...Array.from(
-        element.querySelectorAll(
-          "h1, h2, h3, h4, h5, h6, .sr-only, [aria-label]",
-        ),
-      ).map((candidate) =>
-        candidate instanceof HTMLElement
-          ? (candidate.getAttribute("aria-label") ??
-            candidate.textContent ??
-            "")
-          : "",
-      ),
-    ]);
-    return labels.some((value) => hasToken(value, ["chatgpt", "assistant"]));
+  return {
+    isTransientAskStatusText,
+    isTransientAskStatusElement,
+    isThoughtDividerElement,
+    explicitAssistantRole,
+    thoughtDividerBeforeMessage,
+    isReasoningArtifactMessage,
+    isInsideReasoningArtifactMessage,
+    findMessageContentRoot,
+    readMessageIdentity,
   };
+}
 
-  const isAssistantMessageElement = (element) => {
-    if (!(element instanceof HTMLElement)) {
-      return false;
-    }
-    if (isReasoningArtifactMessage(element)) {
-      return false;
-    }
-    if (explicitAssistantRole(element)) {
-      return true;
-    }
-    const slot = normalizeText(
-      datasetValue(element.getAttribute("data-slot")) ?? "",
-    );
-    if (slot === "assistant-message") {
-      return true;
-    }
-    if (element.matches("article.assistant")) {
-      return true;
-    }
-    return isModernAssistantTurn(element);
-  };
+function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
+  const {
+    normalizeText,
+    uniqueCollapsed,
+    hasToken,
+    collapseInlineText,
+    normalizeInlineOutput,
+  } = textUtils;
+  const { isVisible } = domUtils;
+  const {
+    isTransientAskStatusText,
+    isTransientAskStatusElement,
+    isInsideReasoningArtifactMessage,
+    findMessageContentRoot,
+  } = messageFilters;
 
   const collectCodeBlockText = (element) => {
     if (!(element instanceof HTMLElement)) {
@@ -1708,6 +1648,91 @@ export function createTablinqPageAdapterRuntime() {
       .join("\n");
   };
 
+  return {
+    collectText,
+    collectMermaidSvgLabels,
+    isMermaidPreviewBlock,
+    serializeMermaidPreviewBlock,
+  };
+}
+
+function createAssistantMessageRuntimeModule({
+  textUtils,
+  domUtils,
+  messageFilters,
+  markdownRuntime,
+  composerRuntime,
+  conversationRuntime,
+}) {
+  const {
+    normalizeText,
+    collapseText,
+    uniqueCollapsed,
+    datasetValue,
+    hasToken,
+  } = textUtils;
+  const { queryFirstVisible, queryVisible, visibleUnique, findByAliases } =
+    domUtils;
+  const {
+    isReasoningArtifactMessage,
+    explicitAssistantRole,
+    readMessageIdentity,
+    thoughtDividerBeforeMessage,
+  } = messageFilters;
+  const { collectText } = markdownRuntime;
+  const { stopButtonVisible } = composerRuntime;
+  const { parseConversationIdFromUrl } = conversationRuntime;
+
+  const isModernAssistantTurn = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    const testId = datasetValue(element.getAttribute("data-testid"));
+    if (!testId || !/^conversation-turn(?:-[a-z0-9_-]+)?$/i.test(testId)) {
+      return false;
+    }
+    if (element.querySelector(".markdown, [data-message-content]")) {
+      return true;
+    }
+    const labels = uniqueCollapsed([
+      element.getAttribute("aria-label"),
+      ...Array.from(
+        element.querySelectorAll(
+          "h1, h2, h3, h4, h5, h6, .sr-only, [aria-label]",
+        ),
+      ).map((candidate) =>
+        candidate instanceof HTMLElement
+          ? (candidate.getAttribute("aria-label") ??
+            candidate.textContent ??
+            "")
+          : "",
+      ),
+    ]);
+    return labels.some((value) => hasToken(value, ["chatgpt", "assistant"]));
+  };
+
+  const isAssistantMessageElement = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (isReasoningArtifactMessage(element)) {
+      return false;
+    }
+    if (explicitAssistantRole(element)) {
+      return true;
+    }
+    const slot = normalizeText(
+      datasetValue(element.getAttribute("data-slot")) ?? "",
+    );
+    if (slot === "assistant-message") {
+      return true;
+    }
+    if (element.matches("article.assistant")) {
+      return true;
+    }
+    return isModernAssistantTurn(element);
+  };
+
   const findAssistantMessages = () => {
     const direct = visibleUnique(
       document.querySelectorAll(
@@ -1870,173 +1895,35 @@ export function createTablinqPageAdapterRuntime() {
     return explicitState || "idle";
   };
 
-  const readResearchStatusMessage = () =>
-    datasetValue(document.body.dataset.researchStatusMessage) ??
-    normalizeText(
-      queryFirstVisible([
-        "[data-slot='research-status']",
-        "[data-testid='research-status']",
-        "[aria-live='polite']",
-      ])?.textContent,
-    ) ??
-    null;
-
-  const onDeepResearchLanding = () =>
-    /(^|\/)deep-research$/.test(currentPathname()) &&
-    parseConversationIdFromUrl() === null;
-
-  const isPlaceholderResearchText = (text) =>
-    hasToken(text, ["streaming", "output", "lands", "here"]) ||
-    hasToken(text, ["workspace", "notices", "appear", "thinking"]);
-
-  const normalizeResearchReportText = (text) => {
-    const collapsed = collapseText(text);
-    return collapsed && !isPlaceholderResearchText(collapsed) ? collapsed : "";
+  return {
+    findAssistantMessages,
+    findLatestAssistantMessage,
+    resolveAskArticle,
+    readAskFailureState,
+    inferAskState,
+    readMessageIdentity,
+    collectText,
+    thoughtDividerBeforeMessage,
   };
+}
 
-  const findResearchReportArticle = () => {
-    const explicit = latestVisible([
-      "[data-slot='research-report']",
-      "[data-message-author-role='assistant'][data-message-id]",
-      "[data-slot='assistant-message'][data-message-id]",
-    ]);
-    if (explicit) {
-      return explicit;
-    }
+function createCapabilityRuntimeModule({ textUtils, domUtils, composerRuntime }) {
+  const { normalizeText, unique, hasToken } = textUtils;
+  const {
+    isVisible,
+    firstVisible,
+    accessibleName,
+    actionableSelector,
+    actionableElements,
+    visibleUnique,
+    isSelected,
+    findByAliases,
+    clickControl,
+  } = domUtils;
+  const { isComposerAdjacent, findComposerAdjacentControl } = composerRuntime;
 
-    const latest = findLatestAssistantMessage();
-    if (
-      latest &&
-      (datasetValue(latest.getAttribute("data-message-id")) ||
-        latest.getAttribute("data-stream-state") === "running")
-    ) {
-      return latest;
-    }
-    return null;
-  };
-
-  const inferResearchStatus = (
-    text,
-    statusMessage = readResearchStatusMessage(),
-  ) => {
-    const explicitState = datasetValue(document.body.dataset.researchState);
-    if (explicitState && explicitState !== "idle") {
-      return explicitState;
-    }
-
-    const statusText = normalizeText(statusMessage);
-
-    if (
-      hasToken(statusText, ["failed", "error", "retry"]) &&
-      !hasToken(statusText, ["running"])
-    ) {
-      return "failed";
-    }
-    if (hasToken(statusText, ["source", "sources", "gathering", "finding"])) {
-      return "waiting_for_sources";
-    }
-    if (hasToken(statusText, ["running", "drafting", "working"])) {
-      return "running";
-    }
-    if (stopButtonVisible()) {
-      return "running";
-    }
-    if (text) {
-      return "done";
-    }
-    return "idle";
-  };
-
-  const readResearchSubmissionState = () => {
-    const article = findResearchReportArticle();
-    const reportText = normalizeResearchReportText(
-      article ? collectText(article) : "",
-    );
-    const statusMessage = readResearchStatusMessage();
-    const status = inferResearchStatus(reportText, statusMessage);
-    const controlState = readSubmitControlState();
-    const conversationId =
-      datasetValue(document.body.dataset.conversationId) ??
-      parseConversationIdFromUrl();
-    const messageId =
-      readMessageIdentity(article) ??
-      datasetValue(document.body.dataset.lastMessageId) ??
-      null;
-    const submitted =
-      status !== "idle" || Boolean(conversationId) || Boolean(messageId);
-
-    return {
-      composerReady: Boolean(findComposer()),
-      composerText: readComposerText(),
-      composerDisabled: composerDisabled(),
-      ...controlState,
-      onDeepResearchLanding: onDeepResearchLanding(),
-      status,
-      statusMessage,
-      reportText,
-      conversationId,
-      messageId,
-      currentUrl: window.location.href,
-      submitted,
-    };
-  };
-
-  const researchSubmissionStarted = () =>
-    readResearchSubmissionState().submitted;
-
-  const setComposerValue = (element, value) => {
-    if (!(element instanceof HTMLElement)) {
-      throw new Error("composer not found");
-    }
-
-    element.focus();
-    if (
-      element instanceof HTMLTextAreaElement ||
-      element instanceof HTMLInputElement
-    ) {
-      const descriptor =
-        Object.getOwnPropertyDescriptor(
-          Object.getPrototypeOf(element),
-          "value",
-        ) ??
-        Object.getOwnPropertyDescriptor(
-          HTMLTextAreaElement.prototype,
-          "value",
-        ) ??
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
-      if (descriptor?.set) {
-        descriptor.set.call(element, value);
-      } else {
-        element.value = value;
-      }
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-      return;
-    }
-
-    if (element.isContentEditable) {
-      const selection = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(element);
-      range.deleteContents();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
-      if (typeof document.execCommand === "function") {
-        document.execCommand("insertText", false, value);
-      } else {
-        element.textContent = value;
-      }
-      element.dispatchEvent(
-        new InputEvent("input", { bubbles: true, data: value }),
-      );
-      return;
-    }
-
-    element.textContent = value;
-    element.dispatchEvent(
-      new InputEvent("input", { bubbles: true, data: value }),
-    );
-  };
+  const expandAliases = (report, bucket, key, defaults) =>
+    unique([...(report?.aliases?.[bucket]?.[key] ?? []), ...defaults]);
 
   const controlStateDetail = (aliases, requested) => {
     const entries = Object.entries(aliases ?? {})
@@ -2596,111 +2483,7 @@ export function createTablinqPageAdapterRuntime() {
     await sleep(150);
   };
 
-  const uploadAcknowledged = ({ names }) => {
-    const expected = unique(names);
-    const fromDataset = unique(
-      (document.body.dataset.uploadedFiles ?? "").split("|"),
-    );
-    if (expected.every((name) => fromDataset.includes(normalizeText(name)))) {
-      return true;
-    }
-
-    const candidates = unique(
-      Array.from(
-        document.querySelectorAll(
-          [
-            "[data-slot='uploaded-file']",
-            "[data-slot='upload-entry-name']",
-            "[data-testid='upload-chip']",
-            "[data-testid*='attachment']",
-            "[aria-label*='Attached file']",
-            "[aria-label*='attachment']",
-            "button",
-            "span",
-            "div",
-            "li",
-          ].join(", "),
-        ),
-      )
-        .filter(isVisible)
-        .flatMap((element) => [
-          accessibleName(element),
-          normalizeText(element.textContent),
-        ]),
-    );
-
-    return expected.every(
-      (name) =>
-        candidates.includes(normalizeText(name)) ||
-        candidates.some((candidate) => candidate.includes(normalizeText(name))),
-    );
-  };
-
-  const textUtils = createTextUtilsModule({
-    normalizeText,
-    collapseText,
-    unique,
-    uniqueCollapsed,
-    datasetValue,
-    hasToken,
-    collapseInlineText,
-    normalizeInlineOutput,
-    indentLines,
-  });
-  const domUtils = createDomUtilsModule({
-    getComputed,
-    isVisible,
-    firstVisible,
-    accessibleName,
-    queryFirstVisible,
-    queryVisible,
-    actionableSelector,
-    actionableElements,
-    latestVisible,
-    visibleUnique,
-    isSelected,
-    isDisabled,
-    findByAliases,
-    clickControl,
-  });
-  const composerRuntime = createComposerRuntimeModule({
-    findComposer,
-    composerContainers,
-    isComposerAdjacent,
-    findComposerAdjacentControl,
-    readComposerText,
-    composerDisabled,
-    findSubmitButton,
-    readSubmitControlState,
-    keyboardSubmitReady,
-    submitButtonEnabled,
-    submitReady,
-    stopButtonVisible,
-    readSubmitState,
-    submitStarted,
-    attachmentsStillProcessing,
-    setComposerValue,
-    uploadAcknowledged,
-  });
-  const artifactRuntime = createArtifactRuntimeModule({
-    isReasoningArtifactMessage,
-    isInsideReasoningArtifactMessage,
-    isMermaidPreviewBlock,
-    serializeMermaidPreviewBlock,
-    collectMermaidSvgLabels,
-  });
-  const messageRuntime = createMessageRuntimeModule({
-    artifactRuntime,
-    findAssistantMessages,
-    findLatestAssistantMessage,
-    resolveAskArticle,
-    readAskFailureState,
-    inferAskState,
-    readMessageIdentity,
-    collectText,
-    thoughtDividerBeforeMessage,
-  });
-  const capabilityRuntime = createCapabilityRuntimeModule({
+  return {
     expandAliases,
     controlStateDetail,
     throwCapabilityMissing,
@@ -2711,10 +2494,145 @@ export function createTablinqPageAdapterRuntime() {
     ensureEffort,
     discoverVisibleModelAliases,
     discoverVisibleEffortAliases,
-  });
-  const conversationRuntime = createConversationRuntimeModule({
-    parseConversationIdFromUrl,
-    currentPathname,
+  };
+}
+
+function createResearchRuntimeModule({
+  textUtils,
+  domUtils,
+  composerRuntime,
+  messageRuntime,
+  markdownRuntime,
+  conversationRuntime,
+}) {
+  const { normalizeText, collapseText, datasetValue, hasToken } = textUtils;
+  const { queryFirstVisible, latestVisible } = domUtils;
+  const {
+    findComposer,
+    readComposerText,
+    composerDisabled,
+    readSubmitControlState,
+    stopButtonVisible,
+  } = composerRuntime;
+  const { findLatestAssistantMessage, readMessageIdentity } = messageRuntime;
+  const { collectText } = markdownRuntime;
+  const { parseConversationIdFromUrl, currentPathname } = conversationRuntime;
+
+  const readResearchStatusMessage = () =>
+    datasetValue(document.body.dataset.researchStatusMessage) ??
+    normalizeText(
+      queryFirstVisible([
+        "[data-slot='research-status']",
+        "[data-testid='research-status']",
+        "[aria-live='polite']",
+      ])?.textContent,
+    ) ??
+    null;
+
+  const onDeepResearchLanding = () =>
+    /(^|\/)deep-research$/.test(currentPathname()) &&
+    parseConversationIdFromUrl() === null;
+
+  const isPlaceholderResearchText = (text) =>
+    hasToken(text, ["streaming", "output", "lands", "here"]) ||
+    hasToken(text, ["workspace", "notices", "appear", "thinking"]);
+
+  const normalizeResearchReportText = (text) => {
+    const collapsed = collapseText(text);
+    return collapsed && !isPlaceholderResearchText(collapsed) ? collapsed : "";
+  };
+
+  const findResearchReportArticle = () => {
+    const explicit = latestVisible([
+      "[data-slot='research-report']",
+      "[data-message-author-role='assistant'][data-message-id]",
+      "[data-slot='assistant-message'][data-message-id]",
+    ]);
+    if (explicit) {
+      return explicit;
+    }
+
+    const latest = findLatestAssistantMessage();
+    if (
+      latest &&
+      (datasetValue(latest.getAttribute("data-message-id")) ||
+        latest.getAttribute("data-stream-state") === "running")
+    ) {
+      return latest;
+    }
+    return null;
+  };
+
+  const inferResearchStatus = (
+    text,
+    statusMessage = readResearchStatusMessage(),
+  ) => {
+    const explicitState = datasetValue(document.body.dataset.researchState);
+    if (explicitState && explicitState !== "idle") {
+      return explicitState;
+    }
+
+    const statusText = normalizeText(statusMessage);
+
+    if (
+      hasToken(statusText, ["failed", "error", "retry"]) &&
+      !hasToken(statusText, ["running"])
+    ) {
+      return "failed";
+    }
+    if (hasToken(statusText, ["source", "sources", "gathering", "finding"])) {
+      return "waiting_for_sources";
+    }
+    if (hasToken(statusText, ["running", "drafting", "working"])) {
+      return "running";
+    }
+    if (stopButtonVisible()) {
+      return "running";
+    }
+    if (text) {
+      return "done";
+    }
+    return "idle";
+  };
+
+  const readResearchSubmissionState = () => {
+    const article = findResearchReportArticle();
+    const reportText = normalizeResearchReportText(
+      article ? collectText(article) : "",
+    );
+    const statusMessage = readResearchStatusMessage();
+    const status = inferResearchStatus(reportText, statusMessage);
+    const controlState = readSubmitControlState();
+    const conversationId =
+      datasetValue(document.body.dataset.conversationId) ??
+      parseConversationIdFromUrl();
+    const messageId =
+      readMessageIdentity(article) ??
+      datasetValue(document.body.dataset.lastMessageId) ??
+      null;
+    const submitted =
+      status !== "idle" || Boolean(conversationId) || Boolean(messageId);
+
+    return {
+      composerReady: Boolean(findComposer()),
+      composerText: readComposerText(),
+      composerDisabled: composerDisabled(),
+      ...controlState,
+      onDeepResearchLanding: onDeepResearchLanding(),
+      status,
+      statusMessage,
+      reportText,
+      conversationId,
+      messageId,
+      currentUrl: window.location.href,
+      submitted,
+    };
+  };
+
+  const researchSubmissionStarted = () =>
+    readResearchSubmissionState().submitted;
+
+  return {
     readResearchStatusMessage,
     onDeepResearchLanding,
     normalizeResearchReportText,
@@ -2722,6 +2640,167 @@ export function createTablinqPageAdapterRuntime() {
     inferResearchStatus,
     readResearchSubmissionState,
     researchSubmissionStarted,
+  };
+}
+
+function createCommandRuntime({
+  textUtils,
+  domUtils,
+  composerRuntime,
+  messageRuntime,
+  capabilityRuntime,
+  researchRuntime,
+  conversationRuntime,
+}) {
+  return {
+    composerReady() {
+      return Boolean(composerRuntime.findComposer());
+    },
+    fillComposer({ prompt }) {
+      composerRuntime.setComposerValue(composerRuntime.findComposer(), prompt);
+      return true;
+    },
+    clickSubmit() {
+      const button = composerRuntime.findSubmitButton();
+      if (button && domUtils.clickControl(button)) {
+        return true;
+      }
+      return false;
+    },
+    async applyAskConfiguration({ report, request }) {
+      if (
+        !request.modelClass &&
+        !request.effort &&
+        (!request.mode || request.mode === "normal")
+      ) {
+        return true;
+      }
+      if (!report) {
+        throw new Error(
+          "capability missing: no capability report is available for model or mode selection",
+        );
+      }
+      if (request.modelClass) {
+        await capabilityRuntime.ensureModelClass(report, request.modelClass);
+      }
+      if (request.effort) {
+        await capabilityRuntime.ensureEffort(report, request.effort);
+      }
+      if (request.mode) {
+        capabilityRuntime.ensureMode(report, request.mode);
+      }
+      return true;
+    },
+    uploadAcknowledged(payload) {
+      return composerRuntime.uploadAcknowledged(payload);
+    },
+    readAskBaseline() {
+      const article = messageRuntime.findLatestAssistantMessage();
+      const messages = messageRuntime.findAssistantMessages();
+      return {
+        assistantMessageCount: messages.length,
+        conversationId:
+          textUtils.datasetValue(document.body.dataset.conversationId) ??
+          conversationRuntime.parseConversationIdFromUrl(),
+        messageId: messageRuntime.readMessageIdentity(article),
+        text: article ? messageRuntime.collectText(article) : "",
+      };
+    },
+    readAskSnapshot({ baseline } = {}) {
+      const article = messageRuntime.resolveAskArticle(baseline ?? null);
+      const text = article ? messageRuntime.collectText(article) : "";
+      const failure = messageRuntime.readAskFailureState(article);
+      return {
+        hasAssistantMessage: Boolean(article),
+        text,
+        state: messageRuntime.inferAskState(text, article),
+        failureCode: failure.failureCode,
+        failureMessage: failure.failureMessage,
+        retryVisible: failure.retryVisible,
+        conversationId:
+          textUtils.datasetValue(document.body.dataset.conversationId) ??
+          conversationRuntime.parseConversationIdFromUrl(),
+        messageId:
+          messageRuntime.readMessageIdentity(article) ??
+          (article
+            ? textUtils.datasetValue(document.body.dataset.lastMessageId)
+            : null) ??
+          null,
+        thoughtDividerBeforeMessage:
+          messageRuntime.thoughtDividerBeforeMessage(article),
+        currentUrl: window.location.href,
+      };
+    },
+    readResearchSnapshot() {
+      const submission = researchRuntime.readResearchSubmissionState();
+      return {
+        status: submission.status,
+        statusMessage: submission.statusMessage,
+        reportText: submission.reportText,
+        conversationId: submission.conversationId,
+        messageId: submission.messageId,
+        currentUrl: submission.currentUrl,
+      };
+    },
+    readResearchSubmissionState() {
+      return researchRuntime.readResearchSubmissionState();
+    },
+    researchSubmissionStarted() {
+      return researchRuntime.researchSubmissionStarted();
+    },
+    readSubmitState() {
+      return composerRuntime.readSubmitState();
+    },
+    submitReady() {
+      return composerRuntime.submitReady();
+    },
+    attachmentsStillProcessing() {
+      return composerRuntime.attachmentsStillProcessing();
+    },
+    submitStarted(payload) {
+      return composerRuntime.submitStarted(payload ?? {});
+    },
+  };
+}
+export function createTablinqPageAdapterRuntime() {
+  const textUtils = createTextUtilsModule();
+  const domUtils = createDomUtilsModule({ textUtils });
+  const conversationRuntime = createConversationRuntimeModule();
+  let messageRuntime;
+  const composerRuntime = createComposerRuntimeModule({
+    textUtils,
+    domUtils,
+    getMessageRuntime: () => messageRuntime,
+  });
+  const messageFilters = createMessageFilterRuntimeModule({
+    textUtils,
+    domUtils,
+  });
+  const markdownRuntime = createMarkdownRuntimeModule({
+    textUtils,
+    domUtils,
+    messageFilters,
+  });
+  messageRuntime = createAssistantMessageRuntimeModule({
+    textUtils,
+    domUtils,
+    messageFilters,
+    markdownRuntime,
+    composerRuntime,
+    conversationRuntime,
+  });
+  const capabilityRuntime = createCapabilityRuntimeModule({
+    textUtils,
+    domUtils,
+    composerRuntime,
+  });
+  const researchRuntime = createResearchRuntimeModule({
+    textUtils,
+    domUtils,
+    composerRuntime,
+    messageRuntime,
+    markdownRuntime,
+    conversationRuntime,
   });
 
   return createCommandRuntime({
@@ -2730,6 +2809,7 @@ export function createTablinqPageAdapterRuntime() {
     composerRuntime,
     messageRuntime,
     capabilityRuntime,
+    researchRuntime,
     conversationRuntime,
   });
 }
