@@ -12,7 +12,6 @@ import {
 import { callPageAdapter, waitForPageAdapterCondition } from "./adapter";
 import {
   clickWithInteractionJitter,
-  pauseForInteraction,
   pressShortcutWithInteractionJitter,
   prepareHighRiskInteraction,
   sleep,
@@ -158,7 +157,6 @@ export async function clickSubmit(page: Page): Promise<void> {
     "readSubmitState",
   );
   await prepareHighRiskInteraction(page, "final_submit");
-  await pauseForInteraction("button_click");
   await callPageAdapter<boolean>(page, "clickSubmit");
   if (await submitEdgeDetected(page, baseline)) {
     return;

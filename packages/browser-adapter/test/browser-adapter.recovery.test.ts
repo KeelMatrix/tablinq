@@ -36,7 +36,11 @@ afterEach(async () => {
 
 async function maybeCloseManagedBrowserOnRunningIdentity(
   adapter: BrowserAdapter,
-  update: { state: string; conversation_id?: string | null; message_id?: string | null },
+  update: {
+    state: string;
+    conversation_id?: string | null;
+    message_id?: string | null;
+  },
   alreadyClosed: boolean,
 ): Promise<boolean> {
   if (

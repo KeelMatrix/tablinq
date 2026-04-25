@@ -129,8 +129,10 @@ export {
   highRiskActionCooldownMs,
   noteProviderPressure,
   noteProviderPressureFromText,
+  pacingRandomValueFromSeed,
   providerPressureCooldownMs,
   resetProviderPressureForTest,
+  resetSessionRhythmForTest,
   uploadAckTimeoutMsForFiles,
 } from "./timing";
 import {

@@ -42,6 +42,13 @@ export type HighRiskActionKind =
   | "final_submit"
   | "retry_click";
 
+export type ActionPacingProfile =
+  | "micro"
+  | "visual-choice"
+  | "commit"
+  | "retry"
+  | "research-handoff";
+
 export type AdaptivePollingProfile =
   | "edge"
   | "stabilize"
@@ -62,6 +69,17 @@ interface PressureState {
   lastSignalAt: number;
 }
 
+interface ActionPacingBounds {
+  profile: ActionPacingProfile;
+  minMs: number;
+  maxMs: number;
+}
+
+interface SessionRhythmState {
+  consecutiveActions: number;
+  lastActionAt: number;
+}
+
 const PRESSURE_SIGNAL_DURATIONS_MS: Record<PressureSignalKind, number> = {
   rate_limited: 20_000,
   overloaded: 15_000,
@@ -72,6 +90,40 @@ const PRESSURE_SIGNAL_DURATIONS_MS: Record<PressureSignalKind, number> = {
 const PRESSURE_RESET_WINDOW_MS = 20_000;
 const MAX_PRESSURE_COOLDOWN_MS = 30_000;
 const DETERMINISTIC_PACING_RANDOM_VALUE = 0.5;
+const RHYTHM_IDLE_RESET_MS = 3_000;
+const RHYTHM_STEP_BONUS = 0.045;
+const RHYTHM_MAX_BONUS = 0.18;
+
+const INTERACTION_PACING_BOUNDS: Record<
+  InteractionJitterKind,
+  ActionPacingBounds
+> = {
+  chip_clear: { profile: "micro", minMs: 30, maxMs: 80 },
+  keyboard_submit: { profile: "micro", minMs: 35, maxMs: 80 },
+  picker_trigger: { profile: "micro", minMs: 45, maxMs: 120 },
+  choice_select: { profile: "micro", minMs: 55, maxMs: 145 },
+  mode_toggle: { profile: "micro", minMs: 60, maxMs: 150 },
+  upload_entry: { profile: "micro", minMs: 70, maxMs: 160 },
+  button_click: { profile: "micro", minMs: 70, maxMs: 170 },
+};
+
+const HIGH_RISK_ACTION_PACING_BOUNDS: Record<
+  HighRiskActionKind,
+  ActionPacingBounds
+> = {
+  picker_open: { profile: "visual-choice", minMs: 150, maxMs: 350 },
+  option_select: { profile: "visual-choice", minMs: 250, maxMs: 700 },
+  mode_toggle: { profile: "visual-choice", minMs: 300, maxMs: 900 },
+  upload_entry: { profile: "commit", minMs: 500, maxMs: 1_200 },
+  final_submit: { profile: "commit", minMs: 700, maxMs: 1_800 },
+  retry_click: { profile: "retry", minMs: 1_500, maxMs: 5_000 },
+};
+
+const DEEP_RESEARCH_HANDOFF_PACING_BOUNDS: ActionPacingBounds = {
+  profile: "research-handoff",
+  minMs: DEEP_RESEARCH_START_DELAY_MIN_MS,
+  maxMs: DEEP_RESEARCH_START_DELAY_MIN_MS + DEEP_RESEARCH_START_DELAY_JITTER_MS,
+};
 
 const pressureState: PressureState = {
   untilMs: 0,
@@ -79,45 +131,36 @@ const pressureState: PressureState = {
   lastSignalAt: 0,
 };
 
+const sessionRhythmState: SessionRhythmState = {
+  consecutiveActions: 0,
+  lastActionAt: 0,
+};
+
 export function deepResearchStartDelayMs(
-  randomValue = Math.random(),
+  randomValue: number | string = Math.random(),
   enabled = shortInteractionJitterEnabled(),
+  now = Date.now(),
 ): number {
-  if (!enabled) {
-    return 0;
-  }
-  const jitter = resolvePacingRandomValue(randomValue);
-  return (
-    DEEP_RESEARCH_START_DELAY_MIN_MS +
-    Math.round(jitter * DEEP_RESEARCH_START_DELAY_JITTER_MS)
+  return actionPacingDelayMs(
+    DEEP_RESEARCH_HANDOFF_PACING_BOUNDS,
+    randomValue,
+    enabled,
+    now,
   );
 }
 
 export function interactionJitterMs(
   kind: InteractionJitterKind,
-  randomValue = Math.random(),
+  randomValue: number | string = Math.random(),
   enabled = shortInteractionJitterEnabled(),
+  now = Date.now(),
 ): number {
-  if (!enabled) {
-    return 0;
-  }
-  const jitter = resolvePacingRandomValue(randomValue);
-  switch (kind) {
-    case "chip_clear":
-      return 30 + Math.round(jitter * 50);
-    case "keyboard_submit":
-      return 35 + Math.round(jitter * 45);
-    case "picker_trigger":
-      return 45 + Math.round(jitter * 75);
-    case "choice_select":
-      return 55 + Math.round(jitter * 90);
-    case "mode_toggle":
-      return 60 + Math.round(jitter * 90);
-    case "upload_entry":
-      return 70 + Math.round(jitter * 90);
-    case "button_click":
-      return 70 + Math.round(jitter * 100);
-  }
+  return actionPacingDelayMs(
+    INTERACTION_PACING_BOUNDS[kind],
+    randomValue,
+    enabled,
+    now,
+  );
 }
 
 export function shortInteractionJitterEnabled(): boolean {
@@ -154,38 +197,16 @@ export function highRiskActionForInteractionKind(
 
 export function highRiskActionCooldownMs(
   action: HighRiskActionKind,
-  randomValue = Math.random(),
+  randomValue: number | string = Math.random(),
   enabled = highRiskPacingEnabled(),
   now = Date.now(),
 ): number {
-  if (!enabled) {
-    return 0;
-  }
-
-  const jitter = resolvePacingRandomValue(randomValue);
-  let delayMs: number;
-  switch (action) {
-    case "picker_open":
-      delayMs = interpolate(70, 130, jitter);
-      break;
-    case "option_select":
-      delayMs = interpolate(80, 150, jitter);
-      break;
-    case "mode_toggle":
-      delayMs = interpolate(90, 170, jitter);
-      break;
-    case "upload_entry":
-      delayMs = interpolate(110, 220, jitter);
-      break;
-    case "final_submit":
-      delayMs = interpolate(100, 180, jitter);
-      break;
-    case "retry_click":
-      delayMs = interpolate(180, 320, jitter);
-      break;
-  }
-
-  return widenDelayForProviderPressure(delayMs, now, 600);
+  return actionPacingDelayMs(
+    HIGH_RISK_ACTION_PACING_BOUNDS[action],
+    randomValue,
+    enabled,
+    now,
+  );
 }
 
 export function quietSurfaceStableWindowMs(
@@ -207,7 +228,7 @@ export function quietSurfaceStableWindowMs(
       baseMs = 225;
       break;
   }
-  return widenDelayForProviderPressure(baseMs, now, 250);
+  return widenDelayForActionPressure(action, baseMs, now, 250);
 }
 
 export function quietSurfaceTimeoutMs(
@@ -229,7 +250,7 @@ export function quietSurfaceTimeoutMs(
       baseMs = 2_500;
       break;
   }
-  return widenDelayForProviderPressure(baseMs, now, 1_000);
+  return widenDelayForActionPressure(action, baseMs, now, 1_000);
 }
 
 export function adaptivePollIntervalMs(
@@ -344,6 +365,20 @@ export function resetProviderPressureForTest(): void {
   pressureState.lastSignalAt = 0;
 }
 
+export function resetSessionRhythmForTest(): void {
+  sessionRhythmState.consecutiveActions = 0;
+  sessionRhythmState.lastActionAt = 0;
+}
+
+export function pacingRandomValueFromSeed(seed: string): number {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0) / 0xffff_ffff;
+}
+
 export function uploadAckTimeoutMsForFiles(fileSizes: number[]): number {
   if (fileSizes.length === 0) {
     return UPLOAD_ACK_TIMEOUT_MIN_MS;
@@ -378,15 +413,108 @@ function deterministicPacingEnabled(): boolean {
   return readBooleanEnv("TABLINQ_PACING_DETERMINISTIC") ?? false;
 }
 
-function resolvePacingRandomValue(randomValue: number): number {
+function actionPacingDelayMs(
+  bounds: ActionPacingBounds,
+  randomValue: number | string,
+  enabled: boolean,
+  now: number,
+): number {
+  if (!enabled) {
+    return 0;
+  }
+
+  const jitter = resolvePacingRandomValue(randomValue);
+  const baseMs = interpolate(bounds.minMs, bounds.maxMs, jitter);
+  const rhythmicMs = applySessionRhythm(baseMs, bounds.maxMs, now);
+  return widenDelayForProfilePressure(
+    bounds.profile,
+    rhythmicMs,
+    now,
+    providerPressureMaxBonusMs(bounds.profile),
+  );
+}
+
+function resolvePacingRandomValue(randomValue: number | string): number {
   if (deterministicPacingEnabled()) {
     return DETERMINISTIC_PACING_RANDOM_VALUE;
+  }
+  if (typeof randomValue === "string") {
+    return pacingRandomValueFromSeed(randomValue);
   }
   return Math.min(1, Math.max(0, randomValue));
 }
 
 function interpolate(minMs: number, maxMs: number, factor: number): number {
   return minMs + Math.round((maxMs - minMs) * factor);
+}
+
+function applySessionRhythm(
+  baseMs: number,
+  maxMs: number,
+  now: number,
+): number {
+  if (baseMs <= 0) {
+    return 0;
+  }
+
+  if (
+    sessionRhythmState.lastActionAt <= 0 ||
+    now - sessionRhythmState.lastActionAt > RHYTHM_IDLE_RESET_MS
+  ) {
+    sessionRhythmState.consecutiveActions = 0;
+  }
+
+  const bonus = Math.min(
+    RHYTHM_MAX_BONUS,
+    sessionRhythmState.consecutiveActions * RHYTHM_STEP_BONUS,
+  );
+  sessionRhythmState.consecutiveActions = Math.min(
+    4,
+    sessionRhythmState.consecutiveActions + 1,
+  );
+  sessionRhythmState.lastActionAt = now;
+
+  return Math.min(maxMs, Math.round(baseMs * (1 + bonus)));
+}
+
+function providerPressureMaxBonusMs(profile: ActionPacingProfile): number {
+  switch (profile) {
+    case "commit":
+      return 600;
+    case "retry":
+      return 2_500;
+    case "research-handoff":
+      return 3_000;
+    case "micro":
+    case "visual-choice":
+      return 0;
+  }
+}
+
+function widenDelayForActionPressure(
+  action: HighRiskActionKind,
+  baseMs: number,
+  now: number,
+  maxBonusMs: number,
+): number {
+  return widenDelayForProfilePressure(
+    HIGH_RISK_ACTION_PACING_BOUNDS[action].profile,
+    baseMs,
+    now,
+    maxBonusMs,
+  );
+}
+
+function widenDelayForProfilePressure(
+  profile: ActionPacingProfile,
+  baseMs: number,
+  now: number,
+  maxBonusMs: number,
+): number {
+  if (maxBonusMs <= 0 || providerPressureMaxBonusMs(profile) <= 0) {
+    return baseMs;
+  }
+  return widenDelayForProviderPressure(baseMs, now, maxBonusMs);
 }
 
 function widenDelayForProviderPressure(

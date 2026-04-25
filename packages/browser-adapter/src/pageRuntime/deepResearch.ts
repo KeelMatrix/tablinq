@@ -296,7 +296,11 @@ export async function inspectDeepResearchFrame(
       .replace(/\r/g, "")
       .trim();
   const visibleRole = async (name: RegExp): Promise<boolean> =>
-    frame.getByRole("button", { name }).first().isVisible().catch(() => false);
+    frame
+      .getByRole("button", { name })
+      .first()
+      .isVisible()
+      .catch(() => false);
 
   const startButton = frame.getByRole("button", { name: /^Start$/i }).first();
   const startVisible = await startButton.isVisible().catch(() => false);
@@ -319,7 +323,9 @@ export async function inspectDeepResearchFrame(
     ? explicitReportRoot
     : frame.locator("main, body").first();
   const statusRoot = frame
-    .locator("[data-deep-research-status], [class*='text-token-text-secondary']")
+    .locator(
+      "[data-deep-research-status], [class*='text-token-text-secondary']",
+    )
     .first();
   const bodyText = normalize(
     await reportRoot.innerText({ timeout: 100 }).catch(() => ""),

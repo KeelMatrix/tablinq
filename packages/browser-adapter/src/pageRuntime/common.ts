@@ -147,8 +147,9 @@ export async function clickWithInteractionJitter(
   const action = highRiskActionForInteractionKind(kind);
   if (page && action) {
     await prepareHighRiskInteraction(page, action, locator);
+  } else {
+    await pauseForInteraction(kind);
   }
-  await pauseForInteraction(kind);
   await locator.click(options);
 }
 
