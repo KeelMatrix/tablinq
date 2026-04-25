@@ -23,6 +23,7 @@ import {
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
 import { applyAskSnapshot } from "../src/execution/streaming";
+import { loadPageAdapterSource } from "../src/assets";
 import { waitForQuietInteractionSurface } from "../src/pageRuntime";
 import {
   createBrowserIntegrationHarness,
@@ -141,13 +142,7 @@ describe("browser adapter", () => {
   );
 
   it("keeps the page runtime command facade aligned with composer, submit, capability, and message probes", async () => {
-    const runtimeSource = await readFile(
-      path.join(
-        process.cwd(),
-        "packages/browser-adapter/src/pageAdapter.runtime.js",
-      ),
-      "utf8",
-    );
+    const runtimeSource = loadPageAdapterSource();
     const dom = new JSDOM(
       `<!doctype html><html><body data-uploaded-files="brief.txt" data-stream-state="done">
         <main>
