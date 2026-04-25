@@ -25,6 +25,7 @@ import {
   withAttachedBrowser,
   withHarnessUrl,
 } from "./browser-adapter.integration.helpers";
+import { stopFakeChatGptServer } from "./helpers";
 
 let harness: ReturnType<typeof createBrowserIntegrationHarness>;
 
@@ -1553,6 +1554,60 @@ describe("browser adapter", () => {
     );
     expect(chunks.join("")).toBe(result.output_text);
 
+    await adapter.shutdown();
+  });
+
+  it("fails fast before composer mutation when attach preflight network checks fail", async () => {
+    const server = await harness.startServer();
+    const attached = await harness.startAttachableBrowser(server.url);
+
+    const root = await harness.createWorkspace("attach-network-preflight");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+    await adapter.open({ targetUrl: server.url, headless: true });
+    await stopFakeChatGptServer(server.process);
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-attach-network-preflight-fail",
+          prompt: "should never reach composer",
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/provider\/network-unavailable/i);
+
+    const pageState = await withAttachedBrowser(
+      attached.endpoint,
+      async (browser) => {
+        const page = browser
+          .contexts()
+          .flatMap((context) => context.pages())
+          .find((candidate) => candidate.url().startsWith(server.url));
+        if (!page) {
+          throw new Error("expected attached target page");
+        }
+        return page.evaluate(() => ({
+          composerValue:
+            (
+              document.querySelector(
+                "#prompt-textarea",
+              ) as HTMLTextAreaElement | null
+            )?.value ?? "",
+          lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+        }));
+      },
+    );
+
+    expect(pageState.composerValue).toBe("");
+    expect(pageState.lastSubmissionMethod).toBe("");
     await adapter.shutdown();
   });
 
