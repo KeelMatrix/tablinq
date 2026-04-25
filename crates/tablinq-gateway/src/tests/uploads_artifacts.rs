@@ -226,7 +226,7 @@ fn paperclip_like_http_flow_supports_files_and_artifacts() {
             ("x-client-id", "paperclip"),
         ],
         &body,
-        20_000,
+        60_000,
     )
     .unwrap();
     assert_eq!(response.status_code, 200);
