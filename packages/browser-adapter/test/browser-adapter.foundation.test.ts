@@ -140,6 +140,114 @@ describe("browser adapter", () => {
     },
   );
 
+  it("keeps the page runtime command facade aligned with composer, submit, capability, and message probes", async () => {
+    const runtimeSource = await readFile(
+      path.join(
+        process.cwd(),
+        "packages/browser-adapter/src/pageAdapter.runtime.js",
+      ),
+      "utf8",
+    );
+    const dom = new JSDOM(
+      `<!doctype html><html><body data-uploaded-files="brief.txt" data-stream-state="done">
+        <main>
+          <form data-testid="composer-root">
+            <textarea id="prompt-textarea" aria-label="Message"></textarea>
+            <button data-testid="send-button" aria-label="Send message" type="button"></button>
+            <button data-mode="search" aria-label="Search" type="button"></button>
+          </form>
+          <article data-slot="assistant-message" data-message-author-role="assistant" data-message-id="msg-command">
+            <div class="markdown"><p>Final answer.</p></div>
+          </article>
+        </main>
+      </body></html>`,
+      {
+        url: "https://chatgpt.com/c/conv-command",
+        runScripts: "outside-only",
+      },
+    );
+    const { window } = dom;
+    const adapter = window.eval(
+      `${runtimeSource.replace(
+        /^export\s+/gm,
+        "",
+      )}\ncreateTablinqPageAdapterRuntime();`,
+    );
+    const composer = window.document.querySelector("#prompt-textarea");
+    const search = window.document.querySelector("[data-mode='search']");
+    if (
+      !(composer instanceof window.HTMLTextAreaElement) ||
+      !(search instanceof window.HTMLElement)
+    ) {
+      throw new Error("expected runtime test controls");
+    }
+    search.addEventListener("click", () => {
+      search.setAttribute("aria-pressed", "true");
+    });
+
+    expect(Object.keys(adapter).sort()).toEqual([
+      "applyAskConfiguration",
+      "attachmentsStillProcessing",
+      "clickSubmit",
+      "composerReady",
+      "fillComposer",
+      "readAskBaseline",
+      "readAskSnapshot",
+      "readResearchSnapshot",
+      "readResearchSubmissionState",
+      "readSubmitState",
+      "researchSubmissionStarted",
+      "submitReady",
+      "submitStarted",
+      "uploadAcknowledged",
+    ]);
+    expect(adapter.composerReady()).toBe(true);
+    expect(adapter.readSubmitState()).toMatchObject({
+      composerText: "",
+      submitVisible: true,
+      submitEnabled: true,
+      submitBusy: false,
+      keyboardReady: false,
+      attachmentsProcessing: false,
+      stopVisible: false,
+      assistantMessageCount: 1,
+      streamState: "done",
+    });
+
+    adapter.fillComposer({ prompt: "Hello command facade" });
+    expect(composer.value).toBe("Hello command facade");
+    expect(adapter.submitReady()).toBe(true);
+    expect(adapter.uploadAcknowledged({ names: ["brief.txt"] })).toBe(true);
+
+    await adapter.applyAskConfiguration({
+      report: {
+        matrix: {
+          search_mode_visible: true,
+          research_mode_visible: false,
+          model_picker_visible: false,
+          thinking_effort_visible: false,
+        },
+        aliases: {
+          modes: { search: ["search"] },
+          model_classes: {},
+          efforts: {},
+        },
+      },
+      request: { mode: "search" },
+    });
+    expect(search.getAttribute("aria-pressed")).toBe("true");
+
+    expect(adapter.readAskSnapshot()).toMatchObject({
+      hasAssistantMessage: true,
+      text: "Final answer.",
+      state: "done",
+      conversationId: "conv-command",
+      messageId: "msg-command",
+      currentUrl: "https://chatgpt.com/c/conv-command",
+    });
+    dom.window.close();
+  });
+
   it("keeps the effort control absent until Thinking is selected on the modern menu harness", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
