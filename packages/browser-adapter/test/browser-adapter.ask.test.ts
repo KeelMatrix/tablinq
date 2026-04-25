@@ -1556,6 +1556,79 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("fails fast before composer mutation when attach preflight network checks fail", async () => {
+    const server = await harness.startServer();
+    const attached = await harness.startAttachableBrowser(server.url);
+
+    await withAttachedBrowser(attached.endpoint, async (browser) => {
+      const page = browser.contexts().flatMap((context) => context.pages())[0];
+      if (!page) {
+        throw new Error("expected attached page");
+      }
+      await page.route("**/*", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (
+          request.resourceType() === "fetch" &&
+          url.origin === new URL(server.url).origin &&
+          url.pathname === "/"
+        ) {
+          await route.abort("internetdisconnected");
+          return;
+        }
+        await route.continue();
+      });
+    });
+
+    const root = await harness.createWorkspace("attach-network-preflight");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "attach_first",
+        debugEndpoint: attached.endpoint,
+      }),
+    );
+    await adapter.open({ targetUrl: server.url, headless: true });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-attach-network-preflight-fail",
+          prompt: "should never reach composer",
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/provider\/network-unavailable/i);
+
+    const pageState = await withAttachedBrowser(
+      attached.endpoint,
+      async (browser) => {
+        const page = browser
+          .contexts()
+          .flatMap((context) => context.pages())
+          .find((candidate) => candidate.url().startsWith(server.url));
+        if (!page) {
+          throw new Error("expected attached target page");
+        }
+        return page.evaluate(() => ({
+          composerValue:
+            (
+              document.querySelector("#prompt-textarea") as
+                | HTMLTextAreaElement
+                | null
+            )?.value ?? "",
+          lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+        }));
+      },
+    );
+
+    expect(pageState.composerValue).toBe("");
+    expect(pageState.lastSubmissionMethod).toBeUndefined();
+    await adapter.shutdown();
+  });
+
   it("fails with a capability-missing error in attach mode when search mode is unavailable", async () => {
     const server = await harness.startServer();
     const targetUrl = withHarnessUrl(server.url, { missing: ["search"] });

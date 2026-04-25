@@ -3,6 +3,7 @@ import type {
   AskResultSnapshot,
   RequestStateSnapshot,
 } from "../contracts";
+import type { Page } from "playwright-core";
 import {
   applyAskConfiguration,
   clickSubmit,
@@ -44,6 +45,7 @@ import type {
 
 const PROVIDER_GENERATION_FAILURE_CODE =
   "provider_generation_failed_nonretryable";
+const PROVIDER_NETWORK_PREFLIGHT_TIMEOUT_MS = 1_500;
 
 class AskProviderFailure extends Error {
   readonly code = PROVIDER_GENERATION_FAILURE_CODE;
@@ -84,6 +86,7 @@ export async function runAsk(
   let page = await host.openExecutionPage(
     host.resolveAskTarget(command.conversationId, command.newConversation),
   );
+  await ensureProviderReachable(page);
   let askBaseline = null;
 
   if (options.submitPrompt) {
@@ -321,6 +324,41 @@ export async function runAsk(
   }
 
   throw new Error("ask timed out waiting for streamed response");
+}
+
+async function ensureProviderReachable(page: Page): Promise<void> {
+  const result = await page.evaluate(
+    async (timeoutMs) => {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        await fetch(new URL("/", window.location.origin), {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        return { ok: true as const };
+      } catch (error) {
+        return {
+          ok: false as const,
+          timedOut: controller.signal.aborted,
+          reason: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+    },
+    PROVIDER_NETWORK_PREFLIGHT_TIMEOUT_MS,
+  );
+  if (result.ok) {
+    return;
+  }
+  const suffix = result.timedOut ? "timed out" : "failed";
+  const reason = result.reason ? `: ${result.reason}` : "";
+  throw new Error(
+    `provider/network-unavailable: chatgpt preflight request ${suffix}${reason}`,
+  );
 }
 
 async function emitAskIdentityUpdate(
