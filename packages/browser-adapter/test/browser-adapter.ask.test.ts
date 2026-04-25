@@ -25,6 +25,7 @@ import {
   withAttachedBrowser,
   withHarnessUrl,
 } from "./browser-adapter.integration.helpers";
+import { stopFakeChatGptServer } from "./helpers";
 
 let harness: ReturnType<typeof createBrowserIntegrationHarness>;
 
@@ -1560,26 +1561,6 @@ describe("browser adapter", () => {
     const server = await harness.startServer();
     const attached = await harness.startAttachableBrowser(server.url);
 
-    await withAttachedBrowser(attached.endpoint, async (browser) => {
-      const page = browser.contexts().flatMap((context) => context.pages())[0];
-      if (!page) {
-        throw new Error("expected attached page");
-      }
-      await page.route("**/*", async (route) => {
-        const request = route.request();
-        const url = new URL(request.url());
-        if (
-          request.resourceType() === "fetch" &&
-          url.origin === new URL(server.url).origin &&
-          url.pathname === "/"
-        ) {
-          await route.abort("internetdisconnected");
-          return;
-        }
-        await route.continue();
-      });
-    });
-
     const root = await harness.createWorkspace("attach-network-preflight");
     const adapter = harness.trackAdapter(
       new BrowserAdapter({
@@ -1591,6 +1572,7 @@ describe("browser adapter", () => {
       }),
     );
     await adapter.open({ targetUrl: server.url, headless: true });
+    await stopFakeChatGptServer(server.process);
 
     await expect(
       adapter.ask(
@@ -1615,9 +1597,9 @@ describe("browser adapter", () => {
         return page.evaluate(() => ({
           composerValue:
             (
-              document.querySelector("#prompt-textarea") as
-                | HTMLTextAreaElement
-                | null
+              document.querySelector(
+                "#prompt-textarea",
+              ) as HTMLTextAreaElement | null
             )?.value ?? "",
           lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
         }));
@@ -1625,7 +1607,7 @@ describe("browser adapter", () => {
     );
 
     expect(pageState.composerValue).toBe("");
-    expect(pageState.lastSubmissionMethod).toBeUndefined();
+    expect(pageState.lastSubmissionMethod).toBe("");
     await adapter.shutdown();
   });
 

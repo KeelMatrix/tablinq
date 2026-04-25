@@ -327,30 +327,34 @@ export async function runAsk(
 }
 
 async function ensureProviderReachable(page: Page): Promise<void> {
-  const result = await page.evaluate(
-    async (timeoutMs) => {
-      const controller = new AbortController();
-      const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        await fetch(new URL("/", window.location.origin), {
-          method: "GET",
-          credentials: "include",
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        return { ok: true as const };
-      } catch (error) {
+  const result = await page.evaluate(async (timeoutMs) => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(new URL("/", window.location.origin), {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) {
         return {
           ok: false as const,
-          timedOut: controller.signal.aborted,
-          reason: error instanceof Error ? error.message : String(error),
+          timedOut: false,
+          reason: `status ${response.status}`,
         };
-      } finally {
-        window.clearTimeout(timeoutId);
       }
-    },
-    PROVIDER_NETWORK_PREFLIGHT_TIMEOUT_MS,
-  );
+      return { ok: true as const };
+    } catch (error) {
+      return {
+        ok: false as const,
+        timedOut: controller.signal.aborted,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }, PROVIDER_NETWORK_PREFLIGHT_TIMEOUT_MS);
   if (result.ok) {
     return;
   }
