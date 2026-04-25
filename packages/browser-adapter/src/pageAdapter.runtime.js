@@ -1,3 +1,230 @@
+function createTextUtilsModule(deps) {
+  return {
+    normalizeText: deps.normalizeText,
+    collapseText: deps.collapseText,
+    unique: deps.unique,
+    uniqueCollapsed: deps.uniqueCollapsed,
+    datasetValue: deps.datasetValue,
+    hasToken: deps.hasToken,
+    collapseInlineText: deps.collapseInlineText,
+    normalizeInlineOutput: deps.normalizeInlineOutput,
+    indentLines: deps.indentLines,
+  };
+}
+
+function createDomUtilsModule(deps) {
+  return {
+    getComputed: deps.getComputed,
+    isVisible: deps.isVisible,
+    firstVisible: deps.firstVisible,
+    accessibleName: deps.accessibleName,
+    queryFirstVisible: deps.queryFirstVisible,
+    queryVisible: deps.queryVisible,
+    actionableSelector: deps.actionableSelector,
+    actionableElements: deps.actionableElements,
+    latestVisible: deps.latestVisible,
+    visibleUnique: deps.visibleUnique,
+    isSelected: deps.isSelected,
+    isDisabled: deps.isDisabled,
+    findByAliases: deps.findByAliases,
+    clickControl: deps.clickControl,
+  };
+}
+
+function createComposerRuntimeModule(deps) {
+  return {
+    findComposer: deps.findComposer,
+    composerContainers: deps.composerContainers,
+    isComposerAdjacent: deps.isComposerAdjacent,
+    findComposerAdjacentControl: deps.findComposerAdjacentControl,
+    readComposerText: deps.readComposerText,
+    composerDisabled: deps.composerDisabled,
+    findSubmitButton: deps.findSubmitButton,
+    readSubmitControlState: deps.readSubmitControlState,
+    keyboardSubmitReady: deps.keyboardSubmitReady,
+    submitButtonEnabled: deps.submitButtonEnabled,
+    submitReady: deps.submitReady,
+    stopButtonVisible: deps.stopButtonVisible,
+    readSubmitState: deps.readSubmitState,
+    submitStarted: deps.submitStarted,
+    attachmentsStillProcessing: deps.attachmentsStillProcessing,
+    setComposerValue: deps.setComposerValue,
+    uploadAcknowledged: deps.uploadAcknowledged,
+  };
+}
+
+function createArtifactRuntimeModule(deps) {
+  return {
+    isReasoningArtifactMessage: deps.isReasoningArtifactMessage,
+    isInsideReasoningArtifactMessage: deps.isInsideReasoningArtifactMessage,
+    isMermaidPreviewBlock: deps.isMermaidPreviewBlock,
+    serializeMermaidPreviewBlock: deps.serializeMermaidPreviewBlock,
+    collectMermaidSvgLabels: deps.collectMermaidSvgLabels,
+  };
+}
+
+function createMessageRuntimeModule(deps) {
+  return {
+    artifactRuntime: deps.artifactRuntime,
+    findAssistantMessages: deps.findAssistantMessages,
+    findLatestAssistantMessage: deps.findLatestAssistantMessage,
+    resolveAskArticle: deps.resolveAskArticle,
+    readAskFailureState: deps.readAskFailureState,
+    inferAskState: deps.inferAskState,
+    readMessageIdentity: deps.readMessageIdentity,
+    collectText: deps.collectText,
+    thoughtDividerBeforeMessage: deps.thoughtDividerBeforeMessage,
+  };
+}
+
+function createCapabilityRuntimeModule(deps) {
+  return {
+    expandAliases: deps.expandAliases,
+    controlStateDetail: deps.controlStateDetail,
+    throwCapabilityMissing: deps.throwCapabilityMissing,
+    throwUiDrift: deps.throwUiDrift,
+    mergeAliasBuckets: deps.mergeAliasBuckets,
+    ensureMode: deps.ensureMode,
+    ensureModelClass: deps.ensureModelClass,
+    ensureEffort: deps.ensureEffort,
+    discoverVisibleModelAliases: deps.discoverVisibleModelAliases,
+    discoverVisibleEffortAliases: deps.discoverVisibleEffortAliases,
+  };
+}
+
+function createConversationRuntimeModule(deps) {
+  return {
+    parseConversationIdFromUrl: deps.parseConversationIdFromUrl,
+    currentPathname: deps.currentPathname,
+    readResearchStatusMessage: deps.readResearchStatusMessage,
+    onDeepResearchLanding: deps.onDeepResearchLanding,
+    normalizeResearchReportText: deps.normalizeResearchReportText,
+    findResearchReportArticle: deps.findResearchReportArticle,
+    inferResearchStatus: deps.inferResearchStatus,
+    readResearchSubmissionState: deps.readResearchSubmissionState,
+    researchSubmissionStarted: deps.researchSubmissionStarted,
+  };
+}
+
+function createCommandRuntime({
+  textUtils,
+  domUtils,
+  composerRuntime,
+  messageRuntime,
+  capabilityRuntime,
+  conversationRuntime,
+}) {
+  return {
+    composerReady() {
+      return Boolean(composerRuntime.findComposer());
+    },
+    fillComposer({ prompt }) {
+      composerRuntime.setComposerValue(composerRuntime.findComposer(), prompt);
+      return true;
+    },
+    clickSubmit() {
+      const button = composerRuntime.findSubmitButton();
+      if (button && domUtils.clickControl(button)) {
+        return true;
+      }
+      return false;
+    },
+    async applyAskConfiguration({ report, request }) {
+      if (
+        !request.modelClass &&
+        !request.effort &&
+        (!request.mode || request.mode === "normal")
+      ) {
+        return true;
+      }
+      if (!report) {
+        throw new Error(
+          "capability missing: no capability report is available for model or mode selection",
+        );
+      }
+      if (request.modelClass) {
+        await capabilityRuntime.ensureModelClass(report, request.modelClass);
+      }
+      if (request.effort) {
+        await capabilityRuntime.ensureEffort(report, request.effort);
+      }
+      if (request.mode) {
+        capabilityRuntime.ensureMode(report, request.mode);
+      }
+      return true;
+    },
+    uploadAcknowledged(payload) {
+      return composerRuntime.uploadAcknowledged(payload);
+    },
+    readAskBaseline() {
+      const article = messageRuntime.findLatestAssistantMessage();
+      const messages = messageRuntime.findAssistantMessages();
+      return {
+        assistantMessageCount: messages.length,
+        conversationId:
+          textUtils.datasetValue(document.body.dataset.conversationId) ??
+          conversationRuntime.parseConversationIdFromUrl(),
+        messageId: messageRuntime.readMessageIdentity(article),
+        text: article ? messageRuntime.collectText(article) : "",
+      };
+    },
+    readAskSnapshot({ baseline } = {}) {
+      const article = messageRuntime.resolveAskArticle(baseline ?? null);
+      const text = article ? messageRuntime.collectText(article) : "";
+      const failure = messageRuntime.readAskFailureState(article);
+      return {
+        hasAssistantMessage: Boolean(article),
+        text,
+        state: messageRuntime.inferAskState(text, article),
+        failureCode: failure.failureCode,
+        failureMessage: failure.failureMessage,
+        retryVisible: failure.retryVisible,
+        conversationId:
+          textUtils.datasetValue(document.body.dataset.conversationId) ??
+          conversationRuntime.parseConversationIdFromUrl(),
+        messageId:
+          messageRuntime.readMessageIdentity(article) ??
+          (article
+            ? textUtils.datasetValue(document.body.dataset.lastMessageId)
+            : null) ??
+          null,
+        thoughtDividerBeforeMessage:
+          messageRuntime.thoughtDividerBeforeMessage(article),
+        currentUrl: window.location.href,
+      };
+    },
+    readResearchSnapshot() {
+      const submission = conversationRuntime.readResearchSubmissionState();
+      return {
+        status: submission.status,
+        statusMessage: submission.statusMessage,
+        reportText: submission.reportText,
+        conversationId: submission.conversationId,
+        messageId: submission.messageId,
+        currentUrl: submission.currentUrl,
+      };
+    },
+    readResearchSubmissionState() {
+      return conversationRuntime.readResearchSubmissionState();
+    },
+    researchSubmissionStarted() {
+      return conversationRuntime.researchSubmissionStarted();
+    },
+    readSubmitState() {
+      return composerRuntime.readSubmitState();
+    },
+    submitReady() {
+      return composerRuntime.submitReady();
+    },
+    attachmentsStillProcessing() {
+      return composerRuntime.attachmentsStillProcessing();
+    },
+    submitStarted(payload) {
+      return composerRuntime.submitStarted(payload ?? {});
+    },
+  };
+}
+
 export function createTablinqPageAdapterRuntime() {
   const normalizeText = (value) =>
     (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -2369,150 +2596,140 @@ export function createTablinqPageAdapterRuntime() {
     await sleep(150);
   };
 
-  return {
-    composerReady() {
-      return Boolean(findComposer());
-    },
-    fillComposer({ prompt }) {
-      setComposerValue(findComposer(), prompt);
+  const uploadAcknowledged = ({ names }) => {
+    const expected = unique(names);
+    const fromDataset = unique(
+      (document.body.dataset.uploadedFiles ?? "").split("|"),
+    );
+    if (expected.every((name) => fromDataset.includes(normalizeText(name)))) {
       return true;
-    },
-    clickSubmit() {
-      const button = findSubmitButton();
-      if (button && clickControl(button)) {
-        return true;
-      }
-      return false;
-    },
-    async applyAskConfiguration({ report, request }) {
-      if (
-        !request.modelClass &&
-        !request.effort &&
-        (!request.mode || request.mode === "normal")
-      ) {
-        return true;
-      }
-      if (!report) {
-        throw new Error(
-          "capability missing: no capability report is available for model or mode selection",
-        );
-      }
-      if (request.modelClass) {
-        await ensureModelClass(report, request.modelClass);
-      }
-      if (request.effort) {
-        await ensureEffort(report, request.effort);
-      }
-      if (request.mode) {
-        ensureMode(report, request.mode);
-      }
-      return true;
-    },
-    uploadAcknowledged({ names }) {
-      const expected = unique(names);
-      const fromDataset = unique(
-        (document.body.dataset.uploadedFiles ?? "").split("|"),
-      );
-      if (expected.every((name) => fromDataset.includes(normalizeText(name)))) {
-        return true;
-      }
+    }
 
-      const candidates = unique(
-        Array.from(
-          document.querySelectorAll(
-            [
-              "[data-slot='uploaded-file']",
-              "[data-slot='upload-entry-name']",
-              "[data-testid='upload-chip']",
-              "[data-testid*='attachment']",
-              "[aria-label*='Attached file']",
-              "[aria-label*='attachment']",
-              "button",
-              "span",
-              "div",
-              "li",
-            ].join(", "),
-          ),
-        )
-          .filter(isVisible)
-          .flatMap((element) => [
-            accessibleName(element),
-            normalizeText(element.textContent),
-          ]),
-      );
+    const candidates = unique(
+      Array.from(
+        document.querySelectorAll(
+          [
+            "[data-slot='uploaded-file']",
+            "[data-slot='upload-entry-name']",
+            "[data-testid='upload-chip']",
+            "[data-testid*='attachment']",
+            "[aria-label*='Attached file']",
+            "[aria-label*='attachment']",
+            "button",
+            "span",
+            "div",
+            "li",
+          ].join(", "),
+        ),
+      )
+        .filter(isVisible)
+        .flatMap((element) => [
+          accessibleName(element),
+          normalizeText(element.textContent),
+        ]),
+    );
 
-      return expected.every(
-        (name) =>
-          candidates.includes(normalizeText(name)) ||
-          candidates.some((candidate) =>
-            candidate.includes(normalizeText(name)),
-          ),
-      );
-    },
-    readAskBaseline() {
-      const article = findLatestAssistantMessage();
-      const messages = findAssistantMessages();
-      return {
-        assistantMessageCount: messages.length,
-        conversationId:
-          datasetValue(document.body.dataset.conversationId) ??
-          parseConversationIdFromUrl(),
-        messageId: readMessageIdentity(article),
-        text: article ? collectText(article) : "",
-      };
-    },
-    readAskSnapshot({ baseline } = {}) {
-      const article = resolveAskArticle(baseline ?? null);
-      const text = article ? collectText(article) : "";
-      const failure = readAskFailureState(article);
-      return {
-        hasAssistantMessage: Boolean(article),
-        text,
-        state: inferAskState(text, article),
-        failureCode: failure.failureCode,
-        failureMessage: failure.failureMessage,
-        retryVisible: failure.retryVisible,
-        conversationId:
-          datasetValue(document.body.dataset.conversationId) ??
-          parseConversationIdFromUrl(),
-        messageId:
-          readMessageIdentity(article) ??
-          (article
-            ? datasetValue(document.body.dataset.lastMessageId)
-            : null) ??
-          null,
-        thoughtDividerBeforeMessage: thoughtDividerBeforeMessage(article),
-        currentUrl: window.location.href,
-      };
-    },
-    readResearchSnapshot() {
-      const submission = readResearchSubmissionState();
-      return {
-        status: submission.status,
-        statusMessage: submission.statusMessage,
-        reportText: submission.reportText,
-        conversationId: submission.conversationId,
-        messageId: submission.messageId,
-        currentUrl: submission.currentUrl,
-      };
-    },
-    readResearchSubmissionState() {
-      return readResearchSubmissionState();
-    },
-    researchSubmissionStarted() {
-      return researchSubmissionStarted();
-    },
-    readSubmitState() {
-      return readSubmitState();
-    },
-    submitReady() {
-      return submitReady();
-    },
-    attachmentsStillProcessing() {
-      return attachmentsStillProcessing();
-    },
-    submitStarted(payload) {
-      return submitStarted(payload ?? {});
-    },
+    return expected.every(
+      (name) =>
+        candidates.includes(normalizeText(name)) ||
+        candidates.some((candidate) => candidate.includes(normalizeText(name))),
+    );
   };
+
+  const textUtils = createTextUtilsModule({
+    normalizeText,
+    collapseText,
+    unique,
+    uniqueCollapsed,
+    datasetValue,
+    hasToken,
+    collapseInlineText,
+    normalizeInlineOutput,
+    indentLines,
+  });
+  const domUtils = createDomUtilsModule({
+    getComputed,
+    isVisible,
+    firstVisible,
+    accessibleName,
+    queryFirstVisible,
+    queryVisible,
+    actionableSelector,
+    actionableElements,
+    latestVisible,
+    visibleUnique,
+    isSelected,
+    isDisabled,
+    findByAliases,
+    clickControl,
+  });
+  const composerRuntime = createComposerRuntimeModule({
+    findComposer,
+    composerContainers,
+    isComposerAdjacent,
+    findComposerAdjacentControl,
+    readComposerText,
+    composerDisabled,
+    findSubmitButton,
+    readSubmitControlState,
+    keyboardSubmitReady,
+    submitButtonEnabled,
+    submitReady,
+    stopButtonVisible,
+    readSubmitState,
+    submitStarted,
+    attachmentsStillProcessing,
+    setComposerValue,
+    uploadAcknowledged,
+  });
+  const artifactRuntime = createArtifactRuntimeModule({
+    isReasoningArtifactMessage,
+    isInsideReasoningArtifactMessage,
+    isMermaidPreviewBlock,
+    serializeMermaidPreviewBlock,
+    collectMermaidSvgLabels,
+  });
+  const messageRuntime = createMessageRuntimeModule({
+    artifactRuntime,
+    findAssistantMessages,
+    findLatestAssistantMessage,
+    resolveAskArticle,
+    readAskFailureState,
+    inferAskState,
+    readMessageIdentity,
+    collectText,
+    thoughtDividerBeforeMessage,
+  });
+  const capabilityRuntime = createCapabilityRuntimeModule({
+    expandAliases,
+    controlStateDetail,
+    throwCapabilityMissing,
+    throwUiDrift,
+    mergeAliasBuckets,
+    ensureMode,
+    ensureModelClass,
+    ensureEffort,
+    discoverVisibleModelAliases,
+    discoverVisibleEffortAliases,
+  });
+  const conversationRuntime = createConversationRuntimeModule({
+    parseConversationIdFromUrl,
+    currentPathname,
+    readResearchStatusMessage,
+    onDeepResearchLanding,
+    normalizeResearchReportText,
+    findResearchReportArticle,
+    inferResearchStatus,
+    readResearchSubmissionState,
+    researchSubmissionStarted,
+  });
+
+  return createCommandRuntime({
+    textUtils,
+    domUtils,
+    composerRuntime,
+    messageRuntime,
+    capabilityRuntime,
+    conversationRuntime,
+  });
 }
