@@ -1,0 +1,360 @@
+use crate::http::HttpResponse;
+use crate::json::json_response;
+use serde_json::json;
+use shared_protocol::JobStatus;
+
+pub(crate) const HEALTH_PATH: &str = "/health";
+pub(crate) const READY_PATH: &str = "/ready";
+pub(crate) const ADMIN_STATUS_PATH: &str = "/admin/status";
+pub(crate) const ADMIN_SHUTDOWN_PATH: &str = "/admin/shutdown";
+pub(crate) const V1_MODELS_PATH: &str = "/v1/models";
+pub(crate) const V1_CAPABILITIES_PATH: &str = "/v1/capabilities";
+pub(crate) const V1_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
+pub(crate) const V1_FILES_PATH: &str = "/v1/files";
+pub(crate) const V1_ARTIFACTS_PATH: &str = "/v1/artifacts";
+pub(crate) const V1_PROVIDER_PATH: &str = "/v1/provider";
+pub(crate) const V1_SESSIONS_PATH: &str = "/v1/sessions";
+pub(crate) const V1_REQUESTS_PATH: &str = "/v1/requests";
+pub(crate) const V1_CONVERSATIONS_PATH: &str = "/v1/conversations";
+pub(crate) const V1_CONVERSATIONS_SELECT_PATH: &str = "/v1/conversations/select";
+pub(crate) const V1_USAGE_PATH: &str = "/v1/usage";
+pub(crate) const V1_SESSIONS_PREFIX: &str = "/v1/sessions/";
+pub(crate) const V1_CONVERSATIONS_PREFIX: &str = "/v1/conversations/";
+pub(crate) const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
+pub(crate) const REQUEST_SUMMARY_LIMIT: usize = 50;
+pub(crate) const REQUEST_LIST_MAX_LIMIT: usize = 100;
+pub(crate) const CONVERSATION_MESSAGE_LIST_DEFAULT_LIMIT: usize = 50;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Route {
+    Health,
+    Ready,
+    AdminStatus,
+    AdminShutdown,
+    Models,
+    Capabilities,
+    Provider,
+    Usage,
+    Sessions,
+    SessionConversations,
+    Requests,
+    Conversations,
+    ConversationMessages,
+    ConversationSnapshot,
+    ConversationDetail,
+    RequestEvidence,
+    RequestSummary,
+    FilesList,
+    FileUpload,
+    FileDetail,
+    ArtifactsList,
+    ArtifactDetail,
+    RequestAction,
+    ConversationSelect,
+    ChatCompletions,
+    NotFound,
+}
+
+pub(crate) fn match_route(method: &str, path: &str) -> Route {
+    let request_path = normalized_request_path(path);
+    match (method, request_path) {
+        ("GET", HEALTH_PATH) => Route::Health,
+        ("GET", READY_PATH) => Route::Ready,
+        ("GET", ADMIN_STATUS_PATH) => Route::AdminStatus,
+        ("POST", ADMIN_SHUTDOWN_PATH) => Route::AdminShutdown,
+        ("GET", V1_MODELS_PATH) => Route::Models,
+        ("GET", V1_CAPABILITIES_PATH) => Route::Capabilities,
+        ("GET", V1_PROVIDER_PATH) => Route::Provider,
+        ("GET", V1_USAGE_PATH) => Route::Usage,
+        ("GET", V1_SESSIONS_PATH) => Route::Sessions,
+        ("GET", V1_REQUESTS_PATH) => Route::Requests,
+        ("GET", V1_CONVERSATIONS_PATH) => Route::Conversations,
+        ("GET", V1_FILES_PATH) => Route::FilesList,
+        ("POST", V1_FILES_PATH) => Route::FileUpload,
+        ("GET", V1_ARTIFACTS_PATH) => Route::ArtifactsList,
+        ("POST", V1_CONVERSATIONS_SELECT_PATH) => Route::ConversationSelect,
+        ("POST", V1_CHAT_COMPLETIONS_PATH) => Route::ChatCompletions,
+        ("GET", _) if session_conversations_id_from_path(path).is_some() => {
+            Route::SessionConversations
+        }
+        ("GET", _) if conversation_messages_id_from_path(path).is_some() => {
+            Route::ConversationMessages
+        }
+        ("GET", _) if conversation_snapshot_id_from_path(path).is_some() => {
+            Route::ConversationSnapshot
+        }
+        ("GET", _) if conversation_id_from_path(path).is_some() => Route::ConversationDetail,
+        ("GET", _) if request_evidence_request_id_from_path(path).is_some() => {
+            Route::RequestEvidence
+        }
+        ("GET", _) if request_id_from_path(path).is_some() => Route::RequestSummary,
+        ("GET", _) if path.starts_with(&format!("{V1_FILES_PATH}/")) => Route::FileDetail,
+        ("GET", _) if path.starts_with(&format!("{V1_ARTIFACTS_PATH}/")) => Route::ArtifactDetail,
+        ("POST", _) if request_path.starts_with(V1_REQUESTS_PREFIX) => Route::RequestAction,
+        _ => Route::NotFound,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RequestListQuery {
+    pub(crate) limit: usize,
+    pub(crate) offset: usize,
+    pub(crate) status: Option<JobStatus>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ConversationMessageQuery {
+    pub(crate) limit: usize,
+    pub(crate) offset: usize,
+}
+
+pub(crate) fn parse_request_list_query(
+    path: &str,
+    request_id: &str,
+) -> std::result::Result<RequestListQuery, HttpResponse> {
+    let mut query = RequestListQuery {
+        limit: REQUEST_SUMMARY_LIMIT,
+        offset: 0,
+        status: None,
+    };
+    for (key, value) in request_query_pairs(path) {
+        match key {
+            "limit" => {
+                let parsed = value.parse::<usize>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": "limit must be a positive integer",
+                        }),
+                    )
+                })?;
+                if parsed == 0 || parsed > REQUEST_LIST_MAX_LIMIT {
+                    return Err(json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
+                        }),
+                    ));
+                }
+                query.limit = parsed;
+            }
+            "offset" => {
+                query.offset = value.parse::<usize>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": "offset must be a non-negative integer",
+                        }),
+                    )
+                })?;
+            }
+            "status" => {
+                query.status = Some(value.parse::<JobStatus>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": format!("unsupported status filter: {value}"),
+                        }),
+                    )
+                })?);
+            }
+            _ => {}
+        }
+    }
+    Ok(query)
+}
+
+pub(crate) fn parse_conversation_message_query(
+    path: &str,
+    request_id: &str,
+) -> std::result::Result<ConversationMessageQuery, HttpResponse> {
+    let mut query = ConversationMessageQuery {
+        limit: CONVERSATION_MESSAGE_LIST_DEFAULT_LIMIT,
+        offset: 0,
+    };
+    for (key, value) in request_query_pairs(path) {
+        match key {
+            "limit" => {
+                let parsed = value.parse::<usize>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": "limit must be a positive integer",
+                        }),
+                    )
+                })?;
+                if parsed == 0 || parsed > REQUEST_LIST_MAX_LIMIT {
+                    return Err(json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
+                        }),
+                    ));
+                }
+                query.limit = parsed;
+            }
+            "offset" => {
+                query.offset = value.parse::<usize>().map_err(|_| {
+                    json_response(
+                        400,
+                        json!({
+                            "request_id": request_id,
+                            "error": "invalid_request",
+                            "message": "offset must be a non-negative integer",
+                        }),
+                    )
+                })?;
+            }
+            _ => {}
+        }
+    }
+    Ok(query)
+}
+
+pub(crate) fn normalized_request_path(path: &str) -> &str {
+    path.split_once('?').map(|(base, _)| base).unwrap_or(path)
+}
+
+pub(crate) fn request_query_pairs(path: &str) -> impl Iterator<Item = (&str, &str)> {
+    path.split_once('?')
+        .map(|(_, query)| query)
+        .into_iter()
+        .flat_map(|query| query.split('&'))
+        .filter_map(|pair| {
+            if pair.is_empty() {
+                None
+            } else if let Some((key, value)) = pair.split_once('=') {
+                Some((key, value))
+            } else {
+                Some((pair, ""))
+            }
+        })
+}
+
+pub(crate) fn file_id_from_path(path: &str) -> Option<&str> {
+    normalized_request_path(path)
+        .strip_prefix(&format!("{V1_FILES_PATH}/"))
+        .filter(|value| !value.contains('/'))
+}
+
+pub(crate) fn artifact_id_from_path(path: &str) -> Option<(&str, bool)> {
+    let suffix = normalized_request_path(path).strip_prefix(&format!("{V1_ARTIFACTS_PATH}/"))?;
+    if let Some(artifact_id) = suffix.strip_suffix("/content") {
+        if artifact_id.contains('/') || artifact_id.is_empty() {
+            return None;
+        }
+        Some((artifact_id, true))
+    } else if suffix.contains('/') || suffix.is_empty() {
+        None
+    } else {
+        Some((suffix, false))
+    }
+}
+
+pub(crate) fn session_conversations_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_SESSIONS_PREFIX)?;
+    suffix
+        .strip_suffix("/conversations")
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+}
+
+pub(crate) fn conversation_messages_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_CONVERSATIONS_PREFIX)?;
+    suffix
+        .strip_suffix("/messages")
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+}
+
+pub(crate) fn conversation_snapshot_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_CONVERSATIONS_PREFIX)?;
+    suffix
+        .strip_suffix("/snapshot")
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+}
+
+pub(crate) fn conversation_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_CONVERSATIONS_PREFIX)?;
+    if suffix.is_empty() || suffix.contains('/') || suffix == "select" {
+        None
+    } else {
+        Some(suffix)
+    }
+}
+
+pub(crate) fn cancel_request_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_REQUESTS_PREFIX)?;
+    suffix.strip_suffix("/cancel")
+}
+
+pub(crate) fn request_evidence_request_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_REQUESTS_PREFIX)?;
+    suffix
+        .strip_suffix("/evidence")
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn request_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_REQUESTS_PREFIX)?;
+    if suffix.is_empty() || suffix.contains('/') {
+        None
+    } else {
+        Some(suffix)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_matching_centralizes_dynamic_gateway_paths() {
+        assert_eq!(match_route("GET", "/health"), Route::Health);
+        assert_eq!(
+            match_route("GET", "/v1/conversations/conv-1/messages?limit=5"),
+            Route::ConversationMessages
+        );
+        assert_eq!(
+            match_route("GET", "/v1/artifacts/art-1/content"),
+            Route::ArtifactDetail
+        );
+        assert_eq!(
+            match_route("POST", "/v1/requests/req-1/cancel"),
+            Route::RequestAction
+        );
+        assert_eq!(match_route("DELETE", "/v1/files/file-1"), Route::NotFound);
+    }
+
+    #[test]
+    fn request_query_parsing_applies_defaults_filters_and_limits() {
+        let query =
+            parse_request_list_query("/v1/requests?limit=25&offset=5&status=running", "req")
+                .expect("valid request query");
+        assert_eq!(query.limit, 25);
+        assert_eq!(query.offset, 5);
+        assert_eq!(query.status, Some(JobStatus::Running));
+
+        let err = parse_request_list_query("/v1/requests?limit=0", "req")
+            .expect_err("invalid limit should become HTTP response");
+        assert_eq!(err.status_code, 400);
+    }
+
+    #[test]
+    fn conversation_message_query_uses_default_limit() {
+        let query = parse_conversation_message_query("/v1/conversations/conv-1/messages", "req")
+            .expect("valid conversation message query");
+        assert_eq!(query.limit, CONVERSATION_MESSAGE_LIST_DEFAULT_LIMIT);
+        assert_eq!(query.offset, 0);
+    }
+}

@@ -13,11 +13,13 @@ use shared_protocol::{
 };
 use std::net::TcpStream;
 
-use super::{
-    HttpResponse, RequestContext, capture_gateway_failure_bundle, ensure_browser_session,
-    is_client_disconnect_error, json_response, log_response, map_openai_error_value,
-    write_http_response, write_sse_done, write_sse_event, write_sse_headers,
+use crate::browser::ensure_browser_session;
+use crate::errors::{
+    capture_gateway_failure_bundle, is_client_disconnect_error, map_openai_error_value,
 };
+use crate::http::{HttpResponse, RequestContext, log_response, write_http_response};
+use crate::json::json_response;
+use crate::sse::{write_sse_done, write_sse_event, write_sse_headers};
 
 pub(crate) enum PreparedChatJob {
     Ask(PreparedAskJob),

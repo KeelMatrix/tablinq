@@ -1,3 +1,4 @@
+use crate::browser::discover_capabilities;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use gptd::{AppConfig, CoreService};
@@ -54,7 +55,7 @@ impl CapabilityCatalogCache {
     }
 
     pub(crate) fn resolve(&self, core: &CoreService) -> Result<CapabilityCatalog> {
-        let live = crate::discover_capabilities(core);
+        let live = discover_capabilities(core);
         let profile = core.browser_profile_info().ok();
         let (cache_key, profile_dir, workspace_key) = catalog_identity(profile.as_ref(), core);
 
