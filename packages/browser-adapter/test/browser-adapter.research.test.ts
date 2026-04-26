@@ -22,6 +22,11 @@ import {
   withAttachedBrowser,
   withHarnessUrl,
 } from "./browser-adapter.integration.helpers";
+import {
+  captureResearchStatuses,
+  expectResearchHandoffStatuses,
+  openManagedHarnessAdapter,
+} from "./helpers/browserFlow";
 
 let harness: ReturnType<typeof createBrowserIntegrationHarness>;
 
@@ -160,32 +165,22 @@ describe("browser adapter", () => {
 
   it("runs research jobs with progress updates and persisted artifacts", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
+    const { adapter, root } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
+        variant: "live",
+        scenario: "research-success",
+      },
+    );
     const fixtureDir = path.join(root, "fixtures");
     const firstFile = path.join(fixtureDir, "brief.txt");
     const secondFile = path.join(fixtureDir, "notes.csv");
     await mkdir(fixtureDir, { recursive: true });
     await writeFile(firstFile, "brief body", "utf8");
     await writeFile(secondFile, "col\nvalue", "utf8");
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: withHarnessUrl(server.url, {
-          variant: "live",
-          scenario: "research-success",
-        }),
-      }),
-    );
-    await adapter.open({
-      targetUrl: withHarnessUrl(server.url, {
-        variant: "live",
-        scenario: "research-success",
-      }),
-      headless: true,
-    });
 
-    const updates: string[] = [];
+    const progress = captureResearchStatuses();
     const result = await adapter.research(
       {
         jobId: "job-research-success",
@@ -193,14 +188,10 @@ describe("browser adapter", () => {
         files: [firstFile, secondFile],
         timeoutMs: 5_000,
       },
-      (update) => {
-        updates.push(update.status);
-      },
+      progress.onUpdate,
     );
 
-    expect(updates).toContain("starting");
-    expect(updates).toContain("waiting_for_sources");
-    expect(updates).toContain("running");
+    expectResearchHandoffStatuses(progress.statuses);
     expect(result.report_text).toContain(
       "Research report for: investigate launch risks",
     );
@@ -216,26 +207,12 @@ describe("browser adapter", () => {
 
   it("does not finalize Deep Research early when a post-start shell shows provisional text", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: withHarnessUrl(server.url, {
-          variant: "live",
-          scenario: "research-starting-shell",
-        }),
-      }),
-    );
-    await adapter.open({
-      targetUrl: withHarnessUrl(server.url, {
-        variant: "live",
-        scenario: "research-starting-shell",
-      }),
-      headless: true,
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "live",
+      scenario: "research-starting-shell",
     });
 
-    const updates: string[] = [];
+    const progress = captureResearchStatuses();
     const result = await adapter.research(
       {
         jobId: "job-research-starting-shell",
@@ -243,14 +220,10 @@ describe("browser adapter", () => {
           "analyze browser-backed provider tradeoffs across latency, privacy, resilience, and deployment constraints",
         timeoutMs: 8_000,
       },
-      (update) => {
-        updates.push(update.status);
-      },
+      progress.onUpdate,
     );
 
-    expect(updates).toContain("starting");
-    expect(updates).toContain("waiting_for_sources");
-    expect(updates).toContain("running");
+    expectResearchHandoffStatuses(progress.statuses);
     expect(result.report_text).toContain(
       "Research report for: analyze browser-backed provider tradeoffs across latency, privacy, resilience, and deployment constraints",
     );
@@ -265,28 +238,18 @@ describe("browser adapter", () => {
 
   it("submits research from the /deep-research landing page and completes normally", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const fixture = path.join(root, "brief.txt");
-    await writeFile(fixture, "brief body", "utf8");
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: withHarnessUrl(server.url, {
-          variant: "live",
-          scenario: "research-deep-landing",
-        }),
-      }),
-    );
-    await adapter.open({
-      targetUrl: withHarnessUrl(server.url, {
+    const { adapter, root } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
         variant: "live",
         scenario: "research-deep-landing",
-      }),
-      headless: true,
-    });
+      },
+    );
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
 
-    const updates: string[] = [];
+    const progress = captureResearchStatuses();
     const result = await adapter.research(
       {
         jobId: "job-research-deep-landing",
@@ -294,9 +257,7 @@ describe("browser adapter", () => {
         files: [fixture],
         timeoutMs: 8_000,
       },
-      (update) => {
-        updates.push(update.status);
-      },
+      progress.onUpdate,
     );
     const pageState = await adapter.getManagedPageForTest()!.evaluate(() => ({
       researchLandingVisited: document.body.dataset.researchLandingVisited,
@@ -307,9 +268,7 @@ describe("browser adapter", () => {
     expect(result.report_text).toContain(
       "Research report for: investigate deep research landing submission",
     );
-    expect(updates).toContain("starting");
-    expect(updates).toContain("waiting_for_sources");
-    expect(updates).toContain("running");
+    expectResearchHandoffStatuses(progress.statuses);
     expect(pageState.researchLandingVisited).toBe("true");
     expect(pageState.researchSubmitted).toBe("true");
     expect(["button", "keyboard"]).toContain(pageState.lastSubmissionMethod);

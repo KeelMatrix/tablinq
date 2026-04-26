@@ -5,10 +5,15 @@ import {
   type AskResultSnapshot,
   type BrowserAdapterOptions,
   type BrowserOpenCommand,
+  type ResearchProgressSnapshot,
   type BrowserStatusSnapshot,
   type StreamChunkSnapshot,
 } from "../../src/browserAdapter";
-import type { createBrowserIntegrationHarness } from "../browser-adapter.integration.helpers";
+import {
+  type HarnessUrlOptions,
+  type createBrowserIntegrationHarness,
+  withHarnessUrl,
+} from "../browser-adapter.integration.helpers";
 
 type BrowserIntegrationHarness = ReturnType<
   typeof createBrowserIntegrationHarness
@@ -63,6 +68,19 @@ export async function openTrackedManagedAdapter(
   return { adapter, root, snapshot };
 }
 
+export async function openManagedHarnessAdapter(
+  harness: BrowserIntegrationHarness,
+  baseUrl: string,
+  urlOptions: HarnessUrlOptions = {},
+  options: ManagedAdapterOptions & {
+    openCommand?: Partial<BrowserOpenCommand>;
+  } = {},
+) {
+  const targetUrl = withHarnessUrl(baseUrl, urlOptions);
+  const opened = await openTrackedManagedAdapter(harness, targetUrl, options);
+  return { ...opened, targetUrl };
+}
+
 export function captureDeltaChunks() {
   const chunks: string[] = [];
   return {
@@ -76,6 +94,22 @@ export function captureDeltaChunks() {
       return chunks.join("");
     },
   };
+}
+
+export function captureResearchStatuses() {
+  const statuses: string[] = [];
+  return {
+    statuses,
+    onUpdate(update: ResearchProgressSnapshot) {
+      statuses.push(update.status);
+    },
+  };
+}
+
+export function expectResearchHandoffStatuses(statuses: string[]) {
+  expect(statuses).toContain("starting");
+  expect(statuses).toContain("waiting_for_sources");
+  expect(statuses).toContain("running");
 }
 
 export function expectCompletedAskResult(
