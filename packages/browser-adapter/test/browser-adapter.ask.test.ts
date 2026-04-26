@@ -412,6 +412,81 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("opens the composer tools menu and selects Web search before submitting", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-menu-search",
+        prompt: "configure search mode",
+        mode: "search",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      toolsMenuClicks: document.body.dataset.toolsMenuClicks,
+      searchToolClicks: document.body.dataset.searchToolClicks,
+      searchChipVisible:
+        !document.querySelector("#search-chip")?.hasAttribute("hidden"),
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      toolsMenuClicks: "1",
+      searchToolClicks: "1",
+      searchChipVisible: true,
+    });
+    expect(result.output_text).toContain(
+      "Fake response for: configure search mode",
+    );
+
+    await adapter.shutdown();
+  });
+
+  it("leaves an already-active Search chip selected without reopening tools", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      document.body.dataset.selectedMode = "search";
+      (window as unknown as { syncSelectedState?: () => void })
+        .syncSelectedState?.();
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-menu-search-active",
+        prompt: "keep search active",
+        mode: "search",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      toolsMenuClicks: document.body.dataset.toolsMenuClicks ?? "0",
+      searchToolClicks: document.body.dataset.searchToolClicks ?? "0",
+      searchChipVisible:
+        !document.querySelector("#search-chip")?.hasAttribute("hidden"),
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      toolsMenuClicks: "0",
+      searchToolClicks: "0",
+      searchChipVisible: true,
+    });
+
+    await adapter.shutdown();
+  });
+
   it("selects Instant from the classic inline model controls", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {

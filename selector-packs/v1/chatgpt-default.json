@@ -116,21 +116,21 @@
     ],
     "search_mode_visible": [
       {
-        "strategy_id": "data-mode-search",
-        "kind": "css",
-        "selector": "[data-mode='search']",
+        "strategy_id": "composer-search-chip",
+        "kind": "dom_neighborhood",
+        "selector": "[data-testid='composer-root'] button[aria-label*='Search']",
         "score": 1.0
       },
       {
-        "strategy_id": "chatgpt-search-toggle",
-        "kind": "text",
-        "selector": "Search",
-        "score": 0.92
+        "strategy_id": "composer-tools-menu-search",
+        "kind": "dom_neighborhood",
+        "selector": "[role='menu'] [role='menuitemradio']",
+        "score": 0.98
       },
       {
         "strategy_id": "aria-search-toggle",
         "kind": "text",
-        "selector": "Search",
+        "selector": "Web search",
         "score": 0.88
       }
     ],

@@ -115,7 +115,7 @@ Common commands:
 - `gpt gateway status`
 - `gpt gateway stop`
 - `gpt ask "hello"`
-- `gpt ask --model instant --mode search "latest release notes"`
+- `gpt ask --mode search "What is the latest stable Rust release?"`
 - `gpt ask --model thinking --effort extended "compare these options"`
 - `gpt ask --file notes.txt "summarize the attachment"`
 - `gpt research "investigate launch blockers"`

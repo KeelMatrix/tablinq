@@ -102,7 +102,6 @@ describe("extension capability probe", () => {
             <button type="button" data-model="instant" aria-pressed="false">GPT-5.3 Instant</button>
             <button type="button" data-model="thinking" aria-pressed="true">GPT-5.4 Thinking</button>
           </div>
-          <button type="button" data-mode="search">Search</button>
           <button type="button" data-mode="research">Research</button>
           <div data-slot="effort-toggle" role="group" aria-label="Thinking effort">
             <button type="button" data-effort="standard" aria-pressed="true">Standard</button>
@@ -129,7 +128,7 @@ describe("extension capability probe", () => {
       submit_available: true,
       model_picker_visible: true,
       thinking_effort_visible: true,
-      search_mode_visible: true,
+      search_mode_visible: false,
       research_mode_visible: true,
       upload_control_visible: true,
       downloadable_artifacts_observable: true,
@@ -144,6 +143,7 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.model_classes.thinking).toContain("thinking");
     expect(message.report.aliases.efforts.extended).toContain("extended");
     expect(message.report.aliases.modes.research).toContain("deep research");
+    expect(message.report.aliases.modes.search).toBeUndefined();
     expect(message.runtime.dom_neighborhoods.length).toBeGreaterThan(3);
     expect(validateCapabilityReport(message.report)).toBe(true);
     expect(validateCapabilityReport.errors).toBeNull();
@@ -162,7 +162,6 @@ describe("extension capability probe", () => {
               Deep thinking
             </button>
           </div>
-          <button type="button" aria-pressed="false">Browse the web</button>
           <button type="button" aria-pressed="false">Deep research</button>
           <div role="group" aria-label="Reasoning effort">
             <button type="button" data-effort="standard" aria-pressed="true">
@@ -194,7 +193,7 @@ describe("extension capability probe", () => {
       submit_available: true,
       model_picker_visible: true,
       thinking_effort_visible: true,
-      search_mode_visible: true,
+      search_mode_visible: false,
       research_mode_visible: true,
       upload_control_visible: true,
       downloadable_artifacts_observable: true,
@@ -205,10 +204,8 @@ describe("extension capability probe", () => {
     expect(message.runtime.strategy_matches.model_picker_visible).toBe(
       "inline-model-options",
     );
-    expect(message.runtime.strategy_matches.search_mode_visible).toBe(
-      "chatgpt-search-toggle",
-    );
-    expect(message.report.aliases.modes.search).toContain("browse the web");
+    expect(message.runtime.strategy_matches.search_mode_visible).toBeUndefined();
+    expect(message.report.aliases.modes.search).toBeUndefined();
     expect(message.report.aliases.modes.research).toContain("deep research");
     expect(message.report.aliases.model_classes.instant).toContain("instant");
     expect(message.report.aliases.model_classes.thinking).toContain("thinking");
@@ -231,8 +228,8 @@ describe("extension capability probe", () => {
           >
             ChatGPT
           </button>
-          <button type="button" data-mode="search" aria-label="Search">Search</button>
           <nav aria-label="workspace navigation">
+            <button type="button">Search chats</button>
             <a href="/apps" data-testid="apps-button">Apps</a>
             <a href="/deep-research" data-testid="deep-research-sidebar-item">Deep research</a>
             <a href="/codex/cloud">Codex</a>
@@ -262,6 +259,9 @@ describe("extension capability probe", () => {
             <div role="menuitemradio" data-testid="model-switcher-gpt-5-3" hidden>Instant</div>
             <div role="menuitemradio" data-testid="model-switcher-gpt-5-4-thinking" hidden>Thinking</div>
             <div role="menuitemradio" data-testid="model-switcher-gpt-5-4-pro" hidden>Pro</div>
+          </div>
+          <div id="tablinq-tools-menu" role="menu">
+            <div role="menuitemradio">Web search</div>
           </div>
           <div id="tablinq-effort-menu" role="menu" hidden>
             <div role="menuitemradio" hidden>Standard</div>
@@ -300,7 +300,56 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.model_classes.instant).toContain("instant");
     expect(message.report.aliases.model_classes.thinking).toContain("thinking");
     expect(message.report.aliases.modes.research).toContain("deep research");
+    expect(message.report.aliases.modes.search).toContain("web search");
     expect(message.report.aliases.efforts.extended).toContain("extended");
+  });
+
+  it("detects an active composer Search chip", () => {
+    document.body.dataset.uiVariant = "live";
+    document.body.innerHTML = `
+      <main>
+        <form data-testid="composer-root">
+          <textarea id="prompt-textarea" aria-label="Message ChatGPT"></textarea>
+          <button type="button" class="__composer-pill" aria-label="Search, click to remove">Search</button>
+          <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+        </form>
+      </main>
+    `;
+
+    const message = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(message.report.matrix.search_mode_visible).toBe(true);
+    expect(message.runtime.strategy_matches.search_mode_visible).toBe(
+      "composer-search-chip",
+    );
+    expect(message.report.aliases.modes.search).toContain(
+      "search, click to remove",
+    );
+  });
+
+  it("ignores sidebar and conversation search controls", () => {
+    document.body.dataset.uiVariant = "live";
+    document.body.innerHTML = `
+      <main>
+        <nav>
+          <button type="button">Search chats</button>
+          <button type="button" aria-label="Search conversations">Search</button>
+        </nav>
+        <form data-testid="composer-root">
+          <textarea id="prompt-textarea" aria-label="Message ChatGPT"></textarea>
+          <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+        </form>
+      </main>
+    `;
+
+    const message = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(message.report.matrix.search_mode_visible).toBe(false);
+    expect(message.report.aliases.modes.search).toBeUndefined();
   });
 
   it("reports missing controls without inventing aliases", () => {

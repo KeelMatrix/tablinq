@@ -10,6 +10,7 @@ export function createMenuRuntime({
   const effortPickerTrigger = document.querySelector(
     "#thinking-effort-trigger",
   );
+  const composerToolsTrigger = document.querySelector("#composer-plus-btn");
 
   function applyPressedState(selector, selectedValue) {
     document.querySelectorAll(selector).forEach((element) => {
@@ -118,6 +119,27 @@ export function createMenuRuntime({
       .forEach((element) => {
         element.toggleAttribute("hidden", !effortMenuOpen);
       });
+
+    const searchSelected = selectedMode === "search";
+    const searchChip = document.querySelector("#search-chip");
+    if (searchChip instanceof HTMLElement) {
+      searchChip.toggleAttribute("hidden", !searchSelected);
+      searchChip.setAttribute(
+        "aria-label",
+        searchSelected ? "Search, click to remove" : "Search",
+      );
+      searchChip.dataset.selected = searchSelected ? "true" : "false";
+    }
+    const toolsMenu = document.querySelector("#tablinq-tools-menu");
+    const toolsMenuOpen =
+      composerToolsTrigger?.getAttribute("aria-expanded") === "true";
+    toolsMenu?.toggleAttribute("hidden", !toolsMenuOpen);
+    toolsMenu
+      ?.querySelectorAll("[role='menuitemradio'], [role='menuitem']")
+      .forEach((element) => {
+        element.toggleAttribute("hidden", !toolsMenuOpen);
+      });
+    syncModernMenuOption("#tool-option-web-search", searchSelected);
   }
 
   function registerSelectionEvents() {
@@ -155,6 +177,36 @@ export function createMenuRuntime({
         "aria-expanded",
         expanded ? "false" : "true",
       );
+      syncSelectedState();
+    });
+
+    composerToolsTrigger?.addEventListener("click", () => {
+      document.body.dataset.toolsMenuClicks = String(
+        Number.parseInt(document.body.dataset.toolsMenuClicks || "0", 10) + 1,
+      );
+      const expanded =
+        composerToolsTrigger.getAttribute("aria-expanded") === "true";
+      composerToolsTrigger.setAttribute(
+        "aria-expanded",
+        expanded ? "false" : "true",
+      );
+      syncSelectedState();
+    });
+
+    document
+      .querySelector("#tool-option-web-search")
+      ?.addEventListener("click", () => {
+        document.body.dataset.searchToolClicks = String(
+          Number.parseInt(document.body.dataset.searchToolClicks || "0", 10) +
+            1,
+        );
+        document.body.dataset.selectedMode = "search";
+        composerToolsTrigger?.setAttribute("aria-expanded", "false");
+        syncSelectedState();
+      });
+
+    document.querySelector("#search-chip")?.addEventListener("click", () => {
+      document.body.dataset.selectedMode = "normal";
       syncSelectedState();
     });
 
