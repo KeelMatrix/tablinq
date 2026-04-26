@@ -70,6 +70,8 @@ Runs every repo test discovered by the Rust workspace and Vitest:
 
 It also prepends Cargo's bin directory to the current PowerShell session `PATH` when available.
 If `node_modules` is missing, it first runs `pnpm install --frozen-lockfile`.
+The implementation delegates to `test_local.py`, which runs independent jobs in parallel and keeps browser-heavy gateway chunks serialized.
+The default profile is balanced: Rust core and fast gateway tests run in parallel, TypeScript runs in its own phase, and browser-heavy gateway chunks run one at a time. `pnpm run test:local:aggressive` is available for experimentation, but it can expose local browser/resource contention.
 
 **Why it exists**
 
@@ -139,6 +141,8 @@ Runs the Unix equivalent of the full local test stack:
 3. `pnpm exec vitest run --reporter=dot`
 
 If `node_modules` is missing, it first runs `pnpm install --frozen-lockfile`.
+The implementation delegates to `test_local.py`, which runs independent jobs in parallel and keeps browser-heavy gateway chunks serialized.
+The default profile is balanced: Rust core and fast gateway tests run in parallel, TypeScript runs in its own phase, and browser-heavy gateway chunks run one at a time. Use `python3 scripts/test_local.py --profile aggressive` only when you want to probe local parallelism limits.
 
 **Why it exists**
 
