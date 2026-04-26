@@ -1,4 +1,3 @@
-import { readFileSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
@@ -17,7 +16,6 @@ import {
   logRecoveryDecision,
   safePageUrl,
   safeTitle,
-  telemetryKey,
 } from "./capabilityProbe";
 export type {
   AskExecutionCommand,
@@ -42,14 +40,9 @@ import type {
   BrowserOpenCommand,
   BrowserStatusSnapshot,
   CapabilityBridgeMessage,
-  CapabilityKey,
-  CapabilityMatrixSnapshot,
   CapabilityReportPayload,
   DomNeighborhoodSnapshot,
   ProbeDocumentOptions,
-  SelectorPackSnapshot,
-  StrategyAttemptSnapshot,
-  StrategyTelemetrySnapshot,
   RequestStateSnapshot,
   ResearchExecutionCommand,
   ResearchProgressSnapshot,
@@ -107,7 +100,6 @@ export { detectBrowserExecutable, resolveBrowserLaunchConfig } from "./launch";
 import {
   ASK_STALL_RECOVERY_GRACE_MS,
   ASK_TIMEOUT_MS,
-  ATTACH_PROBE_GRACE_MS,
   DEEP_RESEARCH_HANDOFF_TIMEOUT_MS,
   INTERACTION_TIMEOUT_MS,
   MAX_RECOVERY_ATTEMPTS,
@@ -136,14 +128,12 @@ export {
   uploadAckTimeoutMsForFiles,
 } from "./timing";
 import {
-  buildTargetPageId,
   conversationIdFromUrl,
   matchesTargetLocation,
   matchesTargetWorkspace,
   researchRecoveryLocationScore,
   resolveConversationUrl,
   uniquePages,
-  workspaceKeyFromUrl,
 } from "./urls";
 export {
   conversationIdFromUrl,
@@ -151,40 +141,12 @@ export {
   workspaceKeyFromUrl,
 } from "./urls";
 export { chooseUniqueArtifactPath } from "./artifacts";
-
-interface CapabilityCacheEntry {
-  workspace_key: string;
-  saved_at: string;
-  ui_signature: string | null;
-  preferred_strategies: Partial<Record<CapabilityKey, string>>;
-  report: CapabilityReportPayload;
-}
-
-interface StrategyTelemetryStat {
-  capability: CapabilityKey;
-  strategy_id: string;
-  success_count: number;
-  failure_count: number;
-  last_used_at: string | null;
-}
-
-interface CapabilityCacheFile {
-  version: 2;
-  workspaces: Record<string, CapabilityCacheEntry>;
-  telemetry: StrategyTelemetryStat[];
-}
-
-interface TargetPageState {
-  page_id: string;
-  last_seen_url: string | null;
-  workspace_key: string | null;
-  extension_connected: boolean;
-  capability_report: CapabilityReportPayload | null;
-  ui_signature: string | null;
-  dom_neighborhoods: DomNeighborhoodSnapshot[];
-  last_capability_report_at: string | null;
-  probe_ready_until_ms: number;
-}
+import { CapabilityStrategyCache } from "./browserAdapter/capabilityCache";
+import { DiagnosticsBundleCapture } from "./browserAdapter/diagnostics";
+import {
+  BrowserPageRegistry,
+  type TargetPageState,
+} from "./browserAdapter/pageRegistry";
 
 function isRecoverableTargetPageError(error: unknown): boolean {
   if (isTransientPageError(error)) {
@@ -223,30 +185,13 @@ export class BrowserAdapter {
   private targetPageCreatedByAdapter = false;
   private browserOwner: "external" | "managed" = "managed";
   private cdpAttached = false;
-  private readonly observedPages = new WeakSet<Page>();
-  private readonly observedContexts = new WeakSet<BrowserContext>();
-  private readonly pageStates = new Map<string, TargetPageState>();
+  private readonly pageRegistry = new BrowserPageRegistry();
   private extensionConnected = false;
   private lastCapabilityReport: CapabilityReportPayload | null = null;
   private lastUiSignature: string | null = null;
-  private readonly strategyTelemetry = new Map<
-    string,
-    Partial<Record<CapabilityKey, string>>
-  >();
-  private readonly strategyTelemetryStats = new Map<
-    string,
-    StrategyTelemetryStat
-  >();
   private lastDomNeighborhoods: DomNeighborhoodSnapshot[] = [];
-  private readonly capabilityCachePath: string;
-  private capabilityCacheLoaded = false;
-  private capabilityCache: CapabilityCacheFile = {
-    version: 2,
-    workspaces: {},
-    telemetry: [],
-  };
-  private readonly selectorPackPath: string;
-  private selectorPack: SelectorPackSnapshot | null = null;
+  private readonly capabilityCache: CapabilityStrategyCache;
+  private readonly diagnosticsCapture: DiagnosticsBundleCapture;
   private readonly execution: BrowserExecutionController;
 
   constructor(options: BrowserAdapterOptions) {
@@ -261,13 +206,17 @@ export class BrowserAdapter {
     this.autoOpenTargetTab = options.autoOpenTargetTab ?? true;
     this.currentTargetUrl = options.defaultTargetUrl;
     this.currentBrowserPath = options.defaultBrowserPath ?? null;
-    this.capabilityCachePath = resolve(
-      this.profileDir,
-      "tablinq-capability-cache.json",
+    this.capabilityCache = new CapabilityStrategyCache(
+      resolve(this.profileDir, "tablinq-capability-cache.json"),
+      resolve(
+        resolveTablinqAssetPath([
+          "selector-packs",
+          "v1",
+          "chatgpt-default.json",
+        ]),
+      ),
     );
-    this.selectorPackPath = resolve(
-      resolveTablinqAssetPath(["selector-packs", "v1", "chatgpt-default.json"]),
-    );
+    this.diagnosticsCapture = new DiagnosticsBundleCapture(this.profileDir);
     this.execution = new BrowserExecutionController({
       getCurrentTargetUrl: () => this.currentTargetUrl,
       setCurrentTargetUrl: (url) => {
@@ -418,7 +367,7 @@ export class BrowserAdapter {
     this.browserOwner =
       this.connectionMode === "managed_only" ? "managed" : "external";
     this.cdpAttached = false;
-    this.pageStates.clear();
+    this.pageRegistry.clearPageStates();
     this.clearActiveCapabilityState();
     return this.health();
   }
@@ -447,9 +396,7 @@ export class BrowserAdapter {
   }
 
   private activePageState(): TargetPageState | undefined {
-    return this.targetPageId
-      ? this.pageStates.get(this.targetPageId)
-      : undefined;
+    return this.pageRegistry.activePageState(this.targetPageId);
   }
 
   getLastDomNeighborhoodsForTest(): DomNeighborhoodSnapshot[] {
@@ -464,43 +411,11 @@ export class BrowserAdapter {
   }
 
   private ensurePageState(page: Page): TargetPageState {
-    const pageId = buildTargetPageId(page);
-    const existing = this.pageStates.get(pageId);
-    if (existing) {
-      return existing;
-    }
-
-    const state: TargetPageState = {
-      page_id: pageId,
-      last_seen_url: safePageUrl(page),
-      workspace_key: safePageUrl(page)
-        ? workspaceKeyFromUrl(safePageUrl(page)!)
-        : null,
-      extension_connected: false,
-      capability_report: null,
-      ui_signature: null,
-      dom_neighborhoods: [],
-      last_capability_report_at: null,
-      probe_ready_until_ms: this.cdpAttached
-        ? Date.now() + ATTACH_PROBE_GRACE_MS
-        : 0,
-    };
-    this.pageStates.set(pageId, state);
-    return state;
+    return this.pageRegistry.ensurePageState(page, this.cdpAttached);
   }
 
   private updatePageLocationState(page: Page): TargetPageState {
-    const state = this.ensurePageState(page);
-    const currentUrl = safePageUrl(page);
-    state.last_seen_url = currentUrl;
-    state.workspace_key = currentUrl ? workspaceKeyFromUrl(currentUrl) : null;
-    if (this.cdpAttached) {
-      state.probe_ready_until_ms = Math.max(
-        state.probe_ready_until_ms,
-        Date.now() + ATTACH_PROBE_GRACE_MS,
-      );
-    }
-    return state;
+    return this.pageRegistry.updatePageLocationState(page, this.cdpAttached);
   }
 
   private recordCapabilitySuccess(
@@ -513,12 +428,11 @@ export class BrowserAdapter {
     state.ui_signature = message.runtime.ui_signature;
     state.dom_neighborhoods = message.runtime.dom_neighborhoods;
     state.last_capability_report_at = message.report.reported_at;
-    this.strategyTelemetry.set(
-      message.runtime.ui_signature,
-      message.runtime.strategy_matches,
+    this.capabilityCache.recordCapabilitySuccess(
+      page.url(),
+      message,
+      this.lastUiSignature,
     );
-    this.recordStrategyStats(message.runtime.strategy_matches);
-    this.persistCapabilitySnapshot(page.url(), message);
     if (this.targetPageId === state.page_id) {
       this.applyPageStateToActiveTarget(state);
     }
@@ -560,22 +474,10 @@ export class BrowserAdapter {
   }
 
   async diagnostics(bundleDir?: string): Promise<BrowserDiagnosticsSnapshot> {
-    this.hydrateCapabilityCache();
-    const selectorPack = this.ensureSelectorPackLoaded();
-    let profileAccessError: string | null = null;
-    let profileAccessible = true;
-    try {
-      await mkdir(this.profileDir, { recursive: true });
-      writeFileSync(
-        resolve(this.profileDir, ".tablinq-profile-check"),
-        "ok",
-        "utf8",
-      );
-    } catch (error) {
-      profileAccessible = false;
-      profileAccessError =
-        error instanceof Error ? error.message : String(error);
-    }
+    this.capabilityCache.hydrate();
+    const selectorPack = this.capabilityCache.ensureSelectorPackLoaded();
+    const { profileAccessible, profileAccessError } =
+      await this.diagnosticsCapture.checkProfileAccess();
 
     const page =
       this.managedPage && !this.managedPage.isClosed()
@@ -587,7 +489,13 @@ export class BrowserAdapter {
 
     const screenshotPath =
       bundleDir && page
-        ? await this.captureBundleScreenshot(page, bundleDir).catch(() => null)
+        ? await this.diagnosticsCapture
+            .captureBundleScreenshot(page, bundleDir)
+            .then((path) => {
+              this.lastScreenshotPath = path;
+              return path;
+            })
+            .catch(() => null)
         : null;
 
     return {
@@ -602,7 +510,11 @@ export class BrowserAdapter {
         upload_control_visible: false,
         downloadable_artifacts_observable: false,
       },
-      strategy_attempts: this.buildStrategyAttempts(),
+      strategy_attempts: this.capabilityCache.buildStrategyAttempts({
+        lastCapabilityReport: this.lastCapabilityReport,
+        lastUiSignature: this.lastUiSignature,
+        lastDomNeighborhoods: this.lastDomNeighborhoods,
+      }),
       dom_snapshot: page
         ? await captureDomSnapshot(page, this.lastDomNeighborhoods)
         : "",
@@ -613,10 +525,10 @@ export class BrowserAdapter {
             pack_id: selectorPack.pack_id,
             version: `v${selectorPack.format_version}`,
             updated_at: selectorPack.updated_at ?? null,
-            path: this.selectorPackPath,
+            path: this.capabilityCache.selectorPackPath,
           }
         : null,
-      strategy_telemetry: this.getStrategyTelemetrySnapshots(),
+      strategy_telemetry: this.capabilityCache.getStrategyTelemetrySnapshots(),
       browser_detected: detectBrowserAvailability(
         process.platform,
         this.currentBrowserPath ?? undefined,
@@ -755,7 +667,7 @@ export class BrowserAdapter {
     }
 
     this.currentHeadless = headless;
-    this.hydrateCapabilityCache();
+    this.capabilityCache.hydrate();
     await mkdir(this.profileDir, { recursive: true });
     await mkdir(this.downloadsDir, { recursive: true });
     const shouldTryAttach =
@@ -846,14 +758,14 @@ export class BrowserAdapter {
   }
 
   private attachPage(page: Page, activate = false): void {
-    if (this.observedPages.has(page)) {
+    if (this.pageRegistry.hasObservedPage(page)) {
       this.updatePageLocationState(page);
       if (activate) {
         this.activateTargetPage(page, this.targetPageCreatedByAdapter);
       }
       return;
     }
-    this.observedPages.add(page);
+    this.pageRegistry.markPageObserved(page);
     const pageState = this.updatePageLocationState(page);
     const pageId = pageState.page_id;
 
@@ -878,7 +790,7 @@ export class BrowserAdapter {
       }
     });
     page.on("close", () => {
-      this.pageStates.delete(pageId);
+      this.pageRegistry.deletePageState(pageId);
       if (this.managedPage === page) {
         this.managedPage = undefined;
         this.targetPageId = null;
@@ -887,7 +799,7 @@ export class BrowserAdapter {
       }
     });
     page.on("crash", () => {
-      this.pageStates.delete(pageId);
+      this.pageRegistry.deletePageState(pageId);
       if (this.managedPage === page) {
         this.managedPage = undefined;
         this.targetPageId = null;
@@ -936,7 +848,7 @@ export class BrowserAdapter {
       this.targetPageId = null;
       this.targetPageCreatedByAdapter = false;
       this.cdpAttached = false;
-      this.pageStates.clear();
+      this.pageRegistry.clearPageStates();
       this.clearActiveCapabilityState();
     });
     for (const existingContext of this.browser.contexts()) {
@@ -990,10 +902,10 @@ export class BrowserAdapter {
   }
 
   private observeContext(context: BrowserContext): void {
-    if (this.observedContexts.has(context)) {
+    if (this.pageRegistry.hasObservedContext(context)) {
       return;
     }
-    this.observedContexts.add(context);
+    this.pageRegistry.markContextObserved(context);
 
     context.on("close", () => {
       if (this.context === context) {
@@ -1196,11 +1108,11 @@ export class BrowserAdapter {
     }
 
     const pageState = this.updatePageLocationState(page);
-    const preferredStrategies = pageState.ui_signature
-      ? (this.strategyTelemetry.get(pageState.ui_signature) ?? {})
-      : (this.capabilityCache.workspaces[workspaceKeyFromUrl(page.url())]
-          ?.preferred_strategies ?? {});
-    const selectorPack = this.ensureSelectorPackLoaded();
+    const preferredStrategies = this.capabilityCache.preferredStrategiesFor(
+      pageState,
+      page.url(),
+    );
+    const selectorPack = this.capabilityCache.ensureSelectorPackLoaded();
     const probeDeadline = this.cdpAttached
       ? Math.max(pageState.probe_ready_until_ms, Date.now())
       : Date.now();
@@ -1261,234 +1173,4 @@ export class BrowserAdapter {
     return this.recordCapabilityFailure(page);
   }
 
-  private hydrateCapabilityCache(): void {
-    if (this.capabilityCacheLoaded) {
-      return;
-    }
-    this.capabilityCacheLoaded = true;
-
-    try {
-      const parsed = JSON.parse(
-        readFileSync(this.capabilityCachePath, "utf8"),
-      ) as CapabilityCacheFile & {
-        version?: number;
-        telemetry?: StrategyTelemetryStat[];
-      };
-      if (!parsed?.workspaces) {
-        this.capabilityCache = {
-          version: 2,
-          workspaces: {},
-          telemetry: [],
-        };
-        return;
-      }
-      this.capabilityCache = {
-        version: 2,
-        workspaces: parsed.workspaces,
-        telemetry: parsed.telemetry ?? [],
-      };
-      for (const entry of Object.values(this.capabilityCache.workspaces)) {
-        if (entry.ui_signature) {
-          this.strategyTelemetry.set(
-            entry.ui_signature,
-            entry.preferred_strategies ?? {},
-          );
-        }
-      }
-      for (const stat of this.capabilityCache.telemetry) {
-        this.strategyTelemetryStats.set(
-          telemetryKey(stat.capability, stat.strategy_id),
-          stat,
-        );
-      }
-    } catch {
-      this.capabilityCache = {
-        version: 2,
-        workspaces: {},
-        telemetry: [],
-      };
-    }
-  }
-
-  private persistCapabilitySnapshot(
-    currentUrl: string,
-    message: CapabilityBridgeMessage,
-  ): void {
-    const workspaceKey = workspaceKeyFromUrl(currentUrl);
-    this.capabilityCache.workspaces[workspaceKey] = {
-      workspace_key: workspaceKey,
-      saved_at: new Date().toISOString(),
-      ui_signature: message.runtime.ui_signature,
-      preferred_strategies: message.runtime.strategy_matches,
-      report: message.report,
-    };
-    this.capabilityCache.telemetry = Array.from(
-      this.strategyTelemetryStats.values(),
-    );
-
-    try {
-      writeFileSync(
-        this.capabilityCachePath,
-        JSON.stringify(this.capabilityCache, null, 2),
-        "utf8",
-      );
-    } catch {
-      // Cache persistence is opportunistic and should not fail browser control.
-    }
-  }
-
-  private ensureSelectorPackLoaded(): SelectorPackSnapshot | null {
-    if (this.selectorPack) {
-      return this.selectorPack;
-    }
-
-    try {
-      const parsed = JSON.parse(
-        readFileSync(this.selectorPackPath, "utf8"),
-      ) as SelectorPackSnapshot;
-      if (!parsed?.pack_id || parsed.format_version !== 1) {
-        return null;
-      }
-      this.selectorPack = parsed;
-      return this.selectorPack;
-    } catch {
-      return null;
-    }
-  }
-
-  private recordStrategyStats(
-    strategyMatches: Partial<Record<CapabilityKey, string>>,
-  ): void {
-    const capabilities = [
-      "composer_ready",
-      "submit_available",
-      "model_picker_visible",
-      "thinking_effort_visible",
-      "search_mode_visible",
-      "research_mode_visible",
-      "upload_control_visible",
-      "downloadable_artifacts_observable",
-    ] satisfies CapabilityKey[];
-
-    for (const capability of capabilities) {
-      const matched = strategyMatches[capability];
-      if (matched) {
-        const key = telemetryKey(capability, matched);
-        const current = this.strategyTelemetryStats.get(key) ?? {
-          capability,
-          strategy_id: matched,
-          success_count: 0,
-          failure_count: 0,
-          last_used_at: null,
-        };
-        current.success_count += 1;
-        current.last_used_at = new Date().toISOString();
-        this.strategyTelemetryStats.set(key, current);
-        continue;
-      }
-
-      const preferred = this.lastUiSignature
-        ? this.strategyTelemetry.get(this.lastUiSignature)?.[capability]
-        : undefined;
-      const strategyId =
-        preferred ??
-        this.ensureSelectorPackLoaded()?.capabilities?.[capability]?.[0]
-          ?.strategy_id;
-      if (!strategyId) {
-        continue;
-      }
-      const key = telemetryKey(capability, strategyId);
-      const current = this.strategyTelemetryStats.get(key) ?? {
-        capability,
-        strategy_id: strategyId,
-        success_count: 0,
-        failure_count: 0,
-        last_used_at: null,
-      };
-      current.failure_count += 1;
-      this.strategyTelemetryStats.set(key, current);
-    }
-  }
-
-  private buildStrategyAttempts(): StrategyAttemptSnapshot[] {
-    const selectorPack = this.ensureSelectorPackLoaded();
-    const matrix = this.lastCapabilityReport?.matrix;
-    const matched = this.lastUiSignature
-      ? (this.strategyTelemetry.get(this.lastUiSignature) ?? {})
-      : {};
-    const attempts: StrategyAttemptSnapshot[] = [];
-    const capabilities = Object.keys(
-      selectorPack?.capabilities ?? {},
-    ) as CapabilityKey[];
-
-    for (const capability of capabilities) {
-      const strategies = selectorPack?.capabilities?.[capability] ?? [];
-      const matchedStrategy = matched[capability];
-      if (matchedStrategy) {
-        const strategy = strategies.find(
-          (entry) => entry.strategy_id === matchedStrategy,
-        );
-        attempts.push({
-          capability,
-          strategy_id: matchedStrategy,
-          score: strategy?.score ?? 1,
-          outcome: "matched",
-          detail:
-            this.lastDomNeighborhoods.find(
-              (entry) =>
-                entry.capability === capability &&
-                entry.strategy_id === matchedStrategy,
-            )?.anchor_path ?? null,
-        });
-        continue;
-      }
-
-      if (matrix && !matrix[capability]) {
-        const first = strategies[0];
-        if (first) {
-          attempts.push({
-            capability,
-            strategy_id: first.strategy_id,
-            score: first.score,
-            outcome: "missing",
-            detail: "probe did not find a matching visible control",
-          });
-        }
-      }
-    }
-
-    return attempts;
-  }
-
-  private getStrategyTelemetrySnapshots(): StrategyTelemetrySnapshot[] {
-    return Array.from(this.strategyTelemetryStats.values())
-      .sort((left, right) => {
-        if (left.capability === right.capability) {
-          return left.strategy_id.localeCompare(right.strategy_id);
-        }
-        return left.capability.localeCompare(right.capability);
-      })
-      .map((entry) => ({
-        capability: entry.capability,
-        strategy_id: entry.strategy_id,
-        success_count: entry.success_count,
-        failure_count: entry.failure_count,
-        success_rate:
-          entry.success_count + entry.failure_count === 0
-            ? 0
-            : entry.success_count / (entry.success_count + entry.failure_count),
-        last_used_at: entry.last_used_at,
-      }));
-  }
-
-  private async captureBundleScreenshot(
-    page: Page,
-    bundleDir: string,
-  ): Promise<string> {
-    const screenshotPath = resolve(bundleDir, "failure.png");
-    await mkdir(dirname(screenshotPath), { recursive: true });
-    await page.screenshot({ fullPage: true, path: screenshotPath });
-    this.lastScreenshotPath = screenshotPath;
-    return screenshotPath;
-  }
 }
