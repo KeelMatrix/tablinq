@@ -35,6 +35,7 @@ import {
 import {
   expectHarnessCapabilityMatrix,
   expectManagedHarnessOpenSnapshot,
+  openManagedHarnessAdapter,
   openTrackedManagedAdapter,
 } from "./helpers/browserFlow";
 
@@ -225,20 +226,14 @@ describe("browser adapter", () => {
 
   it("keeps the effort control absent until Thinking is selected on the modern menu harness", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const targetUrl = withHarnessUrl(server.url, {
-      variant: "menu",
-      initialModel: "instant",
-    });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
+    const { adapter, snapshot } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
+        variant: "menu",
+        initialModel: "instant",
+      },
     );
-
-    const snapshot = await adapter.open({ targetUrl, headless: true });
     const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
       modelTriggerLabel:
         document
@@ -289,17 +284,11 @@ describe("browser adapter", () => {
 
   it("captures only Deep research aliases from the live sidebar nav cluster", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
+    const { adapter, snapshot } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      { variant: "live" },
     );
-
-    const snapshot = await adapter.open({ targetUrl, headless: true });
     const researchAliases =
       snapshot.capability_report?.aliases.modes.research ?? [];
 

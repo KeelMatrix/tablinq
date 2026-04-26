@@ -35,6 +35,7 @@ import {
 import {
   captureDeltaChunks,
   expectCompletedAskResult,
+  openManagedHarnessAdapter,
   openTrackedManagedAdapter,
 } from "./helpers/browserFlow";
 
@@ -363,18 +364,10 @@ describe("browser adapter", () => {
 
   it("refuses asks when the managed page is a signed-out local login screen", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: `${server.url}/login-expired.html`,
-      }),
+    const { adapter } = await openTrackedManagedAdapter(
+      harness,
+      `${server.url}/login-expired.html`,
     );
-    await adapter.open({
-      targetUrl: `${server.url}/login-expired.html`,
-      headless: true,
-    });
 
     await expect(
       adapter.ask(
@@ -391,19 +384,10 @@ describe("browser adapter", () => {
 
   it("selects Instant from the current ChatGPT model menu", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const targetUrl = withHarnessUrl(server.url, {
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
       variant: "menu",
       initialModel: "thinking",
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
 
     await adapter.ask(
       {
@@ -430,18 +414,9 @@ describe("browser adapter", () => {
 
   it("selects Instant from the classic inline model controls", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const targetUrl = withHarnessUrl(server.url, {
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
       initialModel: "thinking",
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
 
     await adapter.ask(
       {
@@ -465,20 +440,11 @@ describe("browser adapter", () => {
 
   it("selects Thinking and Extended from the aria inline controls", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const targetUrl = withHarnessUrl(server.url, {
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
       variant: "aria",
       initialModel: "instant",
       initialEffort: "standard",
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
 
     await adapter.ask(
       {
@@ -505,18 +471,9 @@ describe("browser adapter", () => {
 
   it("starts a fresh conversation when a new ask requests one", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const targetUrl = withHarnessUrl(server.url, {
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
       variant: "live",
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
 
     const first = await adapter.ask(
       {
@@ -541,19 +498,10 @@ describe("browser adapter", () => {
 
   it("selects Thinking from the current ChatGPT model menu and then applies Extended effort", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const targetUrl = withHarnessUrl(server.url, {
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
       variant: "menu",
       initialModel: "instant",
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
 
     await adapter.ask(
       {
@@ -583,20 +531,11 @@ describe("browser adapter", () => {
 
   it("reports capability missing when the requested model option is absent from the picker", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const targetUrl = withHarnessUrl(server.url, {
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
       variant: "menu",
       initialModel: "thinking",
       missing: ["instant-model"],
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
 
     await expect(
       adapter.ask(
@@ -616,20 +555,11 @@ describe("browser adapter", () => {
 
   it("reports capability missing when thinking effort controls never appear", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const targetUrl = withHarnessUrl(server.url, {
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
       variant: "menu",
       initialModel: "instant",
       missing: ["effort"],
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
 
     await expect(
       adapter.ask(

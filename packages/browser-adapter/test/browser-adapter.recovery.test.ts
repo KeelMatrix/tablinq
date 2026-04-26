@@ -23,6 +23,7 @@ import {
   withAttachedBrowser,
   withHarnessUrl,
 } from "./browser-adapter.integration.helpers";
+import { openManagedHarnessAdapter } from "./helpers/browserFlow";
 
 let harness: ReturnType<typeof createBrowserIntegrationHarness>;
 
@@ -106,17 +107,8 @@ describe("browser adapter", () => {
 
   it("continues ask streaming after a page reload", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: withHarnessUrl(server.url, { scenario: "reload" }),
-      }),
-    );
-    await adapter.open({
-      targetUrl: withHarnessUrl(server.url, { scenario: "reload" }),
-      headless: true,
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      scenario: "reload",
     });
 
     const states: string[] = [];
