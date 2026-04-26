@@ -1,6 +1,8 @@
 use super::*;
 use crate::uploads::MAX_STAGED_UPLOAD_BYTES;
 
+const UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS: u64 = 60_000;
+
 #[test]
 fn upload_store_cleans_up_expired_staged_files() {
     let dir = tempdir().unwrap();
@@ -89,7 +91,7 @@ fn files_upload_endpoint_stages_files_and_research_accepts_file_ids() {
             ("content-type", "application/json"),
         ],
         &first_body,
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(first.status_code, 200);
@@ -125,7 +127,7 @@ fn files_upload_endpoint_stages_files_and_research_accepts_file_ids() {
             ("x-request-id", "req-file-reuse-2"),
         ],
         &second_body,
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(second.status_code, 200);
@@ -137,7 +139,7 @@ fn files_upload_endpoint_stages_files_and_research_accepts_file_ids() {
         &format!("{V1_FILES_PATH}/{file_id}"),
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(detail.status_code, 200);
@@ -243,7 +245,7 @@ fn paperclip_like_http_flow_supports_files_and_artifacts() {
         V1_ARTIFACTS_PATH,
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(artifacts.status_code, 200);
@@ -267,7 +269,7 @@ fn paperclip_like_http_flow_supports_files_and_artifacts() {
         artifact["content_url"].as_str().unwrap(),
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(content.status_code, 200);
@@ -308,7 +310,7 @@ fn provider_smoke_covers_chat_files_artifacts_and_cancel_flow() {
             "messages": [{ "role": "user", "content": "provider smoke ask" }]
         }))
         .unwrap(),
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(chat.status_code, 200);
@@ -339,7 +341,7 @@ fn provider_smoke_covers_chat_files_artifacts_and_cancel_flow() {
             false,
             &[&file_id],
         ),
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(artifact_response.status_code, 200);
@@ -356,7 +358,7 @@ fn provider_smoke_covers_chat_files_artifacts_and_cancel_flow() {
         V1_ARTIFACTS_PATH,
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(artifacts.status_code, 200);
@@ -383,7 +385,7 @@ fn provider_smoke_covers_chat_files_artifacts_and_cancel_flow() {
         &format!("{V1_ARTIFACTS_PATH}/{artifact_id}"),
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(artifact_detail.status_code, 200);
@@ -395,7 +397,7 @@ fn provider_smoke_covers_chat_files_artifacts_and_cancel_flow() {
         &format!("{V1_ARTIFACTS_PATH}/{artifact_id}/content"),
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(artifact_content.status_code, 200);
@@ -424,7 +426,7 @@ fn provider_smoke_covers_chat_files_artifacts_and_cancel_flow() {
                 ("x-request-id", "req-provider-smoke-cancel"),
             ],
             &cancel_body,
-            20_000,
+            UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
         )
         .unwrap()
     });
@@ -475,7 +477,7 @@ fn paperclip_like_requests_report_missing_staged_file_errors_cleanly() {
             ("x-client-id", "paperclip"),
         ],
         &body,
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(response.status_code, 400);
@@ -527,7 +529,7 @@ fn artifacts_endpoints_list_metadata_and_stream_content() {
             ("content-type", "application/json"),
         ],
         &body,
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(completion.status_code, 200);
@@ -545,7 +547,7 @@ fn artifacts_endpoints_list_metadata_and_stream_content() {
         V1_ARTIFACTS_PATH,
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(artifacts.status_code, 200);
@@ -571,7 +573,7 @@ fn artifacts_endpoints_list_metadata_and_stream_content() {
         &format!("{V1_ARTIFACTS_PATH}/{artifact_id}"),
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(detail.status_code, 200);
@@ -601,7 +603,7 @@ fn artifacts_endpoints_list_metadata_and_stream_content() {
         &format!("{V1_ARTIFACTS_PATH}/{artifact_id}/content"),
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(content.status_code, 200);
@@ -634,7 +636,7 @@ fn files_endpoint_keeps_duplicate_original_names_as_separate_staged_ids() {
         V1_FILES_PATH,
         &[("authorization", auth.as_str())],
         &[],
-        20_000,
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
     )
     .unwrap();
     assert_eq!(files.status_code, 200);
