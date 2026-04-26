@@ -18,7 +18,7 @@
     "ci:local:package-smoke": "powershell -ExecutionPolicy Bypass -File scripts/ci-local.ps1 -Job package-smoke",
     "ci:local:rust": "powershell -ExecutionPolicy Bypass -File scripts/ci-local.ps1 -Job rust",
     "ci:local:typescript": "powershell -ExecutionPolicy Bypass -File scripts/ci-local.ps1 -Job typescript",
-    "lint": "pnpm exec tsc -p packages/browser-adapter/tsconfig.json --noEmit && pnpm exec tsc -p packages/extension/tsconfig.json --noEmit",
+    "lint": "pnpm --filter @tablinq/extension run check:probe-content && pnpm exec tsc -p packages/browser-adapter/tsconfig.json --noEmit && pnpm exec tsc -p packages/extension/tsconfig.json --noEmit",
     "format": "pnpm exec prettier --check \"**/*.{json,md,ts,js,html,yml,yaml}\"",
     "package:windows": "powershell -ExecutionPolicy Bypass -File scripts/package.ps1",
     "test": "pnpm exec vitest run"

@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
 
+import { execFileSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import addFormats from "ajv-formats";
 import Ajv2020 from "ajv/dist/2020";
 import { loadSchema } from "../../browser-adapter/src/protocol";
 import { probeDocument } from "../src/probe";
+import { probeDocument as runtimeProbeDocument } from "../src/probe.runtime.js";
 import {
   createBridgeController,
   type BridgeStatus,
@@ -11,6 +15,7 @@ import {
 
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 addFormats(ajv);
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const validateCapabilityReport = ajv.compile(
   loadSchema<Record<string, unknown>>("capability-report"),
@@ -20,6 +25,22 @@ describe("extension capability probe", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
     document.body.dataset.uiVariant = "classic";
+  });
+
+  it("exports probeDocument from the canonical runtime source", () => {
+    expect(typeof runtimeProbeDocument).toBe("function");
+    expect(runtimeProbeDocument).toBe(probeDocument);
+  });
+
+  it("keeps the content probe generated from the runtime source", () => {
+    execFileSync(
+      process.execPath,
+      ["packages/extension/scripts/generate-probe-content.mjs", "--check"],
+      {
+        cwd: repoRoot,
+        stdio: "pipe",
+      },
+    );
   });
 
   it("detects the classic fake harness controls", () => {
