@@ -144,6 +144,9 @@ export function createMenuRuntime({
 
   function registerSelectionEvents() {
     modelPickerTrigger?.addEventListener("click", () => {
+      document.body.dataset.modelMenuClicks = String(
+        Number.parseInt(document.body.dataset.modelMenuClicks || "0", 10) + 1,
+      );
       const expanded =
         modelPickerTrigger.getAttribute("aria-expanded") === "true";
       modelPickerTrigger.setAttribute(
@@ -156,6 +159,10 @@ export function createMenuRuntime({
     document
       .querySelector("#model-option-instant")
       ?.addEventListener("click", () => {
+        document.body.dataset.modelOptionClicks = String(
+          Number.parseInt(document.body.dataset.modelOptionClicks || "0", 10) +
+            1,
+        );
         document.body.dataset.selectedModel = "instant";
         modelPickerTrigger?.setAttribute("aria-expanded", "false");
         effortPickerTrigger?.setAttribute("aria-expanded", "false");
@@ -165,12 +172,19 @@ export function createMenuRuntime({
     document
       .querySelector("#model-option-thinking")
       ?.addEventListener("click", () => {
+        document.body.dataset.modelOptionClicks = String(
+          Number.parseInt(document.body.dataset.modelOptionClicks || "0", 10) +
+            1,
+        );
         document.body.dataset.selectedModel = "thinking";
         modelPickerTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();
       });
 
     effortPickerTrigger?.addEventListener("click", () => {
+      document.body.dataset.effortMenuClicks = String(
+        Number.parseInt(document.body.dataset.effortMenuClicks || "0", 10) + 1,
+      );
       const expanded =
         effortPickerTrigger.getAttribute("aria-expanded") === "true";
       effortPickerTrigger.setAttribute(
@@ -196,10 +210,19 @@ export function createMenuRuntime({
     document
       .querySelector("#tool-option-web-search")
       ?.addEventListener("click", () => {
-        document.body.dataset.searchToolClicks = String(
+        const searchToolClicks =
           Number.parseInt(document.body.dataset.searchToolClicks || "0", 10) +
-            1,
+          1;
+        document.body.dataset.searchToolClicks = String(searchToolClicks);
+        const ignoredClicks = Number.parseInt(
+          config.params.get("search_clicks_before_activate") || "0",
+          10,
         );
+        if (searchToolClicks <= ignoredClicks) {
+          composerToolsTrigger?.setAttribute("aria-expanded", "false");
+          syncSelectedState();
+          return;
+        }
         document.body.dataset.selectedMode = "search";
         composerToolsTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();
@@ -213,6 +236,10 @@ export function createMenuRuntime({
     document
       .querySelector("#effort-option-standard")
       ?.addEventListener("click", () => {
+        document.body.dataset.effortOptionClicks = String(
+          Number.parseInt(document.body.dataset.effortOptionClicks || "0", 10) +
+            1,
+        );
         document.body.dataset.selectedEffort = "standard";
         effortPickerTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();
@@ -221,6 +248,10 @@ export function createMenuRuntime({
     document
       .querySelector("#effort-option-extended")
       ?.addEventListener("click", () => {
+        document.body.dataset.effortOptionClicks = String(
+          Number.parseInt(document.body.dataset.effortOptionClicks || "0", 10) +
+            1,
+        );
         document.body.dataset.selectedEffort = "extended";
         effortPickerTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();

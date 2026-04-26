@@ -40,7 +40,14 @@ export async function applyAskConfiguration(
   if (command.effort) {
     await ensureConfiguredEffort(page, report, command.effort);
   }
-  if (command.mode && command.mode !== "normal") {
+  if (
+    command.mode &&
+    command.mode !== "normal" &&
+    command.mode !== "search"
+  ) {
+    await closeOpenComposerMenus(page);
+    await waitForInteractionSurface(page);
+    await page.waitForTimeout(750);
     page = await ensureConfiguredMode(page, report, command.mode);
   }
   return page;
@@ -168,7 +175,8 @@ async function selectedChoiceMatches(
   }
 
   return page
-    .evaluate((tokensToMatch) => {
+    .evaluate<boolean>(`(() => {
+      const tokensToMatch = ${JSON.stringify(expectedTokens)};
       const selected = Array.from(
         document.querySelectorAll(
           [
@@ -188,7 +196,7 @@ async function selectedChoiceMatches(
           element.getAttribute("data-mode") ?? "",
         ]
           .join(" ")
-          .replace(/\s+/g, " ")
+          .replace(/\\s+/g, " ")
           .trim()
           .toLowerCase();
         if (tokensToMatch.some((token) => text.includes(token))) {
@@ -196,7 +204,7 @@ async function selectedChoiceMatches(
         }
       }
       return false;
-    }, expectedTokens)
+    })()`)
     .catch(() => false);
 }
 
@@ -303,6 +311,7 @@ export async function ensureConfiguredModelClass(
       );
       await page.waitForTimeout(150);
     }
+    await closeOpenComposerMenus(page);
     return;
   }
 
@@ -357,6 +366,7 @@ export async function ensureConfiguredModelClass(
       await page.waitForTimeout(300);
     }
   }
+  await closeOpenComposerMenus(page);
 }
 
 export async function ensureConfiguredEffort(
@@ -409,6 +419,7 @@ export async function ensureConfiguredEffort(
         page,
       );
     }
+    await closeOpenComposerMenus(page);
     return;
   }
 
@@ -441,6 +452,7 @@ export async function ensureConfiguredEffort(
       page,
     );
   }
+  await closeOpenComposerMenus(page);
 }
 
 export async function findVisibleEffortTrigger(
@@ -571,39 +583,72 @@ export async function ensureConfiguredMode(
   return page;
 }
 
-async function ensureConfiguredSearchMode(page: Page): Promise<void> {
+export async function ensureConfiguredSearchMode(page: Page): Promise<void> {
+  await page.bringToFront().catch(() => undefined);
+  if (await searchModeActive(page)) {
+    return;
+  }
+  await activateSearchModeOnce(page, "locator");
+  await page.waitForTimeout(1_500);
+  if (await waitForStableSearchChip(page, 10_000)) {
+    return;
+  }
+  await closeOpenComposerMenus(page);
   if (await searchModeActive(page)) {
     return;
   }
 
-  const trigger = await findVisibleComposerToolsTrigger(page, 1_500);
-  if (!trigger) {
-    throw new Error("capability missing: search mode");
-  }
-
-  await trigger.click();
-  await page.waitForTimeout(250);
-  const option = await findVisibleComposerSearchMenuItem(page, 2_500);
-  if (!option) {
-    await page.keyboard.press("Escape").catch(() => undefined);
-    throw new Error("capability missing: search mode");
-  }
-
-  try {
-    await option.click();
-  } catch (error) {
-    throw new Error(
-      `ui drift: could not activate search mode control: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
-    );
-  }
-
-  if (await waitForSearchModeActive(page, 4_000)) {
-    await page.keyboard.press("Escape").catch(() => undefined);
+  const retried = await activateSearchModeOnce(page, "locator");
+  if (retried === "already-active") {
     return;
   }
-  await page.keyboard.press("Escape").catch(() => undefined);
+  await page.waitForTimeout(1_500);
+  if (await waitForStableSearchChip(page, 10_000)) {
+    return;
+  }
+  await closeOpenComposerMenus(page);
+  if (await searchModeActive(page)) {
+    return;
+  }
+
+  const mouseRetried = await activateSearchModeOnce(page, "mouse");
+  if (mouseRetried === "already-active") {
+    return;
+  }
+  await page.waitForTimeout(1_500);
+  if (await waitForStableSearchChip(page, 10_000)) {
+    return;
+  }
+  await closeOpenComposerMenus(page);
+  if (await searchModeActive(page)) {
+    return;
+  }
+
+  const keyboardRetried = await activateSearchModeOnce(page, "keyboard-enter");
+  if (keyboardRetried === "already-active") {
+    return;
+  }
+  await page.waitForTimeout(1_500);
+  if (await waitForStableSearchChip(page, 10_000)) {
+    return;
+  }
+  await closeOpenComposerMenus(page);
+  if (await searchModeActive(page)) {
+    return;
+  }
+
+  const keyboardSpaceRetried = await activateSearchModeOnce(
+    page,
+    "keyboard-space",
+  );
+  if (keyboardSpaceRetried === "already-active") {
+    return;
+  }
+  await page.waitForTimeout(1_500);
+  if (await waitForStableSearchChip(page, 10_000)) {
+    return;
+  }
+  await closeOpenComposerMenus(page);
   if (await searchModeActive(page)) {
     return;
   }
@@ -613,16 +658,82 @@ async function ensureConfiguredSearchMode(page: Page): Promise<void> {
   );
 }
 
+async function activateSearchModeOnce(
+  page: Page,
+  method: "locator" | "mouse" | "keyboard-enter" | "keyboard-space",
+): Promise<"clicked" | "already-active"> {
+  if (await searchModeActive(page)) {
+    return "already-active";
+  }
+  await closeOpenComposerMenus(page);
+
+  const trigger = await findVisibleComposerToolsTrigger(page, 1_500);
+  if (!trigger) {
+    throw new Error("capability missing: search mode");
+  }
+
+  await trigger.click();
+  await page.waitForTimeout(500);
+  const option = await findVisibleComposerSearchMenuItem(page, 2_500);
+  if (!option) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    throw new Error("capability missing: search mode");
+  }
+  if (option.checked === "true" && (await searchModeChipActive(page))) {
+    return "already-active";
+  }
+
+  try {
+    if (method === "mouse") {
+      const box = await option.locator.boundingBox();
+      if (!box) {
+        throw new Error("search mode control is not actionable");
+      }
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    } else if (method === "keyboard-enter" || method === "keyboard-space") {
+      await option.locator.focus();
+      await page.keyboard.press(method === "keyboard-enter" ? "Enter" : "Space");
+    } else {
+      await option.locator.click();
+    }
+    return "clicked";
+  } catch (error) {
+    throw new Error(
+      `ui drift: could not activate search mode control: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+async function closeOpenComposerMenus(page: Page): Promise<void> {
+  const openMenu = page.locator(
+    [
+      "[role='menu']:visible",
+      "[role='listbox']:visible",
+      "[data-radix-popper-content-wrapper] [role='menu']:visible",
+      "[data-radix-popper-content-wrapper] [role='listbox']:visible",
+    ].join(", "),
+  );
+  if ((await openMenu.count().catch(() => 0)) === 0) {
+    return;
+  }
+  await page.keyboard.press("Escape").catch(() => undefined);
+  await page.waitForTimeout(300);
+}
+
 async function searchModeActive(page: Page): Promise<boolean> {
+  return searchModeChipActive(page);
+}
+
+async function searchModeChipActive(page: Page): Promise<boolean> {
   return page
-    .evaluate(() => {
-      const normalize = (value: string | null | undefined) =>
-        (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-      const isVisible = (element: Element): element is HTMLElement => {
-        if (!(element instanceof HTMLElement) || element.hidden) {
+    .evaluate<boolean>(`(() => {
+      const isVisible = (element) => {
+        if (!(element instanceof HTMLElement)) {
           return false;
         }
-        if (element.getAttribute("aria-hidden") === "true") {
+        if (element.hidden || element.getAttribute("aria-hidden") === "true") {
           return false;
         }
         const style = window.getComputedStyle(element);
@@ -632,72 +743,56 @@ async function searchModeActive(page: Page): Promise<boolean> {
           style.opacity !== "0"
         );
       };
-      const isComposerScoped = (element: Element) =>
-        element.closest("[data-testid='composer-root']") !== null ||
-        element.closest("form") !== null;
-      const nameOf = (element: Element) =>
-        normalize(
-          `${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""}`,
-        );
-      const chipActive = Array.from(
-        document.querySelectorAll(
-          [
-            "button.__composer-pill",
-            "button[aria-label*='Search' i]",
-            "[data-mode='search'][aria-pressed='true']",
-            "[data-mode='search'][data-selected='true']",
-          ].join(", "),
-        ),
-      ).some((element) => {
-        if (!isVisible(element) || !isComposerScoped(element)) {
-          return false;
-        }
-        const name = nameOf(element);
-        return (
-          /\bsearch\b/.test(name) &&
-          !/\bsearch chats\b/.test(name) &&
-          (name.includes("click to remove") ||
-            element.classList.contains("__composer-pill") ||
-            element.getAttribute("aria-pressed") === "true" ||
-            element.getAttribute("data-selected") === "true")
-        );
-      });
-      if (chipActive) {
-        return true;
-      }
       return Array.from(
         document.querySelectorAll(
           [
-            "[role='menu'] [role='menuitemradio']",
-            "[data-radix-popper-content-wrapper] [role='menuitemradio']",
+            "button.__composer-pill",
+            "button[aria-label*='Search']",
+            "[data-mode='search'][aria-pressed='true']",
+            "[data-mode='search'][data-selected='true']",
           ].join(", "),
         ),
       ).some((element) => {
         if (!isVisible(element)) {
           return false;
         }
-        const name = nameOf(element);
+        const normalize = (value) =>
+          (value ?? "").replace(/\\s+/g, " ").trim().toLowerCase();
+        const name = normalize(
+          (element.textContent ?? "") +
+            " " +
+            (element.getAttribute("aria-label") ?? ""),
+        );
+        const inComposer =
+          element.closest("[data-testid='composer-root']") !== null ||
+          element.closest("form") !== null;
         return (
-          (name === "search" || name === "web search") &&
-          element.getAttribute("aria-checked") === "true"
+          inComposer &&
+          /\\bsearch\\b/.test(name) &&
+          !/\\bsearch chats\\b/.test(name) &&
+          (name.includes("click to remove") ||
+            element.classList.contains("__composer-pill") ||
+            element.getAttribute("aria-pressed") === "true" ||
+            element.getAttribute("data-selected") === "true")
         );
       });
-    })
+    })()`)
     .catch(() => false);
 }
 
-async function waitForSearchModeActive(
+async function waitForStableSearchChip(
   page: Page,
   timeoutMs: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (await searchModeActive(page)) {
-      return true;
+    if (await searchModeChipActive(page)) {
+      await page.waitForTimeout(150);
+      return searchModeChipActive(page);
     }
     await page.waitForTimeout(100);
   }
-  return searchModeActive(page);
+  return searchModeChipActive(page);
 }
 
 async function findVisibleComposerToolsTrigger(
@@ -728,7 +823,7 @@ async function findVisibleComposerToolsTrigger(
 async function findVisibleComposerSearchMenuItem(
   page: Page,
   timeoutMs: number,
-): Promise<Locator | null> {
+): Promise<{ locator: Locator; checked: string | null } | null> {
   const exactWebSearch = await waitForVisibleLocator(
     page
       .locator("[role='menu'] [role='menuitemradio']")
@@ -736,7 +831,10 @@ async function findVisibleComposerSearchMenuItem(
     Math.min(timeoutMs, 1_000),
   );
   if (exactWebSearch) {
-    return exactWebSearch;
+    return {
+      locator: exactWebSearch,
+      checked: await exactWebSearch.getAttribute("aria-checked"),
+    };
   }
 
   const deadline = Date.now() + timeoutMs;
@@ -750,7 +848,9 @@ async function findVisibleComposerSearchMenuItem(
   return visibleComposerSearchMenuItem(page);
 }
 
-async function visibleComposerSearchMenuItem(page: Page): Promise<Locator | null> {
+async function visibleComposerSearchMenuItem(
+  page: Page,
+): Promise<{ locator: Locator; checked: string | null } | null> {
   const menuItems = page.locator(
     [
       "[role='menu'] [role='menuitemradio']",
@@ -777,7 +877,10 @@ async function visibleComposerSearchMenuItem(page: Page): Promise<Locator | null
       (text === "search" || text === "web search" || text.includes("web search")) &&
       !text.includes("search chats")
     ) {
-      return item;
+      return {
+        locator: item,
+        checked: await item.getAttribute("aria-checked"),
+      };
     }
   }
   return null;

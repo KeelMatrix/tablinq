@@ -8,6 +8,7 @@ import {
   applyAskConfiguration,
   clickSubmit,
   fillComposer,
+  ensureConfiguredSearchMode,
   isTransientPageError,
   readAskBaseline,
   readAskSnapshot,
@@ -124,6 +125,11 @@ export async function runAsk(
           Math.max(1, timeoutAt - Date.now()),
         ),
       );
+    }
+    if (command.mode === "search") {
+      await sleep(1_000);
+      page = await host.openExecutionPage(safePageUrl(page) ?? page.url());
+      await ensureConfiguredSearchMode(page);
     }
     await maybeApplySubmitJitter(command.submitJitterMs, timeoutAt);
     await clickSubmit(page);

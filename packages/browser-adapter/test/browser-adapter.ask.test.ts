@@ -487,6 +487,100 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("does not reopen model or effort controls when thinking standard search is already selected", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      initialModel: "thinking",
+      initialEffort: "standard",
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      document.body.dataset.selectedMode = "search";
+      (window as unknown as { syncSelectedState?: () => void })
+        .syncSelectedState?.();
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-menu-search-all-active",
+        prompt: "keep selected controls",
+        mode: "search",
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+      effortOptionClicks: document.body.dataset.effortOptionClicks ?? "0",
+      toolsMenuClicks: document.body.dataset.toolsMenuClicks ?? "0",
+      searchToolClicks: document.body.dataset.searchToolClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      model: "thinking",
+      effort: "standard",
+      modelMenuClicks: "0",
+      modelOptionClicks: "0",
+      effortMenuClicks: "0",
+      effortOptionClicks: "0",
+      toolsMenuClicks: "0",
+      searchToolClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("retries search activation only when Web search remains unchecked", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      initialModel: "thinking",
+      initialEffort: "standard",
+      searchClicksBeforeActivate: 1,
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-menu-search-guarded-retry",
+        prompt: "guard search retry",
+        mode: "search",
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      toolsMenuClicks: document.body.dataset.toolsMenuClicks,
+      searchToolClicks: document.body.dataset.searchToolClicks,
+      searchChipVisible:
+        !document.querySelector("#search-chip")?.hasAttribute("hidden"),
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      model: "thinking",
+      effort: "standard",
+      toolsMenuClicks: "2",
+      searchToolClicks: "2",
+      searchChipVisible: true,
+    });
+
+    await adapter.shutdown();
+  });
+
   it("selects Instant from the classic inline model controls", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {

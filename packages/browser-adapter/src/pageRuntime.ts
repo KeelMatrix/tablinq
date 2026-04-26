@@ -37,6 +37,7 @@ export {
   findVisiblePopupChoicePoint,
   ensureConfiguredModelClass,
   ensureConfiguredEffort,
+  ensureConfiguredSearchMode,
   findVisibleEffortTrigger,
   ensureConfiguredMode,
   navigateDirectlyToDeepResearch,
