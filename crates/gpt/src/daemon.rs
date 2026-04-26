@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
-use shared_protocol::{CancelJobCommand, DaemonRequest, build_state_paths, resolve_state_root};
+use shared_protocol::{
+    CancelJobCommand, DaemonRequest, DaemonResponse, build_state_paths, resolve_state_root,
+};
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::{Mutex, OnceLock, mpsc};
@@ -14,19 +16,26 @@ pub(crate) fn send_daemon_request(
     state_root: Option<&Path>,
     request: DaemonRequest,
 ) -> Result<Value> {
+    let response = send_daemon_response(state_root, request)?;
+    serde_json::to_value(response).context("serialize daemon response")
+}
+
+pub(crate) fn send_daemon_response(
+    state_root: Option<&Path>,
+    request: DaemonRequest,
+) -> Result<DaemonResponse> {
     let config = gptd::AppConfig::load_or_create(state_root)?;
     let paths = build_state_paths(resolve_state_root(state_root));
     let timeout = Duration::from_millis(config.gateway_request_timeout_ms());
     let endpoint = paths.ipc_endpoint.clone();
-    let response = run_with_timeout(
+    run_with_timeout(
         timeout,
         format!("daemon request timed out after {} ms", timeout.as_millis()),
         move || {
             gptd::send_request(&endpoint, &request)
                 .with_context(|| format!("connect to daemon at {endpoint}"))
         },
-    )?;
-    serde_json::to_value(response).context("serialize daemon response")
+    )
 }
 
 pub(crate) struct ActiveExecutionInterruptGuard;

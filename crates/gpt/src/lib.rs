@@ -11,10 +11,11 @@ use shared_protocol::{CancelJobCommand, DaemonRequest, PullArtifactCommand};
 use std::path::Path;
 
 use crate::browser::run_browser_command;
-use crate::daemon::{send_daemon_request, start_daemon};
+use crate::daemon::{send_daemon_request, send_daemon_response, start_daemon};
 use crate::status::{config_show, operational_report};
 use crate::terminal::{
     execute_ask_with_terminal_presentation, execute_research_with_terminal_presentation,
+    format_conversation_list, format_conversation_selection,
 };
 
 pub use crate::cli::{
@@ -78,11 +79,31 @@ fn execute(cli: &Cli) -> Result<CliExecution> {
             )?)),
         },
         Command::Conversations { command } => match command {
-            ConversationsCommand::List => Ok(CliExecution::Json(send_daemon_request(
-                cli.state_root.as_deref(),
-                DaemonRequest::ConversationsList,
-            )?)),
-            _ => Ok(CliExecution::Json(send_daemon_request(
+            ConversationsCommand::List { json } => {
+                if *json {
+                    Ok(CliExecution::Json(send_daemon_request(
+                        cli.state_root.as_deref(),
+                        DaemonRequest::ConversationsList,
+                    )?))
+                } else {
+                    render_conversations_list(cli.state_root.as_deref())
+                }
+            }
+            ConversationsCommand::New { json } => {
+                let request = DaemonRequest::ConversationSelect(
+                    crate::cli::build_conversation_select_command(command)
+                        .expect("non-list conversation command"),
+                );
+                if *json {
+                    Ok(CliExecution::Json(send_daemon_request(
+                        cli.state_root.as_deref(),
+                        request,
+                    )?))
+                } else {
+                    render_conversation_new(cli.state_root.as_deref(), request)
+                }
+            }
+            ConversationsCommand::Switch { .. } => Ok(CliExecution::Json(send_daemon_request(
                 cli.state_root.as_deref(),
                 DaemonRequest::ConversationSelect(
                     crate::cli::build_conversation_select_command(command)
@@ -127,6 +148,45 @@ fn execute(cli: &Cli) -> Result<CliExecution> {
             command,
         )?)),
     }
+}
+
+fn render_conversations_list(state_root: Option<&Path>) -> Result<CliExecution> {
+    let response = send_daemon_response(state_root, DaemonRequest::ConversationsList)?;
+    if let shared_protocol::DaemonResponse::Error(error) = &response {
+        anyhow::bail!("{}", error.message);
+    }
+    let shared_protocol::DaemonResponse::Conversations(list) = response else {
+        anyhow::bail!("unexpected conversations list response: {response:?}");
+    };
+    let active_conversation_id = send_daemon_response(state_root, DaemonRequest::SessionsList)
+        .ok()
+        .and_then(|response| match response {
+            shared_protocol::DaemonResponse::Sessions(sessions) => sessions
+                .sessions
+                .first()
+                .and_then(|session| session.latest_conversation_id.clone()),
+            _ => None,
+        });
+    Ok(CliExecution::Text(format_conversation_list(
+        &list,
+        active_conversation_id.as_deref(),
+    )))
+}
+
+fn render_conversation_new(
+    state_root: Option<&Path>,
+    request: DaemonRequest,
+) -> Result<CliExecution> {
+    let response = send_daemon_response(state_root, request)?;
+    if let shared_protocol::DaemonResponse::Error(error) = &response {
+        anyhow::bail!("{}", error.message);
+    }
+    let shared_protocol::DaemonResponse::ConversationSelection(selection) = response else {
+        anyhow::bail!("unexpected conversation selection response: {response:?}");
+    };
+    Ok(CliExecution::Text(format_conversation_selection(
+        &selection,
+    )))
 }
 
 pub(crate) fn render_execution(execution: CliExecution) -> Result<String> {

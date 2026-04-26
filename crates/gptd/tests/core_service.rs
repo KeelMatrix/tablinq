@@ -1,9 +1,9 @@
 use gptd::browser::execution_error_metadata;
 use gptd::{AppConfig, CoreService};
 use shared_protocol::{
-    AskCommand, BrowserConnectionMode, BrowserOpenRequest, CancelJobCommand, ErrorCode,
-    EventPayload, GatewayRequestContext, JobKind, JobStatus, Mode, PullArtifactCommand,
-    ResearchCommand, StreamChunkKind,
+    AskCommand, BrowserConnectionMode, BrowserOpenRequest, CancelJobCommand,
+    ConversationSelectCommand, ErrorCode, EventPayload, GatewayRequestContext, JobKind, JobStatus,
+    Mode, PullArtifactCommand, ResearchCommand, StreamChunkKind,
 };
 use std::fs;
 use std::net::TcpListener;
@@ -345,6 +345,87 @@ fn core_service_recovers_provider_generation_failure_with_fresh_conversation_rep
     let detail = core.job_detail(&result.job_id).unwrap();
     assert_eq!(detail.recovery_trace, result.recovery_trace);
     assert_eq!(detail.recovery_packet, result.recovery_packet);
+
+    let _ = core.browser_close();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn conversation_new_leaves_existing_provider_thread_before_next_ask() {
+    if !browser_integration_prereqs_available() {
+        eprintln!(
+            "skipping browser-backed core_service test: browser adapter prerequisites are unavailable"
+        );
+        return;
+    }
+    let _guard = integration_lock();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let dir = tempdir().unwrap();
+
+    let mut config = core_test_config(dir.path());
+    config.file.browser_target_url = Some(format!("{fake_url}/?variant=live"));
+    let core = CoreService::new(config).unwrap();
+    core.browser_open(BrowserOpenRequest {
+        target_url: None,
+        browser_path: None,
+        headless: Some(true),
+    })
+    .unwrap();
+
+    let first = core
+        .ask(
+            AskCommand {
+                prompt: "list popular programming languages".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
+                mode: Mode::Normal,
+                model_class: None,
+                effort: None,
+                files: vec![],
+                auto_recover_provider_generation_failure: true,
+            },
+            |_event| Ok(()),
+        )
+        .unwrap();
+
+    let selection = core
+        .select_conversation(ConversationSelectCommand {
+            conversation_id: None,
+            new_conversation: true,
+        })
+        .unwrap();
+
+    assert_eq!(selection.conversation_id, None);
+    assert_ne!(
+        selection.current_url.as_deref(),
+        Some(first.current_url.as_str())
+    );
+    assert!(
+        !selection
+            .current_url
+            .as_deref()
+            .unwrap_or_default()
+            .contains(&format!("/c/{}", first.conversation_id))
+    );
+
+    let second = core
+        .ask(
+            AskCommand {
+                prompt: "zig".to_owned(),
+                conversation_id: None,
+                new_conversation: false,
+                mode: Mode::Normal,
+                model_class: None,
+                effort: None,
+                files: vec![],
+                auto_recover_provider_generation_failure: true,
+            },
+            |_event| Ok(()),
+        )
+        .unwrap();
+
+    assert_ne!(second.conversation_id, first.conversation_id);
 
     let _ = core.browser_close();
     let _ = fake_server.kill();
