@@ -32,6 +32,11 @@ import {
   withAttachedBrowser,
   withHarnessUrl,
 } from "./browser-adapter.integration.helpers";
+import {
+  expectHarnessCapabilityMatrix,
+  expectManagedHarnessOpenSnapshot,
+  openTrackedManagedAdapter,
+} from "./helpers/browserFlow";
 
 let harness: ReturnType<typeof createBrowserIntegrationHarness>;
 
@@ -50,35 +55,12 @@ afterEach(async () => {
 describe("browser adapter", () => {
   it("launches a managed browser and opens the fake harness", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: server.url,
-      }),
+    const { adapter, snapshot } = await openTrackedManagedAdapter(
+      harness,
+      server.url,
     );
 
-    const snapshot = await adapter.open({
-      targetUrl: server.url,
-      headless: true,
-    });
-
-    expect(snapshot.running).toBe(true);
-    expect(snapshot.current_url).toContain(server.url);
-    expect(snapshot.authenticated).toBe(true);
-    expect(snapshot.extension_connected).toBe(true);
-    expect(snapshot.capability_report?.matrix.composer_ready).toBe(true);
-    expect(snapshot.attach_mode).toBe("managed_only");
-    expect(snapshot.browser_owner).toBe("managed");
-    expect(snapshot.cdp_attached).toBe(false);
-    expect(snapshot.target_tab_found).toBe(true);
-    expect(snapshot.target_tab_id).toBeTruthy();
-    expect(snapshot.target_workspace_key).toBe(new URL(server.url).toString());
-    expect(snapshot.debug_endpoint).toBe("http://127.0.0.1:9222");
-    expect(snapshot.auth_source).toBe("page");
-    expect(snapshot.extension_required).toBe(true);
-    expect(snapshot.last_capability_report_at).toBeTruthy();
+    expectManagedHarnessOpenSnapshot(snapshot, server.url);
 
     await adapter.shutdown();
   });
@@ -92,43 +74,17 @@ describe("browser adapter", () => {
     "captures the harness capability matrix for the %s variant",
     async (_label, variant) => {
       const server = await harness.startServer();
-      const root = await harness.createWorkspace("browser");
       const targetUrl = withHarnessUrl(server.url, {
         variant,
         initialModel: "thinking",
       });
-      const adapter = harness.trackAdapter(
-        new BrowserAdapter({
-          profileDir: path.join(root, "profile"),
-          downloadsDir: path.join(root, "downloads"),
-          defaultTargetUrl: targetUrl,
-        }),
+      const { adapter, snapshot } = await openTrackedManagedAdapter(
+        harness,
+        targetUrl,
       );
 
-      const snapshot = await adapter.open({
-        targetUrl,
-        headless: true,
-      });
-
       expect(snapshot.extension_connected).toBe(true);
-      expect(snapshot.capability_report?.matrix).toEqual({
-        composer_ready: true,
-        submit_available: true,
-        model_picker_visible: true,
-        thinking_effort_visible: true,
-        search_mode_visible: true,
-        research_mode_visible: true,
-        upload_control_visible: true,
-        downloadable_artifacts_observable: true,
-      });
-      expect(
-        snapshot.capability_report?.aliases.model_classes.instant,
-      ).toBeTruthy();
-      expect(
-        snapshot.capability_report?.aliases.model_classes.thinking,
-      ).toBeTruthy();
-      expect(snapshot.capability_report?.aliases.efforts.standard).toBeTruthy();
-      expect(snapshot.capability_report?.aliases.efforts.extended).toBeTruthy();
+      expectHarnessCapabilityMatrix(snapshot);
       const diagnostics = await adapter.diagnostics();
       expect(diagnostics.selector_pack?.pack_id).toBe("chatgpt-default");
       expect(diagnostics.strategy_attempts.length).toBeGreaterThan(3);

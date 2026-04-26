@@ -1,6 +1,5 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { JSDOM } from "jsdom";
 import {
   BrowserAdapter,
   chooseUniqueArtifactPath,
@@ -16,7 +15,6 @@ import {
   uploadAckTimeoutMsForFiles,
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
-import { loadPageAdapterSource } from "../src/assets";
 import { finalizeAsk } from "../src/execution/finalization";
 import { applyAskSnapshot } from "../src/execution/streaming";
 import {
@@ -27,6 +25,18 @@ import {
   withHarnessUrl,
 } from "./browser-adapter.integration.helpers";
 import { stopFakeChatGptServer } from "./helpers";
+import {
+  createAskRuntimeDom,
+  liveActualAnswerText,
+  liveStyleAnswerMessage,
+  liveStyleReasoningTurn,
+  liveThoughtArtifactText,
+} from "./helpers/askRuntimeDom";
+import {
+  captureDeltaChunks,
+  expectCompletedAskResult,
+  openTrackedManagedAdapter,
+} from "./helpers/browserFlow";
 
 let harness: ReturnType<typeof createBrowserIntegrationHarness>;
 
@@ -40,127 +50,35 @@ afterEach(async () => {
   await harness.cleanup();
 });
 
-const liveThoughtArtifactText =
-  "I\u2019ll frame this as a practical production plan: world generation layers, AI components, runtime architecture, team/cost drivers, and the risks that usually dominate.";
-const liveActualAnswerText =
-  "A lot. Modern AI helps, but it does not remove the need for strong systems design.";
-
-async function createAskRuntimeDom() {
-  const runtimeSource = loadPageAdapterSource();
-  const dom = new JSDOM(
-    `<!doctype html><html><body><main>
-      <section data-testid="conversation-turn-1">
-        <h4 class="sr-only">You said:</h4>
-        <div class="user-message-bubble-color">earlier prompt</div>
-      </section>
-      <section data-testid="conversation-turn-2">
-        <h4 class="sr-only">ChatGPT said:</h4>
-        <div class="markdown"><p>Earlier answer.</p></div>
-      </section>
-    </main></body></html>`,
-    {
-      url: "https://chatgpt.com/c/conv-live-reasoning",
-      runScripts: "outside-only",
-    },
-  );
-  const adapter = dom.window.eval(
-    `${runtimeSource.replace(/^export\s+/gm, "")}\ncreateTablinqPageAdapterRuntime();`,
-  );
-  const main = dom.window.document.querySelector("main");
-  if (!(main instanceof dom.window.HTMLElement)) {
-    throw new Error("expected main element");
-  }
-  return { adapter, dom, main };
-}
-
-function liveStyleReasoningTurn(answerText = "") {
-  return `
-    <section data-testid="conversation-turn-4"
-      class="text-token-text-primary w-full focus:outline-none [--shadow-height:45px] R6Vx5W_threadScrollVars">
-      <h4 class="sr-only">ChatGPT said:</h4>
-      <div class="text-base my-auto mx-auto pb-10">
-        <div class="[--thread-content-max-width:40rem] mx-auto agent-turn">
-          <div id="live-reasoning-grow" class="flex max-w-full flex-col gap-4 grow">
-            <div data-message-author-role="assistant"
-              data-message-id="reasoning-artifact-msg"
-              class="min-h-8 text-message relative flex w-full flex-col items-end gap-2 text-start break-words whitespace-normal outline-none keyboard-focused:focus-ring [.text-message+&]:mt-1">
-              <div class="flex w-full flex-col gap-1">
-                <div class="markdown prose dark:prose-invert w-full wrap-break-word dark markdown-new-styling">
-                  <p>${liveThoughtArtifactText}</p>
-                </div>
-              </div>
-            </div>
-            <div class="flex items-center justify-between">
-              <button type="button" class="text-token-text-tertiary flex items-center gap-0.5 text-start cursor-default">Thought for 6s</button>
-            </div>
-            ${answerText ? liveStyleAnswerMessage(answerText) : ""}
-          </div>
-        </div>
-      </div>
-    </section>`;
-}
-
-function liveStyleAnswerMessage(answerText: string) {
-  return `
-    <div data-message-author-role="assistant"
-      data-message-id="actual-answer-msg"
-      class="min-h-8 text-message relative flex w-full flex-col items-end gap-2 text-start break-words whitespace-normal outline-none keyboard-focused:focus-ring [.text-message+&]:mt-1">
-      <div class="flex w-full flex-col gap-1">
-        <div class="markdown prose dark:prose-invert w-full wrap-break-word dark markdown-new-styling">
-          <p>${answerText}</p>
-        </div>
-      </div>
-    </div>`;
-}
-
 describe("browser adapter", () => {
   it("streams ask responses to completion", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: server.url,
-      }),
-    );
-    await adapter.open({ targetUrl: server.url, headless: true });
+    const { adapter } = await openTrackedManagedAdapter(harness, server.url);
 
-    const chunks: string[] = [];
+    const stream = captureDeltaChunks();
     const result = await adapter.ask(
       {
         jobId: "job-ask-success",
         prompt: "hello streaming world",
       },
-      (chunk: any) => {
-        if (chunk.kind === "delta") {
-          chunks.push(chunk.text);
-        }
-      },
+      stream.onChunk,
     );
 
-    expect(chunks.join("")).toBe("Fake response for: hello streaming world");
-    expect(result.output_text).toBe("Fake response for: hello streaming world");
-    expect(result.conversation_id).toMatch(/^conv-/);
-    expect(result.message_id).toMatch(/^msg-/);
+    expect(stream.text()).toBe("Fake response for: hello streaming world");
+    expectCompletedAskResult(
+      result,
+      "Fake response for: hello streaming world",
+    );
 
     await adapter.shutdown();
   });
 
   it("does not replay the previous reply when a follow-up ask reuses the latest conversation implicitly", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
     const targetUrl = withHarnessUrl(server.url, {
       scenario: "followup-stale",
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
 
     const first = await adapter.ask(
       {
@@ -170,41 +88,29 @@ describe("browser adapter", () => {
       () => {},
     );
 
-    const secondChunks: string[] = [];
+    const secondStream = captureDeltaChunks();
     const second = await adapter.ask(
       {
         jobId: "job-ask-followup-implicit-second",
         prompt: "what can you do?",
       },
-      (chunk) => {
-        if (chunk.kind === "delta") {
-          secondChunks.push(chunk.text);
-        }
-      },
+      secondStream.onChunk,
     );
 
     expect(second.conversation_id).toBe(first.conversation_id);
     expect(second.output_text).toBe("Fake response for: what can you do?");
-    expect(secondChunks.join("")).toBe(second.output_text);
-    expect(secondChunks.join("")).not.toContain(first.output_text);
+    expect(secondStream.text()).toBe(second.output_text);
+    expect(secondStream.text()).not.toContain(first.output_text);
 
     await adapter.shutdown();
   });
 
   it("does not replay the previous reply when a follow-up ask uses the explicit conversation id", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
     const targetUrl = withHarnessUrl(server.url, {
       scenario: "followup-stale",
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
 
     const first = await adapter.ask(
       {
@@ -214,43 +120,31 @@ describe("browser adapter", () => {
       () => {},
     );
 
-    const secondChunks: string[] = [];
+    const secondStream = captureDeltaChunks();
     const second = await adapter.ask(
       {
         jobId: "job-ask-followup-explicit-second",
         prompt: "what can you do?",
         conversationId: first.conversation_id,
       },
-      (chunk) => {
-        if (chunk.kind === "delta") {
-          secondChunks.push(chunk.text);
-        }
-      },
+      secondStream.onChunk,
     );
 
     expect(second.conversation_id).toBe(first.conversation_id);
     expect(second.output_text).toBe("Fake response for: what can you do?");
-    expect(secondChunks.join("")).toBe(second.output_text);
-    expect(secondChunks.join("")).not.toContain(first.output_text);
+    expect(secondStream.text()).toBe(second.output_text);
+    expect(secondStream.text()).not.toContain(first.output_text);
 
     await adapter.shutdown();
   });
 
   it("streams a multi-paragraph follow-up ask without repeating earlier text or failing reconciliation", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
     const targetUrl = withHarnessUrl(server.url, {
       variant: "live",
       scenario: "followup-rich-text",
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
 
     const first = await adapter.ask(
       {
@@ -260,17 +154,13 @@ describe("browser adapter", () => {
       () => {},
     );
 
-    const secondChunks: string[] = [];
+    const secondStream = captureDeltaChunks();
     const second = await adapter.ask(
       {
         jobId: "job-ask-followup-rich-text-second",
         prompt: "what are your capabilities?",
       },
-      (chunk) => {
-        if (chunk.kind === "delta") {
-          secondChunks.push(chunk.text);
-        }
-      },
+      secondStream.onChunk,
     );
 
     const expected =
@@ -280,8 +170,8 @@ describe("browser adapter", () => {
     expect(second.conversation_id).toBe(first.conversation_id);
     expect(second.artifacts).toHaveLength(0);
     expect(second.output_text).toBe(expected);
-    expect(secondChunks.join("")).toBe(expected);
-    expect(secondChunks.join("")).not.toContain(
+    expect(secondStream.text()).toBe(expected);
+    expect(secondStream.text()).not.toContain(
       `${first.output_text}\n${first.output_text}`,
     );
 
@@ -290,42 +180,30 @@ describe("browser adapter", () => {
 
   it("suppresses thought artifact messages and streams the actual reply", async () => {
     const server = await harness.startServer();
-    const root = await harness.createWorkspace("browser");
     const targetUrl = withHarnessUrl(server.url, {
       variant: "live",
       scenario: "thinking-artifact-messages",
     });
-    const adapter = harness.trackAdapter(
-      new BrowserAdapter({
-        profileDir: path.join(root, "profile"),
-        downloadsDir: path.join(root, "downloads"),
-        defaultTargetUrl: targetUrl,
-      }),
-    );
-    await adapter.open({ targetUrl, headless: true });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
 
-    const chunks: string[] = [];
+    const stream = captureDeltaChunks();
     const result = await adapter.ask(
       {
         jobId: "job-ask-thinking-artifact-messages",
         prompt: "reason carefully about this tradeoff",
       },
-      (chunk) => {
-        if (chunk.kind === "delta") {
-          chunks.push(chunk.text);
-        }
-      },
+      stream.onChunk,
     );
 
     expect(result.output_text).toBe(
       "Fake response for: reason carefully about this tradeoff",
     );
-    expect(chunks.join("")).toBe(result.output_text);
-    expect(chunks).toEqual([result.output_text]);
-    expect(chunks.join("")).not.toContain(
+    expect(stream.text()).toBe(result.output_text);
+    expect(stream.chunks).toEqual([result.output_text]);
+    expect(stream.text()).not.toContain(
       "I’m reconstructing the prior context",
     );
-    expect(chunks.join("")).not.toContain("The comparison is narrowing");
+    expect(stream.text()).not.toContain("The comparison is narrowing");
 
     await adapter.shutdown();
   });
