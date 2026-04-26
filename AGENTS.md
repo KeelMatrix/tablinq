@@ -98,3 +98,4 @@
 - No repo tours
 - No speculative changes
 - No broad formatting churn
+- Briefly mention what global / local SKILLS were used and why

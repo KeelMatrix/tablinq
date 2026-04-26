@@ -52,6 +52,7 @@ export type HarnessUrlOptions = {
   conversationStyle?: "query" | "path";
   initialModel?: "instant" | "thinking";
   initialEffort?: "standard" | "extended";
+  searchClicksBeforeActivate?: number;
 };
 
 export type BrowserExecutionMode = "managed" | "attach";
@@ -78,6 +79,12 @@ export function withHarnessUrl(
   }
   if (options.initialEffort) {
     url.searchParams.set("initial_effort", options.initialEffort);
+  }
+  if (options.searchClicksBeforeActivate) {
+    url.searchParams.set(
+      "search_clicks_before_activate",
+      String(options.searchClicksBeforeActivate),
+    );
   }
   return url.toString();
 }
