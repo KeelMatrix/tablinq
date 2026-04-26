@@ -113,9 +113,17 @@ pub enum SessionsCommand {
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum ConversationsCommand {
-    List,
-    Switch { conversation_id: String },
-    New,
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Switch {
+        conversation_id: String,
+    },
+    New {
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
@@ -232,12 +240,12 @@ pub(crate) fn build_conversation_select_command(
     command: &ConversationsCommand,
 ) -> Option<ConversationSelectCommand> {
     match command {
-        ConversationsCommand::List => None,
+        ConversationsCommand::List { .. } => None,
         ConversationsCommand::Switch { conversation_id } => Some(ConversationSelectCommand {
             conversation_id: Some(conversation_id.clone()),
             new_conversation: false,
         }),
-        ConversationsCommand::New => Some(ConversationSelectCommand {
+        ConversationsCommand::New { .. } => Some(ConversationSelectCommand {
             conversation_id: None,
             new_conversation: true,
         }),
@@ -373,7 +381,18 @@ mod tests {
         assert!(matches!(
             cli.command,
             Command::Conversations {
-                command: ConversationsCommand::List
+                command: ConversationsCommand::List { json: false }
+            }
+        ));
+    }
+
+    #[test]
+    fn conversations_list_json_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "conversations", "list", "--json"]);
+        assert!(matches!(
+            cli.command,
+            Command::Conversations {
+                command: ConversationsCommand::List { json: true }
             }
         ));
     }
@@ -395,7 +414,18 @@ mod tests {
         assert!(matches!(
             cli.command,
             Command::Conversations {
-                command: ConversationsCommand::New
+                command: ConversationsCommand::New { json: false }
+            }
+        ));
+    }
+
+    #[test]
+    fn conversations_new_json_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "conversations", "new", "--json"]);
+        assert!(matches!(
+            cli.command,
+            Command::Conversations {
+                command: ConversationsCommand::New { json: true }
             }
         ));
     }
@@ -563,7 +593,8 @@ mod tests {
         assert_eq!(switch.conversation_id.as_deref(), Some("conv-9"));
         assert!(!switch.new_conversation);
 
-        let fresh = build_conversation_select_command(&ConversationsCommand::New).unwrap();
+        let fresh =
+            build_conversation_select_command(&ConversationsCommand::New { json: false }).unwrap();
         assert_eq!(fresh.conversation_id, None);
         assert!(fresh.new_conversation);
     }

@@ -88,6 +88,21 @@ impl BrowserManager {
     }
 
     pub fn open(&mut self, request: BrowserOpenRequest) -> Result<BrowserStatusSnapshot> {
+        self.open_impl(request, false)
+    }
+
+    pub fn open_fresh_conversation(
+        &mut self,
+        request: BrowserOpenRequest,
+    ) -> Result<BrowserStatusSnapshot> {
+        self.open_impl(request, true)
+    }
+
+    fn open_impl(
+        &mut self,
+        request: BrowserOpenRequest,
+        force_reload: bool,
+    ) -> Result<BrowserStatusSnapshot> {
         self.ensure_process()?;
 
         let target_url = request
@@ -107,7 +122,7 @@ impl BrowserManager {
                 target_url,
                 browser_path,
                 headless,
-                force_reload: false,
+                force_reload,
             }) {
             Ok(snapshot) => {
                 let snapshot = normalize_snapshot(&self.config, snapshot);

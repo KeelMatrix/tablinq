@@ -154,12 +154,52 @@ impl CoreService {
             self.config.browser_target_url().to_owned()
         };
 
-        let snapshot = self.browser_open(BrowserOpenRequest {
-            target_url: Some(target_url),
-            browser_path: None,
-            headless: None,
-        })?;
-        let (session_id, _) = browser_session_identity(&snapshot);
+        let snapshot = if command.new_conversation {
+            let mut browser =
+                try_lock_browser(&self.browser)?.ok_or_else(|| anyhow!(browser_busy_message()))?;
+            let previous_url = browser.health()?.current_url;
+            let previous_conversation_id = previous_url
+                .as_deref()
+                .and_then(super::support::conversation_id_from_url);
+            let snapshot = browser.open_fresh_conversation(BrowserOpenRequest {
+                target_url: Some(target_url),
+                browser_path: None,
+                headless: None,
+            })?;
+            if previous_conversation_id.is_some()
+                && snapshot.current_url.as_deref() == previous_url.as_deref()
+            {
+                anyhow::bail!(
+                    "fresh conversation navigation did not leave the previous provider thread"
+                );
+            }
+            if let Some(previous_conversation_id) = previous_conversation_id
+                && snapshot
+                    .current_url
+                    .as_deref()
+                    .and_then(super::support::conversation_id_from_url)
+                    .as_deref()
+                    == Some(previous_conversation_id.as_str())
+            {
+                anyhow::bail!(
+                    "fresh conversation navigation is still on the previous provider thread"
+                );
+            }
+            snapshot
+        } else {
+            self.browser_open(BrowserOpenRequest {
+                target_url: Some(target_url),
+                browser_path: None,
+                headless: None,
+            })?
+        };
+        let (session_id, session_label) = browser_session_identity(&snapshot);
+        self.open_db()?.upsert_session(
+            &session_id,
+            &session_label,
+            snapshot.current_url.as_deref(),
+            Utc::now(),
+        )?;
 
         Ok(ConversationSelection {
             conversation_id: target_conversation.map(|conversation| conversation.conversation_id),
