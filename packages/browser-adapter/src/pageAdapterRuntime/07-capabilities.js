@@ -130,12 +130,29 @@ function createCapabilityRuntimeModule({
   const pathnameHasSegment = (pathname, segment) =>
     pathname.split("/").filter(Boolean).includes(segment);
 
+  const isSearchModeLabel = (name) =>
+    (hasToken(name, ["search"]) || hasToken(name, ["web search"])) &&
+    !name.includes("search chats");
+
+  const isSearchChip = (element) =>
+    element instanceof HTMLElement &&
+    isComposerAdjacent(element) &&
+    element.matches("button, [role='button']") &&
+    isSearchModeLabel(accessibleName(element)) &&
+    (accessibleName(element).includes("click to remove") ||
+      element.classList.contains("__composer-pill") ||
+      element.getAttribute("aria-pressed") === "true" ||
+      element.dataset.selected === "true");
+
+  const isSearchMenuItem = (element) =>
+    element instanceof HTMLElement &&
+    isPopupOption(element) &&
+    element.closest(popupRootSelector) !== null &&
+    isSearchModeLabel(accessibleName(element));
+
   const isSearchModeControl = (element) =>
     element instanceof HTMLElement &&
-    (element.matches("[data-mode='search']") ||
-      element.matches("button[aria-label*='Search']") ||
-      element.matches("button[aria-label*='web']") ||
-      hasToken(accessibleName(element), ["search", "browse the web"]));
+    (isSearchChip(element) || isSearchMenuItem(element));
 
   const isResearchModeControl = (element) => {
     if (!(element instanceof HTMLElement)) {
@@ -474,15 +491,15 @@ function createCapabilityRuntimeModule({
 
     const aliases = expandAliases(report, "modes", mode, [
       mode,
-      mode === "search" ? "browse the web" : "deep research",
+      mode === "search" ? "web search" : "deep research",
     ]);
     const control = findByAliases({
       selectors:
         mode === "search"
           ? [
-              "[data-mode='search']",
-              "button[aria-label*='Search']",
-              "button[aria-label*='web']",
+              "button.__composer-pill[aria-label*='Search']",
+              "[role='menu'] [role='menuitemradio']",
+              "[role='menu'] [role='menuitem']",
             ]
           : [
               "a[data-testid='deep-research-sidebar-item']",
@@ -491,7 +508,7 @@ function createCapabilityRuntimeModule({
             ],
       aliases,
       fallbackTokens:
-        mode === "search" ? ["search", "browse", "web"] : ["deep research"],
+        mode === "search" ? ["search", "web search"] : ["deep research"],
       include: mode === "search" ? isSearchModeControl : isResearchModeControl,
     });
     if (!control) {

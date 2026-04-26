@@ -17,7 +17,7 @@ export async function applyAskConfiguration(
   report: CapabilityReportPayload | null,
 ): Promise<Page> {
   await waitForInteractionSurface(page);
-  if (!command.mode || command.mode === "normal" || command.mode === "search") {
+  if (!command.mode || command.mode === "normal") {
     await ensureComposerModelPickerAvailable(page);
   }
   if (
@@ -306,10 +306,14 @@ export async function ensureConfiguredModelClass(
     return;
   }
 
-  const trigger = await findVisibleModelPickerTrigger(
+  let trigger = await findVisibleModelPickerTrigger(
     page,
     INTERACTION_TIMEOUT_MS,
   );
+  if (!trigger) {
+    await ensureComposerModelPickerAvailable(page);
+    trigger = await findVisibleModelPickerTrigger(page, 1_000);
+  }
   if (!trigger) {
     if (!report.matrix.model_picker_visible) {
       throw new Error(
@@ -460,28 +464,34 @@ export async function ensureConfiguredMode(
   report: CapabilityReportPayload,
   mode: "search" | "research",
 ): Promise<Page> {
-  const visible =
-    mode === "search"
-      ? report.matrix.search_mode_visible
-      : report.matrix.research_mode_visible;
-  if (!visible) {
-    if (mode === "research") {
-      return await navigateDirectlyToDeepResearch(page, INTERACTION_TIMEOUT_MS);
+  if (mode === "search") {
+    const searchAliases = report.aliases.modes.search ?? [];
+    if (
+      report.matrix.search_mode_visible &&
+      searchAliases.some((alias) =>
+        alias.toLowerCase().includes("click to remove"),
+      )
+    ) {
+      return page;
     }
-    throw new Error(`capability missing: ${mode} mode; requested=${mode}`);
+    await ensureConfiguredSearchMode(page);
+    return page;
+  }
+
+  const visible = report.matrix.research_mode_visible;
+  if (!visible) {
+    return await navigateDirectlyToDeepResearch(page, INTERACTION_TIMEOUT_MS);
   }
 
   const locator = await waitForVisibleLocator(
     page.locator(
-      mode === "search"
-        ? "[data-mode='search'], button[aria-label*='Search'], button[aria-label*='web']"
-        : [
-            "[data-mode='research']",
-            "a[data-testid='deep-research-sidebar-item']",
-            "a[href='/deep-research']",
-            "a[href$='/deep-research']",
-            "button[aria-label*='Research']",
-          ].join(", "),
+      [
+        "[data-mode='research']",
+        "a[data-testid='deep-research-sidebar-item']",
+        "a[href='/deep-research']",
+        "a[href$='/deep-research']",
+        "button[aria-label*='Research']",
+      ].join(", "),
     ),
     INTERACTION_TIMEOUT_MS,
   );
@@ -490,17 +500,10 @@ export async function ensureConfiguredMode(
       `ui drift: could not find ${mode} mode control after probing it`,
     );
   }
-  const isActive =
-    mode === "research"
-      ? page.url().toLowerCase().includes("/deep-research")
-      : (await locator.getAttribute("aria-pressed")) === "true";
-  const controlHref =
-    mode === "research"
-      ? await locator.getAttribute("href").catch(() => null)
-      : null;
+  const isActive = page.url().toLowerCase().includes("/deep-research");
+  const controlHref = await locator.getAttribute("href").catch(() => null);
   const requiresDeepResearchLandingWait =
-    mode === "research" &&
-    (await locator
+    await locator
       .evaluate((element) => {
         if (!(element instanceof HTMLElement)) {
           return false;
@@ -513,7 +516,7 @@ export async function ensureConfiguredMode(
           href.toLowerCase().includes("deep-research")
         );
       })
-      .catch(() => false));
+      .catch(() => false);
   if (!isActive) {
     if (requiresDeepResearchLandingWait) {
       await activateModeControl(page, locator);
@@ -566,6 +569,218 @@ export async function ensureConfiguredMode(
     return await navigateDirectlyToDeepResearch(page, INTERACTION_TIMEOUT_MS);
   }
   return page;
+}
+
+async function ensureConfiguredSearchMode(page: Page): Promise<void> {
+  if (await searchModeActive(page)) {
+    return;
+  }
+
+  const trigger = await findVisibleComposerToolsTrigger(page, 1_500);
+  if (!trigger) {
+    throw new Error("capability missing: search mode");
+  }
+
+  await trigger.click();
+  await page.waitForTimeout(250);
+  const option = await findVisibleComposerSearchMenuItem(page, 2_500);
+  if (!option) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    throw new Error("capability missing: search mode");
+  }
+
+  try {
+    await option.click();
+  } catch (error) {
+    throw new Error(
+      `ui drift: could not activate search mode control: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
+  if (await waitForSearchModeActive(page, 4_000)) {
+    await page.keyboard.press("Escape").catch(() => undefined);
+    return;
+  }
+  await page.keyboard.press("Escape").catch(() => undefined);
+  if (await searchModeActive(page)) {
+    return;
+  }
+
+  throw new Error(
+    "ui drift: search mode activation did not show the Search chip",
+  );
+}
+
+async function searchModeActive(page: Page): Promise<boolean> {
+  return page
+    .evaluate(() => {
+      const normalize = (value: string | null | undefined) =>
+        (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+      const isVisible = (element: Element): element is HTMLElement => {
+        if (!(element instanceof HTMLElement) || element.hidden) {
+          return false;
+        }
+        if (element.getAttribute("aria-hidden") === "true") {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0"
+        );
+      };
+      const isComposerScoped = (element: Element) =>
+        element.closest("[data-testid='composer-root']") !== null ||
+        element.closest("form") !== null;
+      const nameOf = (element: Element) =>
+        normalize(
+          `${element.textContent ?? ""} ${element.getAttribute("aria-label") ?? ""}`,
+        );
+      const chipActive = Array.from(
+        document.querySelectorAll(
+          [
+            "button.__composer-pill",
+            "button[aria-label*='Search' i]",
+            "[data-mode='search'][aria-pressed='true']",
+            "[data-mode='search'][data-selected='true']",
+          ].join(", "),
+        ),
+      ).some((element) => {
+        if (!isVisible(element) || !isComposerScoped(element)) {
+          return false;
+        }
+        const name = nameOf(element);
+        return (
+          /\bsearch\b/.test(name) &&
+          !/\bsearch chats\b/.test(name) &&
+          (name.includes("click to remove") ||
+            element.classList.contains("__composer-pill") ||
+            element.getAttribute("aria-pressed") === "true" ||
+            element.getAttribute("data-selected") === "true")
+        );
+      });
+      if (chipActive) {
+        return true;
+      }
+      return Array.from(
+        document.querySelectorAll(
+          [
+            "[role='menu'] [role='menuitemradio']",
+            "[data-radix-popper-content-wrapper] [role='menuitemradio']",
+          ].join(", "),
+        ),
+      ).some((element) => {
+        if (!isVisible(element)) {
+          return false;
+        }
+        const name = nameOf(element);
+        return (
+          (name === "search" || name === "web search") &&
+          element.getAttribute("aria-checked") === "true"
+        );
+      });
+    })
+    .catch(() => false);
+}
+
+async function waitForSearchModeActive(
+  page: Page,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await searchModeActive(page)) {
+      return true;
+    }
+    await page.waitForTimeout(100);
+  }
+  return searchModeActive(page);
+}
+
+async function findVisibleComposerToolsTrigger(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  const direct = await waitForVisibleLocator(
+    page.locator(
+      [
+        "#composer-plus-btn",
+        "[data-testid='composer-plus-btn']",
+        "[data-testid='composer-root'] button[aria-label*='Add files' i][aria-haspopup]",
+        "[data-testid='composer-root'] button[aria-label*='Add photos' i][aria-haspopup]",
+        "form button[aria-label*='Add files' i][aria-haspopup]",
+        "form button[aria-label*='Add photos' i][aria-haspopup]",
+        "form button[aria-label*='tools' i][aria-haspopup]",
+        "form button[aria-label*='more' i][aria-haspopup]",
+      ].join(", "),
+    ),
+    timeoutMs,
+  );
+  if (direct) {
+    return direct;
+  }
+  return null;
+}
+
+async function findVisibleComposerSearchMenuItem(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  const exactWebSearch = await waitForVisibleLocator(
+    page
+      .locator("[role='menu'] [role='menuitemradio']")
+      .filter({ hasText: /^Web search$/i }),
+    Math.min(timeoutMs, 1_000),
+  );
+  if (exactWebSearch) {
+    return exactWebSearch;
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const item = await visibleComposerSearchMenuItem(page);
+    if (item) {
+      return item;
+    }
+    await page.waitForTimeout(100);
+  }
+  return visibleComposerSearchMenuItem(page);
+}
+
+async function visibleComposerSearchMenuItem(page: Page): Promise<Locator | null> {
+  const menuItems = page.locator(
+    [
+      "[role='menu'] [role='menuitemradio']",
+      "[role='menu'] [role='menuitem']",
+      "[data-radix-popper-content-wrapper] [role='menuitemradio']",
+      "[data-radix-popper-content-wrapper] [role='menuitem']",
+    ].join(", "),
+  );
+  const count = await menuItems.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    const item = menuItems.nth(index);
+    if (!(await item.isVisible().catch(() => false))) {
+      continue;
+    }
+    const text = [
+      (await item.textContent().catch(() => null)) ?? "",
+      (await item.getAttribute("aria-label").catch(() => null)) ?? "",
+    ]
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (
+      (text === "search" || text === "web search" || text.includes("web search")) &&
+      !text.includes("search chats")
+    ) {
+      return item;
+    }
+  }
+  return null;
 }
 
 export async function navigateDirectlyToDeepResearch(

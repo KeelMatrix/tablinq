@@ -237,6 +237,9 @@ uploadEntry?.addEventListener("click", () => {
 });
 
 composerPlusButton?.addEventListener("click", () => {
+  if (document.querySelector("#tablinq-tools-menu")) {
+    return;
+  }
   setUploadPopoverOpen(true);
   if (uploadInput instanceof HTMLElement) {
     uploadInput.click();

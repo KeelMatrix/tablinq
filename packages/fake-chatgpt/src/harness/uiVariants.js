@@ -84,9 +84,6 @@ export function renderHarnessShell({ root, note, window, config }) {
 
   function ariaModeControls() {
     return [
-      hasControl("search")
-        ? `<button type="button" data-mode="search" aria-pressed="false">Browse the web</button>`
-        : "",
       hasControl("research")
         ? `<button type="button" data-mode="research" aria-pressed="false">Deep research</button>`
         : "",
@@ -141,9 +138,7 @@ export function renderHarnessShell({ root, note, window, config }) {
   }
 
   function liveModeControls() {
-    return hasControl("search")
-      ? `<button type="button" data-mode="search" aria-label="Search" aria-pressed="false">Search</button>`
-      : "";
+    return "";
   }
 
   function liveSidebarNav() {
@@ -152,6 +147,7 @@ export function renderHarnessShell({ root, note, window, config }) {
     }
     return `
       <nav class="stacked-toolbar" aria-label="workspace navigation">
+        <button type="button" class="group __menu-item hoverable w-full">Search chats</button>
         <a href="/apps" data-testid="apps-button">Apps</a>
         ${
           hasControl("research")
@@ -242,6 +238,15 @@ export function renderHarnessShell({ root, note, window, config }) {
         `
             : ""
         }
+        ${
+          hasControl("search")
+            ? `
+        <div id="tablinq-tools-menu" role="menu" hidden>
+          <div id="tool-option-web-search" role="menuitemradio" hidden>Web search</div>
+        </div>
+        `
+            : ""
+        }
       </div>
     `;
   }
@@ -269,8 +274,11 @@ export function renderHarnessShell({ root, note, window, config }) {
           <button
             type="button"
             id="composer-plus-btn"
-            aria-label="Add photos and files"
-            aria-haspopup="dialog"
+            data-testid="composer-plus-btn"
+            aria-label="Add files and more"
+            aria-haspopup="menu"
+            aria-controls="tablinq-tools-menu"
+            aria-expanded="false"
           >
             +
           </button>
@@ -291,6 +299,28 @@ export function renderHarnessShell({ root, note, window, config }) {
     return `
       <div class="pill">
         ${liveEffortControls()}
+        ${
+          hasControl("search")
+            ? `<button type="button" id="search-chip" class="__composer-pill" aria-label="Search" hidden>Search</button>`
+            : ""
+        }
+        ${
+          hasControl("search")
+            ? `
+        <button
+          type="button"
+          id="composer-plus-btn"
+          data-testid="composer-plus-btn"
+          aria-label="Add files and more"
+          aria-haspopup="menu"
+          aria-controls="tablinq-tools-menu"
+          aria-expanded="false"
+        >
+          +
+        </button>
+        `
+            : ""
+        }
         <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
         <button
           type="button"

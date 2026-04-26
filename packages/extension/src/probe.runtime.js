@@ -546,12 +546,29 @@ export function probeDocument(options = {}) {
   const pathnameHasSegment = (pathname, segment) =>
     pathname.split("/").filter(Boolean).includes(segment);
 
+  const isSearchModeLabel = (name) =>
+    (hasToken(name, ["search"]) || hasToken(name, ["web search"])) &&
+    !name.includes("search chats");
+
+  const isSearchChip = (element) =>
+    element instanceof HTMLElement &&
+    isComposerAdjacent(element) &&
+    element.matches("button, [role='button']") &&
+    isSearchModeLabel(accessibleName(element)) &&
+    (accessibleName(element).includes("click to remove") ||
+      element.classList.contains("__composer-pill") ||
+      element.getAttribute("aria-pressed") === "true" ||
+      element.dataset.selected === "true");
+
+  const isSearchMenuItem = (element) =>
+    element instanceof HTMLElement &&
+    isPopupOption(element) &&
+    element.closest(popupRootSelector) !== null &&
+    isSearchModeLabel(accessibleName(element));
+
   const isSearchModeControl = (element) =>
     element instanceof HTMLElement &&
-    (element.matches("[data-mode='search']") ||
-      element.matches("button[aria-label*='Search']") ||
-      element.matches("button[aria-label*='web']") ||
-      hasToken(accessibleName(element), ["search", "browse the web"]));
+    (isSearchChip(element) || isSearchMenuItem(element));
 
   const isResearchModeControl = (element) => {
     if (!(element instanceof HTMLElement)) {
@@ -863,34 +880,34 @@ export function probeDocument(options = {}) {
       ],
     },
     {
-      key: "search_mode_visible",
-      strategies: [
-        {
-          id: "data-mode-search",
-          score: 1,
-          find: () => firstVisibleBySelector("[data-mode='search']"),
-        },
-        {
-          id: "chatgpt-search-toggle",
-          score: 0.92,
-          find: () =>
-            firstVisibleBySelectors([
-              "button[aria-label*='Search']",
-              "button[aria-label*='web']",
-            ]) ??
-            findNamedControl(["search", "browse", "web"], {
-              include: isSearchModeControl,
-            }),
-        },
-        {
-          id: "aria-search-toggle",
-          score: 0.88,
-          find: () =>
-            findNamedControl(["search", "browse", "web"], {
-              include: isSearchModeControl,
-            }),
-        },
-      ],
+        key: "search_mode_visible",
+        strategies: [
+          {
+            id: "composer-search-chip",
+            score: 1,
+            find: () =>
+              findComposerAdjacentNamedControl(["search"], {
+                include: isSearchChip,
+              }),
+          },
+          {
+            id: "composer-tools-menu-search",
+            score: 0.98,
+            find: () =>
+              findNamedControl(["search", "web search"], {
+                include: isSearchMenuItem,
+                roots: visiblePopupRootsFor(isSearchMenuItem),
+              }),
+          },
+          {
+            id: "aria-search-toggle",
+            score: 0.88,
+            find: () =>
+              findNamedControl(["search", "web search"], {
+                include: isSearchModeControl,
+              }),
+          },
+        ],
     },
     {
       key: "research_mode_visible",

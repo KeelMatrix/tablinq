@@ -46,7 +46,7 @@ Formatting:
 - `cargo run -p gpt -- gateway start`
 - `cargo run -p gpt -- gateway status`
 - `cargo run -p gpt -- ask "hello world"`
-- `cargo run -p gpt -- ask --model instant --mode search "latest release notes"`
+- `cargo run -p gpt -- ask --mode search "What is the latest stable Rust release?"`
 - `cargo run -p gpt -- ask --model thinking --effort extended "compare these ideas"`
 - `cargo run -p gpt -- research "investigate launch blockers"`
 - `cargo run -p gpt -- jobs list`
