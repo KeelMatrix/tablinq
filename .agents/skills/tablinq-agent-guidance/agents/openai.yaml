@@ -1,0 +1,3 @@
+interface:
+  display_name: "Tablinq Agent Guidance"
+  short_description: "Guidance for Tablinq refactors, features, modularity, and interaction pacing."
