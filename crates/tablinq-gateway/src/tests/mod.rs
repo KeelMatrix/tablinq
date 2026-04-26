@@ -292,6 +292,8 @@ mod gateway_process;
 
 mod request_parsing;
 
+mod scheduler_dsl;
+
 mod scheduler_process_control;
 
 mod uploads_artifacts;
