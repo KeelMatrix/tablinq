@@ -1,35 +1,16 @@
+use super::CoreService;
 use super::support::{
     browser_busy_message, browser_session_identity, default_selector_pack_summary, health_snapshot,
-    is_attach_primary_mode, lock_browser, lock_cancel_registry, recovery_guidance,
-    resolve_conversation_target_url, supports_managed_profile_reset, try_lock_browser,
+    is_attach_primary_mode, recovery_guidance, resolve_conversation_target_url,
+    supports_managed_profile_reset, try_lock_browser,
 };
-use super::{ARTIFACT_RETENTION_LIMIT, CoreService, error_code_for_message};
-use crate::browser::BrowserDiagnosticsSnapshot;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
-use serde::Serialize;
-use sha2::{Digest, Sha256};
 use shared_protocol::{
-    AckEvent, ArtifactList, ArtifactMetadata, ArtifactPullResult, ArtifactSummary, BrowserDoctor,
-    BrowserOpenRequest, BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot,
-    ConfigSnapshot, ConversationList, ConversationSelectCommand, ConversationSelection,
-    ConversationSummary, DoctorReport, FailureBundle, GatewayRequestContext, JobDetail, JobList,
-    JobStatus, PullArtifactCommand, RequestHistory, RequestListPage, RequestSummary,
-    SessionConversationList, SessionList,
+    BrowserDoctor, BrowserOpenRequest, BrowserStatusSnapshot, CapabilitySnapshot, ConfigSnapshot,
+    ConversationList, ConversationSelectCommand, ConversationSelection, ConversationSummary,
+    DoctorReport, SessionConversationList, SessionList,
 };
-use std::fs;
-use std::path::{Path, PathBuf};
-
-const EVIDENCE_ARTIFACT_CONTENT_TYPE: &str = "application/tablinq-browser-evidence+json";
-#[derive(Serialize)]
-struct BrowserEvidencePayload {
-    request_id: String,
-    job_id: String,
-    captured_at: chrono::DateTime<Utc>,
-    current_url: Option<String>,
-    screenshot_path: Option<String>,
-    dom_snapshot: String,
-}
 
 impl CoreService {
     pub fn status_snapshot(&self) -> shared_protocol::DaemonStatusSnapshot {
@@ -188,213 +169,6 @@ impl CoreService {
         })
     }
 
-    pub fn list_jobs(&self) -> Result<JobList> {
-        self.open_db()?.list_jobs()
-    }
-
-    pub fn job_detail(&self, job_id: &str) -> Result<JobDetail> {
-        self.open_db()?
-            .job_detail(job_id)?
-            .with_context(|| format!("job {job_id} was not found"))
-    }
-
-    pub fn record_request_summary(&self, summary: &RequestSummary) -> Result<()> {
-        self.open_db()?.upsert_request_summary(summary)
-    }
-
-    pub fn request_summary(&self, request_id: &str) -> Result<RequestSummary> {
-        self.open_db()?
-            .request_summary(request_id)?
-            .with_context(|| format!("request {request_id} was not found"))
-    }
-
-    pub fn list_request_summaries(&self, limit: usize) -> Result<RequestHistory> {
-        self.open_db()?.list_request_summaries(limit)
-    }
-
-    pub fn list_request_page(
-        &self,
-        status: Option<JobStatus>,
-        limit: usize,
-        offset: usize,
-    ) -> Result<RequestListPage> {
-        self.open_db()?.list_request_page(status, limit, offset)
-    }
-
-    pub fn cancel_job(&self, command: CancelJobCommand) -> Result<AckEvent> {
-        let db = self.open_db()?;
-        let detail = db
-            .job_detail(&command.job_id)?
-            .with_context(|| format!("job {} was not found", command.job_id))?;
-        if matches!(
-            detail.status,
-            JobStatus::Completed | JobStatus::Cancelled | JobStatus::Failed
-        ) {
-            Ok(AckEvent {
-                accepted: false,
-                message: format!("job {} is already finished", command.job_id),
-            })
-        } else {
-            db.set_job_cancel_requested(&command.job_id, true)?;
-            lock_cancel_registry(&self.cancel_registry)?.insert(command.job_id.clone());
-            Ok(AckEvent {
-                accepted: true,
-                message: format!("cancellation requested for {}", command.job_id),
-            })
-        }
-    }
-
-    pub fn job_cancel_requested(&self, job_id: &str) -> Result<bool> {
-        self.open_db()?.job_cancel_requested(job_id)
-    }
-
-    pub fn fail_job(&self, job_id: &str, message: &str) -> Result<()> {
-        let db = self.open_db()?;
-        let detail = db
-            .job_detail(job_id)?
-            .with_context(|| format!("job {job_id} was not found"))?;
-        db.insert_job(
-            job_id,
-            JobStatus::Failed,
-            Some(message),
-            detail.conversation_id.as_deref(),
-            detail.created_at,
-            Utc::now(),
-        )?;
-        db.set_job_cancel_requested(job_id, false)?;
-        Ok(())
-    }
-
-    pub fn mark_job_cancelled(&self, job_id: &str, message: &str) -> Result<()> {
-        self.cancel_job_with_detail(job_id, None, message)
-    }
-
-    pub fn mark_job_interrupted(
-        &self,
-        job_id: &str,
-        conversation_id: Option<&str>,
-        message: &str,
-    ) -> Result<()> {
-        let db = self.open_db()?;
-        let detail = db
-            .job_detail(job_id)?
-            .with_context(|| format!("job {job_id} was not found"))?;
-        let interrupted_at = Utc::now();
-        db.insert_job(
-            job_id,
-            JobStatus::Interrupted,
-            Some(message),
-            conversation_id.or(detail.conversation_id.as_deref()),
-            detail.created_at,
-            interrupted_at,
-        )?;
-        db.record_job_interruption(
-            job_id,
-            interrupted_at,
-            message,
-            detail.current_url.as_deref(),
-        )?;
-        Ok(())
-    }
-
-    pub fn mark_job_recovered(
-        &self,
-        job_id: &str,
-        conversation_id: Option<&str>,
-        message: &str,
-    ) -> Result<()> {
-        let db = self.open_db()?;
-        let detail = db
-            .job_detail(job_id)?
-            .with_context(|| format!("job {job_id} was not found"))?;
-        let recovered_at = Utc::now();
-        db.insert_job(
-            job_id,
-            JobStatus::Recovered,
-            Some(message),
-            conversation_id.or(detail.conversation_id.as_deref()),
-            detail.created_at,
-            recovered_at,
-        )?;
-        db.record_job_recovery(job_id, recovered_at, message, detail.current_url.as_deref())?;
-        Ok(())
-    }
-
-    pub(super) fn cancel_job_with_detail(
-        &self,
-        job_id: &str,
-        conversation_id: Option<&str>,
-        message: &str,
-    ) -> Result<()> {
-        let db = self.open_db()?;
-        let detail = db
-            .job_detail(job_id)?
-            .with_context(|| format!("job {job_id} was not found"))?;
-        db.insert_job(
-            job_id,
-            JobStatus::Cancelled,
-            Some(message),
-            conversation_id.or(detail.conversation_id.as_deref()),
-            detail.created_at,
-            Utc::now(),
-        )?;
-        db.set_job_cancel_requested(job_id, false)?;
-        let _ = lock_cancel_registry(&self.cancel_registry).map(|mut set| {
-            set.remove(job_id);
-        });
-        Ok(())
-    }
-
-    pub fn list_artifacts(&self) -> Result<ArtifactList> {
-        let db = self.open_db()?;
-        db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
-        db.list_artifacts()
-    }
-
-    pub fn artifact_job_ids(&self, artifact_id: &str) -> Result<Vec<String>> {
-        self.open_db()?.artifact_job_ids(artifact_id)
-    }
-
-    pub fn artifact_request_ids(&self, artifact_id: &str) -> Result<Vec<String>> {
-        self.open_db()?.artifact_request_ids(artifact_id)
-    }
-
-    pub fn latest_request_evidence(&self, request_id: &str) -> Result<ArtifactSummary> {
-        self.open_db()?
-            .latest_request_artifact_by_content_type(request_id, EVIDENCE_ARTIFACT_CONTENT_TYPE)?
-            .with_context(|| format!("evidence for request {request_id} was not found"))
-    }
-
-    pub fn pull_artifact(&self, command: PullArtifactCommand) -> Result<ArtifactPullResult> {
-        let db = self.open_db()?;
-        let artifact = if command.artifact_id == "last" {
-            db.latest_artifact()?
-        } else {
-            db.find_artifact(&command.artifact_id)?
-        }
-        .with_context(|| format!("artifact {} was not found", command.artifact_id))?;
-
-        let destination_dir = PathBuf::from(&command.destination_dir);
-        fs::create_dir_all(&destination_dir)
-            .with_context(|| format!("create {}", destination_dir.display()))?;
-        let destination_path = super::support::unique_destination_path(
-            &destination_dir,
-            Path::new(&artifact.file_name),
-        );
-        fs::copy(&artifact.storage_path, &destination_path).with_context(|| {
-            format!(
-                "copy managed artifact {} to {}",
-                artifact.storage_path,
-                destination_path.display()
-            )
-        })?;
-
-        Ok(ArtifactPullResult {
-            artifact,
-            destination_path: destination_path.display().to_string(),
-        })
-    }
-
     pub fn browser_open(&self, request: BrowserOpenRequest) -> Result<BrowserStatusSnapshot> {
         let snapshot = try_lock_browser(&self.browser)?
             .ok_or_else(|| anyhow!(browser_busy_message()))?
@@ -456,120 +230,6 @@ impl CoreService {
             .ok_or_else(|| anyhow!(browser_busy_message()))?
             .profile_info()
     }
-
-    pub fn capture_browser_evidence(&self, request_id: &str) -> Result<ArtifactMetadata> {
-        let db = self.open_db()?;
-        let request = self.request_summary(request_id)?;
-        let job = self.job_detail(&request.job_id)?;
-        let created_at = Utc::now();
-        let evidence_dir = self.config.paths.crash_bundles_dir.join(format!(
-            "evidence-{request_id}-{}",
-            created_at.timestamp_millis()
-        ));
-        fs::create_dir_all(&evidence_dir)
-            .with_context(|| format!("create {}", evidence_dir.display()))?;
-
-        let diagnostics = capture_diagnostics_snapshot(&self.browser, &evidence_dir);
-        let payload = BrowserEvidencePayload {
-            request_id: request.request_id.clone(),
-            job_id: request.job_id.clone(),
-            captured_at: created_at,
-            current_url: diagnostics.current_url.clone(),
-            screenshot_path: diagnostics.screenshot_path.clone(),
-            dom_snapshot: diagnostics.dom_snapshot,
-        };
-        let artifact_path = evidence_dir.join("evidence.json");
-        let payload_bytes = serde_json::to_vec_pretty(&payload)?;
-        fs::write(&artifact_path, &payload_bytes)
-            .with_context(|| format!("write {}", artifact_path.display()))?;
-
-        let artifact = ArtifactMetadata {
-            artifact_id: format!("artifact-evidence-{}", created_at.timestamp_millis()),
-            conversation_id: job.conversation_id,
-            message_id: None,
-            file_name: format!("request-evidence-{request_id}.json"),
-            content_type: EVIDENCE_ARTIFACT_CONTENT_TYPE.to_owned(),
-            size_bytes: payload_bytes.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(&payload_bytes)),
-            storage_path: artifact_path.display().to_string(),
-        };
-        db.insert_artifact(&artifact, created_at)?;
-        db.link_job_artifact(&request.job_id, &artifact.artifact_id)?;
-        db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
-        Ok(artifact)
-    }
-
-    pub fn capture_failure_bundle(
-        &self,
-        mode: Option<shared_protocol::Mode>,
-        message: &str,
-        gateway_request: Option<GatewayRequestContext>,
-    ) -> Result<FailureBundle> {
-        let db = self.open_db()?;
-        let created_at = Utc::now();
-        let bundle_id = format!("bundle-{}", created_at.timestamp_millis());
-        let bundle_dir = self.config.paths.crash_bundles_dir.join(&bundle_id);
-        fs::create_dir_all(&bundle_dir)
-            .with_context(|| format!("create {}", bundle_dir.display()))?;
-
-        let diagnostics = capture_diagnostics_snapshot(&self.browser, &bundle_dir);
-
-        let dom_snapshot_path = bundle_dir.join("dom.json");
-        fs::write(&dom_snapshot_path, diagnostics.dom_snapshot.as_bytes())
-            .with_context(|| format!("write {}", dom_snapshot_path.display()))?;
-        let aria_snapshot_path = bundle_dir.join("aria.json");
-        fs::write(&aria_snapshot_path, diagnostics.aria_snapshot.as_bytes())
-            .with_context(|| format!("write {}", aria_snapshot_path.display()))?;
-
-        let bundle = FailureBundle {
-            bundle_id,
-            error_code: error_code_for_message(message),
-            message: message.to_owned(),
-            created_at,
-            url: diagnostics.current_url,
-            mode,
-            screenshot_path: diagnostics.screenshot_path,
-            dom_snapshot_path: Some(dom_snapshot_path.display().to_string()),
-            aria_snapshot_path: Some(aria_snapshot_path.display().to_string()),
-            logs_path: Some(self.config.paths.log_path.display().to_string()),
-            strategy_attempts: diagnostics.strategy_attempts,
-            capability_matrix: diagnostics.capability_matrix,
-            gateway_request,
-        };
-        let bundle_json_path = bundle_dir.join("bundle.json");
-        fs::write(&bundle_json_path, serde_json::to_vec_pretty(&bundle)?)
-            .with_context(|| format!("write {}", bundle_json_path.display()))?;
-        db.insert_failure_bundle(&bundle)?;
-        Ok(bundle)
-    }
-}
-
-fn capture_diagnostics_snapshot(
-    browser: &std::sync::Arc<std::sync::Mutex<crate::browser::BrowserManager>>,
-    output_dir: &Path,
-) -> BrowserDiagnosticsSnapshot {
-    lock_browser(browser)
-        .and_then(|mut manager| manager.diagnostics(Some(output_dir)))
-        .unwrap_or_else(|_| placeholder_diagnostics_snapshot(output_dir))
-}
-
-fn placeholder_diagnostics_snapshot(output_dir: &Path) -> BrowserDiagnosticsSnapshot {
-    let placeholder_screenshot = output_dir.join("failure.png");
-    let _ = fs::write(&placeholder_screenshot, []);
-    BrowserDiagnosticsSnapshot {
-        current_url: None,
-        capability_matrix: Default::default(),
-        strategy_attempts: vec![],
-        dom_snapshot: String::new(),
-        aria_snapshot: String::new(),
-        screenshot_path: Some(placeholder_screenshot.display().to_string()),
-        selector_pack: default_selector_pack_summary(),
-        strategy_telemetry: vec![],
-        browser_detected: cfg!(windows),
-        detected_browser_path: None,
-        profile_accessible: true,
-        profile_access_error: None,
-    }
 }
 
 #[cfg(test)]
@@ -582,7 +242,7 @@ mod tests {
         ConversationMessageSourceKind, ConversationRecoveryManifest, Effort, ErrorCode, JobKind,
         JobStatus, Mode, ModelClass, RecoveryManifestFile, RecoveryManifestFileKind,
         RecoveryManifestTurn, RecoveryPacket, RecoveryStrategy, RecoveryTrace,
-        RequestExecutionKind, RequestUsage,
+        RequestExecutionKind, RequestSummary, RequestUsage,
     };
     use tempfile::{TempDir, tempdir};
 

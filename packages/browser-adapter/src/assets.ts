@@ -26,7 +26,7 @@ export function loadProbeSource(): string {
         ["packages", "extension", "src", "probe.runtime.js"],
       ),
       "utf8",
-    ).replace(/^export\s+function\s+probeDocument/m, "function probeDocument");
+    ).replace(/^export\s+/gm, "");
   }
 
   return probeSource;
