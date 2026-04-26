@@ -4,6 +4,8 @@
   "version": "0.1.0",
   "license": "MIT",
   "scripts": {
-    "build": "tsc -p tsconfig.build.json"
+    "build": "pnpm run check:probe-content && tsc -p tsconfig.build.json",
+    "check:probe-content": "node scripts/generate-probe-content.mjs --check",
+    "generate:probe-content": "node scripts/generate-probe-content.mjs"
   }
 }

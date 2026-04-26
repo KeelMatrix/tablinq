@@ -65,6 +65,36 @@ it("falls back to page messaging when runtime.sendMessage rejects asynchronously
   );
 });
 
+it("publishes with the generated content probe helper", async () => {
+  delete window.__TABLINQ_PROBE_DOCUMENT__;
+  document.body.innerHTML = `
+    <textarea data-slot="composer" aria-label="Prompt composer"></textarea>
+    <button type="button" data-action="submit">Send</button>
+  `;
+  const sendMessage = vi.fn();
+  globalThis.chrome = {
+    runtime: {
+      sendMessage,
+    },
+  };
+
+  await import("../src/probe.content.js");
+  await import("../src/content-script");
+
+  expect(typeof window.__TABLINQ_PROBE_DOCUMENT__).toBe("function");
+  expect(sendMessage).toHaveBeenCalledWith(
+    expect.objectContaining({
+      type: "capability_report",
+      report: expect.objectContaining({
+        matrix: expect.objectContaining({
+          composer_ready: true,
+          submit_available: true,
+        }),
+      }),
+    }),
+  );
+});
+
 it("responds to dom snapshot requests with cleaned text", async () => {
   document.body.innerHTML =
     "<main><h1>Alpha</h1><script>secret-token</script><style>.hidden{display:none}</style><p>Beta text</p></main>";
