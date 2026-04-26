@@ -13,15 +13,12 @@ const header = `// Generated from src/probe.runtime.js. Do not edit by hand.
 `;
 
 function renderContentProbe(runtimeSource) {
-  const runtimeBody = runtimeSource
-    .replace(/^export\s+function\s+probeDocument/m, "function probeDocument")
-    .trimEnd();
-
-  if (runtimeBody === runtimeSource.trimEnd()) {
+  if (!/^export\s+function\s+probeDocument/m.test(runtimeSource)) {
     throw new Error(
       "Expected src/probe.runtime.js to export function probeDocument",
     );
   }
+  const runtimeBody = runtimeSource.replace(/^export\s+/gm, "").trimEnd();
 
   const indentedRuntime = runtimeBody
     .split("\n")

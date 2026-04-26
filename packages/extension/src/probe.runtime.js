@@ -1,3 +1,359 @@
+export const controlCandidateSelector = [
+  "button",
+  "[role='button']",
+  "[role='switch']",
+  "[role='tab']",
+  "[role='option']",
+  "[role='menuitem']",
+  "[role='menuitemradio']",
+  "[aria-haspopup]",
+  "label",
+  "a",
+].join(", ");
+
+export function normalizeProbeText(value) {
+  return (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+export function computedStyleForProbeElement(element) {
+  if (
+    typeof window === "undefined" ||
+    typeof window.getComputedStyle !== "function"
+  ) {
+    return null;
+  }
+  try {
+    return window.getComputedStyle(element);
+  } catch {
+    return null;
+  }
+}
+
+export function isVisibleProbeElement(element) {
+  if (!(element instanceof HTMLElement)) {
+    return false;
+  }
+  if (element.hidden) {
+    return false;
+  }
+  if (element.getAttribute("aria-hidden") === "true") {
+    return false;
+  }
+  const computed = computedStyleForProbeElement(element);
+  if (
+    computed &&
+    (computed.display === "none" ||
+      computed.visibility === "hidden" ||
+      computed.opacity === "0")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+export function firstVisibleProbeElement(elements, isVisible) {
+  for (const element of Array.from(elements)) {
+    if (isVisible(element)) {
+      return element;
+    }
+  }
+  return null;
+}
+
+export function implicitProbeRole(element) {
+  const tagName = element.tagName.toLowerCase();
+  if (tagName === "button") {
+    return "button";
+  }
+  if (tagName === "a" && element.href) {
+    return "link";
+  }
+  if (tagName === "textarea") {
+    return "textbox";
+  }
+  if (tagName === "input") {
+    const type = element.type.toLowerCase();
+    if (type === "file") {
+      return "button";
+    }
+    if (["text", "search", "email", "url"].includes(type)) {
+      return "textbox";
+    }
+  }
+  if (element.hasAttribute("contenteditable")) {
+    return "textbox";
+  }
+  return null;
+}
+
+export function accessibleProbeName(element, documentRoot = document) {
+  if (!element) {
+    return "";
+  }
+  const ariaLabel = element.getAttribute("aria-label");
+  if (ariaLabel) {
+    return normalizeProbeText(ariaLabel);
+  }
+
+  const labelledBy = element.getAttribute("aria-labelledby");
+  if (labelledBy) {
+    const labels = labelledBy
+      .split(/\s+/)
+      .map((id) => documentRoot.getElementById(id))
+      .filter(Boolean)
+      .map((value) => normalizeProbeText(value.textContent));
+    if (labels.length > 0) {
+      return labels.join(" ");
+    }
+  }
+
+  if (
+    element instanceof HTMLInputElement ||
+    element instanceof HTMLTextAreaElement
+  ) {
+    if (element.labels?.length) {
+      return Array.from(element.labels)
+        .map((label) => normalizeProbeText(label.textContent))
+        .join(" ");
+    }
+    if (element.placeholder) {
+      return normalizeProbeText(element.placeholder);
+    }
+    if (element.value) {
+      return normalizeProbeText(element.value);
+    }
+  }
+
+  return normalizeProbeText(element.textContent);
+}
+
+export function probeTextHasToken(value, tokens) {
+  return tokens.some((token) =>
+    new RegExp(
+      `(^|[^a-z0-9])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`,
+    ).test(value),
+  );
+}
+
+export function probeElementPath(element) {
+  const segments = [];
+  let current = element;
+  while (current && segments.length < 5) {
+    const tag = current.tagName.toLowerCase();
+    const id = current.id ? `#${current.id}` : "";
+    const role = current.getAttribute("role");
+    const slot = current.getAttribute("data-slot");
+    const descriptor = [
+      tag,
+      id,
+      role ? `[role=${role}]` : "",
+      slot ? `[data-slot=${slot}]` : "",
+    ].join("");
+    segments.unshift(descriptor);
+    current = current.parentElement;
+  }
+  return segments.join(" > ");
+}
+
+export function probeNearbyText(element) {
+  const container = element.parentElement ?? element;
+  return Array.from(container.querySelectorAll("*"))
+    .slice(0, 8)
+    .map((node) => normalizeProbeText(node.textContent))
+    .filter((value) => value.length > 0)
+    .slice(0, 4);
+}
+
+export function createProbeNeighborhood(capability, strategyId, element) {
+  return {
+    capability,
+    strategy_id: strategyId,
+    anchor_tag: element.tagName.toLowerCase(),
+    anchor_role: element.getAttribute("role") ?? implicitProbeRole(element),
+    anchor_name: accessibleProbeName(element),
+    anchor_path: probeElementPath(element),
+    parent_name:
+      normalizeProbeText(element.parentElement?.textContent ?? null) || null,
+    sibling_names: Array.from(element.parentElement?.children ?? [])
+      .filter((candidate) => candidate !== element)
+      .map((candidate) => accessibleProbeName(candidate))
+      .filter((value) => value.length > 0)
+      .slice(0, 4),
+    nearby_text: probeNearbyText(element),
+  };
+}
+
+export function orderCapabilityStrategies({
+  capability,
+  strategies,
+  selectorPack,
+  preferredStrategies,
+}) {
+  const fromPack =
+    selectorPack?.capabilities?.[capability]
+      ?.map((entry) => {
+        const match = strategies.find(
+          (strategy) => strategy.id === entry.strategy_id,
+        );
+        return match ? { ...match, score: entry.score } : null;
+      })
+      .filter(Boolean) ?? [];
+  const orderedStrategies =
+    fromPack.length > 0
+      ? [
+          ...fromPack,
+          ...strategies.filter(
+            (strategy) => !fromPack.some((entry) => entry.id === strategy.id),
+          ),
+        ]
+      : [...strategies];
+  const preferred = preferredStrategies[capability];
+  if (!preferred) {
+    return orderedStrategies.sort((left, right) => right.score - left.score);
+  }
+  return orderedStrategies.sort((left, right) => {
+    if (left.id === preferred) {
+      return -1;
+    }
+    if (right.id === preferred) {
+      return 1;
+    }
+    return right.score - left.score;
+  });
+}
+
+export function createAliasBuckets() {
+  return {
+    modes: {},
+    model_classes: {},
+    efforts: {},
+  };
+}
+
+export function addProbeAlias(aliases, bucket, key, label) {
+  if (!label) {
+    return;
+  }
+  const current = aliases[bucket][key] ?? [];
+  if (!current.includes(label)) {
+    aliases[bucket][key] = [...current, label];
+  }
+}
+
+export function captureProbeAliases({
+  aliases,
+  capability,
+  element,
+  accessibleName,
+  hasToken,
+  visiblePopupRootsFor,
+  isVisible,
+  isModelOption,
+  isEffortOption,
+  isModelPickerTrigger,
+  isSearchModeControl,
+  isResearchModeControl,
+  popupOptionSelector,
+}) {
+  if (!element) {
+    return;
+  }
+  const names = [];
+  const pushName = (candidate) => {
+    const name =
+      typeof candidate === "string" ? candidate : accessibleName(candidate);
+    if (name && !names.includes(name)) {
+      names.push(name);
+    }
+  };
+
+  pushName(element);
+  if (capability === "model_picker_visible") {
+    for (const root of visiblePopupRootsFor(isModelOption, element)) {
+      for (const candidate of Array.from(
+        root.querySelectorAll(popupOptionSelector),
+      )) {
+        if (isVisible(candidate) && isModelOption(candidate)) {
+          pushName(candidate);
+        }
+      }
+    }
+    for (const name of ["instant", "thinking"]) {
+      pushName(name);
+    }
+  }
+  if (capability === "thinking_effort_visible") {
+    for (const root of visiblePopupRootsFor(isEffortOption, element)) {
+      for (const candidate of Array.from(
+        root.querySelectorAll(popupOptionSelector),
+      )) {
+        if (isVisible(candidate) && isEffortOption(candidate)) {
+          pushName(candidate);
+        }
+      }
+    }
+    for (const name of ["standard", "extended"]) {
+      pushName(name);
+    }
+  }
+  if (capability === "search_mode_visible" && isSearchModeControl(element)) {
+    pushName("search");
+  }
+  if (
+    capability === "research_mode_visible" &&
+    isResearchModeControl(element)
+  ) {
+    pushName("deep research");
+  }
+  if (names.length === 0) {
+    return;
+  }
+  if (capability === "model_picker_visible") {
+    for (const name of names) {
+      if (hasToken(name, ["instant"])) {
+        addProbeAlias(aliases, "model_classes", "instant", name);
+      }
+      if (hasToken(name, ["thinking"])) {
+        addProbeAlias(aliases, "model_classes", "thinking", name);
+      }
+    }
+    if (
+      Object.keys(aliases.model_classes).length === 0 &&
+      isModelPickerTrigger(element)
+    ) {
+      addProbeAlias(aliases, "model_classes", "instant", "instant");
+      addProbeAlias(aliases, "model_classes", "thinking", "thinking");
+    }
+  }
+  if (capability === "thinking_effort_visible") {
+    for (const name of names) {
+      if (hasToken(name, ["extended"])) {
+        addProbeAlias(aliases, "efforts", "extended", name);
+      }
+      if (hasToken(name, ["standard"])) {
+        addProbeAlias(aliases, "efforts", "standard", name);
+      }
+      if (hasToken(name, ["none", "auto"])) {
+        addProbeAlias(aliases, "efforts", "none", name);
+      }
+    }
+  }
+  if (capability === "search_mode_visible") {
+    for (const name of names) {
+      if (hasToken(name, ["search", "browse the web"])) {
+        addProbeAlias(aliases, "modes", "search", name);
+      }
+    }
+  }
+  if (capability === "research_mode_visible") {
+    for (const name of names) {
+      if (hasToken(name, ["deep research"])) {
+        addProbeAlias(aliases, "modes", "research", name);
+      }
+    }
+  }
+}
+
 export function probeDocument(options = {}) {
   const selectorPackId = options.selectorPackId ?? "chatgpt-default";
   const selectorPackVersion = options.selectorPackVersion ?? "v1";
@@ -5,143 +361,16 @@ export function probeDocument(options = {}) {
   const preferredStrategies = options.preferredStrategies ?? {};
   const selectorPack = options.selectorPack ?? null;
 
-  const normalizeText = (value) =>
-    (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
-
   const documentRoot = document;
   const body = documentRoot.body;
-
-  const getComputed = (element) => {
-    if (
-      typeof window === "undefined" ||
-      typeof window.getComputedStyle !== "function"
-    ) {
-      return null;
-    }
-    try {
-      return window.getComputedStyle(element);
-    } catch {
-      return null;
-    }
-  };
-
-  const isVisible = (element) => {
-    if (!(element instanceof HTMLElement)) {
-      return false;
-    }
-    if (element.hidden) {
-      return false;
-    }
-    if (element.getAttribute("aria-hidden") === "true") {
-      return false;
-    }
-    const computed = getComputed(element);
-    if (
-      computed &&
-      (computed.display === "none" ||
-        computed.visibility === "hidden" ||
-        computed.opacity === "0")
-    ) {
-      return false;
-    }
-    return true;
-  };
-
-  const firstVisible = (elements) => {
-    for (const element of Array.from(elements)) {
-      if (isVisible(element)) {
-        return element;
-      }
-    }
-    return null;
-  };
-
-  const controlCandidateSelector = [
-    "button",
-    "[role='button']",
-    "[role='switch']",
-    "[role='tab']",
-    "[role='option']",
-    "[role='menuitem']",
-    "[role='menuitemradio']",
-    "[aria-haspopup]",
-    "label",
-    "a",
-  ].join(", ");
-
-  const implicitRole = (element) => {
-    const tagName = element.tagName.toLowerCase();
-    if (tagName === "button") {
-      return "button";
-    }
-    if (tagName === "a" && element.href) {
-      return "link";
-    }
-    if (tagName === "textarea") {
-      return "textbox";
-    }
-    if (tagName === "input") {
-      const type = element.type.toLowerCase();
-      if (type === "file") {
-        return "button";
-      }
-      if (["text", "search", "email", "url"].includes(type)) {
-        return "textbox";
-      }
-    }
-    if (element.hasAttribute("contenteditable")) {
-      return "textbox";
-    }
-    return null;
-  };
-
-  const accessibleName = (element) => {
-    if (!element) {
-      return "";
-    }
-    const ariaLabel = element.getAttribute("aria-label");
-    if (ariaLabel) {
-      return normalizeText(ariaLabel);
-    }
-
-    const labelledBy = element.getAttribute("aria-labelledby");
-    if (labelledBy) {
-      const labels = labelledBy
-        .split(/\s+/)
-        .map((id) => documentRoot.getElementById(id))
-        .filter(Boolean)
-        .map((value) => normalizeText(value.textContent));
-      if (labels.length > 0) {
-        return labels.join(" ");
-      }
-    }
-
-    if (
-      element instanceof HTMLInputElement ||
-      element instanceof HTMLTextAreaElement
-    ) {
-      if (element.labels?.length) {
-        return Array.from(element.labels)
-          .map((label) => normalizeText(label.textContent))
-          .join(" ");
-      }
-      if (element.placeholder) {
-        return normalizeText(element.placeholder);
-      }
-      if (element.value) {
-        return normalizeText(element.value);
-      }
-    }
-
-    return normalizeText(element.textContent);
-  };
-
-  const hasToken = (value, tokens) =>
-    tokens.some((token) =>
-      new RegExp(
-        `(^|[^a-z0-9])${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`,
-      ).test(value),
-    );
+  const normalizeText = normalizeProbeText;
+  const isVisible = isVisibleProbeElement;
+  const firstVisible = (elements) =>
+    firstVisibleProbeElement(elements, isVisible);
+  const implicitRole = implicitProbeRole;
+  const accessibleName = (element) =>
+    accessibleProbeName(element, documentRoot);
+  const hasToken = probeTextHasToken;
 
   const firstVisibleBySelector = (selector) =>
     firstVisible(documentRoot.querySelectorAll(selector));
@@ -471,51 +700,8 @@ export function probeDocument(options = {}) {
     return null;
   };
 
-  const elementPath = (element) => {
-    const segments = [];
-    let current = element;
-    while (current && segments.length < 5) {
-      const tag = current.tagName.toLowerCase();
-      const id = current.id ? `#${current.id}` : "";
-      const role = current.getAttribute("role");
-      const slot = current.getAttribute("data-slot");
-      const descriptor = [
-        tag,
-        id,
-        role ? `[role=${role}]` : "",
-        slot ? `[data-slot=${slot}]` : "",
-      ].join("");
-      segments.unshift(descriptor);
-      current = current.parentElement;
-    }
-    return segments.join(" > ");
-  };
-
-  const nearbyText = (element) => {
-    const container = element.parentElement ?? element;
-    return Array.from(container.querySelectorAll("*"))
-      .slice(0, 8)
-      .map((node) => normalizeText(node.textContent))
-      .filter((value) => value.length > 0)
-      .slice(0, 4);
-  };
-
-  const createNeighborhood = (capability, strategyId, element) => ({
-    capability,
-    strategy_id: strategyId,
-    anchor_tag: element.tagName.toLowerCase(),
-    anchor_role: element.getAttribute("role") ?? implicitRole(element),
-    anchor_name: accessibleName(element),
-    anchor_path: elementPath(element),
-    parent_name:
-      normalizeText(element.parentElement?.textContent ?? null) || null,
-    sibling_names: Array.from(element.parentElement?.children ?? [])
-      .filter((candidate) => candidate !== element)
-      .map((candidate) => accessibleName(candidate))
-      .filter((value) => value.length > 0)
-      .slice(0, 4),
-    nearby_text: nearbyText(element),
-  });
+  const createNeighborhood = (capability, strategyId, element) =>
+    createProbeNeighborhood(capability, strategyId, element);
 
   const definitions = [
     {
@@ -813,160 +999,32 @@ export function probeDocument(options = {}) {
     },
   ];
 
-  const orderStrategies = (capability, strategies) => {
-    const fromPack =
-      selectorPack?.capabilities?.[capability]
-        ?.map((entry) => {
-          const match = strategies.find(
-            (strategy) => strategy.id === entry.strategy_id,
-          );
-          return match ? { ...match, score: entry.score } : null;
-        })
-        .filter(Boolean) ?? [];
-    const orderedStrategies =
-      fromPack.length > 0
-        ? [
-            ...fromPack,
-            ...strategies.filter(
-              (strategy) => !fromPack.some((entry) => entry.id === strategy.id),
-            ),
-          ]
-        : [...strategies];
-    const preferred = preferredStrategies[capability];
-    if (!preferred) {
-      return orderedStrategies.sort((left, right) => right.score - left.score);
-    }
-    return orderedStrategies.sort((left, right) => {
-      if (left.id === preferred) {
-        return -1;
-      }
-      if (right.id === preferred) {
-        return 1;
-      }
-      return right.score - left.score;
+  const orderStrategies = (capability, strategies) =>
+    orderCapabilityStrategies({
+      capability,
+      strategies,
+      selectorPack,
+      preferredStrategies,
     });
-  };
 
-  const aliases = {
-    modes: {},
-    model_classes: {},
-    efforts: {},
-  };
+  const aliases = createAliasBuckets();
 
-  const addAlias = (bucket, key, label) => {
-    if (!label) {
-      return;
-    }
-    const current = aliases[bucket][key] ?? [];
-    if (!current.includes(label)) {
-      aliases[bucket][key] = [...current, label];
-    }
-  };
-
-  const collectAliasCandidates = (capability, element) => {
-    const names = [];
-    const pushName = (candidate) => {
-      const name =
-        typeof candidate === "string" ? candidate : accessibleName(candidate);
-      if (name && !names.includes(name)) {
-        names.push(name);
-      }
-    };
-
-    pushName(element);
-    if (capability === "model_picker_visible") {
-      for (const root of visiblePopupRootsFor(isModelOption, element)) {
-        for (const candidate of Array.from(
-          root.querySelectorAll(popupOptionSelector),
-        )) {
-          if (isVisible(candidate) && isModelOption(candidate)) {
-            pushName(candidate);
-          }
-        }
-      }
-      for (const name of ["instant", "thinking"]) {
-        pushName(name);
-      }
-    }
-    if (capability === "thinking_effort_visible") {
-      for (const root of visiblePopupRootsFor(isEffortOption, element)) {
-        for (const candidate of Array.from(
-          root.querySelectorAll(popupOptionSelector),
-        )) {
-          if (isVisible(candidate) && isEffortOption(candidate)) {
-            pushName(candidate);
-          }
-        }
-      }
-      for (const name of ["standard", "extended"]) {
-        pushName(name);
-      }
-    }
-    if (capability === "search_mode_visible" && isSearchModeControl(element)) {
-      pushName("search");
-    }
-    if (
-      capability === "research_mode_visible" &&
-      isResearchModeControl(element)
-    ) {
-      pushName("deep research");
-    }
-    return names;
-  };
-
-  const captureAliases = (capability, element) => {
-    if (!element) {
-      return;
-    }
-    const names = collectAliasCandidates(capability, element);
-    if (names.length === 0) {
-      return;
-    }
-    if (capability === "model_picker_visible") {
-      for (const name of names) {
-        if (hasToken(name, ["instant"])) {
-          addAlias("model_classes", "instant", name);
-        }
-        if (hasToken(name, ["thinking"])) {
-          addAlias("model_classes", "thinking", name);
-        }
-      }
-      if (
-        Object.keys(aliases.model_classes).length === 0 &&
-        isModelPickerTrigger(element)
-      ) {
-        addAlias("model_classes", "instant", "instant");
-        addAlias("model_classes", "thinking", "thinking");
-      }
-    }
-    if (capability === "thinking_effort_visible") {
-      for (const name of names) {
-        if (hasToken(name, ["extended"])) {
-          addAlias("efforts", "extended", name);
-        }
-        if (hasToken(name, ["standard"])) {
-          addAlias("efforts", "standard", name);
-        }
-        if (hasToken(name, ["none", "auto"])) {
-          addAlias("efforts", "none", name);
-        }
-      }
-    }
-    if (capability === "search_mode_visible") {
-      for (const name of names) {
-        if (hasToken(name, ["search", "browse the web"])) {
-          addAlias("modes", "search", name);
-        }
-      }
-    }
-    if (capability === "research_mode_visible") {
-      for (const name of names) {
-        if (hasToken(name, ["deep research"])) {
-          addAlias("modes", "research", name);
-        }
-      }
-    }
-  };
+  const captureAliases = (capability, element) =>
+    captureProbeAliases({
+      aliases,
+      capability,
+      element,
+      accessibleName,
+      hasToken,
+      visiblePopupRootsFor,
+      isVisible,
+      isModelOption,
+      isEffortOption,
+      isModelPickerTrigger,
+      isSearchModeControl,
+      isResearchModeControl,
+      popupOptionSelector,
+    });
 
   const matrix = {
     composer_ready: false,

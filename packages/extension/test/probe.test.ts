@@ -7,7 +7,14 @@ import addFormats from "ajv-formats";
 import Ajv2020 from "ajv/dist/2020";
 import { loadSchema } from "../../browser-adapter/src/protocol";
 import { probeDocument } from "../src/probe";
-import { probeDocument as runtimeProbeDocument } from "../src/probe.runtime.js";
+import {
+  accessibleProbeName,
+  isVisibleProbeElement,
+  orderCapabilityStrategies,
+  probeElementPath,
+  probeTextHasToken,
+  probeDocument as runtimeProbeDocument,
+} from "../src/probe.runtime.js";
 import {
   createBridgeController,
   type BridgeStatus,
@@ -30,6 +37,50 @@ describe("extension capability probe", () => {
   it("exports probeDocument from the canonical runtime source", () => {
     expect(typeof runtimeProbeDocument).toBe("function");
     expect(runtimeProbeDocument).toBe(probeDocument);
+  });
+
+  it("keeps DOM helper behavior focused and directly testable", () => {
+    document.body.innerHTML = `
+      <section id="root">
+        <label id="prompt-label" for="prompt"> Message ChatGPT </label>
+        <textarea id="prompt" aria-labelledby="prompt-label"></textarea>
+        <button id="hidden" hidden>Send</button>
+      </section>
+    `;
+
+    const prompt = document.querySelector("#prompt")!;
+    const hidden = document.querySelector("#hidden")!;
+
+    expect(accessibleProbeName(prompt)).toBe("message chatgpt");
+    expect(isVisibleProbeElement(prompt)).toBe(true);
+    expect(isVisibleProbeElement(hidden)).toBe(false);
+    expect(probeElementPath(prompt)).toContain("textarea#prompt");
+    expect(probeTextHasToken("browse the web", ["browse the web"])).toBe(true);
+  });
+
+  it("orders capability strategies from selector pack and preferred strategy metadata", () => {
+    const strategies = [
+      { id: "fallback", score: 0.5 },
+      { id: "preferred", score: 0.75 },
+      { id: "pack-first", score: 0.1 },
+    ];
+
+    const ordered = orderCapabilityStrategies({
+      capability: "composer_ready",
+      strategies,
+      preferredStrategies: { composer_ready: "preferred" },
+      selectorPack: {
+        capabilities: {
+          composer_ready: [{ strategy_id: "pack-first", score: 1 }],
+        },
+      },
+    });
+
+    expect(ordered.map((strategy) => strategy.id)).toEqual([
+      "preferred",
+      "pack-first",
+      "fallback",
+    ]);
   });
 
   it("keeps the content probe generated from the runtime source", () => {
