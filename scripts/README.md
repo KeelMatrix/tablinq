@@ -62,24 +62,22 @@ This is the cheapest Windows preflight check in the repo. It lets a contributor 
 
 **What it does**
 
-Runs the Windows validation stack in this order:
+Runs every repo test discovered by the Rust workspace and Vitest:
 
-1. `cargo fmt --check`
-2. `cargo clippy --all-targets -- -D warnings`
-3. `cargo test`
-4. `pnpm lint`
-5. `pnpm build`
-6. `pnpm test`
+1. Rust package tests with `--locked`
+2. Gateway tests in focused module chunks, so browser-backed tests report progress instead of disappearing inside one long workspace run
+3. `pnpm exec vitest run --reporter=dot`
 
 It also prepends Cargo's bin directory to the current PowerShell session `PATH` when available.
+If `node_modules` is missing, it first runs `pnpm install --frozen-lockfile`.
 
 **Why it exists**
 
-It gives Windows contributors and CI-like local runs a single command that covers both Rust and TypeScript quality gates. The ordering is deliberate: cheap static checks run before more expensive build and test work.
+It gives Windows contributors a single truthful local test command. It intentionally does not skip browser-backed or package smoke tests when local prerequisites are available. Static checks, formatting, and build validation belong to `ci-local.ps1`.
 
 **Use it when**
 
-- You want the closest local equivalent to the repo's main validation path.
+- You want all available Rust and TypeScript tests.
 - You are preparing a commit or pull request from Windows.
 - You changed code across Rust and TypeScript boundaries.
 
@@ -134,23 +132,22 @@ The repo already has general validation helpers, but GitHub now has three distin
 
 **What it does**
 
-Runs the Unix equivalent of the validation stack:
+Runs the Unix equivalent of the full local test stack:
 
-1. `cargo fmt --check`
-2. `cargo clippy --all-targets -- -D warnings`
-3. `cargo test`
-4. `pnpm lint`
-5. `pnpm build`
-6. `pnpm test`
+1. Rust package tests with `--locked`
+2. Gateway tests in focused module chunks, so browser-backed tests report progress instead of disappearing inside one long workspace run
+3. `pnpm exec vitest run --reporter=dot`
+
+If `node_modules` is missing, it first runs `pnpm install --frozen-lockfile`.
 
 **Why it exists**
 
-This is the Unix/Linux counterpart to `test.ps1`, giving non-Windows environments the same one-command validation path.
+This is the Unix/Linux counterpart to `test.ps1`, giving non-Windows environments the same one-command test path without duplicating CI-only static checks.
 
 **Use it when**
 
 - You are validating the repo on Linux or another Unix-like environment.
-- You want consistent local checks across the Rust and TypeScript parts of the workspace.
+- You want all available Rust and TypeScript tests.
 
 **Do not use it for**
 
