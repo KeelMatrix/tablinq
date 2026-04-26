@@ -1,9 +1,5 @@
 function createDomUtilsModule({ textUtils }) {
-  const {
-    normalizeText,
-    unique,
-    hasToken,
-  } = textUtils;
+  const { normalizeText, unique, hasToken } = textUtils;
 
   const getComputed = (element) => {
     if (

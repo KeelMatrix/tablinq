@@ -1,4 +1,8 @@
-function createCapabilityRuntimeModule({ textUtils, domUtils, composerRuntime }) {
+function createCapabilityRuntimeModule({
+  textUtils,
+  domUtils,
+  composerRuntime,
+}) {
   const { normalizeText, unique, hasToken } = textUtils;
   const {
     isVisible,

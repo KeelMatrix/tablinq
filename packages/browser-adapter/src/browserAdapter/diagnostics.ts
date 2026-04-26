@@ -23,12 +23,16 @@ export class DiagnosticsBundleCapture {
     } catch (error) {
       return {
         profileAccessible: false,
-        profileAccessError: error instanceof Error ? error.message : String(error),
+        profileAccessError:
+          error instanceof Error ? error.message : String(error),
       };
     }
   }
 
-  async captureBundleScreenshot(page: Page, bundleDir: string): Promise<string> {
+  async captureBundleScreenshot(
+    page: Page,
+    bundleDir: string,
+  ): Promise<string> {
     const screenshotPath = resolve(bundleDir, "failure.png");
     await mkdir(dirname(screenshotPath), { recursive: true });
     await page.screenshot({ fullPage: true, path: screenshotPath });

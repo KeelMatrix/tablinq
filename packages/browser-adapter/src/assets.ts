@@ -38,11 +38,10 @@ export function loadPageAdapterSource(): string {
       .map((part) => readPageAdapterRuntimePart(part))
       .join("\n\n");
     const entrySource = readPageAdapterRuntimePart(pageAdapterRuntimeEntryPart);
-    pageAdapterSource = `${moduleSource}\n${entrySource}`
-      .replace(
-        /^export\s+function\s+createTablinqPageAdapterRuntime/m,
-        "function createTablinqPageAdapterRuntime",
-      );
+    pageAdapterSource = `${moduleSource}\n${entrySource}`.replace(
+      /^export\s+function\s+createTablinqPageAdapterRuntime/m,
+      "function createTablinqPageAdapterRuntime",
+    );
   }
 
   return pageAdapterSource;

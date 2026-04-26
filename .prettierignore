@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+logs/
+target/
+packages/extension/src/probe.content.js

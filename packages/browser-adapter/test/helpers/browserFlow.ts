@@ -17,7 +17,10 @@ type BrowserIntegrationHarness = ReturnType<
 type ManagedAdapterOptions = {
   workspacePrefix?: string;
   adapterOptions?: Partial<
-    Omit<BrowserAdapterOptions, "profileDir" | "downloadsDir" | "defaultTargetUrl">
+    Omit<
+      BrowserAdapterOptions,
+      "profileDir" | "downloadsDir" | "defaultTargetUrl"
+    >
   >;
 };
 
@@ -26,7 +29,9 @@ export async function createTrackedManagedAdapter(
   targetUrl: string,
   options: ManagedAdapterOptions = {},
 ) {
-  const root = await harness.createWorkspace(options.workspacePrefix ?? "browser");
+  const root = await harness.createWorkspace(
+    options.workspacePrefix ?? "browser",
+  );
   const adapter = harness.trackAdapter(
     new BrowserAdapter({
       profileDir: path.join(root, "profile"),
@@ -114,8 +119,12 @@ export function expectHarnessCapabilityMatrix(snapshot: BrowserStatusSnapshot) {
     upload_control_visible: true,
     downloadable_artifacts_observable: true,
   });
-  expect(snapshot.capability_report?.aliases.model_classes.instant).toBeTruthy();
-  expect(snapshot.capability_report?.aliases.model_classes.thinking).toBeTruthy();
+  expect(
+    snapshot.capability_report?.aliases.model_classes.instant,
+  ).toBeTruthy();
+  expect(
+    snapshot.capability_report?.aliases.model_classes.thinking,
+  ).toBeTruthy();
   expect(snapshot.capability_report?.aliases.efforts.standard).toBeTruthy();
   expect(snapshot.capability_report?.aliases.efforts.extended).toBeTruthy();
 }

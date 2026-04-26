@@ -52,20 +52,62 @@ function Run-RustJob {
   param([string]$RepoRoot)
 
   Write-Host "==> Rust checks"
+  Run-RustFormatJob -RepoRoot $RepoRoot
+  Run-RustClippyJob -RepoRoot $RepoRoot
+  Run-RustTestJob -RepoRoot $RepoRoot
+}
+
+function Run-RustFormatJob {
+  param([string]$RepoRoot)
+
+  Write-Host "==> Rust format"
   Invoke-Step cargo @("fmt", "--all", "--check") $RepoRoot
+}
+
+function Run-RustClippyJob {
+  param([string]$RepoRoot)
+
+  Write-Host "==> Rust clippy"
   Invoke-Step cargo @("clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings") $RepoRoot
-  Invoke-Step cargo @("test", "--workspace", "--locked") $RepoRoot
+}
+
+function Run-RustTestJob {
+  param([string]$RepoRoot)
+
+  Write-Host "==> Rust tests"
+  $previousSkip = $env:TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS
+  $previousPackageSmokeSkip = $env:TABLINQ_SKIP_PACKAGE_SMOKE_TESTS
+  $env:TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS = "1"
+  $env:TABLINQ_SKIP_PACKAGE_SMOKE_TESTS = "1"
+  try {
+    Invoke-Step cargo @("test", "--workspace", "--locked") $RepoRoot
+  }
+  finally {
+    if ($null -eq $previousSkip) {
+      Remove-Item Env:TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS = $previousSkip
+    }
+
+    if ($null -eq $previousPackageSmokeSkip) {
+      Remove-Item Env:TABLINQ_SKIP_PACKAGE_SMOKE_TESTS -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:TABLINQ_SKIP_PACKAGE_SMOKE_TESTS = $previousPackageSmokeSkip
+    }
+  }
 }
 
 function Run-TypeScriptJob {
   param([string]$RepoRoot)
 
-  Write-Host "==> TypeScript checks"
+  Write-Host "==> TypeScript core checks"
   Ensure-PnpmInstall $RepoRoot
   Invoke-Step pnpm @("format") $RepoRoot
   Invoke-Step pnpm @("lint") $RepoRoot
   Invoke-Step pnpm @("build") $RepoRoot
-  Invoke-Step pnpm @("test") $RepoRoot
+  Invoke-Step pnpm @("run", "test:ts:fast") $RepoRoot
 }
 
 function Run-TypeScriptFormatJob {
@@ -82,6 +124,30 @@ function Run-BrowserAdapterAskJob {
   Write-Host "==> Browser adapter ask"
   Ensure-PnpmInstall $RepoRoot
   Invoke-Step pnpm @("run", "test:browser-adapter:ask") $RepoRoot
+}
+
+function Run-BrowserAdapterFoundationJob {
+  param([string]$RepoRoot)
+
+  Write-Host "==> Browser adapter foundation"
+  Ensure-PnpmInstall $RepoRoot
+  Invoke-Step pnpm @("run", "test:browser-adapter:foundation") $RepoRoot
+}
+
+function Run-BrowserAdapterResearchJob {
+  param([string]$RepoRoot)
+
+  Write-Host "==> Browser adapter research"
+  Ensure-PnpmInstall $RepoRoot
+  Invoke-Step pnpm @("run", "test:browser-adapter:research") $RepoRoot
+}
+
+function Run-BrowserAdapterRecoveryJob {
+  param([string]$RepoRoot)
+
+  Write-Host "==> Browser adapter recovery"
+  Ensure-PnpmInstall $RepoRoot
+  Invoke-Step pnpm @("run", "test:browser-adapter:recovery") $RepoRoot
 }
 
 function Run-PackageSmokeJob {
@@ -134,9 +200,16 @@ $validJobs = @(
   "quick",
   "all",
   "rust",
+  "rust-fmt",
+  "rust-clippy",
+  "rust-test",
   "typescript",
   "typescript-format",
+  "browser-adapter-foundation",
   "browser-adapter-ask",
+  "browser-adapter-research",
+  "browser-adapter-recovery",
+  "browser-adapter",
   "package-smoke"
 )
 $requestedJobs = @(
@@ -159,13 +232,18 @@ foreach ($name in $requestedJobs) {
 $jobs = foreach ($name in $requestedJobs) {
   switch ($name) {
     "quick" {
-      "typescript-format"
-      "browser-adapter-ask"
+      "rust-fmt"
+      "typescript"
     }
     "all" {
       "rust"
       "typescript"
-      "package-smoke"
+    }
+    "browser-adapter" {
+      "browser-adapter-foundation"
+      "browser-adapter-ask"
+      "browser-adapter-research"
+      "browser-adapter-recovery"
     }
     default { $name }
   }
@@ -174,9 +252,15 @@ $jobs = foreach ($name in $requestedJobs) {
 foreach ($name in $jobs) {
   switch ($name) {
     "rust" { Run-RustJob -RepoRoot $repoRoot }
+    "rust-fmt" { Run-RustFormatJob -RepoRoot $repoRoot }
+    "rust-clippy" { Run-RustClippyJob -RepoRoot $repoRoot }
+    "rust-test" { Run-RustTestJob -RepoRoot $repoRoot }
     "typescript" { Run-TypeScriptJob -RepoRoot $repoRoot }
     "typescript-format" { Run-TypeScriptFormatJob -RepoRoot $repoRoot }
+    "browser-adapter-foundation" { Run-BrowserAdapterFoundationJob -RepoRoot $repoRoot }
     "browser-adapter-ask" { Run-BrowserAdapterAskJob -RepoRoot $repoRoot }
+    "browser-adapter-research" { Run-BrowserAdapterResearchJob -RepoRoot $repoRoot }
+    "browser-adapter-recovery" { Run-BrowserAdapterRecoveryJob -RepoRoot $repoRoot }
     "package-smoke" { Run-PackageSmokeJob -RepoRoot $repoRoot -ScriptRoot $PSScriptRoot }
   }
 }
