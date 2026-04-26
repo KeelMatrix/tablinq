@@ -155,6 +155,10 @@ fn wait_for_daemon(state_root: &Path) {
 }
 
 fn browser_integration_prereqs_available() -> bool {
+    if std::env::var_os("TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS").is_some() {
+        return false;
+    }
+
     let repo_root = repo_root();
     let adapter_entry = repo_root
         .join("packages")
@@ -413,6 +417,11 @@ fn concurrent_cli_asks_fail_fast_with_browser_busy() {
 #[test]
 fn windows_packaging_and_install_smoke_cover_packaged_layout() {
     let _guard = integration_lock();
+    if std::env::var_os("TABLINQ_SKIP_PACKAGE_SMOKE_TESTS").is_some() {
+        eprintln!("skipping Windows package smoke test");
+        return;
+    }
+
     let repo_root = repo_root();
     let install_dir = tempdir().expect("install tempdir");
     let state_dir = tempdir().expect("state tempdir");

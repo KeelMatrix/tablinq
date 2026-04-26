@@ -15,6 +15,10 @@ pub(super) enum AdapterLauncher {
 }
 
 pub(crate) fn browser_integration_prereqs_available() -> bool {
+    if std::env::var_os("TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS").is_some() {
+        return false;
+    }
+
     if !command_available(node_command(), "--version") {
         return false;
     }

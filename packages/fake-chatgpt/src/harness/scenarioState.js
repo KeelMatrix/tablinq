@@ -17,19 +17,38 @@ export const scenarioRegistry = {
   "recover-running-transient": { recovery: true },
   "recover-same-message-rewrite": { recovery: true },
   "submit-upload-trap": { composerPlusTrap: true },
-  "submit-upload-trap-no-keyboard": { composerPlusTrap: true, keyboardSubmit: false },
-  "submit-upload-stale-recover": { staleSubmitRecovery: true, keyboardSubmit: false },
+  "submit-upload-trap-no-keyboard": {
+    composerPlusTrap: true,
+    keyboardSubmit: false,
+  },
+  "submit-upload-stale-recover": {
+    staleSubmitRecovery: true,
+    keyboardSubmit: false,
+  },
   "upload-processing-delay": { delayedUploadProcessing: true },
   "upload-processing-stuck": { stuckUploadProcessing: true },
-  "submit-never-ready": { blockedSubmitAfterUpload: true, keyboardSubmit: false },
+  "submit-never-ready": {
+    blockedSubmitAfterUpload: true,
+    keyboardSubmit: false,
+  },
   "research-success": { deepResearchFrame: true },
   "research-failure": { deepResearchFrame: true },
   "research-reload": { deepResearchFrame: true },
-  "research-starting-shell": { deepResearchFrame: true, deepResearchStartingShell: true },
+  "research-starting-shell": {
+    deepResearchFrame: true,
+    deepResearchStartingShell: true,
+  },
   "research-deep-landing": { deepResearchLanding: true },
-  "research-deep-landing-submit-fail": { deepResearchLanding: true, researchSubmissionFails: true },
-  "provider-generation-failure-recover": { providerGenerationFailureRecovery: true },
-  "provider-generation-failure-after-success": { providerGenerationFailureAfterSuccess: true },
+  "research-deep-landing-submit-fail": {
+    deepResearchLanding: true,
+    researchSubmissionFails: true,
+  },
+  "provider-generation-failure-recover": {
+    providerGenerationFailureRecovery: true,
+  },
+  "provider-generation-failure-after-success": {
+    providerGenerationFailureAfterSuccess: true,
+  },
   "provider-generation-failure-twice": { providerGenerationFailureTwice: true },
 };
 
@@ -51,7 +70,8 @@ export function createScenarioState(window) {
       : "instant";
   const requestedInitialEffort = params.get("initial_effort");
   const initialEffort =
-    requestedInitialEffort === "standard" || requestedInitialEffort === "extended"
+    requestedInitialEffort === "standard" ||
+    requestedInitialEffort === "extended"
       ? requestedInitialEffort
       : "standard";
 
@@ -65,7 +85,9 @@ export function createScenarioState(window) {
     hasDelayedUploadProcessing: Boolean(definition.delayedUploadProcessing),
     hasStuckUploadProcessing: Boolean(definition.stuckUploadProcessing),
     hasBlockedSubmitAfterUpload: Boolean(definition.blockedSubmitAfterUpload),
-    usesDeepResearchStartingShell: Boolean(definition.deepResearchStartingShell),
+    usesDeepResearchStartingShell: Boolean(
+      definition.deepResearchStartingShell,
+    ),
     usesDeepResearchLanding: Boolean(definition.deepResearchLanding),
     researchSubmissionFails: Boolean(definition.researchSubmissionFails),
     usesDeepResearchFrame:

@@ -1,10 +1,9 @@
-function createComposerRuntimeModule({ textUtils, domUtils, getMessageRuntime }) {
-  const {
-    normalizeText,
-    collapseText,
-    unique,
-    hasToken,
-  } = textUtils;
+function createComposerRuntimeModule({
+  textUtils,
+  domUtils,
+  getMessageRuntime,
+}) {
+  const { normalizeText, collapseText, unique, hasToken } = textUtils;
   const {
     isVisible,
     firstVisible,

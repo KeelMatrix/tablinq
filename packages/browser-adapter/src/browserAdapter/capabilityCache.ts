@@ -129,7 +129,10 @@ export class CapabilityStrategyCache {
       message.runtime.ui_signature,
       message.runtime.strategy_matches,
     );
-    this.recordStrategyStats(message.runtime.strategy_matches, previousUiSignature);
+    this.recordStrategyStats(
+      message.runtime.strategy_matches,
+      previousUiSignature,
+    );
     this.persistCapabilitySnapshot(currentUrl, message);
   }
 

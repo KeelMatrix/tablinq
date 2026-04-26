@@ -1,11 +1,6 @@
 export function createUploadRuntime({ document, variant, config, refs }) {
-  const {
-    uploadList,
-    sendButton,
-    staleSendButton,
-    stopButton,
-    artifactLink,
-  } = refs;
+  const { uploadList, sendButton, staleSendButton, stopButton, artifactLink } =
+    refs;
   let uploadProcessingTimer = null;
 
   function setUploadPopoverOpen(open) {
@@ -42,7 +37,9 @@ export function createUploadRuntime({ document, variant, config, refs }) {
     const running = document.body.dataset.streamState === "running";
     const uploadProcessing = document.body.dataset.uploadProcessing === "true";
     const submitBlocked =
-      config.hasBlockedSubmitAfterUpload && uploadedFiles().length > 0 && !running;
+      config.hasBlockedSubmitAfterUpload &&
+      uploadedFiles().length > 0 &&
+      !running;
     if (sendButton instanceof HTMLElement) {
       sendButton.toggleAttribute("hidden", running);
       sendButton.setAttribute(

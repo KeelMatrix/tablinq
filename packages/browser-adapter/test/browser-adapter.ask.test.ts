@@ -200,9 +200,7 @@ describe("browser adapter", () => {
     );
     expect(stream.text()).toBe(result.output_text);
     expect(stream.chunks).toEqual([result.output_text]);
-    expect(stream.text()).not.toContain(
-      "I’m reconstructing the prior context",
-    );
+    expect(stream.text()).not.toContain("I’m reconstructing the prior context");
     expect(stream.text()).not.toContain("The comparison is narrowing");
 
     await adapter.shutdown();

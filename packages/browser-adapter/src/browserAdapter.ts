@@ -1172,5 +1172,4 @@ export class BrowserAdapter {
 
     return this.recordCapabilityFailure(page);
   }
-
 }
