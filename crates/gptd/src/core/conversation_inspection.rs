@@ -1,5 +1,5 @@
 use super::CoreService;
-use super::support::build_provider_generation_context_summary;
+use super::recovery::build_provider_generation_context_summary;
 use crate::db::ConversationTurnRecord;
 use anyhow::Result;
 use chrono::Utc;
