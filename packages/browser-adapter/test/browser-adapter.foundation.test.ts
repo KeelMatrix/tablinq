@@ -141,6 +141,30 @@ describe("browser adapter", () => {
     },
   );
 
+  it("loads a self-contained page adapter runtime source", () => {
+    const factory = new Function(
+      `${loadPageAdapterSource()}\nreturn createTablinqPageAdapterRuntime;`,
+    )();
+
+    expect(typeof factory).toBe("function");
+    expect(Object.keys(factory()).sort()).toEqual([
+      "applyAskConfiguration",
+      "attachmentsStillProcessing",
+      "clickSubmit",
+      "composerReady",
+      "fillComposer",
+      "readAskBaseline",
+      "readAskSnapshot",
+      "readResearchSnapshot",
+      "readResearchSubmissionState",
+      "readSubmitState",
+      "researchSubmissionStarted",
+      "submitReady",
+      "submitStarted",
+      "uploadAcknowledged",
+    ]);
+  });
+
   it("keeps the page runtime command facade aligned with composer, submit, capability, and message probes", async () => {
     const runtimeSource = loadPageAdapterSource();
     const dom = new JSDOM(
@@ -1063,13 +1087,7 @@ describe("browser adapter", () => {
   });
 
   it("serializes rich assistant markdown into terminal-safe markdown text", async () => {
-    const runtimeSource = await readFile(
-      path.join(
-        process.cwd(),
-        "packages/browser-adapter/src/pageAdapter.runtime.js",
-      ),
-      "utf8",
-    );
+    const runtimeSource = loadPageAdapterSource();
     const expected = [
       "# Heading One",
       "## Heading Two",
@@ -1165,13 +1183,7 @@ describe("browser adapter", () => {
   });
 
   it("serializes complex markdown table cells without breaking table columns", async () => {
-    const runtimeSource = await readFile(
-      path.join(
-        process.cwd(),
-        "packages/browser-adapter/src/pageAdapter.runtime.js",
-      ),
-      "utf8",
-    );
+    const runtimeSource = loadPageAdapterSource();
     const expected = [
       "| Key | Value | Notes |",
       "| --- | --- | --- |",
@@ -1227,13 +1239,7 @@ describe("browser adapter", () => {
   });
 
   it("serializes mermaid preview blocks into explicit text instead of a bare mermaid label", async () => {
-    const runtimeSource = await readFile(
-      path.join(
-        process.cwd(),
-        "packages/browser-adapter/src/pageAdapter.runtime.js",
-      ),
-      "utf8",
-    );
+    const runtimeSource = loadPageAdapterSource();
     const dom = new JSDOM("<!doctype html><html><body></body></html>", {
       url: "https://chatgpt.com/c/conv-mermaid-preview",
       runScripts: "outside-only",
@@ -1284,13 +1290,7 @@ describe("browser adapter", () => {
   });
 
   it("ignores transient hidden inline nodes so ask streaming can keep a stable prefix", async () => {
-    const runtimeSource = await readFile(
-      path.join(
-        process.cwd(),
-        "packages/browser-adapter/src/pageAdapter.runtime.js",
-      ),
-      "utf8",
-    );
+    const runtimeSource = loadPageAdapterSource();
     const dom = new JSDOM("<!doctype html><html><body></body></html>", {
       url: "http://127.0.0.1:3847/?variant=live",
       runScripts: "outside-only",
@@ -1374,13 +1374,7 @@ describe("browser adapter", () => {
   });
 
   it("reads modern section-based assistant turns and tracks stable turn progress", async () => {
-    const runtimeSource = await readFile(
-      path.join(
-        process.cwd(),
-        "packages/browser-adapter/src/pageAdapter.runtime.js",
-      ),
-      "utf8",
-    );
+    const runtimeSource = loadPageAdapterSource();
     const dom = new JSDOM(
       "<!doctype html><html><body><main></main></body></html>",
       {

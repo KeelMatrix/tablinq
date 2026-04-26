@@ -16,6 +16,7 @@ import {
   uploadAckTimeoutMsForFiles,
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
+import { loadPageAdapterSource } from "../src/assets";
 import { finalizeAsk } from "../src/execution/finalization";
 import { applyAskSnapshot } from "../src/execution/streaming";
 import {
@@ -45,13 +46,7 @@ const liveActualAnswerText =
   "A lot. Modern AI helps, but it does not remove the need for strong systems design.";
 
 async function createAskRuntimeDom() {
-  const runtimeSource = await readFile(
-    path.join(
-      process.cwd(),
-      "packages/browser-adapter/src/pageAdapter.runtime.js",
-    ),
-    "utf8",
-  );
+  const runtimeSource = loadPageAdapterSource();
   const dom = new JSDOM(
     `<!doctype html><html><body><main>
       <section data-testid="conversation-turn-1">
