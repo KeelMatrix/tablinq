@@ -12,13 +12,20 @@ const header = `// Generated from src/probe.runtime.js. Do not edit by hand.
 
 `;
 
+function normalizeLineEndings(source) {
+  return source.replace(/\r\n?/g, "\n");
+}
+
 function renderContentProbe(runtimeSource) {
+  const normalizedRuntimeSource = normalizeLineEndings(runtimeSource);
   if (!/^export\s+function\s+probeDocument/m.test(runtimeSource)) {
     throw new Error(
       "Expected src/probe.runtime.js to export function probeDocument",
     );
   }
-  const runtimeBody = runtimeSource.replace(/^export\s+/gm, "").trimEnd();
+  const runtimeBody = normalizedRuntimeSource
+    .replace(/^export\s+/gm, "")
+    .trimEnd();
 
   const indentedRuntime = runtimeBody
     .split("\n")
@@ -42,7 +49,7 @@ if (process.argv.includes("--check")) {
     process.exit(1);
   }
   const currentSource = readFileSync(contentPath, "utf8");
-  if (currentSource !== generatedSource) {
+  if (normalizeLineEndings(currentSource) !== generatedSource) {
     console.error(
       "packages/extension/src/probe.content.js is out of sync with probe.runtime.js",
     );
