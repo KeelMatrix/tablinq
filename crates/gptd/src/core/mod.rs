@@ -1,5 +1,7 @@
 mod conversation_inspection;
 mod operations;
+mod recovery;
+mod recovery_manifest;
 mod support;
 
 use crate::browser::{BrowserManager, execution_error, execution_error_metadata};
@@ -7,6 +9,15 @@ use crate::config::AppConfig;
 use crate::db::Database;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use recovery::{
+    ProviderGenerationRecoveryPacketInput, build_provider_generation_context_summary,
+    build_provider_generation_recovery_packet, build_provider_generation_recovery_trace,
+    build_provider_generation_replay_files, build_provider_generation_replay_prompt,
+    provider_recovery_attempt_request_id, should_auto_recover_provider_generation_failure,
+};
+use recovery_manifest::{
+    update_conversation_recovery_manifest, write_provider_generation_recovery_manifest_attachment,
+};
 use shared_protocol::{
     AskCommand, AskResult, BrowserOpenRequest, ErrorCode, EventPayload, JobKind, JobState,
     JobStatus, ResearchCommand, ResearchResult,
@@ -16,13 +27,8 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 pub use support::error_code_for_message;
 use support::{
-    ProviderGenerationRecoveryPacketInput, apply_research_update, browser_session_identity,
-    build_provider_generation_context_summary, build_provider_generation_recovery_packet,
-    build_provider_generation_recovery_trace, build_provider_generation_replay_files,
-    build_provider_generation_replay_prompt, conversation_id_from_url, is_cancelled_message,
-    lock_browser, lock_cancel_registry, maybe_write_research_output,
-    provider_recovery_attempt_request_id, should_auto_recover_provider_generation_failure,
-    update_conversation_recovery_manifest, write_provider_generation_recovery_manifest_attachment,
+    apply_research_update, browser_session_identity, conversation_id_from_url,
+    is_cancelled_message, lock_browser, lock_cancel_registry, maybe_write_research_output,
 };
 
 const ARTIFACT_RETENTION_LIMIT: usize = 100;
