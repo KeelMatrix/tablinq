@@ -13,6 +13,7 @@ import {
   readAskBaseline,
   readAskSnapshot,
   resetConversationIdentity,
+  scrollToBottomIfNeeded,
   sleep,
   uploadAttachments,
   waitForSubmitReadyAfterUploads,
@@ -79,6 +80,7 @@ export async function runAsk(
 
   const timing = resolveAskTiming(command);
   let page = await openAskExecutionPage(host, command);
+  await scrollToBottomIfNeeded(page);
   let askBaseline: AskBaseline | null = null;
 
   if (options.submitPrompt) {

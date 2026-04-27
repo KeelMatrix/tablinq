@@ -36,6 +36,84 @@ export async function resetConversationIdentity(page: Page): Promise<void> {
   }, resetUrl);
 }
 
+export async function scrollToBottomIfNeeded(page: Page): Promise<void> {
+  await page
+    .evaluate(() => {
+      const bottomTolerancePx = 8;
+      const candidates = [
+        document.scrollingElement,
+        document.documentElement,
+        document.body,
+        ...Array.from(
+          document.querySelectorAll(
+            [
+              "main",
+              "[role='main']",
+              "[data-testid*='conversation']",
+              "[class*='thread']",
+              "[class*='scroll']",
+              "[class*='overflow-y-auto']",
+              "[class*='overflow-auto']",
+            ].join(", "),
+          ),
+        ),
+      ];
+
+      const seen = new Set<Element>();
+      let best: {
+        element: Element;
+        scrollHeight: number;
+        clientHeight: number;
+        scrollTop: number;
+        scrollablePx: number;
+      } | null = null;
+
+      for (const element of candidates) {
+        if (!element || seen.has(element)) {
+          continue;
+        }
+        seen.add(element);
+        const scrollHeight = element.scrollHeight;
+        const clientHeight = element.clientHeight;
+        const scrollablePx = scrollHeight - clientHeight;
+        if (scrollablePx <= bottomTolerancePx) {
+          continue;
+        }
+        const entry = {
+          element,
+          scrollHeight,
+          clientHeight,
+          scrollTop: element.scrollTop,
+          scrollablePx,
+        };
+        if (!best || entry.scrollablePx > best.scrollablePx) {
+          best = entry;
+        }
+      }
+
+      if (!best) {
+        return false;
+      }
+
+      const remainingPx =
+        best.scrollHeight - best.clientHeight - best.scrollTop;
+      if (remainingPx <= bottomTolerancePx) {
+        return false;
+      }
+
+      if (
+        best.element === document.scrollingElement ||
+        best.element === document.documentElement ||
+        best.element === document.body
+      ) {
+        window.scrollTo({ top: best.scrollHeight, behavior: "auto" });
+      }
+      best.element.scrollTop = best.scrollHeight;
+      return true;
+    })
+    .catch(() => undefined);
+}
+
 export async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }

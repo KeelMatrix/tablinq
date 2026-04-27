@@ -24,7 +24,10 @@ import {
 } from "../src/browserAdapter";
 import { applyAskSnapshot } from "../src/execution/streaming";
 import { loadPageAdapterSource } from "../src/assets";
-import { waitForQuietInteractionSurface } from "../src/pageRuntime";
+import {
+  scrollToBottomIfNeeded,
+  waitForQuietInteractionSurface,
+} from "../src/pageRuntime";
 import {
   createBrowserIntegrationHarness,
   createIsolatedTempDir,
@@ -552,6 +555,39 @@ describe("browser adapter", () => {
 
     expect(settled).toBe(true);
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300);
+
+    await adapter.shutdown();
+  });
+
+  it("scrolls the active page to the bottom only when it is not already there", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+      }),
+    );
+
+    await adapter.open({ targetUrl: server.url, headless: true });
+    const page = adapter.getManagedPageForTest()!;
+    await page.setViewportSize({ width: 900, height: 600 });
+    await page.evaluate(() => {
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        "<div id='scroll-probe' style='height: 3000px'></div>",
+      );
+      window.scrollTo(0, 0);
+    });
+
+    await scrollToBottomIfNeeded(page);
+    const firstScrollY = await page.evaluate(() => window.scrollY);
+    await scrollToBottomIfNeeded(page);
+    const secondScrollY = await page.evaluate(() => window.scrollY);
+
+    expect(firstScrollY).toBeGreaterThan(0);
+    expect(secondScrollY).toBe(firstScrollY);
 
     await adapter.shutdown();
   });

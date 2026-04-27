@@ -11,6 +11,7 @@ import {
   isTransientPageError,
   readLiveResearchSnapshot,
   resetConversationIdentity,
+  scrollToBottomIfNeeded,
   sleep,
   submitResearch,
   uploadAttachments,
@@ -56,6 +57,7 @@ export async function runResearch(
 ): Promise<ResearchResultSnapshot> {
   let timing = resolveResearchTiming(command);
   let page = await openResearchExecutionPage(host, command);
+  await scrollToBottomIfNeeded(page);
   let submissionState: ResearchSubmissionStateSnapshot | null = null;
   let initialSnapshot: ResearchSnapshot | null = null;
 
