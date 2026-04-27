@@ -1,7 +1,4 @@
-import type {
-  BrowserAdapter,
-  BrowserStatusSnapshot,
-} from "../src/browserAdapter";
+import type { BrowserAdapter } from "../src/browserAdapter";
 import { dispatchAdapterRequest } from "../src/service/dispatch";
 import { encodeFrame, streamChunkFrame } from "../src/service/frames";
 import {
@@ -12,36 +9,12 @@ import {
   normalizeResearchRecoveryState,
   parseArgs,
 } from "../src/service/normalization";
-import type { AdapterFrame, RecoverAskRequest } from "../src/service/protocol";
-
-function statusSnapshot(): BrowserStatusSnapshot {
-  return {
-    running: false,
-    browser_kind: "chromium",
-    profile_dir: "profile",
-    downloads_dir: "downloads",
-    target_url: "https://chatgpt.test",
-    current_url: null,
-    page_title: null,
-    page_ready: false,
-    authenticated: false,
-    reload_count: 0,
-    screenshot_path: null,
-    browser_path: null,
-    extension_connected: false,
-    capability_report: null,
-    attach_mode: "managed_only",
-    browser_owner: "managed",
-    cdp_attached: false,
-    target_tab_found: false,
-    target_tab_id: null,
-    target_workspace_key: null,
-    debug_endpoint: "http://127.0.0.1:9222",
-    auth_source: "unknown",
-    extension_required: true,
-    last_capability_report_at: null,
-  };
-}
+import {
+  captureAdapterFrames,
+  recoverAskRequestFixture,
+  recoverResearchRequestFixture,
+  statusSnapshotFixture,
+} from "./helpers/serviceFixtures";
 
 describe("browser adapter service helpers", () => {
   it("normalizes CLI args and service execution commands without changing defaults", () => {
@@ -105,17 +78,7 @@ describe("browser adapter service helpers", () => {
   });
 
   it("maps recover_ask baseline fields with nullish defaults only", () => {
-    const request: RecoverAskRequest = {
-      type: "recover_ask",
-      job_id: "job-recover",
-      prompt: "resume",
-      emitted_text: null,
-      next_seq: null,
-      baseline_assistant_message_count: 0,
-      baseline_conversation_id: null,
-      baseline_message_id: "msg-base",
-      baseline_text: null,
-    };
+    const request = recoverAskRequestFixture();
 
     expect(normalizeAskRecoveryState(request)).toEqual({
       emittedText: "",
@@ -130,34 +93,22 @@ describe("browser adapter service helpers", () => {
       },
     });
     expect(
-      normalizeAskRecoveryState({
-        ...request,
-        baseline_assistant_message_count: null,
-      }).askBaseline,
+      normalizeAskRecoveryState(
+        recoverAskRequestFixture({ baseline_assistant_message_count: null }),
+      ).askBaseline,
     ).toBeNull();
   });
 
   it("maps recover_research state fields with the existing defaults", () => {
-    expect(
-      normalizeResearchRecoveryState({
-        type: "recover_research",
-        job_id: "job-research-recover",
-        query: "resume research",
-        emitted_text: null,
-        next_seq: null,
-      }),
-    ).toEqual({
+    expect(normalizeResearchRecoveryState(recoverResearchRequestFixture())).toEqual({
       emittedText: "",
       nextSeq: 0,
     });
     expect(
-      normalizeResearchRecoveryState({
-        type: "recover_research",
-        job_id: "job-research-recover",
-        query: "resume research",
+      normalizeResearchRecoveryState(recoverResearchRequestFixture({
         emitted_text: "partial",
         next_seq: 5,
-      }),
+      })),
     ).toEqual({
       emittedText: "partial",
       nextSeq: 5,
@@ -183,8 +134,8 @@ describe("browser adapter service helpers", () => {
   });
 
   it("wraps ask execution callbacks without changing frame shapes or sequence numbers", async () => {
-    const frames: AdapterFrame[] = [];
-    const state = statusSnapshot();
+    const frameCapture = captureAdapterFrames();
+    const state = statusSnapshotFixture();
     const requestState = {
       state: "running" as const,
       reason: "observed in-flight assistant identity",
@@ -242,13 +193,11 @@ describe("browser adapter service helpers", () => {
     const outcome = await dispatchAdapterRequest(
       adapter,
       { type: "ask", job_id: "job-ask-frame", prompt: "hello" },
-      (frame) => {
-        frames.push(frame);
-      },
+      frameCapture.write,
     );
 
     expect(outcome).toEqual({ shutdown: false });
-    expect(frames).toEqual([
+    expect(frameCapture.frames).toEqual([
       { type: "request_state", update: requestState },
       { type: "stream_chunk", chunk: delta },
       { type: "stream_chunk", chunk: done },

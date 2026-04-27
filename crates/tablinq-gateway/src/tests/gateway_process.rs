@@ -4,8 +4,8 @@ use super::*;
 fn gateway_health_and_readiness_endpoints_respond() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();
-    let state_root = config.paths.state_root.clone();
-    let (handle, snapshot) = spawn_gateway(config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
 
     let health = http_request(
         &snapshot.host,
@@ -30,17 +30,14 @@ fn gateway_health_and_readiness_endpoints_respond() {
     )
     .unwrap();
     assert_eq!(ready.status_code, 200);
-
-    stop_gateway_process(Some(&state_root)).unwrap();
-    handle.join().unwrap().unwrap();
 }
 
 #[test]
 fn gateway_rejects_unauthorized_admin_requests() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();
-    let state_root = config.paths.state_root.clone();
-    let (handle, snapshot) = spawn_gateway(config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
 
     let response = http_request(
         &snapshot.host,
@@ -53,9 +50,6 @@ fn gateway_rejects_unauthorized_admin_requests() {
     )
     .unwrap();
     assert_eq!(response.status_code, 401);
-
-    stop_gateway_process(Some(&state_root)).unwrap();
-    handle.join().unwrap().unwrap();
 }
 
 #[test]
