@@ -26,6 +26,7 @@ import { applyAskSnapshot } from "../src/execution/streaming";
 import { loadPageAdapterSource } from "../src/assets";
 import {
   scrollToBottomIfNeeded,
+  waitForInteractionSurface,
   waitForQuietInteractionSurface,
 } from "../src/pageRuntime";
 import {
@@ -588,6 +589,99 @@ describe("browser adapter", () => {
 
     expect(firstScrollY).toBeGreaterThan(0);
     expect(secondScrollY).toBe(firstScrollY);
+
+    await adapter.shutdown();
+  });
+
+  it("reloads once when the composer is unavailable before interaction", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+      }),
+    );
+
+    await adapter.open({ targetUrl: server.url, headless: true });
+    const page = adapter.getManagedPageForTest()!;
+    await page.evaluate(() => {
+      for (const element of Array.from(
+        document.querySelectorAll(
+          [
+            "#prompt-textarea",
+            "[data-slot='composer']",
+            "[data-testid='composer-root']",
+            "textarea",
+            "[role='textbox']",
+            "[contenteditable='true']",
+          ].join(", "),
+        ),
+      )) {
+        element.remove();
+      }
+    });
+
+    await waitForInteractionSurface(page, {
+      reloadOnUnavailable: true,
+      composerTimeoutMs: 250,
+    });
+
+    expect(
+      await page
+        .locator("#prompt-textarea, textarea, [role='textbox']")
+        .count(),
+    ).toBeGreaterThan(0);
+
+    await adapter.shutdown();
+  });
+
+  it("does not reload when the composer is unavailable during an active provider request", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+      }),
+    );
+
+    await adapter.open({ targetUrl: server.url, headless: true });
+    const page = adapter.getManagedPageForTest()!;
+    await page.evaluate(() => {
+      for (const element of Array.from(
+        document.querySelectorAll(
+          [
+            "#prompt-textarea",
+            "[data-slot='composer']",
+            "[data-testid='composer-root']",
+            "textarea",
+            "[role='textbox']",
+            "[contenteditable='true']",
+          ].join(", "),
+        ),
+      )) {
+        element.remove();
+      }
+      document.body.dataset.streamState = "running";
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        "<button data-testid='stop-button'>Stop</button>",
+      );
+    });
+
+    await expect(
+      waitForInteractionSurface(page, {
+        reloadOnUnavailable: true,
+        composerTimeoutMs: 250,
+      }),
+    ).rejects.toThrow();
+    expect(await page.locator("[data-testid='composer-root']").count()).toBe(0);
+    expect(await page.evaluate(() => document.body.dataset.streamState)).toBe(
+      "running",
+    );
 
     await adapter.shutdown();
   });

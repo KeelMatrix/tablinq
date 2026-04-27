@@ -16,6 +16,7 @@ import {
   scrollToBottomIfNeeded,
   sleep,
   uploadAttachments,
+  waitForInteractionSurface,
   waitForSubmitReadyAfterUploads,
 } from "../pageRuntime";
 import {
@@ -231,6 +232,7 @@ async function prepareAskSubmission(
   ) {
     await resetConversationIdentity(page);
   }
+  await waitForInteractionSurface(page, { reloadOnUnavailable: true });
   const askBaseline = await readAskBaseline(page);
   await host.refreshCapabilities(page);
   if (

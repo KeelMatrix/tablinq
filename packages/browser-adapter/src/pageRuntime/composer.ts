@@ -95,7 +95,38 @@ async function submitEdgeDetected(
   return waitForSubmitStarted(page, baseline, timeoutMs);
 }
 
-export async function waitForInteractionSurface(page: Page): Promise<void> {
+type InteractionSurfaceOptions = {
+  composerTimeoutMs?: number;
+  reloadOnUnavailable?: boolean;
+};
+
+export async function waitForInteractionSurface(
+  page: Page,
+  options: InteractionSurfaceOptions = {},
+): Promise<void> {
+  try {
+    await waitForInteractionSurfaceOnce(page, options.composerTimeoutMs);
+    return;
+  } catch (error) {
+    if (!options.reloadOnUnavailable) {
+      throw error;
+    }
+    if (await providerRequestInProgress(page)) {
+      throw error;
+    }
+    await page
+      .reload({ waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS })
+      .catch(() => {
+        throw error;
+      });
+    await waitForInteractionSurfaceOnce(page, options.composerTimeoutMs);
+  }
+}
+
+async function waitForInteractionSurfaceOnce(
+  page: Page,
+  composerTimeoutMs = INTERACTION_TIMEOUT_MS,
+): Promise<void> {
   await page.waitForLoadState("domcontentloaded", {
     timeout: NAVIGATION_TIMEOUT_MS,
   });
@@ -108,7 +139,22 @@ export async function waitForInteractionSurface(page: Page): Promise<void> {
     page,
     "composerReady",
     undefined,
-    INTERACTION_TIMEOUT_MS,
+    composerTimeoutMs,
+  );
+}
+
+async function providerRequestInProgress(page: Page): Promise<boolean> {
+  const state = await callPageAdapter<SubmitStateSnapshot>(
+    page,
+    "readSubmitState",
+  ).catch(() => null);
+  if (!state) {
+    return false;
+  }
+  return (
+    state.stopVisible ||
+    state.submitBusy ||
+    !["idle", "done"].includes(state.streamState ?? "idle")
   );
 }
 
