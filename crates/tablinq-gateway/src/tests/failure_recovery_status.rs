@@ -535,25 +535,11 @@ fn request_role_fields_flow_into_failure_bundles_and_request_summaries() {
     .unwrap();
     assert_eq!(response.status_code, 504);
 
-    let summary = http_request(
-        &snapshot.host,
-        snapshot.port,
-        "GET",
-        "/v1/requests/req-role-timeout",
-        &[("authorization", auth.as_str())],
-        &[],
-        20_000,
-    )
-    .unwrap();
-    assert_eq!(summary.status_code, 200);
-    let summary_body: Value = serde_json::from_slice(&summary.body).unwrap();
+    let summary_body = request_summary_json(&snapshot, &auth, "req-role-timeout");
     assert_eq!(summary_body["data"]["request_role"], "branch");
     assert_eq!(summary_body["data"]["parent_request_id"], "req-parent-1");
 
-    let config = AppConfig::load_or_create(Some(&state_root)).unwrap();
-    let db = Database::open(&config.paths.db_path).unwrap();
-    let bundle = db.latest_failure_bundle().unwrap().expect("failure bundle");
-    let gateway_request = bundle.gateway_request.expect("gateway request context");
+    let gateway_request = latest_failure_bundle_request(&state_root);
     assert_eq!(gateway_request.request_id, "req-role-timeout");
     assert_eq!(gateway_request.request_path, V1_CHAT_COMPLETIONS_PATH);
     assert_eq!(gateway_request.model.as_deref(), Some("tablinq-instant"));

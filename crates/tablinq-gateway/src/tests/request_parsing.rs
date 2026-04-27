@@ -134,7 +134,7 @@ fn declared_upload_over_limit_preserves_twenty_mib_cap_response() {
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
-    let response = http_request_with_declared_content_length(
+    let response = upload_with_declared_content_length(
         &snapshot,
         &auth,
         "oversize.bin",

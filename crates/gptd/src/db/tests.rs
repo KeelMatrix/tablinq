@@ -2,78 +2,58 @@ use super::*;
 use chrono::Duration;
 use shared_protocol::{RequestExecutionKind, RequestUsage, SessionList};
 use std::fs;
-use tempfile::tempdir;
+use tempfile::{TempDir, tempdir};
 
-#[test]
-fn migrations_are_applied_on_open() {
+fn test_db() -> (TempDir, Database) {
     let dir = tempdir().unwrap();
     let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
-    assert_eq!(
-        db.migration_count().unwrap(),
-        migrations::MIGRATIONS.len() as u32
-    );
+    (dir, db)
 }
 
-#[test]
-fn request_history_is_retained_with_a_fixed_bound() {
-    let dir = tempdir().unwrap();
-    let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
-    let start = Utc::now();
-
-    for index in 0..(REQUEST_HISTORY_LIMIT as u64 + 5) {
-        let timestamp = start + Duration::milliseconds(index as i64);
-        db.upsert_request_summary(&RequestSummary {
-            request_id: format!("req-{index}"),
-            job_id: format!("job-{index}"),
-            model_id: Some("tablinq-instant".to_owned()),
-            request_role: Some("primary".to_owned()),
-            parent_request_id: None,
-            execution_kind: RequestExecutionKind::Ask,
-            status: JobStatus::Completed,
-            cancelled: false,
-            start_time: timestamp,
-            end_time: Some(timestamp),
-            duration_ms: Some(1),
-            queue_wait_ms: 0,
-            interrupted_at: None,
-            interruption_reason: None,
-            recovered_at: None,
-            recovery_reason: None,
-            failed_at: None,
-            failure_reason: None,
-            recovery_trace: None,
-            recovery_packet: None,
-            usage: RequestUsage {
-                status: "unknown".to_owned(),
-                prompt_tokens: None,
-                completion_tokens: None,
-                total_tokens: None,
-            },
-            warnings: vec![
-                "exact token usage is unavailable for the browser-backed provider".to_owned(),
-            ],
-        })
-        .unwrap();
+fn unknown_usage() -> RequestUsage {
+    RequestUsage {
+        status: "unknown".to_owned(),
+        prompt_tokens: None,
+        completion_tokens: None,
+        total_tokens: None,
     }
-
-    let history = db
-        .list_request_summaries(REQUEST_HISTORY_LIMIT + 10)
-        .unwrap();
-    assert_eq!(history.requests.len(), REQUEST_HISTORY_LIMIT);
-    assert_eq!(
-        history.requests[0].request_id,
-        format!("req-{}", REQUEST_HISTORY_LIMIT as u64 + 4)
-    );
-    assert_eq!(history.requests.last().unwrap().request_id, "req-5");
-    assert!(db.request_summary("req-0").unwrap().is_none());
 }
 
-#[test]
-fn recovery_metadata_roundtrips_through_request_history_and_job_detail() {
-    let dir = tempdir().unwrap();
-    let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
-    let now = Utc::now();
-    let recovery_trace = RecoveryTrace {
+fn request_summary_fixture(
+    request_id: impl Into<String>,
+    job_id: impl Into<String>,
+    timestamp: chrono::DateTime<Utc>,
+) -> RequestSummary {
+    RequestSummary {
+        request_id: request_id.into(),
+        job_id: job_id.into(),
+        model_id: Some("tablinq-instant".to_owned()),
+        request_role: Some("primary".to_owned()),
+        parent_request_id: None,
+        execution_kind: RequestExecutionKind::Ask,
+        status: JobStatus::Completed,
+        cancelled: false,
+        start_time: timestamp,
+        end_time: Some(timestamp),
+        duration_ms: Some(1),
+        queue_wait_ms: 0,
+        interrupted_at: None,
+        interruption_reason: None,
+        recovered_at: None,
+        recovery_reason: None,
+        failed_at: None,
+        failure_reason: None,
+        recovery_trace: None,
+        recovery_packet: None,
+        usage: unknown_usage(),
+        warnings: vec![
+            "exact token usage is unavailable for the browser-backed provider".to_owned(),
+        ],
+    }
+}
+
+fn recovery_trace_fixture() -> RecoveryTrace {
+    RecoveryTrace {
         recovery_available: true,
         recovery_attempted: true,
         recovery_strategy: Some(
@@ -86,8 +66,11 @@ fn recovery_metadata_roundtrips_through_request_history_and_job_detail() {
         prior_conversation_id: Some("conv-old".to_owned()),
         replacement_conversation_id: Some("conv-new".to_owned()),
         recovery_attempt_count: 1,
-    };
-    let recovery_packet = RecoveryPacket {
+    }
+}
+
+fn recovery_packet_fixture(now: chrono::DateTime<Utc>) -> RecoveryPacket {
+    RecoveryPacket {
         original_input: "reason carefully about this tradeoff".to_owned(),
         mode: shared_protocol::Mode::Normal,
         model_class: Some(shared_protocol::ModelClass::Thinking),
@@ -123,7 +106,82 @@ fn recovery_metadata_roundtrips_through_request_history_and_job_detail() {
         prior_conversation_id: Some("conv-old".to_owned()),
         failure_code: shared_protocol::ErrorCode::ProviderGenerationFailedNonretryable,
         recovery_attempt_count: 1,
-    };
+    }
+}
+
+fn seed_session(db: &Database, now: chrono::DateTime<Utc>) {
+    db.upsert_session(
+        "session-1",
+        "Browser session",
+        Some("https://chatgpt.com/"),
+        now,
+    )
+    .unwrap();
+}
+
+fn seed_conversation(
+    db: &Database,
+    conversation_id: &str,
+    prompt: &str,
+    response: &str,
+    timestamp: chrono::DateTime<Utc>,
+) {
+    db.upsert_conversation(
+        conversation_id,
+        "session-1",
+        &format!("Conversation {conversation_id}"),
+        Some(&format!("https://chatgpt.com/c/{conversation_id}")),
+        Some(prompt),
+        Some(response),
+        None,
+        timestamp,
+    )
+    .unwrap();
+}
+
+#[test]
+fn migrations_are_applied_on_open() {
+    let dir = tempdir().unwrap();
+    let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
+    assert_eq!(
+        db.migration_count().unwrap(),
+        migrations::MIGRATIONS.len() as u32
+    );
+}
+
+#[test]
+fn request_history_is_retained_with_a_fixed_bound() {
+    let (_dir, db) = test_db();
+    let start = Utc::now();
+
+    for index in 0..(REQUEST_HISTORY_LIMIT as u64 + 5) {
+        let timestamp = start + Duration::milliseconds(index as i64);
+        db.upsert_request_summary(&request_summary_fixture(
+            format!("req-{index}"),
+            format!("job-{index}"),
+            timestamp,
+        ))
+        .unwrap();
+    }
+
+    let history = db
+        .list_request_summaries(REQUEST_HISTORY_LIMIT + 10)
+        .unwrap();
+    assert_eq!(history.requests.len(), REQUEST_HISTORY_LIMIT);
+    assert_eq!(
+        history.requests[0].request_id,
+        format!("req-{}", REQUEST_HISTORY_LIMIT as u64 + 4)
+    );
+    assert_eq!(history.requests.last().unwrap().request_id, "req-5");
+    assert!(db.request_summary("req-0").unwrap().is_none());
+}
+
+#[test]
+fn recovery_metadata_roundtrips_through_request_history_and_job_detail() {
+    let (_dir, db) = test_db();
+    let now = Utc::now();
+    let recovery_trace = recovery_trace_fixture();
+    let recovery_packet = recovery_packet_fixture(now);
 
     db.upsert_request_summary(&RequestSummary {
         request_id: "req-1".to_owned(),
@@ -146,12 +204,7 @@ fn recovery_metadata_roundtrips_through_request_history_and_job_detail() {
         failure_reason: Some("provider generation failed".to_owned()),
         recovery_trace: Some(recovery_trace.clone()),
         recovery_packet: Some(recovery_packet.clone()),
-        usage: RequestUsage {
-            status: "unknown".to_owned(),
-            prompt_tokens: None,
-            completion_tokens: None,
-            total_tokens: None,
-        },
+        usage: unknown_usage(),
         warnings: vec![],
     })
     .unwrap();
@@ -333,40 +386,18 @@ fn conversation_summaries_are_listed_and_persisted() {
 
 #[test]
 fn list_conversations_returns_newest_first() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("tablinq.sqlite3");
+    let (_dir, db) = test_db();
     let now = Utc::now();
-    let db = Database::open(&path).unwrap();
 
-    db.upsert_session(
-        "session-1",
-        "Browser session",
-        Some("https://chatgpt.com/"),
-        now,
-    )
-    .unwrap();
-    db.upsert_conversation(
-        "conv-1",
-        "session-1",
-        "Conversation 1",
-        Some("https://chatgpt.com/c/conv-1"),
-        Some("prompt 1"),
-        Some("response 1"),
-        None,
-        now,
-    )
-    .unwrap();
-    db.upsert_conversation(
+    seed_session(&db, now);
+    seed_conversation(&db, "conv-1", "prompt 1", "response 1", now);
+    seed_conversation(
+        &db,
         "conv-2",
-        "session-1",
-        "Conversation 2",
-        Some("https://chatgpt.com/c/conv-2"),
-        Some("prompt 2"),
-        Some("response 2"),
-        None,
+        "prompt 2",
+        "response 2",
         now + Duration::seconds(1),
-    )
-    .unwrap();
+    );
 
     let conversations = db.list_conversations().unwrap();
     assert_eq!(conversations.conversations.len(), 2);

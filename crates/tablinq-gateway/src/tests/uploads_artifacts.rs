@@ -174,7 +174,7 @@ fn files_upload_endpoint_rejects_files_larger_than_twenty_mib() {
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
-    let response = http_request_with_declared_content_length(
+    let response = upload_with_declared_content_length(
         &snapshot,
         &auth,
         "oversize.bin",
