@@ -366,6 +366,15 @@ fn daemon_reports_timeout_errors_for_stalled_asks() {
 
     let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
     let db = Database::open(&config.paths.db_path).unwrap();
+    let jobs = db.list_jobs().unwrap();
+    assert_eq!(jobs.jobs[0].status, JobStatus::Failed);
+    assert!(
+        jobs.jobs[0]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("timed out")
+    );
     assert_eq!(db.count_failure_bundles().unwrap(), 1);
     let bundle = db.latest_failure_bundle().unwrap().expect("failure bundle");
     assert_eq!(bundle.error_code, ErrorCode::ActionTimeout);
@@ -610,6 +619,15 @@ fn client_disconnect_during_ask_cancels_the_job() {
     let job_id = wait_for_job_id(dir.path());
     wait_for_job_status(dir.path(), &job_id, JobStatus::Cancelled);
 
+    let detail = send_request(&endpoint, &DaemonRequest::JobsShow(job_id.clone())).unwrap();
+    match detail {
+        DaemonResponse::Job(job) => {
+            assert_eq!(job.status, JobStatus::Cancelled);
+            assert!(job.message.unwrap().contains("client disconnected"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
+
     let status = send_request(&endpoint, &DaemonRequest::Status).unwrap();
     assert!(matches!(status, DaemonResponse::Status(_)));
 
@@ -664,6 +682,15 @@ fn client_disconnect_during_research_cancels_the_job() {
 
     let job_id = wait_for_job_id(dir.path());
     wait_for_job_status(dir.path(), &job_id, JobStatus::Cancelled);
+
+    let detail = send_request(&endpoint, &DaemonRequest::JobsShow(job_id.clone())).unwrap();
+    match detail {
+        DaemonResponse::Job(job) => {
+            assert_eq!(job.status, JobStatus::Cancelled);
+            assert!(job.message.unwrap().contains("client disconnected"));
+        }
+        other => panic!("unexpected response: {other:?}"),
+    }
 
     let status = send_request(&endpoint, &DaemonRequest::Status).unwrap();
     assert!(matches!(status, DaemonResponse::Status(_)));
@@ -1263,6 +1290,18 @@ fn daemon_reports_research_failures_with_research_error_code() {
         }
         other => panic!("unexpected response: {other:?}"),
     }
+
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let db = Database::open(&config.paths.db_path).unwrap();
+    let jobs = db.list_jobs().unwrap();
+    assert_eq!(jobs.jobs[0].status, JobStatus::Failed);
+    assert!(
+        jobs.jobs[0]
+            .message
+            .as_deref()
+            .unwrap()
+            .contains("research job failed")
+    );
 
     stop_daemon(dir.path(), &mut daemon);
     let _ = fake_server.kill();

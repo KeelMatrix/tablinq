@@ -1,19 +1,18 @@
+use super::lifecycle::{
+    ConversationFinalization, JobLifecycle, JobLifecycleRef, PrepareJobInput, TerminalFailure,
+    emit_job_state, ensure_prompt_execution_allowed, final_status_and_message, persist_artifacts,
+    prepare_job_record, record_failure_checkpoint, record_terminal_failure,
+    status_for_error_message,
+};
 use super::recovery::{
     ProviderGenerationRecoveryPacketInput, build_provider_generation_context_summary,
     build_provider_generation_recovery_packet, build_provider_generation_recovery_trace,
     build_provider_generation_replay_files, build_provider_generation_replay_prompt,
     provider_recovery_attempt_request_id, should_auto_recover_provider_generation_failure,
 };
-use super::recovery_manifest::{
-    update_conversation_recovery_manifest, write_provider_generation_recovery_manifest_attachment,
-};
-use super::support::{
-    browser_session_identity, conversation_id_from_url, is_cancelled_message, lock_browser,
-    lock_cancel_registry,
-};
-use super::{
-    ARTIFACT_RETENTION_LIMIT, CoreService, ExecutionRecoveryState, error_code_for_message,
-};
+use super::recovery_manifest::write_provider_generation_recovery_manifest_attachment;
+use super::support::{conversation_id_from_url, lock_browser, lock_cancel_registry};
+use super::{CoreService, ExecutionRecoveryState, error_code_for_message};
 use crate::browser::{execution_error, execution_error_metadata};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -29,46 +28,44 @@ pub struct PreparedAskJob {
     pub created_at: DateTime<Utc>,
 }
 
+impl PreparedAskJob {
+    fn lifecycle_ref(&self) -> JobLifecycleRef<'_> {
+        JobLifecycleRef {
+            job_id: &self.job_id,
+            created_at: self.created_at,
+            conversation_id: self.command.conversation_id.as_deref(),
+            lifecycle: JobLifecycle::ask(),
+        }
+    }
+
+    pub(crate) fn queued_event(&self) -> EventPayload {
+        self.lifecycle_ref().queued_event()
+    }
+}
+
 impl CoreService {
     pub fn prepare_ask(&self, command: AskCommand) -> Result<PreparedAskJob> {
-        if self.config.safe_mode() {
-            anyhow::bail!(
-                "safe mode enabled: prompt execution is disabled; run doctor or capabilities only"
-            );
-        }
+        ensure_prompt_execution_allowed(&self.config)?;
         command.validate().context("validate ask command")?;
 
         let db = self.open_db()?;
-        let created_at = Utc::now();
-        let job_id = format!("job-{}", created_at.timestamp_millis());
-        let conversation_id = match (command.new_conversation, command.conversation_id.clone()) {
-            (true, _) => None,
-            (false, Some(value)) => {
-                if db.find_conversation(&value)?.is_none() {
-                    anyhow::bail!("conversation {value} was not found");
-                }
-                Some(value)
-            }
-            (false, None) => None,
-        };
+        let prepared = prepare_job_record(
+            &db,
+            PrepareJobInput {
+                kind: JobKind::Ask,
+                input_text: &command.prompt,
+                conversation_id: command.conversation_id.clone(),
+                new_conversation: command.new_conversation,
+            },
+        )?;
         let mut effective = command.clone();
-        effective.conversation_id = conversation_id.clone();
+        effective.conversation_id = prepared.conversation_id.clone();
         effective.new_conversation = command.new_conversation;
 
-        db.insert_job(
-            &job_id,
-            JobStatus::Queued,
-            Some("queued ask job"),
-            effective.conversation_id.as_deref(),
-            created_at,
-            created_at,
-        )?;
-        db.upsert_job_detail(&job_id, JobKind::Ask, Some(&effective.prompt), None)?;
-
         Ok(PreparedAskJob {
-            job_id,
+            job_id: prepared.job_id,
             command: effective,
-            created_at,
+            created_at: prepared.created_at,
         })
     }
 
@@ -81,57 +78,23 @@ impl CoreService {
         F: FnMut(EventPayload) -> Result<()>,
     {
         let db = self.open_db()?;
-        if db.job_cancel_requested(&prepared.job_id)? {
-            let message = "ask cancelled before execution";
-            self.cancel_job_with_detail(
-                &prepared.job_id,
-                prepared.command.conversation_id.as_deref(),
-                message,
-            )?;
-            on_event(EventPayload::JobState(JobState {
-                job_id: prepared.job_id.clone(),
-                status: JobStatus::Cancelled,
-                message: Some(message.to_owned()),
-                conversation_id: prepared.command.conversation_id.clone(),
-                updated_at: Utc::now(),
-                artifacts: vec![],
-            }))?;
-            anyhow::bail!(message);
-        }
-
-        db.insert_job(
-            &prepared.job_id,
+        self.cancel_if_requested_before_execution(&db, prepared.lifecycle_ref(), &mut on_event)?;
+        emit_job_state(
+            &db,
+            prepared.lifecycle_ref(),
             JobStatus::Starting,
-            Some("starting ask"),
+            "starting ask",
             prepared.command.conversation_id.as_deref(),
-            prepared.created_at,
-            Utc::now(),
+            &mut on_event,
         )?;
-        on_event(EventPayload::JobState(JobState {
-            job_id: prepared.job_id.clone(),
-            status: JobStatus::Starting,
-            message: Some("starting ask".to_owned()),
-            conversation_id: prepared.command.conversation_id.clone(),
-            updated_at: Utc::now(),
-            artifacts: vec![],
-        }))?;
-
-        db.insert_job(
-            &prepared.job_id,
+        emit_job_state(
+            &db,
+            prepared.lifecycle_ref(),
             JobStatus::Running,
-            Some("streaming response"),
+            "streaming response",
             prepared.command.conversation_id.as_deref(),
-            prepared.created_at,
-            Utc::now(),
+            &mut on_event,
         )?;
-        on_event(EventPayload::JobState(JobState {
-            job_id: prepared.job_id.clone(),
-            status: JobStatus::Running,
-            message: Some("streaming response".to_owned()),
-            conversation_id: prepared.command.conversation_id.clone(),
-            updated_at: Utc::now(),
-            artifacts: vec![],
-        }))?;
 
         let recovery_state = RefCell::new(ExecutionRecoveryState::default());
         let latest_lifecycle_update = RefCell::new(None::<crate::browser::RequestLifecycleUpdate>);
@@ -319,19 +282,15 @@ impl CoreService {
                     recovery_packet = Some(packet.clone());
 
                     let failed_at = Utc::now();
-                    db.record_job_failure(
+                    record_failure_checkpoint(
+                        &db,
                         &prepared.job_id,
                         failed_at,
                         &provider_error.message,
                         provider_error.current_url.as_deref(),
+                        Some(&trace),
+                        Some(&packet),
                     )?;
-                    db.update_job_output(
-                        &prepared.job_id,
-                        None,
-                        provider_error.current_url.as_deref(),
-                        None,
-                    )?;
-                    db.update_job_recovery_metadata(&prepared.job_id, Some(&trace), Some(&packet))?;
 
                     if !recovery_allowed {
                         break Err(execution_error(provider_error.with_recovery(trace, packet)));
@@ -398,10 +357,7 @@ impl CoreService {
             }
         };
 
-        let _ = lock_cancel_registry(&self.cancel_registry).map(|mut set| {
-            set.remove(&prepared.job_id);
-        });
-        let _ = db.set_job_cancel_requested(&prepared.job_id, false);
+        self.cleanup_cancel_registration_best_effort(&db, &prepared.job_id);
 
         match outcome {
             Ok(mut result) => {
@@ -413,22 +369,17 @@ impl CoreService {
                     .unwrap_or(false);
                 result.low_confidence = recovery_state.recovered || provider_recovered;
                 let completed_at = result.completed_at;
-                for artifact in &result.artifacts {
-                    db.insert_artifact(artifact, completed_at)?;
-                    db.link_job_artifact(&prepared.job_id, &artifact.artifact_id)?;
-                    on_event(EventPayload::ArtifactReady(artifact.clone()))?;
-                }
-                db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
-                let final_status = if recovery_state.recovered || provider_recovered {
-                    JobStatus::Recovered
-                } else {
-                    JobStatus::Completed
-                };
-                let final_message = if recovery_state.recovered || provider_recovered {
-                    "ask recovered"
-                } else {
-                    "ask completed"
-                };
+                persist_artifacts(
+                    &db,
+                    &prepared.job_id,
+                    &result.artifacts,
+                    completed_at,
+                    &mut on_event,
+                )?;
+                let (final_status, final_message) = final_status_and_message(
+                    prepared.lifecycle_ref().lifecycle,
+                    recovery_state.recovered || provider_recovered,
+                );
                 db.insert_job(
                     &prepared.job_id,
                     final_status,
@@ -453,39 +404,21 @@ impl CoreService {
                         Some(&result.current_url),
                     )?;
                 }
-                let browser_snapshot = lock_browser(&self.browser)?.health()?;
-                let (session_id, session_label) = browser_session_identity(&browser_snapshot);
-                db.upsert_session(
-                    &session_id,
-                    &session_label,
-                    Some(&result.current_url),
-                    completed_at,
-                )?;
-                let existing_manifest =
-                    db.conversation_recovery_manifest(&result.conversation_id)?;
-                let conversation_manifest = update_conversation_recovery_manifest(
-                    existing_manifest.as_ref().or_else(|| {
-                        result
+                self.finalize_session_and_conversation(
+                    &db,
+                    ConversationFinalization {
+                        conversation_id: &result.conversation_id,
+                        current_url: &result.current_url,
+                        prompt: &prepared.command.prompt,
+                        output_text: &result.output_text,
+                        files: &prepared.command.files,
+                        artifacts: &result.artifacts,
+                        completed_at,
+                        manifest_seed: result
                             .recovery_packet
                             .as_ref()
-                            .and_then(|packet| packet.context_manifest.as_ref())
-                    }),
-                    &result.conversation_id,
-                    &prepared.command.prompt,
-                    &result.output_text,
-                    &prepared.command.files,
-                    &result.artifacts,
-                    completed_at,
-                );
-                db.upsert_conversation(
-                    &result.conversation_id,
-                    &session_id,
-                    "Browser conversation",
-                    Some(&result.current_url),
-                    Some(&prepared.command.prompt),
-                    Some(&result.output_text),
-                    Some(&conversation_manifest),
-                    completed_at,
+                            .and_then(|packet| packet.context_manifest.as_ref()),
+                    },
                 )?;
                 db.update_job_output(
                     &prepared.job_id,
@@ -509,14 +442,9 @@ impl CoreService {
                 Ok(result)
             }
             Err(err) => {
-                let failed_at = Utc::now();
                 let typed_error = execution_error_metadata(&err);
                 let message = format!("{err:#}");
-                let status = if is_cancelled_message(&message) {
-                    JobStatus::Cancelled
-                } else {
-                    JobStatus::Failed
-                };
+                let status = status_for_error_message(&message);
                 let current_url = typed_error
                     .as_ref()
                     .and_then(|error| error.current_url.as_deref());
@@ -540,31 +468,26 @@ impl CoreService {
                             })
                     })
                     .or_else(|| prepared.command.conversation_id.clone());
-                db.insert_job(
-                    &prepared.job_id,
-                    status,
-                    Some(&message),
-                    failure_conversation_id.as_deref(),
-                    prepared.created_at,
-                    failed_at,
+                record_terminal_failure(
+                    &db,
+                    prepared.lifecycle_ref(),
+                    TerminalFailure {
+                        status,
+                        persisted_message: &message,
+                        event_message: &message,
+                        conversation_id: failure_conversation_id.as_deref(),
+                        current_url,
+                        output_text: None,
+                        record_recovery_metadata: typed_error.is_some(),
+                        recovery_trace: typed_error
+                            .as_ref()
+                            .and_then(|error| error.recovery_trace.as_ref()),
+                        recovery_packet: typed_error
+                            .as_ref()
+                            .and_then(|error| error.recovery_packet.as_ref()),
+                    },
+                    &mut on_event,
                 )?;
-                db.record_job_failure(&prepared.job_id, failed_at, &message, current_url)?;
-                db.update_job_output(&prepared.job_id, None, current_url, None)?;
-                if let Some(typed_error) = typed_error {
-                    db.update_job_recovery_metadata(
-                        &prepared.job_id,
-                        typed_error.recovery_trace.as_ref(),
-                        typed_error.recovery_packet.as_ref(),
-                    )?;
-                }
-                on_event(EventPayload::JobState(JobState {
-                    job_id: prepared.job_id.clone(),
-                    status,
-                    message: Some(message),
-                    conversation_id: failure_conversation_id,
-                    updated_at: failed_at,
-                    artifacts: vec![],
-                }))?;
                 Err(err)
             }
         }

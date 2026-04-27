@@ -8,8 +8,7 @@ use anyhow::Result;
 use interprocess::local_socket::traits::Listener as LocalSocketListenerTrait;
 use serde_json::json;
 use shared_protocol::{
-    CancelJobCommand, DaemonErrorResponse, DaemonFrame, DaemonRequest, DaemonResponse,
-    EventPayload, JobState, JobStatus,
+    CancelJobCommand, DaemonErrorResponse, DaemonFrame, DaemonRequest, DaemonResponse, EventPayload,
 };
 use std::sync::Arc;
 use std::thread;
@@ -152,21 +151,13 @@ fn handle_ask_request(
     command: shared_protocol::AskCommand,
 ) -> Result<()> {
     let prepared = core.prepare_ask(command)?;
-    if let Err(err) = ipc::write_frame(
+    write_queued_event_or_cancel(
+        core,
         stream,
-        &DaemonFrame::Event(EventPayload::JobState(JobState {
-            job_id: prepared.job_id.clone(),
-            status: JobStatus::Queued,
-            message: Some("queued ask job".to_owned()),
-            conversation_id: prepared.command.conversation_id.clone(),
-            updated_at: prepared.created_at,
-            artifacts: vec![],
-        })),
-    ) {
-        let message = format!("ask cancelled: client disconnected before execution: {err:#}");
-        let _ = core.mark_job_cancelled(&prepared.job_id, &message);
-        anyhow::bail!(message);
-    }
+        &prepared.job_id,
+        prepared.queued_event(),
+        |err| format!("ask cancelled: client disconnected before execution: {err:#}"),
+    )?;
     let result = core.execute_prepared_ask(&prepared, |event| {
         write_ask_event(core, stream, &prepared.job_id, event.clone())
     })?;
@@ -188,24 +179,18 @@ fn handle_research_request(
     command: shared_protocol::ResearchCommand,
 ) -> Result<()> {
     let prepared = core.prepare_research(command)?;
-    if let Err(err) = ipc::write_frame(
+    write_queued_event_or_cancel(
+        core,
         stream,
-        &DaemonFrame::Event(EventPayload::JobState(JobState {
-            job_id: prepared.job_id.clone(),
-            status: JobStatus::Queued,
-            message: Some("queued research job".to_owned()),
-            conversation_id: prepared.command.conversation_id.clone(),
-            updated_at: prepared.created_at,
-            artifacts: vec![],
-        })),
-    ) {
-        let message = format!(
-            "research cancelled: client disconnected before execution for job {}; daemon_cancel=not_requested job_marked_cancelled=true; stream_error={err:#}",
-            prepared.job_id
-        );
-        let _ = core.mark_job_cancelled(&prepared.job_id, &message);
-        anyhow::bail!(message);
-    }
+        &prepared.job_id,
+        prepared.queued_event(),
+        |err| {
+            format!(
+                "research cancelled: client disconnected before execution for job {}; daemon_cancel=not_requested job_marked_cancelled=true; stream_error={err:#}",
+                prepared.job_id
+            )
+        },
+    )?;
     let result = core.execute_prepared_research(&prepared, |event| {
         write_research_event(core, stream, &prepared.job_id, event.clone())
     })?;
@@ -281,11 +266,47 @@ fn map_error(err: anyhow::Error) -> DaemonResponse {
     })
 }
 
-fn write_ask_event(
+fn write_queued_event_or_cancel<F>(
     core: &CoreService,
     stream: &interprocess::local_socket::Stream,
     job_id: &str,
     event: EventPayload,
+    disconnect_message: F,
+) -> Result<()>
+where
+    F: FnOnce(&anyhow::Error) -> String,
+{
+    match ipc::write_frame(stream, &DaemonFrame::Event(event)) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let message = disconnect_message(&err);
+            let _ = core.mark_job_cancelled(job_id, &message);
+            anyhow::bail!(message);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StreamingRequestKind {
+    Ask,
+    Research,
+}
+
+impl StreamingRequestKind {
+    fn label(self) -> &'static str {
+        match self {
+            StreamingRequestKind::Ask => "ask",
+            StreamingRequestKind::Research => "research",
+        }
+    }
+}
+
+fn write_stream_event(
+    core: &CoreService,
+    stream: &interprocess::local_socket::Stream,
+    job_id: &str,
+    event: EventPayload,
+    kind: StreamingRequestKind,
 ) -> Result<()> {
     match ipc::write_frame(stream, &DaemonFrame::Event(event)) {
         Ok(()) => Ok(()),
@@ -294,12 +315,22 @@ fn write_ask_event(
                 job_id: job_id.to_owned(),
             });
             anyhow::bail!(
-                "ask cancelled: client disconnected while streaming job {}; {}; stream_error={err:#}",
+                "{} cancelled: client disconnected while streaming job {}; {}; stream_error={err:#}",
+                kind.label(),
                 job_id,
                 format_cancel_result(cancel_result)
             );
         }
     }
+}
+
+fn write_ask_event(
+    core: &CoreService,
+    stream: &interprocess::local_socket::Stream,
+    job_id: &str,
+    event: EventPayload,
+) -> Result<()> {
+    write_stream_event(core, stream, job_id, event, StreamingRequestKind::Ask)
 }
 
 fn write_research_event(
@@ -308,19 +339,7 @@ fn write_research_event(
     job_id: &str,
     event: EventPayload,
 ) -> Result<()> {
-    match ipc::write_frame(stream, &DaemonFrame::Event(event)) {
-        Ok(()) => Ok(()),
-        Err(err) => {
-            let cancel_result = core.cancel_job(CancelJobCommand {
-                job_id: job_id.to_owned(),
-            });
-            anyhow::bail!(
-                "research cancelled: client disconnected while streaming job {}; {}; stream_error={err:#}",
-                job_id,
-                format_cancel_result(cancel_result)
-            );
-        }
-    }
+    write_stream_event(core, stream, job_id, event, StreamingRequestKind::Research)
 }
 
 fn format_cancel_result(result: Result<shared_protocol::AckEvent>) -> String {
