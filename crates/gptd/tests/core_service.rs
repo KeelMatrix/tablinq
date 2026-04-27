@@ -172,6 +172,25 @@ fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
 
     let sessions = core.list_sessions().unwrap();
     assert_eq!(sessions.sessions.len(), 1);
+    assert_eq!(
+        sessions.sessions[0].latest_conversation_id.as_deref(),
+        Some(result.conversation_id.as_str())
+    );
+
+    let conversations = core.list_conversations().unwrap();
+    assert_eq!(conversations.conversations.len(), 1);
+    assert_eq!(
+        conversations.conversations[0].conversation_id,
+        result.conversation_id
+    );
+    assert_eq!(
+        conversations.conversations[0].last_prompt.as_deref(),
+        Some("summarize uploads")
+    );
+    assert_eq!(
+        conversations.conversations[0].last_response.as_deref(),
+        Some(result.output_text.as_str())
+    );
 
     let jobs = core.list_jobs().unwrap();
     assert_eq!(jobs.jobs.len(), 1);
@@ -257,6 +276,28 @@ fn core_service_runs_research_jobs_without_cli() {
     assert_eq!(detail.status, JobStatus::Completed);
     assert!(detail.output_path.is_some());
     assert_eq!(detail.artifacts.len(), 1);
+
+    let sessions = core.list_sessions().unwrap();
+    assert_eq!(
+        sessions.sessions[0].latest_conversation_id.as_deref(),
+        Some(result.conversation_id.as_str())
+    );
+    let conversations = core.list_conversations().unwrap();
+    assert_eq!(
+        conversations.conversations[0].conversation_id,
+        result.conversation_id
+    );
+    assert_eq!(
+        conversations.conversations[0].last_prompt.as_deref(),
+        Some("investigate launch blockers")
+    );
+    assert!(
+        conversations.conversations[0]
+            .last_response
+            .as_deref()
+            .unwrap()
+            .contains("Research report for")
+    );
 
     let _ = core.browser_close();
     let _ = fake_server.kill();
@@ -750,6 +791,57 @@ fn cancelled_jobs_report_cancelled_status_in_job_detail() {
     assert_eq!(
         detail.message.as_deref(),
         Some("ask cancelled before execution")
+    );
+    assert!(!detail.cancel_requested);
+}
+
+#[test]
+fn cancelled_research_jobs_report_cancelled_status_before_execution() {
+    let _guard = integration_lock();
+    let dir = tempdir().unwrap();
+
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let core = CoreService::new(config).unwrap();
+    let prepared = core
+        .prepare_research(ResearchCommand {
+            query: "cancel research before execution".to_owned(),
+            conversation_id: None,
+            new_conversation: false,
+            files: vec![],
+            output_dir: None,
+        })
+        .unwrap();
+
+    let ack = core
+        .cancel_job(CancelJobCommand {
+            job_id: prepared.job_id.clone(),
+        })
+        .unwrap();
+    assert!(ack.accepted);
+
+    let mut cancelled_event = None;
+    let err = core
+        .execute_prepared_research(&prepared, |event| {
+            if let EventPayload::JobState(state) = event {
+                cancelled_event = Some(state);
+            }
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("research cancelled before execution"));
+
+    let event = cancelled_event.expect("cancelled event");
+    assert_eq!(event.status, JobStatus::Cancelled);
+    assert_eq!(
+        event.message.as_deref(),
+        Some("research cancelled before execution")
+    );
+
+    let detail = core.job_detail(&prepared.job_id).unwrap();
+    assert_eq!(detail.status, JobStatus::Cancelled);
+    assert_eq!(
+        detail.message.as_deref(),
+        Some("research cancelled before execution")
     );
     assert!(!detail.cancel_requested);
 }

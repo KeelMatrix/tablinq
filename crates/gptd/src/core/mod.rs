@@ -2,6 +2,7 @@ mod artifact_operations;
 mod ask;
 mod conversation_inspection;
 mod job_operations;
+mod lifecycle;
 mod operations;
 mod recovery;
 mod recovery_manifest;
@@ -16,8 +17,7 @@ pub use ask::PreparedAskJob;
 use chrono::Utc;
 pub use research::PreparedResearchJob;
 use shared_protocol::{
-    AskCommand, AskResult, BrowserOpenRequest, EventPayload, JobState, JobStatus, ResearchCommand,
-    ResearchResult,
+    AskCommand, AskResult, BrowserOpenRequest, EventPayload, ResearchCommand, ResearchResult,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -73,14 +73,7 @@ impl CoreService {
         F: FnMut(EventPayload) -> Result<()>,
     {
         let prepared = self.prepare_ask(command)?;
-        on_event(EventPayload::JobState(JobState {
-            job_id: prepared.job_id.clone(),
-            status: JobStatus::Queued,
-            message: Some("queued ask job".to_owned()),
-            conversation_id: prepared.command.conversation_id.clone(),
-            updated_at: prepared.created_at,
-            artifacts: vec![],
-        }))?;
+        on_event(prepared.queued_event())?;
         self.execute_prepared_ask(&prepared, on_event)
     }
 
@@ -89,14 +82,7 @@ impl CoreService {
         F: FnMut(EventPayload) -> Result<()>,
     {
         let prepared = self.prepare_research(command)?;
-        on_event(EventPayload::JobState(JobState {
-            job_id: prepared.job_id.clone(),
-            status: JobStatus::Queued,
-            message: Some("queued research job".to_owned()),
-            conversation_id: prepared.command.conversation_id.clone(),
-            updated_at: prepared.created_at,
-            artifacts: vec![],
-        }))?;
+        on_event(prepared.queued_event())?;
         self.execute_prepared_research(&prepared, on_event)
     }
 }

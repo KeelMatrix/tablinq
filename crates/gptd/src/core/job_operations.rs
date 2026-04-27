@@ -158,10 +158,6 @@ impl CoreService {
             detail.created_at,
             Utc::now(),
         )?;
-        db.set_job_cancel_requested(job_id, false)?;
-        let _ = lock_cancel_registry(&self.cancel_registry).map(|mut set| {
-            set.remove(job_id);
-        });
-        Ok(())
+        self.clear_cancel_requested(&db, job_id)
     }
 }

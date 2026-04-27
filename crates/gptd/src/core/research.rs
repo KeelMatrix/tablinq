@@ -1,9 +1,12 @@
-use super::recovery_manifest::update_conversation_recovery_manifest;
-use super::support::{
-    apply_research_update, browser_session_identity, is_cancelled_message, lock_browser,
-    lock_cancel_registry, maybe_write_research_output,
+use super::lifecycle::{
+    ConversationFinalization, JobLifecycle, JobLifecycleRef, PrepareJobInput, TerminalFailure,
+    ensure_prompt_execution_allowed, final_status_and_message, persist_artifacts,
+    prepare_job_record, record_terminal_failure, status_for_error_message,
 };
-use super::{ARTIFACT_RETENTION_LIMIT, CoreService, ExecutionRecoveryState};
+use super::support::{
+    apply_research_update, lock_browser, lock_cancel_registry, maybe_write_research_output,
+};
+use super::{CoreService, ExecutionRecoveryState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use shared_protocol::{
@@ -18,45 +21,44 @@ pub struct PreparedResearchJob {
     pub created_at: DateTime<Utc>,
 }
 
+impl PreparedResearchJob {
+    fn lifecycle_ref(&self) -> JobLifecycleRef<'_> {
+        JobLifecycleRef {
+            job_id: &self.job_id,
+            created_at: self.created_at,
+            conversation_id: self.command.conversation_id.as_deref(),
+            lifecycle: JobLifecycle::research(),
+        }
+    }
+
+    pub(crate) fn queued_event(&self) -> EventPayload {
+        self.lifecycle_ref().queued_event()
+    }
+}
+
 impl CoreService {
     pub fn prepare_research(&self, command: ResearchCommand) -> Result<PreparedResearchJob> {
-        if self.config.safe_mode() {
-            anyhow::bail!(
-                "safe mode enabled: prompt execution is disabled; run doctor or capabilities only"
-            );
-        }
+        ensure_prompt_execution_allowed(&self.config)?;
         command.validate().context("validate research command")?;
 
         let db = self.open_db()?;
-        let created_at = Utc::now();
-        let job_id = format!("job-{}", created_at.timestamp_millis());
-        let conversation_id = match (command.new_conversation, command.conversation_id.clone()) {
-            (true, _) => None,
-            (false, Some(value)) => {
-                if db.find_conversation(&value)?.is_none() {
-                    anyhow::bail!("conversation {value} was not found");
-                }
-                Some(value)
-            }
-            (false, None) => None,
-        };
-        let mut effective = command.clone();
-        effective.conversation_id = conversation_id.clone();
-        effective.new_conversation = false;
-        db.insert_job(
-            &job_id,
-            JobStatus::Queued,
-            Some("queued research job"),
-            conversation_id.as_deref(),
-            created_at,
-            created_at,
+        let prepared = prepare_job_record(
+            &db,
+            PrepareJobInput {
+                kind: JobKind::Research,
+                input_text: &command.query,
+                conversation_id: command.conversation_id.clone(),
+                new_conversation: command.new_conversation,
+            },
         )?;
-        db.upsert_job_detail(&job_id, JobKind::Research, Some(&effective.query), None)?;
+        let mut effective = command.clone();
+        effective.conversation_id = prepared.conversation_id.clone();
+        effective.new_conversation = false;
 
         Ok(PreparedResearchJob {
-            job_id,
+            job_id: prepared.job_id,
             command: effective,
-            created_at,
+            created_at: prepared.created_at,
         })
     }
 
@@ -69,23 +71,7 @@ impl CoreService {
         F: FnMut(EventPayload) -> Result<()>,
     {
         let db = self.open_db()?;
-        if db.job_cancel_requested(&prepared.job_id)? {
-            let message = "research cancelled before execution";
-            self.cancel_job_with_detail(
-                &prepared.job_id,
-                prepared.command.conversation_id.as_deref(),
-                message,
-            )?;
-            on_event(EventPayload::JobState(JobState {
-                job_id: prepared.job_id.clone(),
-                status: JobStatus::Cancelled,
-                message: Some(message.to_owned()),
-                conversation_id: prepared.command.conversation_id.clone(),
-                updated_at: Utc::now(),
-                artifacts: vec![],
-            }))?;
-            anyhow::bail!(message);
-        }
+        self.cancel_if_requested_before_execution(&db, prepared.lifecycle_ref(), &mut on_event)?;
 
         let conversation_id = RefCell::new(None);
         let current_url = RefCell::new(None);
@@ -140,10 +126,7 @@ impl CoreService {
             },
         );
 
-        let _ = lock_cancel_registry(&self.cancel_registry).map(|mut set| {
-            set.remove(&prepared.job_id);
-        });
-        let _ = db.set_job_cancel_requested(&prepared.job_id, false);
+        self.cleanup_cancel_registration_best_effort(&db, &prepared.job_id);
 
         match outcome {
             Ok(mut result) => {
@@ -156,22 +139,17 @@ impl CoreService {
                 )?;
                 result.output_path = output_path.clone();
                 let completed_at = result.completed_at;
-                for artifact in &result.artifacts {
-                    db.insert_artifact(artifact, completed_at)?;
-                    db.link_job_artifact(&prepared.job_id, &artifact.artifact_id)?;
-                    on_event(EventPayload::ArtifactReady(artifact.clone()))?;
-                }
-                db.prune_artifacts(ARTIFACT_RETENTION_LIMIT)?;
-                let final_status = if recovery_state.recovered {
-                    JobStatus::Recovered
-                } else {
-                    JobStatus::Completed
-                };
-                let final_message = if recovery_state.recovered {
-                    "research recovered"
-                } else {
-                    "research completed"
-                };
+                persist_artifacts(
+                    &db,
+                    &prepared.job_id,
+                    &result.artifacts,
+                    completed_at,
+                    &mut on_event,
+                )?;
+                let (final_status, final_message) = final_status_and_message(
+                    prepared.lifecycle_ref().lifecycle,
+                    recovery_state.recovered,
+                );
                 db.insert_job(
                     &prepared.job_id,
                     final_status,
@@ -194,34 +172,18 @@ impl CoreService {
                     Some(&result.current_url),
                     output_path.as_deref(),
                 )?;
-                let browser_snapshot = lock_browser(&self.browser)?.health()?;
-                let (session_id, session_label) = browser_session_identity(&browser_snapshot);
-                db.upsert_session(
-                    &session_id,
-                    &session_label,
-                    Some(&result.current_url),
-                    completed_at,
-                )?;
-                let existing_manifest =
-                    db.conversation_recovery_manifest(&result.conversation_id)?;
-                let conversation_manifest = update_conversation_recovery_manifest(
-                    existing_manifest.as_ref(),
-                    &result.conversation_id,
-                    &prepared.command.query,
-                    &result.report_text,
-                    &prepared.command.files,
-                    &result.artifacts,
-                    completed_at,
-                );
-                db.upsert_conversation(
-                    &result.conversation_id,
-                    &session_id,
-                    "Browser conversation",
-                    Some(&result.current_url),
-                    Some(&prepared.command.query),
-                    Some(&result.report_text),
-                    Some(&conversation_manifest),
-                    completed_at,
+                self.finalize_session_and_conversation(
+                    &db,
+                    ConversationFinalization {
+                        conversation_id: &result.conversation_id,
+                        current_url: &result.current_url,
+                        prompt: &prepared.command.query,
+                        output_text: &result.report_text,
+                        files: &prepared.command.files,
+                        artifacts: &result.artifacts,
+                        completed_at,
+                        manifest_seed: None,
+                    },
                 )?;
                 on_event(EventPayload::JobState(JobState {
                     job_id: prepared.job_id.clone(),
@@ -237,50 +199,33 @@ impl CoreService {
                 let conversation_id = conversation_id.into_inner();
                 let current_url = current_url.into_inner();
                 let report_text = report_text.into_inner();
-                let failed_at = Utc::now();
                 let message = format!("{err:#}");
-                let status = if is_cancelled_message(&message) {
-                    JobStatus::Cancelled
-                } else {
-                    JobStatus::Failed
-                };
+                let status = status_for_error_message(&message);
                 let status_message = if status == JobStatus::Cancelled {
                     "research cancelled"
                 } else {
                     "research failed"
                 };
-                db.insert_job(
-                    &prepared.job_id,
-                    status,
-                    Some(&message),
-                    conversation_id.as_deref(),
-                    prepared.created_at,
-                    failed_at,
-                )?;
-                db.record_job_failure(
-                    &prepared.job_id,
-                    failed_at,
-                    &message,
-                    current_url.as_deref(),
-                )?;
-                db.update_job_output(
-                    &prepared.job_id,
-                    if report_text.is_empty() {
-                        None
-                    } else {
-                        Some(report_text.as_str())
+                record_terminal_failure(
+                    &db,
+                    prepared.lifecycle_ref(),
+                    TerminalFailure {
+                        status,
+                        persisted_message: &message,
+                        event_message: status_message,
+                        conversation_id: conversation_id.as_deref(),
+                        current_url: current_url.as_deref(),
+                        output_text: if report_text.is_empty() {
+                            None
+                        } else {
+                            Some(report_text.as_str())
+                        },
+                        record_recovery_metadata: false,
+                        recovery_trace: None,
+                        recovery_packet: None,
                     },
-                    current_url.as_deref(),
-                    None,
+                    &mut on_event,
                 )?;
-                on_event(EventPayload::JobState(JobState {
-                    job_id: prepared.job_id.clone(),
-                    status,
-                    message: Some(status_message.to_owned()),
-                    conversation_id,
-                    updated_at: failed_at,
-                    artifacts: vec![],
-                }))?;
                 Err(err)
             }
         }
