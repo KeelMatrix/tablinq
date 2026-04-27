@@ -15,6 +15,7 @@ import {
   sleep,
   submitResearch,
   uploadAttachments,
+  waitForInteractionSurface,
   waitForSubmitReadyAfterUploads,
 } from "../pageRuntime";
 import {
@@ -215,6 +216,7 @@ async function prepareResearchSubmission(
   if (!command.conversationId) {
     await resetConversationIdentity(page);
   }
+  await waitForInteractionSurface(page, { reloadOnUnavailable: true });
   await host.refreshCapabilities(page);
   page = await applyAskConfiguration(
     page,
