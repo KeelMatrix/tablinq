@@ -204,7 +204,9 @@ describe("extension capability probe", () => {
     expect(message.runtime.strategy_matches.model_picker_visible).toBe(
       "inline-model-options",
     );
-    expect(message.runtime.strategy_matches.search_mode_visible).toBeUndefined();
+    expect(
+      message.runtime.strategy_matches.search_mode_visible,
+    ).toBeUndefined();
     expect(message.report.aliases.modes.search).toBeUndefined();
     expect(message.report.aliases.modes.research).toContain("deep research");
     expect(message.report.aliases.model_classes.instant).toContain("instant");

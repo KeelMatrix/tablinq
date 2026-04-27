@@ -96,6 +96,19 @@ function createCapabilityRuntimeModule({
         "effort",
       ]));
 
+  const isComposerToolsTrigger = (element) =>
+    element instanceof HTMLElement &&
+    element.getAttribute("aria-haspopup") !== null &&
+    isComposerAdjacent(element) &&
+    (element.matches("#composer-plus-btn") ||
+      element.matches("[data-testid='composer-plus-btn']") ||
+      hasToken(accessibleName(element), [
+        "add files",
+        "add photos",
+        "tools",
+        "more",
+      ]));
+
   const isModelOption = (element) =>
     element instanceof HTMLElement &&
     !isModelPickerTrigger(element) &&
@@ -150,9 +163,16 @@ function createCapabilityRuntimeModule({
     element.closest(popupRootSelector) !== null &&
     isSearchModeLabel(accessibleName(element));
 
+  const isLegacySearchModeControl = (element) =>
+    element instanceof HTMLElement &&
+    element.getAttribute("data-mode") === "search" &&
+    isSearchModeLabel(accessibleName(element));
+
   const isSearchModeControl = (element) =>
     element instanceof HTMLElement &&
-    (isSearchChip(element) || isSearchMenuItem(element));
+    (isSearchChip(element) ||
+      isSearchMenuItem(element) ||
+      isLegacySearchModeControl(element));
 
   const isResearchModeControl = (element) => {
     if (!(element instanceof HTMLElement)) {
@@ -289,6 +309,22 @@ function createCapabilityRuntimeModule({
       include: isEffortPickerTrigger,
       requirePopup: true,
       exclude: (element) => !isEffortPickerTrigger(element),
+    });
+
+  const findComposerToolsTrigger = () =>
+    findComposerAdjacentControl({
+      selectors: [
+        "#composer-plus-btn",
+        "[data-testid='composer-plus-btn']",
+        "button[aria-label*='Add files'][aria-haspopup]",
+        "button[aria-label*='Add photos'][aria-haspopup]",
+        "button[aria-label*='tools'][aria-haspopup]",
+        "button[aria-label*='more'][aria-haspopup]",
+      ],
+      tokens: ["add files", "add photos", "tools", "more"],
+      include: isComposerToolsTrigger,
+      requirePopup: true,
+      exclude: (element) => !isComposerToolsTrigger(element),
     });
 
   const visibleRoots = (selectors) =>
@@ -467,6 +503,36 @@ function createCapabilityRuntimeModule({
           exclude: isEffortPickerTrigger,
         });
 
+  const findConcreteSearchControl = (report, roots = []) =>
+    roots.length > 0
+      ? findByAliasesInRoots({
+          roots,
+          selectors: [
+            "button.__composer-pill[aria-label*='Search']",
+            "[role='menu'] [role='menuitemradio']",
+            "[role='menu'] [role='menuitem']",
+          ],
+          aliases: expandAliases(report, "modes", "search", [
+            "search",
+            "web search",
+          ]),
+          fallbackTokens: ["search", "web search"],
+          include: isSearchModeControl,
+        })
+      : findByAliases({
+          selectors: [
+            "button.__composer-pill[aria-label*='Search']",
+            "[role='menu'] [role='menuitemradio']",
+            "[role='menu'] [role='menuitem']",
+          ],
+          aliases: expandAliases(report, "modes", "search", [
+            "search",
+            "web search",
+          ]),
+          fallbackTokens: ["search", "web search"],
+          include: isSearchModeControl,
+        });
+
   const findOpenEffortMenuControl = (report, effort) =>
     findByAliasesInRoots({
       roots: visiblePopupRootsFor(isEffortOption),
@@ -476,7 +542,7 @@ function createCapabilityRuntimeModule({
       exclude: isEffortPickerTrigger,
     });
 
-  const ensureMode = (report, mode) => {
+  const ensureMode = async (report, mode) => {
     if (mode === "normal") {
       return;
     }
@@ -489,28 +555,36 @@ function createCapabilityRuntimeModule({
       throwCapabilityMissing(`${mode} mode`, mode, report.aliases.modes);
     }
 
-    const aliases = expandAliases(report, "modes", mode, [
-      mode,
-      mode === "search" ? "web search" : "deep research",
-    ]);
-    const control = findByAliases({
-      selectors:
-        mode === "search"
-          ? [
-              "button.__composer-pill[aria-label*='Search']",
-              "[role='menu'] [role='menuitemradio']",
-              "[role='menu'] [role='menuitem']",
-            ]
-          : [
+    const control =
+      mode === "search"
+        ? findConcreteSearchControl(report)
+        : findByAliases({
+            selectors: [
               "a[data-testid='deep-research-sidebar-item']",
               "a[href='/deep-research']",
               "a[href$='/deep-research']",
             ],
-      aliases,
-      fallbackTokens:
-        mode === "search" ? ["search", "web search"] : ["deep research"],
-      include: mode === "search" ? isSearchModeControl : isResearchModeControl,
-    });
+            aliases: expandAliases(report, "modes", mode, [
+              mode,
+              "deep research",
+            ]),
+            fallbackTokens: ["deep research"],
+            include: isResearchModeControl,
+          });
+    if (!control && mode === "search") {
+      const trigger = findComposerToolsTrigger();
+      if (trigger) {
+        const roots = await openPopupRootsFor(trigger, isSearchMenuItem);
+        const openedControl = findConcreteSearchControl(report, roots);
+        if (!openedControl) {
+          throwUiDrift(`could not find ${mode} mode control after probing it`);
+        }
+        if (!isSelected(openedControl) && !clickControl(openedControl)) {
+          throwUiDrift(`could not activate ${mode} mode control`);
+        }
+        return;
+      }
+    }
     if (!control) {
       throwUiDrift(`could not find ${mode} mode control after probing it`);
     }

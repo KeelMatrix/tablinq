@@ -84,6 +84,9 @@ export function renderHarnessShell({ root, note, window, config }) {
 
   function ariaModeControls() {
     return [
+      hasControl("search")
+        ? `<button type="button" data-mode="search" aria-pressed="false">Search</button>`
+        : "",
       hasControl("research")
         ? `<button type="button" data-mode="research" aria-pressed="false">Deep research</button>`
         : "",

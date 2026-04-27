@@ -431,8 +431,9 @@ describe("browser adapter", () => {
       mode: document.body.dataset.selectedMode,
       toolsMenuClicks: document.body.dataset.toolsMenuClicks,
       searchToolClicks: document.body.dataset.searchToolClicks,
-      searchChipVisible:
-        !document.querySelector("#search-chip")?.hasAttribute("hidden"),
+      searchChipVisible: !document
+        .querySelector("#search-chip")
+        ?.hasAttribute("hidden"),
     }));
 
     expect(state).toEqual({
@@ -456,8 +457,9 @@ describe("browser adapter", () => {
 
     await adapter.getManagedPageForTest()!.evaluate(() => {
       document.body.dataset.selectedMode = "search";
-      (window as unknown as { syncSelectedState?: () => void })
-        .syncSelectedState?.();
+      (
+        window as unknown as { syncSelectedState?: () => void }
+      ).syncSelectedState?.();
     });
 
     await adapter.ask(
@@ -473,8 +475,9 @@ describe("browser adapter", () => {
       mode: document.body.dataset.selectedMode,
       toolsMenuClicks: document.body.dataset.toolsMenuClicks ?? "0",
       searchToolClicks: document.body.dataset.searchToolClicks ?? "0",
-      searchChipVisible:
-        !document.querySelector("#search-chip")?.hasAttribute("hidden"),
+      searchChipVisible: !document
+        .querySelector("#search-chip")
+        ?.hasAttribute("hidden"),
     }));
 
     expect(state).toEqual({
@@ -497,8 +500,9 @@ describe("browser adapter", () => {
 
     await adapter.getManagedPageForTest()!.evaluate(() => {
       document.body.dataset.selectedMode = "search";
-      (window as unknown as { syncSelectedState?: () => void })
-        .syncSelectedState?.();
+      (
+        window as unknown as { syncSelectedState?: () => void }
+      ).syncSelectedState?.();
     });
 
     await adapter.ask(
@@ -565,8 +569,9 @@ describe("browser adapter", () => {
       effort: document.body.dataset.selectedEffort,
       toolsMenuClicks: document.body.dataset.toolsMenuClicks,
       searchToolClicks: document.body.dataset.searchToolClicks,
-      searchChipVisible:
-        !document.querySelector("#search-chip")?.hasAttribute("hidden"),
+      searchChipVisible: !document
+        .querySelector("#search-chip")
+        ?.hasAttribute("hidden"),
     }));
 
     expect(state).toEqual({

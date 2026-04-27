@@ -40,11 +40,7 @@ export async function applyAskConfiguration(
   if (command.effort) {
     await ensureConfiguredEffort(page, report, command.effort);
   }
-  if (
-    command.mode &&
-    command.mode !== "normal" &&
-    command.mode !== "search"
-  ) {
+  if (command.mode && command.mode !== "normal" && command.mode !== "search") {
     await closeOpenComposerMenus(page);
     await waitForInteractionSurface(page);
     await page.waitForTimeout(750);
@@ -175,7 +171,8 @@ async function selectedChoiceMatches(
   }
 
   return page
-    .evaluate<boolean>(`(() => {
+    .evaluate<boolean>(
+      `(() => {
       const tokensToMatch = ${JSON.stringify(expectedTokens)};
       const selected = Array.from(
         document.querySelectorAll(
@@ -204,7 +201,8 @@ async function selectedChoiceMatches(
         }
       }
       return false;
-    })()`)
+    })()`,
+    )
     .catch(() => false);
 }
 
@@ -514,21 +512,19 @@ export async function ensureConfiguredMode(
   }
   const isActive = page.url().toLowerCase().includes("/deep-research");
   const controlHref = await locator.getAttribute("href").catch(() => null);
-  const requiresDeepResearchLandingWait =
-    await locator
-      .evaluate((element) => {
-        if (!(element instanceof HTMLElement)) {
-          return false;
-        }
-        const href = element.getAttribute("href") ?? "";
-        return (
-          element.tagName.toLowerCase() === "a" ||
-          element.getAttribute("data-testid") ===
-            "deep-research-sidebar-item" ||
-          href.toLowerCase().includes("deep-research")
-        );
-      })
-      .catch(() => false);
+  const requiresDeepResearchLandingWait = await locator
+    .evaluate((element) => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      const href = element.getAttribute("href") ?? "";
+      return (
+        element.tagName.toLowerCase() === "a" ||
+        element.getAttribute("data-testid") === "deep-research-sidebar-item" ||
+        href.toLowerCase().includes("deep-research")
+      );
+    })
+    .catch(() => false);
   if (!isActive) {
     if (requiresDeepResearchLandingWait) {
       await activateModeControl(page, locator);
@@ -692,7 +688,9 @@ async function activateSearchModeOnce(
       await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
     } else if (method === "keyboard-enter" || method === "keyboard-space") {
       await option.locator.focus();
-      await page.keyboard.press(method === "keyboard-enter" ? "Enter" : "Space");
+      await page.keyboard.press(
+        method === "keyboard-enter" ? "Enter" : "Space",
+      );
     } else {
       await option.locator.click();
     }
@@ -728,7 +726,8 @@ async function searchModeActive(page: Page): Promise<boolean> {
 
 async function searchModeChipActive(page: Page): Promise<boolean> {
   return page
-    .evaluate<boolean>(`(() => {
+    .evaluate<boolean>(
+      `(() => {
       const isVisible = (element) => {
         if (!(element instanceof HTMLElement)) {
           return false;
@@ -776,7 +775,8 @@ async function searchModeChipActive(page: Page): Promise<boolean> {
             element.getAttribute("data-selected") === "true")
         );
       });
-    })()`)
+    })()`,
+    )
     .catch(() => false);
 }
 
@@ -874,7 +874,9 @@ async function visibleComposerSearchMenuItem(
       .trim()
       .toLowerCase();
     if (
-      (text === "search" || text === "web search" || text.includes("web search")) &&
+      (text === "search" ||
+        text === "web search" ||
+        text.includes("web search")) &&
       !text.includes("search chats")
     ) {
       return {
