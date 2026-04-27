@@ -42,7 +42,7 @@ function createCommandRuntime({
         await capabilityRuntime.ensureEffort(report, request.effort);
       }
       if (request.mode) {
-        capabilityRuntime.ensureMode(report, request.mode);
+        await capabilityRuntime.ensureMode(report, request.mode);
       }
       return true;
     },

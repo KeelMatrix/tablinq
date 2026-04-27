@@ -386,14 +386,14 @@ export function probeDocument(options = {}) {
   };
 
   const findNamedControl = (tokens, options = {}) => {
-    const { include, roots = [documentRoot] } = options;
+    const { include, includeHidden = false, roots = [documentRoot] } = options;
     for (const root of roots) {
       const candidates =
         root instanceof Document || root instanceof Element
           ? root.querySelectorAll(controlCandidateSelector)
           : [];
       for (const candidate of Array.from(candidates)) {
-        if (!isVisible(candidate)) {
+        if (!includeHidden && !isVisible(candidate)) {
           continue;
         }
         if (include && !include(candidate)) {
@@ -506,6 +506,19 @@ export function probeDocument(options = {}) {
         "effort",
       ]));
 
+  const isComposerToolsTrigger = (element) =>
+    element instanceof HTMLElement &&
+    element.getAttribute("aria-haspopup") !== null &&
+    isComposerAdjacent(element) &&
+    (element.matches("#composer-plus-btn") ||
+      element.matches("[data-testid='composer-plus-btn']") ||
+      hasToken(accessibleName(element), [
+        "add files",
+        "add photos",
+        "tools",
+        "more",
+      ]));
+
   const isModelOption = (element) =>
     element instanceof HTMLElement &&
     !isModelPickerTrigger(element) &&
@@ -566,9 +579,16 @@ export function probeDocument(options = {}) {
     element.closest(popupRootSelector) !== null &&
     isSearchModeLabel(accessibleName(element));
 
+  const isLegacySearchModeControl = (element) =>
+    element instanceof HTMLElement &&
+    element.getAttribute("data-mode") === "search" &&
+    isSearchModeLabel(accessibleName(element));
+
   const isSearchModeControl = (element) =>
     element instanceof HTMLElement &&
-    (isSearchChip(element) || isSearchMenuItem(element));
+    (isSearchChip(element) ||
+      isSearchMenuItem(element) ||
+      isLegacySearchModeControl(element));
 
   const isResearchModeControl = (element) => {
     if (!(element instanceof HTMLElement)) {
@@ -607,6 +627,37 @@ export function probeDocument(options = {}) {
           (element) => isVisible(element) && include(element),
         )
       ) {
+        roots.push(root);
+      }
+    }
+    return roots;
+  };
+
+  const composerToolsMenuRootsFor = (include) => {
+    const roots = [];
+    for (const trigger of Array.from(
+      documentRoot.querySelectorAll(controlCandidateSelector),
+    )) {
+      if (!isVisible(trigger) || !isComposerToolsTrigger(trigger)) {
+        continue;
+      }
+      const controlledId = trigger.getAttribute("aria-controls");
+      if (!controlledId) {
+        continue;
+      }
+      const controlled = documentRoot.getElementById(controlledId);
+      if (
+        controlled instanceof HTMLElement &&
+        !roots.includes(controlled) &&
+        Array.from(controlled.querySelectorAll(popupOptionSelector)).some(
+          (element) => include(element),
+        )
+      ) {
+        roots.push(controlled);
+      }
+    }
+    for (const root of visiblePopupRootsFor(include)) {
+      if (!roots.includes(root)) {
         roots.push(root);
       }
     }
@@ -880,34 +931,35 @@ export function probeDocument(options = {}) {
       ],
     },
     {
-        key: "search_mode_visible",
-        strategies: [
-          {
-            id: "composer-search-chip",
-            score: 1,
-            find: () =>
-              findComposerAdjacentNamedControl(["search"], {
-                include: isSearchChip,
-              }),
-          },
-          {
-            id: "composer-tools-menu-search",
-            score: 0.98,
-            find: () =>
-              findNamedControl(["search", "web search"], {
-                include: isSearchMenuItem,
-                roots: visiblePopupRootsFor(isSearchMenuItem),
-              }),
-          },
-          {
-            id: "aria-search-toggle",
-            score: 0.88,
-            find: () =>
-              findNamedControl(["search", "web search"], {
-                include: isSearchModeControl,
-              }),
-          },
-        ],
+      key: "search_mode_visible",
+      strategies: [
+        {
+          id: "composer-search-chip",
+          score: 1,
+          find: () =>
+            findComposerAdjacentNamedControl(["search"], {
+              include: isSearchChip,
+            }),
+        },
+        {
+          id: "composer-tools-menu-search",
+          score: 0.98,
+          find: () =>
+            findNamedControl(["search", "web search"], {
+              include: isSearchMenuItem,
+              includeHidden: true,
+              roots: composerToolsMenuRootsFor(isSearchMenuItem),
+            }),
+        },
+        {
+          id: "aria-search-toggle",
+          score: 0.88,
+          find: () =>
+            findNamedControl(["search", "web search"], {
+              include: isSearchModeControl,
+            }),
+        },
+      ],
     },
     {
       key: "research_mode_visible",

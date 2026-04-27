@@ -130,7 +130,18 @@ describe("browser adapter", () => {
           <form data-testid="composer-root">
             <textarea id="prompt-textarea" aria-label="Message"></textarea>
             <button data-testid="send-button" aria-label="Send message" type="button"></button>
-            <button data-mode="search" aria-label="Search" type="button"></button>
+            <button
+              id="composer-plus-btn"
+              aria-label="Add files and more"
+              aria-haspopup="menu"
+              aria-controls="tools-menu"
+              aria-expanded="false"
+              type="button"
+            ></button>
+            <div id="tools-menu" role="menu" hidden>
+              <button id="search-mode-option" role="menuitemradio" type="button">Web search</button>
+            </div>
+            <button id="search-chip" class="__composer-pill" aria-label="Search" type="button" hidden>Search</button>
           </form>
           <article data-slot="assistant-message" data-message-author-role="assistant" data-message-id="msg-command">
             <div class="markdown"><p>Final answer.</p></div>
@@ -150,15 +161,32 @@ describe("browser adapter", () => {
       )}\ncreateTablinqPageAdapterRuntime();`,
     );
     const composer = window.document.querySelector("#prompt-textarea");
-    const search = window.document.querySelector("[data-mode='search']");
+    const tools = window.document.querySelector("#tools-menu");
+    const plus = window.document.querySelector("#composer-plus-btn");
+    const search = window.document.querySelector("#search-mode-option");
+    const searchChip = window.document.querySelector("#search-chip");
     if (
       !(composer instanceof window.HTMLTextAreaElement) ||
-      !(search instanceof window.HTMLElement)
+      !(tools instanceof window.HTMLElement) ||
+      !(plus instanceof window.HTMLElement) ||
+      !(search instanceof window.HTMLElement) ||
+      !(searchChip instanceof window.HTMLElement)
     ) {
       throw new Error("expected runtime test controls");
     }
+    plus.addEventListener("click", () => {
+      const expanded = plus.getAttribute("aria-expanded") === "true";
+      plus.setAttribute("aria-expanded", expanded ? "false" : "true");
+      tools.toggleAttribute("hidden", expanded);
+      search.toggleAttribute("hidden", expanded);
+    });
     search.addEventListener("click", () => {
-      search.setAttribute("aria-pressed", "true");
+      search.setAttribute("aria-checked", "true");
+      tools.setAttribute("hidden", "");
+      search.setAttribute("hidden", "");
+      plus.setAttribute("aria-expanded", "false");
+      searchChip.removeAttribute("hidden");
+      searchChip.setAttribute("aria-label", "Search, click to remove");
     });
 
     expect(Object.keys(adapter).sort()).toEqual([
@@ -211,7 +239,8 @@ describe("browser adapter", () => {
       },
       request: { mode: "search" },
     });
-    expect(search.getAttribute("aria-pressed")).toBe("true");
+    expect(search.getAttribute("aria-checked")).toBe("true");
+    expect(searchChip.hasAttribute("hidden")).toBe(false);
 
     expect(adapter.readAskSnapshot()).toMatchObject({
       hasAssistantMessage: true,
