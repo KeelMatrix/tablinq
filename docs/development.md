@@ -15,7 +15,9 @@ Tablinq is attach-first.
 
 That means the normal development posture is:
 
-- normal Chrome or Edge profile
+- an attach target browser profile you can inspect yourself
+- the dedicated Chrome attach profile under the state root when using current Chrome
+- the started Edge profile when using Edge attach-first
 - manual sign-in to ChatGPT
 - Tablinq extension loaded in that profile
 - local debug endpoint enabled
@@ -27,12 +29,26 @@ For the broader system view, see [architecture.md](architecture.md).
 
 ## Standard validation
 
-Run these before opening a PR:
+Choose the smallest loop that proves the change. Common focused loops:
+
+- CLI-local Rust: `cargo test -p gpt`
+- Daemon-local Rust: `cargo test -p gptd`
+- Gateway-local Rust: `cargo test -p tablinq-gateway`
+- TypeScript core/protocol/probe checks: `pnpm run test:ts:fast`
+- Browser-adapter shards:
+  - `pnpm run test:browser-adapter:foundation`
+  - `pnpm run test:browser-adapter:ask`
+  - `pnpm run test:browser-adapter:research`
+  - `pnpm run test:browser-adapter:recovery`
+
+Broader repo checks:
 
 - `cargo test`
 - `pnpm lint`
 - `pnpm build`
 - `pnpm test`
+- `pnpm run ci:local`
+- `pnpm run ci:local:all`
 
 Formatting:
 
@@ -48,14 +64,19 @@ Formatting:
 - `cargo run -p gpt -- ask "hello world"`
 - `cargo run -p gpt -- ask --mode search "What is the latest stable Rust release?"`
 - `cargo run -p gpt -- ask --model thinking --effort extended "compare these ideas"`
+- `cargo run -p gpt -- ask --conversation conv-123 "continue from here"`
+- `cargo run -p gpt -- ask --new-conversation "start clean"`
 - `cargo run -p gpt -- research "investigate launch blockers"`
+- `cargo run -p gpt -- research --file notes.txt --output-dir reports "write a brief"`
 - `cargo run -p gpt -- jobs list`
 - `cargo run -p gpt -- jobs show job-123`
 - `cargo run -p gpt -- jobs cancel job-123`
 - `cargo run -p gpt -- sessions list`
 - `cargo run -p gpt -- conversations list`
+- `cargo run -p gpt -- conversations list --json`
 - `cargo run -p gpt -- conversations switch conv-123`
 - `cargo run -p gpt -- conversations new`
+- `cargo run -p gpt -- conversations new --json`
 - `cargo run -p gpt -- artifacts list`
 - `cargo run -p gpt -- artifacts pull last --to .`
 - `cargo run -p gpt -- doctor`
@@ -110,10 +131,13 @@ GitHub Actions currently uses:
 
 - `.github/workflows/ci.yml`
   - Rust formatting, clippy, and locked workspace tests
-  - TypeScript formatting, type-check, build, and tests
+  - TypeScript core formatting, type-check, build, and fast schema/probe/content-script tests
+  - browser-adapter test shards for foundation, ask, research, and recovery flows
 - `.github/workflows/package-smoke.yml`
   - Windows packaged install smoke coverage
   - package artifact upload on non-PR runs
+
+On Windows, `scripts/ci-local.ps1 -Job quick` runs the default fast mirror, `-Job all` runs the non-package CI mirror, and `-Job package-smoke` runs the separate package-smoke path.
 
 ## Testing strategy
 
@@ -150,11 +174,11 @@ Prefer the fake harness first. Use [live-smoke-checklist.md](live-smoke-checklis
 - `crates/gptd/src/browser/`
   - browser-adapter supervision, request transport, cancellation, and recovery handoff
 - `crates/tablinq-gateway/src/lib.rs`
-  - HTTP entry wiring into `chat.rs`, `scheduler.rs`, `uploads.rs`, `capabilities.rs`, and `process_control.rs`
+  - gateway entry wiring into `server.rs`, `connection.rs`, `routes.rs`, `handlers/*`, `chat/*`, `scheduler.rs`, `uploads.rs`, `capabilities.rs`, and `process_control.rs`
 - `packages/browser-adapter/src/browserAdapter.ts`
-  - high-level attach runtime orchestration over focused modules such as `contracts.ts`, `timing.ts`, `assets.ts`, `pageRuntime.ts`, and `urls.ts`
-- `packages/browser-adapter/src/pageAdapter.runtime.js`
-  - page-level DOM helpers and UI-specific logic
+  - high-level attach runtime orchestration over focused modules under `browserAdapter/*`, `execution/*`, `pageRuntime/*`, `contracts.ts`, `timing.ts`, `assets.ts`, and `urls.ts`
+- `packages/browser-adapter/src/pageAdapterRuntime/*`
+  - page-level DOM helpers and UI-specific logic; `pageAdapter.runtime.js` is the bundled runtime entry
 - `packages/extension/src/probe.ts`
   - extension-facing capability probes and alias discovery, with DOM/runtime helpers in `probe.runtime.js`
 

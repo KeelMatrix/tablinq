@@ -21,9 +21,12 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds v
 - Gateway-local Rust changes: `cargo test -p tablinq-gateway`
 - Native host Rust changes: `cargo test -p tablinq-host`
 - Browser adapter TS changes: matching `pnpm test packages/browser-adapter/test/<file>.test.ts`
+- Browser adapter shard checks: `pnpm run test:browser-adapter:foundation`, `pnpm run test:browser-adapter:ask`, `pnpm run test:browser-adapter:research`, or `pnpm run test:browser-adapter:recovery`
 - Extension TS changes: matching `pnpm test packages/extension/test/<file>.test.ts`
+- Schema/probe/content-script TS checks: `pnpm run test:ts:fast`
 - TS surface-wide type validation: `pnpm lint`
 - TS package build validation when necessary: `pnpm build`
+- Windows CI parity when needed: `pnpm run ci:local`, `pnpm run ci:local:all`, or `pnpm run ci:local:package-smoke`
 
 ## Escalation rules
 

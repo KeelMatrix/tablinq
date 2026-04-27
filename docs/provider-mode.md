@@ -11,10 +11,10 @@ This is the right fit when you want tools or agent frameworks to talk to a real 
 3. Start the control plane:
    - `gpt daemon start`
    - `gpt gateway start`
-4. Start your normal browser in attachable mode:
+4. Start an attachable browser session:
    - `gpt browser start-debug`
 5. If you are using Chrome attach-first, load the unpacked extension into the dedicated persistent Chrome attach profile under the Tablinq state root.
-6. Sign in manually at `https://chatgpt.com/` in that browser profile.
+6. Sign in manually at `https://chatgpt.com/` in that same attach target profile.
 7. Attach and verify health:
    - `gpt browser attach`
    - `gpt status`

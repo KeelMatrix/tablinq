@@ -97,10 +97,10 @@ Then:
 3. If the installer did not already bring it up successfully, start the gateway:
    - `~/.local/share/tablinq/install/bin/gpt gateway start`
 4. Fully close Chrome or Edge so the debug flags can take effect cleanly.
-5. Start your normal browser in attachable mode:
+5. Start an attachable browser session:
    - `~/.local/share/tablinq/install/bin/gpt browser start-debug`
 6. If you plan to use Chrome attach-first, load the unpacked extension into the dedicated Tablinq Chrome attach profile under the state root.
-7. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+7. Sign in manually at `https://chatgpt.com/` in that same attach target profile.
 8. Attach and verify:
    - `~/.local/share/tablinq/install/bin/gpt browser attach`
    - `~/.local/share/tablinq/install/bin/gpt browser connection-info`

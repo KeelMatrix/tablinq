@@ -21,7 +21,7 @@ Follow the repository `AGENTS.md` as the baseline policy. This skill only adds g
 - Preserve OpenAI-compatible behavior where the gateway already intentionally models it.
 - Keep gateway fixes in the gateway unless the daemon contract is actually wrong or incomplete.
 - Change shared protocol only if the gateway cannot express the required behavior without it.
-- Prefer handler-level tests or `cargo test -p tablinq-gateway` before broader validation.
+- Prefer matching gateway module filters such as `tests::chat_requests`, `tests::conversation_inspection`, `tests::failure_recovery_status`, `tests::scheduler_process_control`, or `tests::uploads_artifacts` before broader validation.
 
 ## Output
 

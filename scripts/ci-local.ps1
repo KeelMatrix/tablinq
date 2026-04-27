@@ -238,6 +238,7 @@ $jobs = foreach ($name in $requestedJobs) {
     "all" {
       "rust"
       "typescript"
+      "browser-adapter"
     }
     "browser-adapter" {
       "browser-adapter-foundation"

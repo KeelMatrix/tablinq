@@ -34,6 +34,7 @@ Decide which browser-side boundary is failing:
 ## Validation
 
 - Prefer the narrowest affected test file first.
+- Use the browser-adapter shard scripts when the change aligns with foundation, ask, research, or recovery behavior.
 - If live browser validation is required, use attach-first commands and state the manual prerequisite when sign-in or browser state is needed.
 - Do not touch fake harness code unless the task is actually a harness issue or test gap.
 
