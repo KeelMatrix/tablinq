@@ -11,6 +11,7 @@ export {
 export {
   resetConversationIdentity,
   sleep,
+  scrollToBottomIfNeeded,
   pauseForInteraction,
   pauseForHighRiskAction,
   waitForQuietInteractionSurface,
