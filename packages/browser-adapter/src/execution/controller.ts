@@ -13,7 +13,11 @@ import type {
 import { reconcileAskAfterInterruption } from "./askRecovery";
 import { runAsk } from "./ask";
 import { runResearch } from "./research";
-import type { AskRuntimeState, BrowserExecutionHost } from "./types";
+import type {
+  AskExecutionOptions,
+  AskRuntimeState,
+  BrowserExecutionHost,
+} from "./types";
 import type { AskBaseline } from "../snapshotState";
 import { workspaceKeyFromUrl } from "../urls";
 
@@ -30,22 +34,12 @@ export class BrowserExecutionController {
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,
   ): Promise<AskResultSnapshot> {
-    return this.runWithSingleFlight(
-      this.interactiveTargetKey(
-        this.host.resolveAskTarget(
-          command.conversationId,
-          command.newConversation,
-        ),
-      ),
-      "ask",
-      () =>
-        runAsk(this.host, command, onChunk, onState, {
-          submitPrompt: true,
-          emittedText: "",
-          nextSeq: 0,
-          recoveryReason: null,
-        }),
-    );
+    return this.runAskCommand(command, onChunk, onState, "ask", {
+      submitPrompt: true,
+      emittedText: "",
+      nextSeq: 0,
+      recoveryReason: null,
+    });
   }
 
   async research(
@@ -54,19 +48,12 @@ export class BrowserExecutionController {
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,
   ): Promise<ResearchResultSnapshot> {
-    return this.runWithSingleFlight(
-      this.interactiveTargetKey(
-        this.host.resolveConversationTarget(command.conversationId),
-      ),
-      "research",
-      () =>
-        runResearch(this.host, command, onUpdate, onState, {
-          submitPrompt: true,
-          emittedText: "",
-          nextSeq: 0,
-          recoveryReason: null,
-        }),
-    );
+    return this.runResearchCommand(command, onUpdate, onState, "research", {
+      submitPrompt: true,
+      emittedText: "",
+      nextSeq: 0,
+      recoveryReason: null,
+    });
   }
 
   async recoverAsk(
@@ -82,25 +69,15 @@ export class BrowserExecutionController {
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,
   ): Promise<AskResultSnapshot> {
-    return this.runWithSingleFlight(
-      this.interactiveTargetKey(
-        this.host.resolveAskTarget(
-          command.conversationId,
-          command.newConversation,
-        ),
-      ),
-      "recover ask",
-      () =>
-        runAsk(this.host, command, onChunk, onState, {
-          submitPrompt: false,
-          emittedText: state.emittedText,
-          nextSeq: state.nextSeq,
-          recoveryReason: "re-attached to the browser session",
-          knownConversationId: state.knownConversationId,
-          knownMessageId: state.knownMessageId,
-          askBaseline: state.askBaseline,
-        }),
-    );
+    return this.runAskCommand(command, onChunk, onState, "recover ask", {
+      submitPrompt: false,
+      emittedText: state.emittedText,
+      nextSeq: state.nextSeq,
+      recoveryReason: "re-attached to the browser session",
+      knownConversationId: state.knownConversationId,
+      knownMessageId: state.knownMessageId,
+      askBaseline: state.askBaseline,
+    });
   }
 
   async recoverResearch(
@@ -110,18 +87,17 @@ export class BrowserExecutionController {
     onState: (update: RequestStateSnapshot) => Promise<void> | void = () =>
       undefined,
   ): Promise<ResearchResultSnapshot> {
-    return this.runWithSingleFlight(
-      this.interactiveTargetKey(
-        this.host.resolveConversationTarget(command.conversationId),
-      ),
+    return this.runResearchCommand(
+      command,
+      onUpdate,
+      onState,
       "recover research",
-      () =>
-        runResearch(this.host, command, onUpdate, onState, {
-          submitPrompt: false,
-          emittedText: state.emittedText,
-          nextSeq: state.nextSeq,
-          recoveryReason: "re-attached to the browser session",
-        }),
+      {
+        submitPrompt: false,
+        emittedText: state.emittedText,
+        nextSeq: state.nextSeq,
+        recoveryReason: "re-attached to the browser session",
+      },
     );
   }
 
@@ -148,6 +124,47 @@ export class BrowserExecutionController {
 
   private interactiveTargetKey(targetUrl: string): string {
     return workspaceKeyFromUrl(targetUrl);
+  }
+
+  private askTargetKey(command: AskExecutionCommand): string {
+    return this.interactiveTargetKey(
+      this.host.resolveAskTarget(
+        command.conversationId,
+        command.newConversation,
+      ),
+    );
+  }
+
+  private researchTargetKey(command: ResearchExecutionCommand): string {
+    return this.interactiveTargetKey(
+      this.host.resolveConversationTarget(command.conversationId),
+    );
+  }
+
+  private async runAskCommand(
+    command: AskExecutionCommand,
+    onChunk: (chunk: StreamChunkSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void,
+    action: string,
+    options: AskExecutionOptions,
+  ): Promise<AskResultSnapshot> {
+    return this.runWithSingleFlight(this.askTargetKey(command), action, () =>
+      runAsk(this.host, command, onChunk, onState, options),
+    );
+  }
+
+  private async runResearchCommand(
+    command: ResearchExecutionCommand,
+    onUpdate: (update: ResearchProgressSnapshot) => Promise<void> | void,
+    onState: (update: RequestStateSnapshot) => Promise<void> | void,
+    action: string,
+    options: AskExecutionOptions,
+  ): Promise<ResearchResultSnapshot> {
+    return this.runWithSingleFlight(
+      this.researchTargetKey(command),
+      action,
+      () => runResearch(this.host, command, onUpdate, onState, options),
+    );
   }
 
   private async runWithSingleFlight<T>(

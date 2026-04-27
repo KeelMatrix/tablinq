@@ -71,6 +71,13 @@ import {
 import { BrowserPageRegistry } from "./browserAdapter/pageRegistry";
 import { BrowserSessionController } from "./browserAdapter/sessionController";
 
+type StatusSnapshotOptions = {
+  recoverManagedPage: boolean;
+  refreshCapabilities: boolean;
+  clearCapabilitiesWhenStopped: boolean;
+  includeTitle: boolean;
+};
+
 export class BrowserAdapter {
   private readonly profileDir: string;
   private readonly downloadsDir: string;
@@ -173,13 +180,35 @@ export class BrowserAdapter {
   }
 
   async health(): Promise<BrowserStatusSnapshot> {
-    await this.session.recoverManagedPage();
+    return this.buildStatusSnapshot({
+      recoverManagedPage: true,
+      refreshCapabilities: true,
+      clearCapabilitiesWhenStopped: true,
+      includeTitle: true,
+    });
+  }
+
+  async snapshot(): Promise<BrowserStatusSnapshot> {
+    return this.buildStatusSnapshot({
+      recoverManagedPage: false,
+      refreshCapabilities: false,
+      clearCapabilitiesWhenStopped: false,
+      includeTitle: false,
+    });
+  }
+
+  private async buildStatusSnapshot(
+    options: StatusSnapshotOptions,
+  ): Promise<BrowserStatusSnapshot> {
+    if (options.recoverManagedPage) {
+      await this.session.recoverManagedPage();
+    }
     const page = this.session.activePage;
     const running = Boolean(page && !page.isClosed());
 
-    if (running) {
+    if (running && options.refreshCapabilities) {
       await this.refreshCapabilities(page!);
-    } else {
+    } else if (!running && options.clearCapabilitiesWhenStopped) {
       this.capabilities.clearActiveState();
     }
 
@@ -191,43 +220,8 @@ export class BrowserAdapter {
       downloads_dir: this.downloadsDir,
       target_url: this.session.targetUrl,
       current_url: running ? page!.url() : null,
-      page_title: running ? await safeTitle(page!) : null,
-      page_ready: running ? !page!.isClosed() : false,
-      authenticated: running ? inferAuthenticated(page!.url()) : false,
-      reload_count: this.session.activeReloadCount,
-      screenshot_path: this.lastScreenshotPath,
-      browser_path: this.session.browserPath,
-      extension_connected: capability.extensionConnected,
-      capability_report: capability.lastCapabilityReport,
-      attach_mode: this.connectionMode,
-      browser_owner: this.session.activeBrowserOwner,
-      cdp_attached: this.session.attachedOverCdp,
-      target_tab_found: running,
-      target_tab_id: running ? this.session.activePageId : null,
-      target_workspace_key: running ? this.session.activeWorkspaceKey() : null,
-      debug_endpoint: this.debugEndpoint,
-      auth_source:
-        running && inferAuthenticated(page!.url()) ? "page" : "unknown",
-      extension_required: this.extensionRequired,
-      last_capability_report_at: running
-        ? this.capabilities.activeReportedAt()
-        : null,
-    };
-  }
-
-  async snapshot(): Promise<BrowserStatusSnapshot> {
-    const page = this.session.activePage;
-    const running = Boolean(page && !page.isClosed());
-
-    const capability = this.capabilities.snapshot();
-    return {
-      running,
-      browser_kind: this.session.statusBrowserKind(),
-      profile_dir: this.profileDir,
-      downloads_dir: this.downloadsDir,
-      target_url: this.session.targetUrl,
-      current_url: running ? page!.url() : null,
-      page_title: null,
+      page_title:
+        running && options.includeTitle ? await safeTitle(page!) : null,
       page_ready: running,
       authenticated: running ? inferAuthenticated(page!.url()) : false,
       reload_count: this.session.activeReloadCount,
