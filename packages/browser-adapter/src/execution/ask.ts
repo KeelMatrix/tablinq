@@ -17,7 +17,11 @@ import {
   uploadAttachments,
   waitForSubmitReadyAfterUploads,
 } from "../pageRuntime";
-import { computeStallTimeoutMs } from "../snapshotState";
+import {
+  computeStallTimeoutMs,
+  type AskBaseline,
+  type AskSnapshot,
+} from "../snapshotState";
 import {
   adaptivePollIntervalMs,
   ASK_STALL_RECOVERY_GRACE_MS,
@@ -37,6 +41,7 @@ import { runResearch } from "./research";
 import { applyAskSnapshot, rememberAskSnapshot } from "./streaming";
 import type {
   AskExecutionOptions,
+  AskRecoveryResult,
   AskRuntimeState,
   BrowserExecutionHost,
   ChunkSink,
@@ -72,70 +77,204 @@ export async function runAsk(
     return runAskAsResearch(host, command, onChunk, onState, options);
   }
 
-  const timeoutAt = Date.now() + (command.timeoutMs ?? ASK_TIMEOUT_MS);
+  const timing = resolveAskTiming(command);
+  let page = await openAskExecutionPage(host, command);
+  let askBaseline: AskBaseline | null = null;
+
+  if (options.submitPrompt) {
+    const prepared = await prepareAskSubmission(host, command, page, timing);
+    page = prepared.page;
+    askBaseline = prepared.askBaseline;
+  }
+
+  const state = createAskRuntimeState(command, options, page, askBaseline);
+  await emitAskIdentityUpdate(
+    command,
+    state,
+    safePageUrl(page),
+    onState,
+    "observed ask baseline",
+  );
+
+  const initialRecovery = await recoverInitialAskIfNeeded(
+    host,
+    command,
+    page,
+    state,
+    onChunk,
+    onState,
+    options,
+    timing.timeoutAt,
+  );
+  page = initialRecovery.page;
+  if (initialRecovery.result) {
+    return initialRecovery.result;
+  }
+
+  while (Date.now() < timing.timeoutAt) {
+    let snapshot: AskSnapshot;
+    try {
+      snapshot = await readAskSnapshot(page, state.askBaseline);
+    } catch (error) {
+      const recovered = await recoverAskSnapshotRead(
+        host,
+        command,
+        page,
+        state,
+        onChunk,
+        onState,
+        error,
+        timing.timeoutAt,
+      );
+      if (recovered) {
+        page = recovered.page;
+        if (recovered.result) {
+          return recovered.result;
+        }
+        continue;
+      }
+      throw error;
+    }
+
+    throwIfProviderGenerationFailed(snapshot);
+
+    await recordAskSnapshotProgress(
+      host,
+      command,
+      state,
+      snapshot,
+      onChunk,
+      onState,
+      "observed in-flight assistant identity",
+    );
+    updateAskDoneStreak(state, snapshot);
+
+    const finalized = await finalizeStableAskIfReady(
+      host,
+      command,
+      page,
+      state,
+      snapshot,
+      onChunk,
+      onState,
+      timing.timeoutAt,
+    );
+    snapshot = finalized.snapshot;
+    if (finalized.result) {
+      return finalized.result;
+    }
+
+    const stallRecovery = await recoverStalledAskIfNeeded(
+      host,
+      command,
+      page,
+      state,
+      onChunk,
+      onState,
+      timing,
+    );
+    page = stallRecovery.page;
+    if (stallRecovery.result) {
+      return stallRecovery.result;
+    }
+
+    await sleepForAskPoll(state, timing.timeoutAt);
+  }
+
+  throw new Error("ask timed out waiting for streamed response");
+}
+
+type AskTiming = {
+  timeoutAt: number;
+  stallTimeoutMs: number;
+  initialStallTimeoutMs: number;
+};
+
+function resolveAskTiming(command: AskExecutionCommand): AskTiming {
+  const executionTimeoutMs = command.timeoutMs ?? ASK_TIMEOUT_MS;
   const stallTimeoutMs = computeStallTimeoutMs(
     command.timeoutMs,
     ASK_TIMEOUT_MS,
   );
-  const initialAskStallTimeoutMs = Math.max(
+  return {
+    timeoutAt: Date.now() + executionTimeoutMs,
     stallTimeoutMs,
-    Math.min(
-      ASK_STALL_RECOVERY_GRACE_MS,
-      Math.floor((command.timeoutMs ?? ASK_TIMEOUT_MS) / 2),
+    initialStallTimeoutMs: Math.max(
+      stallTimeoutMs,
+      Math.min(ASK_STALL_RECOVERY_GRACE_MS, Math.floor(executionTimeoutMs / 2)),
     ),
-  );
-  let page = await host.openExecutionPage(
+  };
+}
+
+async function openAskExecutionPage(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+): Promise<Page> {
+  const page = await host.openExecutionPage(
     host.resolveAskTarget(command.conversationId, command.newConversation),
   );
   await ensureProviderReachable(page);
-  let askBaseline = null;
+  return page;
+}
 
-  if (options.submitPrompt) {
-    if (
-      (command.newConversation && !command.conversationId) ||
-      (!command.conversationId && !conversationIdFromUrl(safePageUrl(page)))
-    ) {
-      await resetConversationIdentity(page);
-    }
-    askBaseline = await readAskBaseline(page);
-    await host.refreshCapabilities(page);
-    if (
-      command.modelClass ||
-      command.effort ||
-      (command.mode && command.mode !== "normal")
-    ) {
-      page = await applyAskConfiguration(
-        page,
-        command,
-        host.getLastCapabilityReport(),
-      );
-      await host.refreshCapabilities(page);
-    }
-    await uploadAttachments(
+async function prepareAskSubmission(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+  page: Page,
+  timing: AskTiming,
+): Promise<{ page: Page; askBaseline: AskBaseline }> {
+  if (
+    (command.newConversation && !command.conversationId) ||
+    (!command.conversationId && !conversationIdFromUrl(safePageUrl(page)))
+  ) {
+    await resetConversationIdentity(page);
+  }
+  const askBaseline = await readAskBaseline(page);
+  await host.refreshCapabilities(page);
+  if (
+    command.modelClass ||
+    command.effort ||
+    (command.mode && command.mode !== "normal")
+  ) {
+    page = await applyAskConfiguration(
       page,
-      command.files ?? [],
+      command,
       host.getLastCapabilityReport(),
     );
-    await fillComposer(page, command.prompt);
-    if ((command.files ?? []).length > 0) {
-      await waitForSubmitReadyAfterUploads(
-        page,
-        Math.min(
-          SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
-          Math.max(1, timeoutAt - Date.now()),
-        ),
-      );
-    }
-    if (command.mode === "search") {
-      await sleep(1_000);
-      page = await host.openExecutionPage(safePageUrl(page) ?? page.url());
-      await ensureConfiguredSearchMode(page);
-    }
-    await maybeApplySubmitJitter(command.submitJitterMs, timeoutAt);
-    await clickSubmit(page);
+    await host.refreshCapabilities(page);
   }
+  await uploadAttachments(
+    page,
+    command.files ?? [],
+    host.getLastCapabilityReport(),
+  );
+  await fillComposer(page, command.prompt);
+  if ((command.files ?? []).length > 0) {
+    await waitForSubmitReadyAfterUploads(
+      page,
+      Math.min(
+        SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+        Math.max(1, timing.timeoutAt - Date.now()),
+      ),
+    );
+  }
+  if (command.mode === "search") {
+    await sleep(1_000);
+    page = await host.openExecutionPage(safePageUrl(page) ?? page.url());
+    await ensureConfiguredSearchMode(page);
+  }
+  await maybeApplySubmitJitter(command.submitJitterMs, timing.timeoutAt);
+  await clickSubmit(page);
+  return { page, askBaseline };
+}
 
-  const state: AskRuntimeState = {
+function createAskRuntimeState(
+  command: AskExecutionCommand,
+  options: AskExecutionOptions,
+  page: Page,
+  askBaseline: AskBaseline | null,
+): AskRuntimeState {
+  return {
     emittedText: options.emittedText,
     nextSeq: options.nextSeq,
     doneStreak: 0,
@@ -156,180 +295,231 @@ export async function runAsk(
     lastSnapshotSignature: null,
     lastIdentityUpdateSignature: null,
   };
+}
+
+async function recoverInitialAskIfNeeded(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+  page: Page,
+  state: AskRuntimeState,
+  onChunk: ChunkSink,
+  onState: StateSink,
+  options: AskExecutionOptions,
+  timeoutAt: number,
+): Promise<AskRecoveryResult> {
+  if (options.submitPrompt) {
+    return { page };
+  }
+  const recovered = await reconcileAskAfterInterruption(
+    host,
+    page,
+    command,
+    state,
+    onChunk,
+    onState,
+    options.recoveryReason ?? "recovered the interrupted ask",
+    timeoutAt,
+  );
+  if (!recovered.result) {
+    state.lastProgressAt = Date.now();
+  }
+  return recovered;
+}
+
+async function recoverAskSnapshotRead(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+  page: Page,
+  state: AskRuntimeState,
+  onChunk: ChunkSink,
+  onState: StateSink,
+  error: unknown,
+  timeoutAt: number,
+): Promise<AskRecoveryResult | null> {
+  if (
+    !isTransientPageError(error) ||
+    state.recoveryAttempts >= MAX_RECOVERY_ATTEMPTS
+  ) {
+    return null;
+  }
+  noteProviderPressure("recovery_loop");
+  const recovered = await reconcileAskAfterInterruption(
+    host,
+    page,
+    command,
+    state,
+    onChunk,
+    onState,
+    error instanceof Error ? error.message : String(error),
+    timeoutAt,
+  );
+  if (!recovered.result) {
+    state.lastProgressAt = Date.now();
+    await sleepForAskRecovery(state, timeoutAt);
+  }
+  return recovered;
+}
+
+function throwIfProviderGenerationFailed(snapshot: AskSnapshot): void {
+  if (snapshot.failureCode !== PROVIDER_GENERATION_FAILURE_CODE) {
+    return;
+  }
+  noteProviderPressure("generation_failed");
+  if (snapshot.retryVisible) {
+    noteProviderPressure("retry_visible");
+  }
+  noteProviderPressureFromText(snapshot.failureMessage);
+  throw new AskProviderFailure(
+    snapshot.failureMessage ??
+      "Something went wrong while generating the response. If this issue persists please contact us through our help center.",
+    snapshot.currentUrl,
+    snapshot.retryVisible,
+  );
+}
+
+async function recordAskSnapshotProgress(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+  state: AskRuntimeState,
+  snapshot: AskSnapshot,
+  onChunk: ChunkSink,
+  onState: StateSink,
+  reason: string,
+): Promise<void> {
+  rememberAskSnapshot(host, state, snapshot);
+  const progressed = await applyAskSnapshot(command, state, snapshot, onChunk);
   await emitAskIdentityUpdate(
     command,
     state,
-    safePageUrl(page),
+    snapshot.currentUrl,
     onState,
-    "observed ask baseline",
+    reason,
   );
-
-  if (!options.submitPrompt) {
-    const recovered = await reconcileAskAfterInterruption(
-      host,
-      page,
-      command,
-      state,
-      onChunk,
-      onState,
-      options.recoveryReason ?? "recovered the interrupted ask",
-      timeoutAt,
-    );
-    page = recovered.page;
-    if (recovered.result) {
-      return recovered.result;
-    }
+  if (progressed) {
     state.lastProgressAt = Date.now();
   }
+}
 
-  while (Date.now() < timeoutAt) {
-    let snapshot;
-    try {
-      snapshot = await readAskSnapshot(page, state.askBaseline);
-    } catch (error) {
-      if (
-        isTransientPageError(error) &&
-        state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS
-      ) {
-        noteProviderPressure("recovery_loop");
-        const recovered = await reconcileAskAfterInterruption(
-          host,
-          page,
-          command,
-          state,
-          onChunk,
-          onState,
-          error instanceof Error ? error.message : String(error),
-          timeoutAt,
-        );
-        page = recovered.page;
-        if (recovered.result) {
-          return recovered.result;
-        }
-        state.lastProgressAt = Date.now();
-        await sleep(
-          Math.min(
-            adaptivePollIntervalMs(
-              "recovery",
-              Date.now() - state.lastProgressAt,
-            ),
-            Math.max(1, timeoutAt - Date.now()),
-          ),
-        );
-        continue;
-      }
-      throw error;
-    }
-
-    if (snapshot.failureCode === PROVIDER_GENERATION_FAILURE_CODE) {
-      noteProviderPressure("generation_failed");
-      if (snapshot.retryVisible) {
-        noteProviderPressure("retry_visible");
-      }
-      noteProviderPressureFromText(snapshot.failureMessage);
-      throw new AskProviderFailure(
-        snapshot.failureMessage ??
-          "Something went wrong while generating the response. If this issue persists please contact us through our help center.",
-        snapshot.currentUrl,
-        snapshot.retryVisible,
-      );
-    }
-
-    rememberAskSnapshot(host, state, snapshot);
-    const progressed = await applyAskSnapshot(
-      command,
-      state,
-      snapshot,
-      onChunk,
-    );
-    await emitAskIdentityUpdate(
-      command,
-      state,
-      snapshot.currentUrl,
-      onState,
-      "observed in-flight assistant identity",
-    );
-    if (progressed) {
-      state.lastProgressAt = Date.now();
-    }
-
-    if (snapshot.state === "done") {
-      state.doneStreak += 1;
-    } else {
-      state.doneStreak = 0;
-    }
-
-    if (snapshot.state === "done" && state.doneStreak >= STABLE_DONE_POLLS) {
-      snapshot = await stabilizeAskCompletion(
-        page,
-        state.askBaseline,
-        snapshot,
-        timeoutAt,
-      );
-      rememberAskSnapshot(host, state, snapshot);
-      const stabilizedProgress = await applyAskSnapshot(
-        command,
-        state,
-        snapshot,
-        onChunk,
-      );
-      await emitAskIdentityUpdate(
-        command,
-        state,
-        snapshot.currentUrl,
-        onState,
-        "observed stabilized assistant identity",
-      );
-      if (stabilizedProgress) {
-        state.lastProgressAt = Date.now();
-      }
-      if (snapshot.state === "done") {
-        state.pendingTextReconciliation = false;
-        return finalizeAsk(host, command, page, state, snapshot, onChunk);
-      }
-      state.doneStreak = 0;
-    }
-
-    const canRecoverFromAskStall =
-      state.emittedText.length > 0 ||
-      state.knownConversationId !== null ||
-      state.knownMessageId !== null;
-    const askStallTimeoutMs =
-      state.emittedText.length === 0 && state.knownMessageId === null
-        ? initialAskStallTimeoutMs
-        : stallTimeoutMs;
-    if (
-      Date.now() - state.lastProgressAt >= askStallTimeoutMs &&
-      state.recoveryAttempts < MAX_RECOVERY_ATTEMPTS &&
-      canRecoverFromAskStall
-    ) {
-      noteProviderPressure("recovery_loop");
-      const recovered = await reconcileAskAfterInterruption(
-        host,
-        page,
-        command,
-        state,
-        onChunk,
-        onState,
-        "stream stalled while waiting for provider output",
-        timeoutAt,
-      );
-      page = recovered.page;
-      if (recovered.result) {
-        return recovered.result;
-      }
-      state.lastProgressAt = Date.now();
-    }
-
-    await sleep(
-      Math.min(
-        adaptivePollIntervalMs("generation", Date.now() - state.lastProgressAt),
-        Math.max(1, timeoutAt - Date.now()),
-      ),
-    );
+function updateAskDoneStreak(
+  state: AskRuntimeState,
+  snapshot: AskSnapshot,
+): void {
+  if (snapshot.state === "done") {
+    state.doneStreak += 1;
+  } else {
+    state.doneStreak = 0;
   }
+}
 
-  throw new Error("ask timed out waiting for streamed response");
+async function finalizeStableAskIfReady(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+  page: Page,
+  state: AskRuntimeState,
+  snapshot: AskSnapshot,
+  onChunk: ChunkSink,
+  onState: StateSink,
+  timeoutAt: number,
+): Promise<{ snapshot: AskSnapshot; result?: AskResultSnapshot }> {
+  if (snapshot.state !== "done" || state.doneStreak < STABLE_DONE_POLLS) {
+    return { snapshot };
+  }
+  const stabilized = await stabilizeAskCompletion(
+    page,
+    state.askBaseline,
+    snapshot,
+    timeoutAt,
+  );
+  await recordAskSnapshotProgress(
+    host,
+    command,
+    state,
+    stabilized,
+    onChunk,
+    onState,
+    "observed stabilized assistant identity",
+  );
+  if (stabilized.state === "done") {
+    state.pendingTextReconciliation = false;
+    return {
+      snapshot: stabilized,
+      result: await finalizeAsk(
+        host,
+        command,
+        page,
+        state,
+        stabilized,
+        onChunk,
+      ),
+    };
+  }
+  state.doneStreak = 0;
+  return { snapshot: stabilized };
+}
+
+async function recoverStalledAskIfNeeded(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+  page: Page,
+  state: AskRuntimeState,
+  onChunk: ChunkSink,
+  onState: StateSink,
+  timing: AskTiming,
+): Promise<AskRecoveryResult> {
+  const canRecoverFromAskStall =
+    state.emittedText.length > 0 ||
+    state.knownConversationId !== null ||
+    state.knownMessageId !== null;
+  const askStallTimeoutMs =
+    state.emittedText.length === 0 && state.knownMessageId === null
+      ? timing.initialStallTimeoutMs
+      : timing.stallTimeoutMs;
+  if (
+    Date.now() - state.lastProgressAt < askStallTimeoutMs ||
+    state.recoveryAttempts >= MAX_RECOVERY_ATTEMPTS ||
+    !canRecoverFromAskStall
+  ) {
+    return { page };
+  }
+  noteProviderPressure("recovery_loop");
+  const recovered = await reconcileAskAfterInterruption(
+    host,
+    page,
+    command,
+    state,
+    onChunk,
+    onState,
+    "stream stalled while waiting for provider output",
+    timing.timeoutAt,
+  );
+  if (!recovered.result) {
+    state.lastProgressAt = Date.now();
+  }
+  return recovered;
+}
+
+async function sleepForAskRecovery(
+  state: AskRuntimeState,
+  timeoutAt: number,
+): Promise<void> {
+  await sleep(
+    Math.min(
+      adaptivePollIntervalMs("recovery", Date.now() - state.lastProgressAt),
+      Math.max(1, timeoutAt - Date.now()),
+    ),
+  );
+}
+
+async function sleepForAskPoll(
+  state: AskRuntimeState,
+  timeoutAt: number,
+): Promise<void> {
+  await sleep(
+    Math.min(
+      adaptivePollIntervalMs("generation", Date.now() - state.lastProgressAt),
+      Math.max(1, timeoutAt - Date.now()),
+    ),
+  );
 }
 
 async function ensureProviderReachable(page: Page): Promise<void> {

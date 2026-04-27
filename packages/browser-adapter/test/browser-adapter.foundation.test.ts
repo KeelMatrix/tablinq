@@ -66,6 +66,21 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("keeps health and snapshot status fields aligned except title refresh", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openTrackedManagedAdapter(harness, server.url);
+
+    const health = await adapter.health();
+    const snapshot = await adapter.snapshot();
+
+    expect({
+      ...health,
+      page_title: null,
+    }).toEqual(snapshot);
+
+    await adapter.shutdown();
+  });
+
   it.each([
     ["classic", "classic"],
     ["aria", "aria"],

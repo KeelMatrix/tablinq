@@ -15,6 +15,7 @@ import {
   uploadAckTimeoutMsForFiles,
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
+import type { StreamChunkSnapshot } from "../src/browserAdapter";
 import { finalizeAsk } from "../src/execution/finalization";
 import { applyAskSnapshot } from "../src/execution/streaming";
 import {
@@ -316,7 +317,7 @@ describe("browser adapter", () => {
     );
     dom.window.document.body.dataset.streamState = "done";
     const snapshot = adapter.readAskSnapshot({ baseline });
-    const emitted: string[] = [];
+    const emitted: StreamChunkSnapshot[] = [];
     const fakeLocator = {
       first() {
         return this;
@@ -350,15 +351,30 @@ describe("browser adapter", () => {
       { emittedText: "", nextSeq: 0 },
       snapshot,
       (chunk) => {
-        if (chunk.kind === "delta") {
-          emitted.push(chunk.text);
-        }
+        emitted.push(chunk);
       },
     );
 
     expect(result.output_text).toBe(liveActualAnswerText);
     expect(result.output_text).not.toContain(liveThoughtArtifactText);
-    expect(emitted.join("")).toBe(liveActualAnswerText);
+    expect(emitted).toEqual([
+      {
+        job_id: "job-live-style-finalize",
+        conversation_id: snapshot.conversationId,
+        message_id: snapshot.messageId,
+        seq: 0,
+        kind: "delta",
+        text: liveActualAnswerText,
+      },
+      {
+        job_id: "job-live-style-finalize",
+        conversation_id: snapshot.conversationId,
+        message_id: snapshot.messageId,
+        seq: 1,
+        kind: "done",
+        text: "",
+      },
+    ]);
     dom.window.close();
   });
 
