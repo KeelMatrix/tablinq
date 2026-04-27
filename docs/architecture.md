@@ -6,7 +6,7 @@ Tablinq is browser-driven by design. The browser is the execution engine, not a 
 
 The modern Tablinq stack is attach-first:
 
-- the user owns the browser session
+- the user owns the browser session and manual sign-in
 - the user signs in manually
 - the extension is the semantic bridge
 - Playwright is used as an attach-and-assist runtime
@@ -26,7 +26,8 @@ The old managed Playwright-owned login path is no longer the primary model. That
 1. `gpt` parses local commands and sends daemon requests over local IPC.
 2. `gptd` owns durable execution, persistence, request lifecycle state, and one supervised browser adapter process.
 3. `tablinq-gateway` exposes an OpenAI-compatible HTTP surface backed by the same core service.
-4. The browser adapter attaches to a user-owned Chrome or Edge browser session through a local debug endpoint, or launches managed fallback explicitly when configured.
+4. The browser adapter attaches to an attachable Chrome or Edge browser session through a local debug endpoint, or launches managed fallback explicitly when configured.
+   Current Chrome attach-first uses a dedicated persistent real Chrome profile under the Tablinq state root so Chrome will expose that endpoint.
 5. The extension probes the page and publishes capability and alias data back to the control loop.
 
 ## High-level flow
@@ -37,7 +38,7 @@ flowchart LR
     IPC --> Daemon["gptd daemon"]
     Daemon --> DB["SQLite + state root"]
     Daemon --> Adapter["browser adapter"]
-    Adapter --> Browser["user-owned Chrome / Edge profile"]
+    Adapter --> Browser["attachable Chrome / Edge profile"]
     Browser --> Extension["MV3 extension"]
     Extension --> Page["ChatGPT tab"]
     Gateway["OpenAI-compatible HTTP gateway"] --> Daemon
@@ -79,12 +80,13 @@ The resolved state root contains:
 - `logs/gateway.log`
 - `db/tablinq.sqlite3`
 - `browser-profile/`
+- `chrome-attach-profile/`
 - `downloads/`
 - `crash-bundles/`
 - `gateway-uploads/`
 - `daemon.lock`
 
-`browser-profile/` remains in the layout because managed fallback still exists and compatibility with earlier state roots matters.
+`browser-profile/` remains in the layout because managed fallback still exists and compatibility with earlier state roots matters. `chrome-attach-profile/` is the persistent real Chrome attach-first profile used by `gpt browser start-debug` when Chrome requires an explicit user data directory for remote debugging.
 
 ## Request lifecycle
 

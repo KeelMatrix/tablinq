@@ -47,9 +47,14 @@
 - Install: `pnpm install`
 - Rust tests: `cargo test`
 - TS tests: `pnpm test`
+- Fast TS core validation: `pnpm run test:ts:fast`
+- Browser-adapter shards: `pnpm run test:browser-adapter:foundation`, `pnpm run test:browser-adapter:ask`, `pnpm run test:browser-adapter:research`, `pnpm run test:browser-adapter:recovery`
 - TS typecheck: `pnpm lint`
 - TS build: `pnpm build`
 - Format check: `cargo fmt --all --check` and `pnpm format`
+- Local CI mirror: `pnpm run ci:local`
+- Full non-package CI mirror: `pnpm run ci:local:all`
+- Package smoke mirror: `pnpm run ci:local:package-smoke`
 - Start daemon: `cargo run -p gpt -- daemon start`
 - Check daemon: `cargo run -p gpt -- daemon status`
 - Start gateway: `cargo run -p gpt -- gateway start`
@@ -62,6 +67,7 @@
 - Fastest native host validation: `cargo test -p tablinq-host`
 - Fastest browser-adapter validation: `pnpm test packages/browser-adapter/test/<file>.test.ts`
 - Fastest extension validation: `pnpm test packages/extension/test/<file>.test.ts`
+- Fastest schema/probe/content-script validation: `pnpm run test:ts:fast`
 - Package only when required: `scripts/package.ps1` or `./scripts/package.sh`
 
 ## Constraints
@@ -74,6 +80,7 @@
 - Avoid cross-layer refactors unless requested
 - Preserve attach-first browser model unless task requires change
 - Preserve command surface and package layout unless task requires change
+- Do not add backward-compatibility layers unless explicitly asked
 - Keep edits minimal, local, and test-backed
 
 ## Efficiency Rules

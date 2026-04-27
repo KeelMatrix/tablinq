@@ -114,7 +114,7 @@ Do not repeat the previous user query. Do not paraphrase it with only cosmetic c
 
 ### 6. Handle uploads uniquely
 
-Before uploading any file, create unique content and a unique filename. Use `scripts/make_unique_upload.py` when a simple upload fixture is enough.
+Before uploading any file, create unique content and a unique filename. Use this skill's `scripts/make_unique_upload.py` helper when a simple upload fixture is enough, and write output to an ignored temp or task scratch directory.
 
 Requirements:
 

@@ -7,9 +7,11 @@ description: guidance for agents working on the tablinq codebase. use when asked
 
 ## Core Rules
 
-Prefer correctness, truthfulness, and maintainability over speed. State uncertainty instead of guessing. Do not add speculative features, compatibility layers, abstractions, or configuration unless the task requires them.
+Prefer correctness, truthfulness, and maintainability over speed. State uncertainty instead of guessing. Do not add speculative features, backward-compatibility layers, abstractions, or configuration unless the task requires them.
 
 Keep changes local to the active execution path. Preserve existing behavior unless the user explicitly asks for a behavior change. Read nearby tests and contracts before editing, then validate with the narrowest relevant checks.
+
+For documentation or agent-guidance work, only document behavior that is present in code, scripts, schemas, or tests. Remove stale instructions instead of preserving old operational stories.
 
 ## File Size Discipline
 

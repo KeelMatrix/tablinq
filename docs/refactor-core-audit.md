@@ -21,8 +21,9 @@ This note captures the current separation of concerns now that Tablinq has a bro
   - maps transport frames to `CoreService`
   - emits stream events and error responses
 - Provider gateway: [`crates/tablinq-gateway/src/lib.rs`](../crates/tablinq-gateway/src/lib.rs)
-  - exposes HTTP endpoints and minimal request routing
-  - delegates provider request mapping to [`crates/tablinq-gateway/src/chat.rs`](../crates/tablinq-gateway/src/chat.rs)
+  - exposes HTTP startup through [`crates/tablinq-gateway/src/server.rs`](../crates/tablinq-gateway/src/server.rs), [`crates/tablinq-gateway/src/connection.rs`](../crates/tablinq-gateway/src/connection.rs), and [`crates/tablinq-gateway/src/routes.rs`](../crates/tablinq-gateway/src/routes.rs)
+  - delegates endpoint handling to [`crates/tablinq-gateway/src/handlers`](../crates/tablinq-gateway/src/handlers)
+  - delegates provider request mapping and streaming to [`crates/tablinq-gateway/src/chat`](../crates/tablinq-gateway/src/chat)
   - delegates queueing to [`crates/tablinq-gateway/src/scheduler.rs`](../crates/tablinq-gateway/src/scheduler.rs)
   - delegates staged upload handling to [`crates/tablinq-gateway/src/uploads.rs`](../crates/tablinq-gateway/src/uploads.rs)
   - records provider request summaries and recovery outcomes

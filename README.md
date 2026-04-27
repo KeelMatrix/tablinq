@@ -12,6 +12,14 @@ It also plugs directly into [OpenClaude](docs/openclaude.md) and [Paperclip](doc
 
 Tablinq is built for the case where the browser is the provider. It does not export cookies, replay hidden bearer tokens, or pretend the website is a raw API.
 
+## Start here
+
+- Install or operate Tablinq: [docs/install.md](docs/install.md)
+- Work from a repo checkout: [docs/development.md](docs/development.md)
+- Use the OpenAI-compatible gateway: [docs/provider-mode.md](docs/provider-mode.md)
+- Debug attach, extension, auth, or recovery issues: [docs/troubleshooting.md](docs/troubleshooting.md)
+- Validate against the real ChatGPT site: [docs/live-smoke-checklist.md](docs/live-smoke-checklist.md)
+
 ## Why Tablinq exists
 
 If you want local tools to work through ChatGPT without handing out browser secrets, you need a product that respects the browser as the source of truth.
@@ -31,8 +39,8 @@ Using a Playwright-owned browser profile as the normal sign-in and startup path 
 
 The current design is the correct default for this product:
 
-- you run your normal browser
-- you install the Tablinq extension in that real profile
+- you run an attachable browser profile you can inspect yourself
+- you install the Tablinq extension in that same attach target profile
 - you sign in manually
 - Tablinq attaches to that existing browser session through a local debug endpoint
 
@@ -60,42 +68,56 @@ It is no longer the default owner of your ChatGPT login session.
 
 This is the normal operating path:
 
-1. Install Tablinq and load the extension into your normal Chrome or Edge profile.
+1. Install Tablinq.
 2. Start the local control plane:
    - `gpt daemon start`
    - `gpt gateway start`
 3. Start an attachable browser session:
    - `gpt browser start-debug`
-4. Sign in manually at `https://chatgpt.com/` in that browser profile.
-   Current Chrome uses a dedicated persistent attach profile under the Tablinq state root; Edge keeps the existing flow.
-5. Attach Tablinq:
+4. Load the Tablinq extension into the attach target profile.
+   - Edge attach-first normally uses the Edge profile you started.
+   - Current Chrome attach-first uses the dedicated `chrome-attach-profile` under the Tablinq state root.
+5. Sign in manually at `https://chatgpt.com/` in that same browser profile.
+6. Attach Tablinq:
    - `gpt browser attach`
-6. Confirm health:
+7. Confirm health:
    - `gpt status`
    - `gpt doctor`
    - `gpt browser connection-info`
    - `gpt capabilities`
-7. Run work:
+8. Run work:
    - `gpt ask "Summarize the value of Tablinq in one paragraph."`
    - `gpt research "Investigate launch blockers for a desktop AI tool."`
 
-## Quick start
+## Quick Start
 
-```bash
-pnpm install
-cargo test
-pnpm test
+Windows packaged install:
+
+```powershell
+scripts/install.ps1
 
 gpt daemon start
 gpt gateway start
 gpt browser start-debug
-# sign in manually in the opened browser if needed
+# load the extension into the attach target profile, then sign in manually
 gpt browser attach
+gpt doctor
 gpt ask "Summarize the value of Tablinq in one paragraph."
-gpt status
 ```
 
-For install instructions, see [docs/install.md](docs/install.md).
+Repo-checkout development:
+
+```bash
+pnpm install
+cargo test -p gpt
+pnpm run test:ts:fast
+
+cargo run -p gpt -- daemon start
+cargo run -p gpt -- gateway start
+cargo run -p gpt -- browser start-debug
+cargo run -p gpt -- browser attach
+cargo run -p gpt -- ask "hello from tablinq"
+```
 
 If your repo checkout grows large during development, run `cargo clean` to remove the local Rust `target/` build directory. That deletes compiled binaries, PDBs, incremental caches, and packaging-related build outputs, and the next Rust build will rebuild them from scratch.
 
@@ -118,14 +140,19 @@ Common commands:
 - `gpt ask --mode search "What is the latest stable Rust release?"`
 - `gpt ask --model thinking --effort extended "compare these options"`
 - `gpt ask --file notes.txt "summarize the attachment"`
+- `gpt ask --conversation conv-123 "continue from here"`
+- `gpt ask --new-conversation "start clean"`
 - `gpt research "investigate launch blockers"`
+- `gpt research --file notes.txt --output-dir reports "write a brief"`
 - `gpt jobs list`
 - `gpt jobs show job-123`
 - `gpt jobs cancel job-123`
 - `gpt sessions list`
 - `gpt conversations list`
+- `gpt conversations list --json`
 - `gpt conversations switch conv-123`
 - `gpt conversations new`
+- `gpt conversations new --json`
 - `gpt artifacts list`
 - `gpt artifacts pull last --to .`
 - `gpt browser start-debug`
@@ -207,7 +234,7 @@ flowchart LR
     IPC --> Daemon["gptd daemon"]
     Daemon --> DB["SQLite + state root"]
     Daemon --> Adapter["browser adapter (TS + Playwright attach runtime)"]
-    Adapter --> Browser["user-owned Chrome / Edge profile"]
+    Adapter --> Browser["attachable Chrome / Edge profile"]
     Browser --> Extension["MV3 extension"]
     Extension --> Page["ChatGPT tab"]
     Gateway["OpenAI-compatible HTTP gateway"] --> Daemon
@@ -231,14 +258,28 @@ See [docs/architecture.md](docs/architecture.md) for the full model.
 
 ## Validation
 
-Local validation:
+Smallest useful validation depends on the files touched:
+
+- Rust CLI: `cargo test -p gpt`
+- Daemon: `cargo test -p gptd`
+- Gateway: `cargo test -p tablinq-gateway`
+- TypeScript core/protocol/probe checks: `pnpm run test:ts:fast`
+- Browser-adapter shards:
+  - `pnpm run test:browser-adapter:foundation`
+  - `pnpm run test:browser-adapter:ask`
+  - `pnpm run test:browser-adapter:research`
+  - `pnpm run test:browser-adapter:recovery`
+
+Broader validation:
 
 - `cargo test`
 - `pnpm lint`
 - `pnpm build`
 - `pnpm test`
+- `pnpm run ci:local`
+- `pnpm run ci:local:all`
 
-If you touch packaging or installed behavior on Windows, also run the package smoke path.
+If you touch packaging or installed behavior on Windows, also run `pnpm run ci:local:package-smoke`.
 
 ## Documentation
 

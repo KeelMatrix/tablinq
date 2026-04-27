@@ -19,7 +19,8 @@ That separation matters. Packaging and installation are not the same step, and v
 | ----------------------------------------------------------- | ----------------------------- |
 | Confirm your Windows shell can see Node, pnpm, and cargo    | `bootstrap.ps1`               |
 | Mirror the current GitHub Actions jobs locally on Windows   | `ci-local.ps1`                |
-| Run the full repo validation suite                          | `test.ps1` or `test.sh`       |
+| Run the broad local test suite                              | `test.ps1` or `test.sh`       |
+| Run the Python validation orchestrator directly             | `test_local.py`               |
 | Build a distributable package without installing it         | `package.ps1` or `package.sh` |
 | Install Tablinq locally from the repo/package output        | `install.ps1` or `install.sh` |
 | Repeatedly hit the local gateway to check stability/latency | `soak_gateway.ps1`            |
@@ -62,9 +63,9 @@ This is the cheapest Windows preflight check in the repo. It lets a contributor 
 
 **What it does**
 
-Runs every repo test discovered by the Rust workspace and Vitest:
+Runs the broad local validation orchestrator:
 
-1. Rust package tests with `--locked`
+1. Rust package tests for `gpt`, `gptd`, `shared-protocol`, and `tablinq-host` with `--locked`
 2. Gateway tests in focused module chunks, so browser-backed tests report progress instead of disappearing inside one long workspace run
 3. `pnpm exec vitest run --reporter=dot`
 
@@ -75,11 +76,11 @@ The default profile is balanced: Rust core and fast gateway tests run in paralle
 
 **Why it exists**
 
-It gives Windows contributors a single truthful local test command. It intentionally does not skip browser-backed or package smoke tests when local prerequisites are available. Static checks, formatting, and build validation belong to `ci-local.ps1`.
+It gives Windows contributors a single broad local test command with useful progress and logs. It includes the browser-heavy gateway chunks, but static checks, formatting, build validation, and package smoke coverage belong to `ci-local.ps1`.
 
 **Use it when**
 
-- You want all available Rust and TypeScript tests.
+- You want broad Rust and TypeScript test coverage without manually coordinating gateway chunks.
 - You are preparing a commit or pull request from Windows.
 - You changed code across Rust and TypeScript boundaries.
 
@@ -87,6 +88,30 @@ It gives Windows contributors a single truthful local test command. It intention
 
 - Producing a distributable package.
 - Installing the app onto a machine.
+- Package smoke validation.
+
+---
+
+### `test_local.py`
+
+**What it does**
+
+Runs the cross-platform validation orchestrator used by `test.ps1`, `test.sh`, and the root `test:local*` package scripts. It creates per-job logs in a temporary directory, runs independent Rust and gateway jobs with bounded parallelism, keeps browser-heavy gateway chunks serialized, and supports `--profile balanced`, `--profile aggressive`, and `--keep-logs`.
+
+**Why it exists**
+
+The Rust and TypeScript test surfaces have different costs and contention profiles. Keeping the orchestration in one Python entrypoint avoids duplicating scheduling logic across PowerShell and shell wrappers.
+
+**Use it when**
+
+- You need the same local validation behavior from a non-wrapper environment.
+- You want `--keep-logs` for diagnosing a failing local test job.
+- You are adjusting local test scheduling itself.
+
+**Do not use it for**
+
+- CI job parity. Use `ci-local.ps1` on Windows for that.
+- Packaging, installation, or gateway soak checks.
 
 ---
 
@@ -99,19 +124,42 @@ Runs the current GitHub job commands locally on Windows, with the same environme
 - `rust`
   - `cargo fmt --all --check`
   - `cargo clippy --workspace --all-targets --locked -- -D warnings`
-  - `cargo test --workspace --locked`
+  - `cargo test --workspace --locked` with browser-integration and package-smoke tests skipped through environment flags
 - `typescript`
   - `pnpm install --frozen-lockfile`
   - `pnpm format`
   - `pnpm lint`
   - `pnpm build`
-  - `pnpm test`
+  - `pnpm run test:ts:fast`
+- `browser-adapter`
+  - `pnpm run test:browser-adapter:foundation`
+  - `pnpm run test:browser-adapter:ask`
+  - `pnpm run test:browser-adapter:research`
+  - `pnpm run test:browser-adapter:recovery`
 - `package-smoke`
   - `pnpm install --frozen-lockfile`
   - `./scripts/package.ps1 -Profile dev`
   - `cargo test -p gpt --test production_smoke windows_packaging_and_install_smoke_cover_packaged_layout -- --nocapture`
 
-It accepts `-Job rust`, `-Job typescript`, `-Job package-smoke`, or `-Job all`.
+Composite jobs:
+
+- `quick`: `rust-fmt` plus `typescript`
+- `all`: `rust`, `typescript`, and all browser-adapter shards
+- `browser-adapter`: all browser-adapter shards
+
+Focused jobs:
+
+- `rust-fmt`
+- `rust-clippy`
+- `rust-test`
+- `typescript-format`
+- `browser-adapter-foundation`
+- `browser-adapter-ask`
+- `browser-adapter-research`
+- `browser-adapter-recovery`
+- `package-smoke`
+
+Use `-Job all,package-smoke` when you deliberately want both the main CI mirror and the separate package-smoke workflow.
 
 **Why it exists**
 
@@ -134,9 +182,9 @@ The repo already has general validation helpers, but GitHub now has three distin
 
 **What it does**
 
-Runs the Unix equivalent of the full local test stack:
+Runs the Unix equivalent of the broad local test stack:
 
-1. Rust package tests with `--locked`
+1. Rust package tests for `gpt`, `gptd`, `shared-protocol`, and `tablinq-host` with `--locked`
 2. Gateway tests in focused module chunks, so browser-backed tests report progress instead of disappearing inside one long workspace run
 3. `pnpm exec vitest run --reporter=dot`
 
@@ -146,16 +194,17 @@ The default profile is balanced: Rust core and fast gateway tests run in paralle
 
 **Why it exists**
 
-This is the Unix/Linux counterpart to `test.ps1`, giving non-Windows environments the same one-command test path without duplicating CI-only static checks.
+This is the Unix/Linux counterpart to `test.ps1`, giving non-Windows environments the same one-command broad test path without duplicating CI-only static checks or package smoke validation.
 
 **Use it when**
 
 - You are validating the repo on Linux or another Unix-like environment.
-- You want all available Rust and TypeScript tests.
+- You want broad Rust and TypeScript test coverage.
 
 **Do not use it for**
 
 - Packaging or installation.
+- Package smoke validation.
 
 ---
 
@@ -343,11 +392,13 @@ This is not a developer build or install helper. It is an operational confidence
 ### Windows contributor
 
 1. Run `bootstrap.ps1`.
-2. Run `test.ps1` while iterating on code.
-3. Run `ci-local.ps1` when you need to reproduce the current GitHub job commands locally.
-4. Run `package.ps1` when you need an installable layout.
-5. Run `install.ps1` when you need a real local install.
-6. Run `soak_gateway.ps1` only after the local gateway is up and you want runtime confidence.
+2. Run `test.ps1` while iterating on broad code changes.
+3. Run `ci-local.ps1 -Job quick` for the default fast CI mirror.
+4. Run `ci-local.ps1 -Job all` when you need the non-package CI mirror.
+5. Run `ci-local.ps1 -Job package-smoke` when packaging or installed behavior changed.
+6. Run `package.ps1` when you need an installable layout.
+7. Run `install.ps1` when you need a real local install.
+8. Run `soak_gateway.ps1` only after the local gateway is up and you want runtime confidence.
 
 ### Unix/Linux contributor
 

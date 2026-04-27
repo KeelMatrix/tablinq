@@ -100,15 +100,19 @@ describe("browser adapter service helpers", () => {
   });
 
   it("maps recover_research state fields with the existing defaults", () => {
-    expect(normalizeResearchRecoveryState(recoverResearchRequestFixture())).toEqual({
+    expect(
+      normalizeResearchRecoveryState(recoverResearchRequestFixture()),
+    ).toEqual({
       emittedText: "",
       nextSeq: 0,
     });
     expect(
-      normalizeResearchRecoveryState(recoverResearchRequestFixture({
-        emitted_text: "partial",
-        next_seq: 5,
-      })),
+      normalizeResearchRecoveryState(
+        recoverResearchRequestFixture({
+          emitted_text: "partial",
+          next_seq: 5,
+        }),
+      ),
     ).toEqual({
       emittedText: "partial",
       nextSeq: 5,

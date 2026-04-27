@@ -29,11 +29,13 @@ Tablinq does not use a Playwright-owned managed login flow as the normal path an
 
 The supported model is:
 
-- normal browser profile
+- attach target browser profile
 - manual sign-in
 - local debug endpoint
 - Tablinq attach
 - extension bridge on the real tab
+
+For current Chrome attach-first, the attach target is the dedicated `chrome-attach-profile` under the Tablinq state root. For Edge attach-first, it is normally the Edge profile started by `gpt browser start-debug`.
 
 Playwright is still used internally for attach, navigation assistance, screenshots, uploads, downloads, and recovery. It is no longer the default owner of the ChatGPT login session.
 
@@ -78,7 +80,7 @@ Symptoms:
 
 Actions:
 
-- sign in manually at `https://chatgpt.com/` in the attached normal browser
+- sign in manually at `https://chatgpt.com/` in the attached browser profile
 - clear any login, challenge, or captcha page before retrying
 - rerun `gpt browser attach`
 - if Tablinq attached to the wrong tab, run `gpt browser open`
