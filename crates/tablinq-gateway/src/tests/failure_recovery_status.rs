@@ -555,11 +555,28 @@ fn request_role_fields_flow_into_failure_bundles_and_request_summaries() {
     let bundle = db.latest_failure_bundle().unwrap().expect("failure bundle");
     let gateway_request = bundle.gateway_request.expect("gateway request context");
     assert_eq!(gateway_request.request_id, "req-role-timeout");
+    assert_eq!(gateway_request.request_path, V1_CHAT_COMPLETIONS_PATH);
+    assert_eq!(gateway_request.model.as_deref(), Some("tablinq-instant"));
     assert_eq!(gateway_request.request_role.as_deref(), Some("branch"));
     assert_eq!(
         gateway_request.parent_request_id.as_deref(),
         Some("req-parent-1")
     );
+    assert!(
+        !gateway_request
+            .client_id
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty()
+    );
+    assert!(
+        !gateway_request
+            .job_id
+            .as_deref()
+            .unwrap_or_default()
+            .is_empty()
+    );
+    assert!(!gateway_request.streaming);
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
