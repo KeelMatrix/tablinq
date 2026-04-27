@@ -686,6 +686,54 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("does not reload when only live DOM busy markers show an active provider request", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+      }),
+    );
+
+    await adapter.open({ targetUrl: server.url, headless: true });
+    const page = adapter.getManagedPageForTest()!;
+    await page.evaluate(() => {
+      for (const element of Array.from(
+        document.querySelectorAll(
+          [
+            "#prompt-textarea",
+            "[data-slot='composer']",
+            "[data-testid='composer-root']",
+            "textarea",
+            "[role='textbox']",
+            "[contenteditable='true']",
+          ].join(", "),
+        ),
+      )) {
+        element.remove();
+      }
+      document.body.dataset.streamState = "idle";
+      document.body.insertAdjacentHTML(
+        "beforeend",
+        "<main><section data-stream-state='running'><button aria-label='Stop generating'>Stop</button></section></main>",
+      );
+    });
+
+    await expect(
+      waitForInteractionSurface(page, {
+        reloadOnUnavailable: true,
+        composerTimeoutMs: 250,
+      }),
+    ).rejects.toThrow();
+    expect(
+      await page.locator("button[aria-label='Stop generating']").count(),
+    ).toBe(1);
+
+    await adapter.shutdown();
+  });
+
   it("scales upload acknowledgment timeout nonlinearly by file size and additional files", () => {
     expect(uploadAckTimeoutMsForFiles([])).toBe(10_000);
     expect(uploadAckTimeoutMsForFiles([0])).toBe(10_000);

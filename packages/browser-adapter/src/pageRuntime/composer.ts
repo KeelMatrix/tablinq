@@ -148,14 +148,86 @@ async function providerRequestInProgress(page: Page): Promise<boolean> {
     page,
     "readSubmitState",
   ).catch(() => null);
-  if (!state) {
-    return false;
+  if (
+    state &&
+    (state.stopVisible ||
+      state.submitBusy ||
+      !["idle", "done"].includes(state.streamState ?? "idle"))
+  ) {
+    return true;
   }
-  return (
-    state.stopVisible ||
-    state.submitBusy ||
-    !["idle", "done"].includes(state.streamState ?? "idle")
-  );
+  return providerRequestInProgressFromDom(page);
+}
+
+async function providerRequestInProgressFromDom(page: Page): Promise<boolean> {
+  return page
+    .evaluate(() => {
+      const isVisible = (element: Element | null): element is HTMLElement => {
+        if (!(element instanceof HTMLElement) || element.hidden) {
+          return false;
+        }
+        if (element.getAttribute("aria-hidden") === "true") {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0"
+        );
+      };
+      const controlText = (element: Element) =>
+        [
+          element.textContent ?? "",
+          element.getAttribute("aria-label") ?? "",
+          element.getAttribute("title") ?? "",
+          element.getAttribute("data-testid") ?? "",
+        ]
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+
+      const streamState = document.body.dataset.streamState;
+      if (streamState && streamState !== "idle" && streamState !== "done") {
+        return true;
+      }
+
+      for (const element of Array.from(
+        document.querySelectorAll(
+          [
+            "[data-testid='stop-button']",
+            "button[aria-label*='Stop' i]",
+            "button[aria-label*='Cancel' i]",
+            "[data-stream-state='running']",
+            "[aria-busy='true']",
+          ].join(", "),
+        ),
+      )) {
+        if (isVisible(element)) {
+          return true;
+        }
+      }
+
+      for (const element of Array.from(
+        document.querySelectorAll("button, [role='button']"),
+      )) {
+        if (!isVisible(element)) {
+          continue;
+        }
+        const text = controlText(element);
+        if (
+          text.includes("stop generating") ||
+          text === "stop" ||
+          text.includes("cancel response") ||
+          text.includes("cancel generation")
+        ) {
+          return true;
+        }
+      }
+      return false;
+    })
+    .catch(() => false);
 }
 
 export async function fillComposer(page: Page, prompt: string): Promise<void> {
