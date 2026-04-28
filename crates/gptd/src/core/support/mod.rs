@@ -41,7 +41,8 @@ pub(super) use locks::{
     browser_busy_message, lock_browser, lock_cancel_registry, try_lock_browser,
 };
 pub(super) use research::{
-    apply_research_update, maybe_write_research_output, unique_destination_path,
+    ResearchUpdateContext, ResearchUpdateProgress, apply_research_update,
+    maybe_write_research_output, unique_destination_path,
 };
 
 #[cfg(test)]
