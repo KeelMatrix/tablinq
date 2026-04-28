@@ -1,8 +1,12 @@
+#![allow(dead_code, unused_imports)]
+
+mod core;
 mod daemon;
 mod fake_chatgpt;
 mod polling;
 mod process;
 
+pub use core::{core_browser_integration_prereqs_available, core_test_config};
 pub use daemon::{
     browser_integration_prereqs_available, integration_lock, spawn_daemon, stop_daemon,
     wait_until_ready,
