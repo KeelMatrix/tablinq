@@ -13,6 +13,7 @@ import {
   readArtifactStabilitySignature,
   readAskSnapshot,
   readLiveResearchSnapshot,
+  scrollToBottomIfNeeded,
   sleep,
 } from "../pageRuntime";
 import type {
@@ -124,6 +125,7 @@ export async function finalizeAsk(
     snapshot.conversationId,
     snapshot.messageId,
   );
+  await scrollToBottomIfNeeded(page);
   await host.ensureManagedPage(
     host.resolveConversationTarget(snapshot.conversationId),
   );
@@ -173,6 +175,7 @@ export async function finalizeResearch(
     snapshot.conversationId,
     snapshot.messageId,
   );
+  await scrollToBottomIfNeeded(page);
   await host.ensureManagedPage(
     host.resolveConversationTarget(snapshot.conversationId),
   );
