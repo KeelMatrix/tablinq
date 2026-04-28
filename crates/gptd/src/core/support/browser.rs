@@ -80,13 +80,27 @@ pub(in crate::core) fn recovery_guidance(
     if is_attach_primary_mode(browser.attach_mode) {
         if !browser.running {
             attach_problem = true;
-            guidance.push(format!(
-                "attach endpoint is not reachable at {debug_endpoint}; fully close Chrome or Edge, run `gpt browser start-debug`, then rerun `gpt browser attach`"
-            ));
-            guidance.push(
-                "run `gpt browser connection-info` and confirm the configured debug endpoint, target URL, and browser path before switching modes"
-                    .to_owned(),
-            );
+            if browser.action.as_deref() == Some("detached") {
+                let browser_label = recovery_browser_label(config, browser);
+                guidance
+                    .push("Tablinq is detached from the attach-first browser session.".to_owned());
+                guidance.push(format!(
+                    "If {browser_label} is still open, run `gpt browser attach`."
+                ));
+                guidance.push(format!(
+                    "If attach fails or the debug endpoint is gone, fully close {} and run `gpt browser start-debug`.",
+                    browser_label
+                ));
+            } else {
+                guidance.push(format!(
+                    "attach endpoint is not reachable at {debug_endpoint}; fully close {}, run `gpt browser start-debug`, then rerun `gpt browser attach`",
+                    recovery_browser_label(config, browser)
+                ));
+                guidance.push(
+                    "run `gpt browser connection-info` and confirm the configured debug endpoint, target URL, and browser path before switching modes"
+                        .to_owned(),
+                );
+            }
         }
         if browser.extension_required && !browser.extension_connected {
             attach_problem = true;
@@ -182,6 +196,20 @@ pub(in crate::core) fn recovery_guidance(
         }
     }
     guidance
+}
+
+fn recovery_browser_label(config: &AppConfig, browser: &BrowserStatusSnapshot) -> &'static str {
+    let configured = config.browser_channel().to_ascii_lowercase();
+    let actual = browser.browser_kind.to_ascii_lowercase();
+    if configured == "msedge"
+        || configured == "edge"
+        || actual == "msedge"
+        || actual.contains("edge")
+    {
+        "Edge"
+    } else {
+        "Chrome"
+    }
 }
 
 pub(in crate::core) fn current_url_requires_login_or_challenge(current_url: Option<&str>) -> bool {

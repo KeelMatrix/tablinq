@@ -93,3 +93,43 @@ fn browser_reset_profile_is_rejected_in_attach_first_mode() {
 
     assert!(format!("{err:#}").contains("managed browser recovery"));
 }
+
+#[test]
+fn browser_close_in_attach_first_reports_detach_without_edge_fallback() {
+    let _guard = integration_lock();
+    let dir = tempdir().unwrap();
+    fs::create_dir_all(dir.path().join("config")).unwrap();
+    fs::write(
+        dir.path().join("config").join("config.toml"),
+        "version = 2\nbrowser_channel = \"chrome\"\n",
+    )
+    .unwrap();
+
+    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+    let core = CoreService::new(config).unwrap();
+    let snapshot = core.browser_close().unwrap();
+    let report = core.doctor_report().unwrap();
+
+    assert_eq!(snapshot.action.as_deref(), Some("detached"));
+    assert_eq!(
+        snapshot.browser_owner,
+        shared_protocol::BrowserOwner::External
+    );
+    assert_eq!(snapshot.browser_kind, "chrome");
+    assert_eq!(snapshot.browser_process_closed, Some(false));
+    assert!(!snapshot.cdp_attached);
+    assert!(!snapshot.running);
+    assert_eq!(report.browser.browser_kind, "chrome");
+    assert!(
+        report
+            .recovery_guidance
+            .iter()
+            .any(|line| line.contains("gpt browser attach"))
+    );
+    assert!(
+        !report
+            .recovery_guidance
+            .iter()
+            .any(|line| line.contains("Chrome or Edge"))
+    );
+}

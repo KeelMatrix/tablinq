@@ -49,7 +49,7 @@ Symptoms:
 
 Actions:
 
-- fully close Chrome or Edge before retrying
+- fully close the configured browser before retrying
 - run `gpt browser start-debug`
 - run `gpt browser connection-info`
 - confirm the reported `debug_endpoint`, `browser_path`, and target URL match what you expect

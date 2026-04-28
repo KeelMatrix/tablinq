@@ -164,13 +164,13 @@ Common commands:
 - `gpt browser attach`
 - `gpt browser connection-info`
 - `gpt browser open`
-- `gpt browser close`
+- `gpt browser detach`
 - `gpt browser logout`
 - `gpt browser switch-account`
 - `gpt browser reset-profile`
 - `gpt browser profile-info`
 
-`attach_first` is the default mode. `gpt browser reset-profile` is for `managed_only` and `managed_fallback` only.
+`attach_first` is the default mode. `gpt browser detach` disconnects Tablinq from the user-owned browser and does not close Chrome. `gpt browser reset-profile` is for `managed_only` and `managed_fallback` only.
 
 ## Provider mode
 

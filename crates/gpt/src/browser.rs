@@ -7,8 +7,11 @@ use shared_protocol::{
 };
 use std::env;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
+use std::time::Duration;
 
 pub(crate) fn run_browser_command(
     state_root: Option<&Path>,
@@ -33,7 +36,7 @@ pub(crate) fn run_browser_command(
                 headless: Some(*headless),
             }),
         ),
-        BrowserCommand::Close => send_daemon_request(state_root, DaemonRequest::BrowserClose),
+        BrowserCommand::Detach => send_daemon_request(state_root, DaemonRequest::BrowserClose),
         BrowserCommand::Logout | BrowserCommand::SwitchAccount => {
             send_daemon_request(state_root, DaemonRequest::BrowserLogout)
         }
@@ -95,6 +98,32 @@ fn browser_start_debug(
     browser_path: Option<&Path>,
 ) -> Result<Value> {
     let plan = build_browser_start_debug_plan(config, target_url, browser_path)?;
+    if let Some(existing) = focus_existing_debug_target(config, &plan.target_url) {
+        return Ok(json!({
+            "status": existing.status,
+            "browser_path": plan.executable,
+            "target_url": plan.target_url,
+            "debug_endpoint": config.browser_debug_endpoint(),
+            "debug_host": config.browser_debug_host(),
+            "debug_port": config.browser_debug_port(),
+            "attach_profile_dir": plan.attach_profile_dir.as_ref().map(|path| path.display().to_string()),
+            "pid": Value::Null,
+            "launch_args": plan.launch_args,
+            "browser_user_owned": true,
+            "browser_owner": "external",
+            "manual_sign_in_required": true,
+            "requires_clean_browser_restart_for_fresh_debug_endpoint": true,
+            "target_url_opened_or_focused": existing.target_url_opened_or_focused,
+            "reused_existing_debug_endpoint": true,
+            "target_tab_id": existing.target_tab_id,
+            "next_commands": [
+                "gpt browser attach",
+                "gpt status",
+                "gpt doctor",
+            ],
+            "note": browser_start_debug_note(plan.attach_profile_dir.is_some()),
+        }));
+    }
     if let Some(attach_profile_dir) = plan.attach_profile_dir.as_ref() {
         fs::create_dir_all(attach_profile_dir)
             .with_context(|| format!("create {}", attach_profile_dir.display()))?;
@@ -123,8 +152,11 @@ fn browser_start_debug(
         "pid": child.id(),
         "launch_args": plan.launch_args,
         "browser_user_owned": true,
+        "browser_owner": "external",
         "manual_sign_in_required": true,
-        "close_existing_browser_windows_first": true,
+        "requires_clean_browser_restart_for_fresh_debug_endpoint": true,
+        "target_url_opened_or_focused": true,
+        "reused_existing_debug_endpoint": false,
         "next_commands": [
             "gpt browser attach",
             "gpt status",
@@ -132,6 +164,94 @@ fn browser_start_debug(
         ],
         "note": browser_start_debug_note(plan.attach_profile_dir.is_some()),
     }))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExistingDebugTarget {
+    status: &'static str,
+    target_url_opened_or_focused: bool,
+    target_tab_id: Option<String>,
+}
+
+fn focus_existing_debug_target(
+    config: &gptd::AppConfig,
+    target_url: &str,
+) -> Option<ExistingDebugTarget> {
+    let endpoint = parse_http_endpoint(&config.browser_debug_endpoint())?;
+    let list = devtools_request(&endpoint, "GET", "/json/list").ok()?;
+    let targets: Value = serde_json::from_str(&list).ok()?;
+    let targets = targets.as_array()?;
+    let target_id = targets.iter().find_map(|target| {
+        let url = target.get("url").and_then(Value::as_str)?;
+        if !same_target_url(url, target_url) {
+            return None;
+        }
+        target
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(ToOwned::to_owned)
+    });
+
+    if let Some(target_id) = target_id {
+        let _ = devtools_request(&endpoint, "GET", &format!("/json/activate/{target_id}"));
+        let _ = devtools_request(&endpoint, "GET", &format!("/json/reload/{target_id}"));
+        return Some(ExistingDebugTarget {
+            status: "focused_existing",
+            target_url_opened_or_focused: true,
+            target_tab_id: Some(target_id),
+        });
+    }
+
+    let opened = devtools_request(&endpoint, "PUT", &format!("/json/new?{target_url}")).is_ok()
+        || devtools_request(&endpoint, "GET", &format!("/json/new?{target_url}")).is_ok();
+    Some(ExistingDebugTarget {
+        status: "already_running",
+        target_url_opened_or_focused: opened,
+        target_tab_id: None,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HttpEndpoint {
+    host: String,
+    port: u16,
+}
+
+fn parse_http_endpoint(raw: &str) -> Option<HttpEndpoint> {
+    let without_scheme = raw.strip_prefix("http://")?;
+    let authority = without_scheme.split('/').next()?.trim();
+    let (host, port) = authority.rsplit_once(':')?;
+    Some(HttpEndpoint {
+        host: host.trim_matches(['[', ']']).to_owned(),
+        port: port.parse().ok()?,
+    })
+}
+
+fn devtools_request(endpoint: &HttpEndpoint, method: &str, path: &str) -> Result<String> {
+    let mut stream = TcpStream::connect((endpoint.host.as_str(), endpoint.port))
+        .with_context(|| format!("connect to Chrome debug endpoint {}", endpoint.port))?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(600)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(600)));
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: {}:{}\r\nConnection: close\r\n\r\n",
+        endpoint.host, endpoint.port
+    )
+    .context("write Chrome debug endpoint request")?;
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .context("read Chrome debug endpoint response")?;
+    let (head, body) = response.split_once("\r\n\r\n").unwrap_or(("", &response));
+    if !head.contains(" 200 ") {
+        anyhow::bail!("Chrome debug endpoint returned non-200 response");
+    }
+    Ok(body.to_owned())
+}
+
+fn same_target_url(current_url: &str, target_url: &str) -> bool {
+    current_url.trim().trim_end_matches('/') == target_url.trim().trim_end_matches('/')
 }
 
 fn build_browser_start_debug_plan(
@@ -420,7 +540,7 @@ pub(crate) fn attach_startup_story(config: &gptd::AppConfig) -> Value {
         "command": "gpt browser start-debug",
         "browser_user_owned": true,
         "manual_sign_in_required": true,
-        "close_existing_browser_windows_first": true,
+        "requires_clean_browser_restart_for_fresh_debug_endpoint": true,
         "extension_install_required": config.browser_extension_required(),
         "verify_commands": [
             "gpt browser attach",
@@ -473,6 +593,11 @@ mod tests {
     use super::*;
     use crate::{Cli, run};
     use clap::Parser;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -501,6 +626,10 @@ mod tests {
         assert!(output.contains("\"browser_connection_mode = \\\"managed_only\\\"\""));
         assert!(output.contains("\"attach_profile_dir\""));
         assert!(output.contains(CHROME_ATTACH_PROFILE_NOTE));
+        assert!(
+            output.contains("\"requires_clean_browser_restart_for_fresh_debug_endpoint\": true")
+        );
+        assert!(!output.contains("close_existing_browser_windows_first"));
     }
 
     #[test]
@@ -530,6 +659,20 @@ mod tests {
             value.get("note").and_then(Value::as_str),
             Some(browser_start_debug_note(true))
         );
+        assert_eq!(value.get("status").and_then(Value::as_str), Some("started"));
+        assert_eq!(
+            value
+                .get("requires_clean_browser_restart_for_fresh_debug_endpoint")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("target_url_opened_or_focused")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(value.get("close_existing_browser_windows_first").is_none());
         assert!(
             value["launch_args"]
                 .as_array()
@@ -538,6 +681,49 @@ mod tests {
                 .any(|item| item.as_str() == Some(&format!("--user-data-dir={attach_profile_dir}")))
         );
         assert!(config.paths.chrome_attach_profile_dir.exists());
+    }
+
+    #[test]
+    fn start_debug_focuses_existing_debug_target_without_launching_duplicate() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("config")).unwrap();
+        let (endpoint, requests) = start_fake_devtools_server("https://chatgpt.com/");
+        fs::write(
+            dir.path().join("config").join("config.toml"),
+            format!("version = 2\nbrowser_channel = \"chrome\"\nbrowser_debug_endpoint = \"{endpoint}\"\n"),
+        )
+        .unwrap();
+        let config = gptd::AppConfig::load_or_create(Some(dir.path())).unwrap();
+        let browser_path = create_fake_browser_launcher(dir.path(), "chrome");
+
+        let value = browser_start_debug(&config, Some("https://chatgpt.com/"), Some(&browser_path))
+            .unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let request_lines = requests.try_iter().collect::<Vec<_>>();
+
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("focused_existing")
+        );
+        assert_eq!(value.get("pid"), Some(&Value::Null));
+        assert_eq!(
+            value
+                .get("target_url_opened_or_focused")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert!(request_lines.iter().any(|line| line.contains("/json/list")));
+        assert!(
+            request_lines
+                .iter()
+                .any(|line| line.contains("/json/activate/tab-1"))
+        );
+        assert!(
+            request_lines
+                .iter()
+                .any(|line| line.contains("/json/reload/tab-1"))
+        );
+        assert!(!request_lines.iter().any(|line| line.contains("/json/new")));
     }
 
     #[test]
@@ -632,6 +818,40 @@ mod tests {
         }
 
         path
+    }
+
+    fn start_fake_devtools_server(target_url: &str) -> (String, mpsc::Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::channel();
+        let target_url = target_url.to_owned();
+        thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while std::time::Instant::now() < deadline {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
+                };
+                let mut buffer = [0_u8; 2048];
+                let count = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..count]).to_string();
+                let request_line = request.lines().next().unwrap_or("").to_owned();
+                let _ = tx.send(request_line.clone());
+                let body = if request_line.contains("/json/list") {
+                    format!(r#"[{{"id":"tab-1","type":"page","url":"{target_url}"}}]"#)
+                } else {
+                    "{}".to_owned()
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (endpoint, rx)
     }
 
     #[test]

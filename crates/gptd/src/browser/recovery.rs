@@ -73,11 +73,7 @@ pub(super) fn idle_snapshot(
         config,
         BrowserStatusSnapshot {
             running: false,
-            browser_kind: if cfg!(windows) {
-                "msedge".to_owned()
-            } else {
-                "chromium".to_owned()
-            },
+            browser_kind: configured_browser_kind(config, browser_path.as_deref()),
             profile_dir: config.paths.browser_profile_dir.display().to_string(),
             attach_profile_dir: None,
             attach_profile_note: None,
@@ -102,6 +98,9 @@ pub(super) fn idle_snapshot(
             auth_source: AuthSource::Unknown,
             extension_required: config.browser_extension_required(),
             last_capability_report_at: None,
+            action: None,
+            browser_process_closed: None,
+            reason: None,
         },
     )
 }
@@ -139,6 +138,37 @@ pub(super) fn normalize_snapshot(
         snapshot.attach_profile_note = None;
     }
     snapshot
+}
+
+fn configured_browser_kind(config: &AppConfig, browser_path: Option<&str>) -> String {
+    if let Some(browser_path) = browser_path {
+        if executable_looks_like_edge(browser_path) {
+            return "msedge".to_owned();
+        }
+        if executable_looks_like_chrome(browser_path) {
+            return "chrome".to_owned();
+        }
+    }
+    if let Some(browser_path) = config.browser_path() {
+        if executable_looks_like_edge(browser_path) {
+            return "msedge".to_owned();
+        }
+        if executable_looks_like_chrome(browser_path) {
+            return "chrome".to_owned();
+        }
+    }
+    match config.browser_channel().to_ascii_lowercase().as_str() {
+        "chrome" => "chrome".to_owned(),
+        "msedge" | "edge" => "msedge".to_owned(),
+        value if !value.is_empty() => value.to_owned(),
+        _ => {
+            if cfg!(windows) {
+                "msedge".to_owned()
+            } else {
+                "chromium".to_owned()
+            }
+        }
+    }
 }
 
 fn uses_chrome_attach_profile(config: &AppConfig, browser_path: Option<&str>) -> bool {

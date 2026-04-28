@@ -57,6 +57,7 @@ mod tests {
         AskCommand, AuthSource, BrowserConnectionMode, BrowserOwner, BrowserStatusSnapshot,
         ErrorCode, Mode, ResearchCommand,
     };
+    use std::fs;
 
     fn seed_conversation(config: &AppConfig, conversation_id: &str) {
         let db = Database::open(&config.paths.db_path).unwrap();
@@ -110,6 +111,9 @@ mod tests {
             auth_source: AuthSource::Page,
             extension_required: true,
             last_capability_report_at: None,
+            action: None,
+            browser_process_closed: None,
+            reason: None,
         };
 
         let (session_id, label) = browser_session_identity(&snapshot);
@@ -121,6 +125,12 @@ mod tests {
     #[test]
     fn attach_recovery_guidance_prioritizes_endpoint_extension_auth_tab_and_fallback() {
         let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("config")).unwrap();
+        fs::write(
+            dir.path().join("config").join("config.toml"),
+            "version = 2\nbrowser_channel = \"chrome\"\n",
+        )
+        .unwrap();
         let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
         let browser = BrowserStatusSnapshot {
             running: false,
@@ -149,15 +159,82 @@ mod tests {
             auth_source: AuthSource::Unknown,
             extension_required: true,
             last_capability_report_at: None,
+            action: None,
+            browser_process_closed: None,
+            reason: None,
         };
 
         let guidance = recovery_guidance(&config, &browser, None);
 
         assert!(guidance.iter().any(|line| line.contains("attach endpoint")));
+        assert!(
+            guidance
+                .iter()
+                .any(|line| line.contains("fully close Chrome"))
+        );
+        assert!(!guidance.iter().any(|line| line.contains("Chrome or Edge")));
         assert!(guidance.iter().any(|line| line.contains("extension")));
         assert!(guidance.iter().any(|line| line.contains("challenge page")));
         assert!(guidance.iter().any(|line| line.contains("target tab")));
         assert!(guidance.iter().any(|line| line.contains("managed_only")));
+    }
+
+    #[test]
+    fn attach_recovery_guidance_after_detach_recommends_attach_first() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("config")).unwrap();
+        fs::write(
+            dir.path().join("config").join("config.toml"),
+            "version = 2\nbrowser_channel = \"chrome\"\n",
+        )
+        .unwrap();
+        let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+        let mut browser = BrowserStatusSnapshot {
+            running: false,
+            browser_kind: "chrome".to_owned(),
+            profile_dir: config.paths.browser_profile_dir.display().to_string(),
+            attach_profile_dir: None,
+            attach_profile_note: None,
+            downloads_dir: config.paths.downloads_dir.display().to_string(),
+            target_url: config.browser_target_url().to_owned(),
+            current_url: None,
+            page_title: None,
+            page_ready: false,
+            authenticated: false,
+            reload_count: 0,
+            screenshot_path: None,
+            browser_path: config.browser_path().map(ToOwned::to_owned),
+            extension_connected: false,
+            capability_report: None,
+            attach_mode: BrowserConnectionMode::AttachFirst,
+            browser_owner: BrowserOwner::External,
+            cdp_attached: false,
+            target_tab_found: false,
+            target_tab_id: None,
+            target_workspace_key: None,
+            debug_endpoint: Some(config.browser_debug_endpoint()),
+            auth_source: AuthSource::Unknown,
+            extension_required: true,
+            last_capability_report_at: None,
+            action: Some("detached".to_owned()),
+            browser_process_closed: Some(false),
+            reason: Some(
+                "attach-first uses a user-owned Chrome profile; Tablinq only disconnects from CDP"
+                    .to_owned(),
+            ),
+        };
+
+        let guidance = recovery_guidance(&config, &browser, None);
+
+        assert!(guidance[0].contains("detached"));
+        assert!(guidance[1].contains("gpt browser attach"));
+        assert!(guidance[2].contains("gpt browser start-debug"));
+        assert!(!guidance.iter().any(|line| line.contains("attach endpoint")));
+        assert!(!guidance.iter().any(|line| line.contains("Chrome or Edge")));
+
+        browser.browser_kind = "msedge".to_owned();
+        let edge_guidance = recovery_guidance(&config, &browser, None);
+        assert!(edge_guidance[2].contains("fully close Edge"));
     }
 
     #[test]
