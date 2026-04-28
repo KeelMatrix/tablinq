@@ -40,6 +40,19 @@ export async function scrollToBottomIfNeeded(page: Page): Promise<void> {
   await page
     .evaluate(() => {
       const bottomTolerancePx = 8;
+      const composer = document.querySelector(
+        [
+          "#prompt-textarea",
+          "[data-slot='composer']",
+          "[data-testid='composer-root'] textarea",
+          "[data-testid='composer-root'] [contenteditable='true']",
+          "textarea[aria-label*='Message']",
+          "[role='textbox'][aria-label*='Message']",
+          "textarea",
+          "[role='textbox']",
+          "[contenteditable='true']",
+        ].join(", "),
+      );
       const candidates = [
         document.scrollingElement,
         document.documentElement,
@@ -54,62 +67,81 @@ export async function scrollToBottomIfNeeded(page: Page): Promise<void> {
               "[class*='scroll']",
               "[class*='overflow-y-auto']",
               "[class*='overflow-auto']",
+              "[style*='overflow']",
             ].join(", "),
           ),
         ),
       ];
 
       const seen = new Set<Element>();
-      let best: {
+      const scrollTargets: {
         element: Element;
         scrollHeight: number;
         clientHeight: number;
         scrollTop: number;
         scrollablePx: number;
-      } | null = null;
+      }[] = [];
 
       for (const element of candidates) {
         if (!element || seen.has(element)) {
           continue;
         }
         seen.add(element);
+        if (composer && element !== composer && !element.contains(composer)) {
+          continue;
+        }
+        const hasScrollableOverflow =
+          element === document.scrollingElement ||
+          element === document.documentElement ||
+          element === document.body ||
+          /(auto|scroll|overlay)/.test(
+            `${window.getComputedStyle(element).overflowY} ${
+              window.getComputedStyle(element).overflow
+            }`,
+          );
+        if (!hasScrollableOverflow) {
+          continue;
+        }
         const scrollHeight = element.scrollHeight;
         const clientHeight = element.clientHeight;
         const scrollablePx = scrollHeight - clientHeight;
         if (scrollablePx <= bottomTolerancePx) {
           continue;
         }
-        const entry = {
+        scrollTargets.push({
           element,
           scrollHeight,
           clientHeight,
           scrollTop: element.scrollTop,
           scrollablePx,
-        };
-        if (!best || entry.scrollablePx > best.scrollablePx) {
-          best = entry;
+        });
+      }
+
+      if (scrollTargets.length === 0) {
+        return false;
+      }
+
+      let scrolled = false;
+      for (const target of scrollTargets.sort(
+        (left, right) => right.scrollablePx - left.scrollablePx,
+      )) {
+        const remainingPx =
+          target.scrollHeight - target.clientHeight - target.scrollTop;
+        if (remainingPx <= bottomTolerancePx) {
+          continue;
         }
-      }
 
-      if (!best) {
-        return false;
+        if (
+          target.element === document.scrollingElement ||
+          target.element === document.documentElement ||
+          target.element === document.body
+        ) {
+          window.scrollTo({ top: target.scrollHeight, behavior: "auto" });
+        }
+        target.element.scrollTop = target.scrollHeight;
+        scrolled = true;
       }
-
-      const remainingPx =
-        best.scrollHeight - best.clientHeight - best.scrollTop;
-      if (remainingPx <= bottomTolerancePx) {
-        return false;
-      }
-
-      if (
-        best.element === document.scrollingElement ||
-        best.element === document.documentElement ||
-        best.element === document.body
-      ) {
-        window.scrollTo({ top: best.scrollHeight, behavior: "auto" });
-      }
-      best.element.scrollTop = best.scrollHeight;
-      return true;
+      return scrolled;
     })
     .catch(() => undefined);
 }

@@ -593,6 +593,62 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("scrolls the composer-owned nested scrollport instead of a larger visible container", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+      }),
+    );
+
+    await adapter.open({ targetUrl: server.url, headless: true });
+    const page = adapter.getManagedPageForTest()!;
+    await page.setViewportSize({ width: 900, height: 600 });
+    await page.evaluate(() => {
+      document.body.innerHTML = `
+        <div class="thread-scroll" style="height: 500px; overflow-y: auto">
+          <main id="main" style="overflow: visible">
+            <div style="height: 2500px">conversation</div>
+            <form data-testid="composer-root">
+              <textarea id="prompt-textarea" aria-label="Message"></textarea>
+            </form>
+          </main>
+        </div>
+      `;
+      const scroller = document.querySelector(".thread-scroll");
+      if (!(scroller instanceof HTMLElement)) {
+        throw new Error("nested scroller missing");
+      }
+      scroller.scrollTop = 0;
+    });
+
+    await scrollToBottomIfNeeded(page);
+
+    const state = await page.evaluate(() => {
+      const scroller = document.querySelector(".thread-scroll");
+      const main = document.querySelector("#main");
+      if (
+        !(scroller instanceof HTMLElement) ||
+        !(main instanceof HTMLElement)
+      ) {
+        throw new Error("scroll test nodes missing");
+      }
+      return {
+        scrollerRemaining:
+          scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop,
+        mainScrollTop: main.scrollTop,
+      };
+    });
+
+    expect(state.scrollerRemaining).toBeLessThanOrEqual(8);
+    expect(state.mainScrollTop).toBe(0);
+
+    await adapter.shutdown();
+  });
+
   it("reloads once when the composer is unavailable before interaction", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
