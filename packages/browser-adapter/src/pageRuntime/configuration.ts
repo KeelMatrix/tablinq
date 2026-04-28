@@ -103,6 +103,27 @@ export async function findVisibleComposerChipRemoveButton(
   );
 }
 
+export async function findVisibleComposerModelChipRemoveButton(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  return waitForVisibleLocator(
+    page.locator(
+      [
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='think' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='reason' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='standard' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='extended' i]",
+        "form button[aria-label*='remove' i][aria-label*='think' i]",
+        "form button[aria-label*='remove' i][aria-label*='reason' i]",
+        "form button[aria-label*='remove' i][aria-label*='standard' i]",
+        "form button[aria-label*='remove' i][aria-label*='extended' i]",
+      ].join(", "),
+    ),
+    timeoutMs,
+  );
+}
+
 export async function waitForVisibleLocator(
   locator: Locator,
   timeoutMs: number,
@@ -145,6 +166,74 @@ export async function findVisiblePopupChoicePoint(
     await page.waitForTimeout(100);
   }
   return null;
+}
+
+async function visibleComposerModelChipPresent(page: Page): Promise<boolean> {
+  return page
+    .evaluate<boolean>(
+      `(() => {
+      const isVisible = (element) => {
+        if (!(element instanceof HTMLElement)) {
+          return false;
+        }
+        if (element.hidden || element.getAttribute("aria-hidden") === "true") {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0"
+        );
+      };
+      const textFor = (element) =>
+        [element.textContent ?? "", element.getAttribute("aria-label") ?? ""]
+          .join(" ")
+          .replace(/\\s+/g, " ")
+          .trim()
+          .toLowerCase();
+      const composerRoots = Array.from(
+        document.querySelectorAll("[data-testid='composer-root'], form"),
+      );
+      return composerRoots.some((root) =>
+        Array.from(
+          root.querySelectorAll(
+            "button.__composer-pill, button[aria-haspopup], [role='button']",
+          ),
+        ).some((element) => {
+          if (!isVisible(element)) {
+            return false;
+          }
+          const text = textFor(element);
+          if (
+            text.includes("search") ||
+            text.includes("research") ||
+            text.includes("canvas")
+          ) {
+            return false;
+          }
+          return (
+            text.includes("think") ||
+            text.includes("reason") ||
+            text.includes("standard") ||
+            text.includes("extended")
+          );
+        }),
+      );
+    })()`,
+    )
+    .catch(() => false);
+}
+
+async function clearVisibleComposerModelChip(page: Page): Promise<boolean> {
+  const chip = await findVisibleComposerModelChipRemoveButton(page, 250);
+  if (!chip) {
+    return false;
+  }
+  await clickWithInteractionJitter(chip, "chip_clear");
+  await page.waitForTimeout(150);
+  await closeOpenComposerMenus(page);
+  return true;
 }
 
 async function readToggleState(locator: Locator): Promise<boolean> {
@@ -254,6 +343,12 @@ export async function ensureConfiguredModelClass(
     modelClass,
     ...(report.aliases.model_classes[modelClass] ?? []),
   ];
+  if (modelClass === "instant") {
+    if (await clearVisibleComposerModelChip(page)) {
+      return;
+    }
+  }
+
   if (await selectedChoiceMatches(page, aliasTokens)) {
     return;
   }
@@ -279,6 +374,12 @@ export async function ensureConfiguredModelClass(
       );
       await page.waitForTimeout(150);
     }
+    return;
+  }
+  if (
+    modelClass === "instant" &&
+    !(await visibleComposerModelChipPresent(page))
+  ) {
     return;
   }
 

@@ -428,6 +428,111 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("treats an absent model chip as Instant without opening the model menu", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      initialModel: "instant",
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      document
+        .querySelectorAll("[aria-checked='true'], [aria-pressed='true']")
+        .forEach((element) => {
+          element.setAttribute("aria-checked", "false");
+          element.setAttribute("aria-pressed", "false");
+        });
+      document.querySelectorAll("[data-selected='true']").forEach((element) => {
+        if (element instanceof HTMLElement) {
+          element.dataset.selected = "false";
+        }
+      });
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-menu-instant-no-chip",
+        prompt: "keep instant without a model chip",
+        mode: "search",
+        modelClass: "instant",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      model: "instant",
+      modelMenuClicks: "0",
+      modelOptionClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("clears the Thinking chip to select Instant without opening the model menu", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      initialModel: "thinking",
+      initialEffort: "standard",
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const chip = document.querySelector("#thinking-effort-trigger");
+      if (!(chip instanceof HTMLElement)) {
+        throw new Error("thinking chip missing");
+      }
+      chip.setAttribute("aria-label", "Thinking, click to remove");
+      chip.addEventListener(
+        "click",
+        (event) => {
+          event.stopImmediatePropagation();
+          document.body.dataset.selectedModel = "instant";
+          document.body.dataset.selectedEffort = "standard";
+          (
+            window as unknown as { syncSelectedState?: () => void }
+          ).syncSelectedState?.();
+        },
+        { capture: true },
+      );
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-menu-clear-thinking-chip",
+        prompt: "clear thinking chip for instant",
+        mode: "search",
+        modelClass: "instant",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      model: "instant",
+      modelMenuClicks: "0",
+      modelOptionClicks: "0",
+      effortMenuClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("opens the composer tools menu and selects Web search before submitting", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
