@@ -19,9 +19,9 @@ use recovery::{
 use serde::Deserialize;
 use serde_json::json;
 use shared_protocol::{
-    AskCommand, AskResult, BrowserOpenRequest, BrowserStatusSnapshot, CapabilityReport,
-    EventPayload, JobStatus, ResearchCommand, ResearchResult, SelectorPackSummary, StrategyAttempt,
-    StrategyTelemetryEntry, StreamChunkKind,
+    AskCommand, AskResult, BrowserConnectionMode, BrowserOpenRequest, BrowserStatusSnapshot,
+    CapabilityReport, EventPayload, JobStatus, ResearchCommand, ResearchResult,
+    SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry, StreamChunkKind,
 };
 use std::cell::{Cell, RefCell};
 use std::fs;
@@ -142,16 +142,38 @@ impl BrowserManager {
     }
 
     pub fn close(&mut self) -> Result<BrowserStatusSnapshot> {
+        let attach_primary = matches!(
+            self.config.browser_connection_mode(),
+            BrowserConnectionMode::AttachFirst | BrowserConnectionMode::ManagedFallback
+        );
         if let Some(process) = self.process.as_mut() {
             let _ = process.request(AdapterRequest::Close);
             let _ = process.request(AdapterRequest::Shutdown);
         }
         self.teardown_process();
-        let snapshot = idle_snapshot(
+        let mut snapshot = idle_snapshot(
             &self.config,
             Some(self.last_snapshot.target_url.clone()),
             self.last_snapshot.browser_path.clone(),
         );
+        if attach_primary {
+            let browser_label = if self.config.browser_channel().eq_ignore_ascii_case("msedge")
+                || self.config.browser_channel().eq_ignore_ascii_case("edge")
+            {
+                "Edge"
+            } else {
+                "Chrome"
+            };
+            snapshot.action = Some("detached".to_owned());
+            snapshot.browser_process_closed = Some(false);
+            snapshot.reason = Some(format!(
+                "attach-first uses a user-owned {browser_label} profile; Tablinq only disconnects from CDP"
+            ));
+        } else {
+            snapshot.action = Some("closed".to_owned());
+            snapshot.browser_process_closed = Some(true);
+            snapshot.reason = Some("managed browser process closed by Tablinq".to_owned());
+        }
         self.last_snapshot = snapshot.clone();
         Ok(snapshot)
     }

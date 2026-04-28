@@ -264,4 +264,10 @@ pub struct BrowserStatusSnapshot {
     pub extension_required: bool,
     #[serde(default)]
     pub last_capability_report_at: Option<String>,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub browser_process_closed: Option<bool>,
+    #[serde(default)]
+    pub reason: Option<String>,
 }

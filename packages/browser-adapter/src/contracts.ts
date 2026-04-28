@@ -210,6 +210,9 @@ export interface BrowserStatusSnapshot {
   auth_source: "page" | "extension" | "unknown";
   extension_required: boolean;
   last_capability_report_at: string | null;
+  action?: string | null;
+  browser_process_closed?: boolean | null;
+  reason?: string | null;
 }
 
 export interface BrowserLaunchConfig {

@@ -242,6 +242,9 @@ export class BrowserAdapter {
       last_capability_report_at: running
         ? this.capabilities.activeReportedAt()
         : null,
+      action: null,
+      browser_process_closed: null,
+      reason: null,
     };
   }
 

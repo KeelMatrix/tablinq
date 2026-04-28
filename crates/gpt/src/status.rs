@@ -160,9 +160,14 @@ fn browser_runtime_state(
         } else {
             "managed"
         });
+    let action = browser
+        .and_then(|value| value.get("action"))
+        .and_then(Value::as_str);
 
     if browser_owner == "external" || (is_attach_primary(mode) && !browser_connected) {
-        if !browser_connected {
+        if !browser_connected && action == Some("detached") {
+            "attach_detached"
+        } else if !browser_connected {
             "attach_unavailable"
         } else if !target_tab_found {
             "target_tab_missing"
@@ -195,10 +200,22 @@ fn operational_recovery_guidance(
 
     if is_attach_primary(config.browser_connection_mode()) {
         let guidance = match browser_state {
+            "attach_detached" => vec![
+                "Tablinq is detached from the attach-first browser session.".to_owned(),
+                format!(
+                    "If {} is still open, run `gpt browser attach`.",
+                    recovery_browser_label(config)
+                ),
+                format!(
+                    "If attach fails or the debug endpoint is gone, fully close {} and run `gpt browser start-debug`.",
+                    recovery_browser_label(config)
+                ),
+            ],
             "attach_unavailable" => vec![
                 format!(
-                "check the attach endpoint at {}; fully close Chrome or Edge, run `gpt browser start-debug`, then inspect `gpt browser connection-info`",
-                    config.browser_debug_endpoint()
+                    "check the attach endpoint at {}; fully close {}, run `gpt browser start-debug`, then inspect `gpt browser connection-info`",
+                    config.browser_debug_endpoint(),
+                    recovery_browser_label(config)
                 ),
                 "confirm the Tablinq extension is installed and enabled in the same normal browser profile".to_owned(),
                 "sign in to ChatGPT in that browser and clear any login or challenge page".to_owned(),
@@ -231,6 +248,15 @@ fn operational_recovery_guidance(
         "use managed mode for debugging, CI/local harness isolation, or when attach-first cannot expose a local debug endpoint",
         "if the managed browser profile is wedged, run `gpt browser reset-profile`",
     ])
+}
+
+fn recovery_browser_label(config: &gptd::AppConfig) -> &'static str {
+    let channel = config.browser_channel().to_ascii_lowercase();
+    if channel == "msedge" || channel == "edge" {
+        "Edge"
+    } else {
+        "Chrome"
+    }
 }
 
 #[cfg(test)]

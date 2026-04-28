@@ -161,12 +161,20 @@ pub enum BrowserCommand {
         #[arg(long, hide = true)]
         headless: bool,
     },
-    Close,
+    #[command(
+        name = "detach",
+        alias = "close",
+        about = "Detach Tablinq from an attach-first browser session; does not close the user-owned browser"
+    )]
+    Detach,
     Logout,
     #[command(name = "switch-account")]
     SwitchAccount,
     ResetProfile,
-    #[command(name = "start-debug")]
+    #[command(
+        name = "start-debug",
+        about = "Start or reuse an external persistent browser debug profile for attach-first mode"
+    )]
     StartDebug {
         #[arg(long)]
         target_url: Option<String>,
@@ -496,6 +504,28 @@ mod tests {
             cli.command,
             Command::Browser {
                 command: BrowserCommand::Attach { .. }
+            }
+        ));
+    }
+
+    #[test]
+    fn browser_detach_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "browser", "detach"]);
+        assert!(matches!(
+            cli.command,
+            Command::Browser {
+                command: BrowserCommand::Detach
+            }
+        ));
+    }
+
+    #[test]
+    fn browser_close_alias_matches_detach_command() {
+        let cli = parse(&["gpt", "browser", "close"]);
+        assert!(matches!(
+            cli.command,
+            Command::Browser {
+                command: BrowserCommand::Detach
             }
         ));
     }

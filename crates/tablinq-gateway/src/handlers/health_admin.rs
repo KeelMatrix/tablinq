@@ -137,11 +137,7 @@ pub(crate) fn degraded_browser_status_snapshot(config: &AppConfig) -> BrowserSta
     let attach_mode = config.browser_connection_mode();
     BrowserStatusSnapshot {
         running: false,
-        browser_kind: if cfg!(windows) {
-            "msedge".to_owned()
-        } else {
-            "chromium".to_owned()
-        },
+        browser_kind: degraded_browser_kind(config),
         profile_dir: config.paths.browser_profile_dir.display().to_string(),
         attach_profile_dir: None,
         attach_profile_note: None,
@@ -171,5 +167,32 @@ pub(crate) fn degraded_browser_status_snapshot(config: &AppConfig) -> BrowserSta
         auth_source: AuthSource::Unknown,
         extension_required: config.browser_extension_required(),
         last_capability_report_at: None,
+        action: None,
+        browser_process_closed: None,
+        reason: None,
+    }
+}
+
+fn degraded_browser_kind(config: &AppConfig) -> String {
+    if let Some(path) = config.browser_path() {
+        let lower = path.to_ascii_lowercase();
+        if lower.contains("msedge") || lower.contains("microsoft edge") {
+            return "msedge".to_owned();
+        }
+        if lower.contains("chrome") {
+            return "chrome".to_owned();
+        }
+    }
+    match config.browser_channel().to_ascii_lowercase().as_str() {
+        "chrome" => "chrome".to_owned(),
+        "msedge" | "edge" => "msedge".to_owned(),
+        value if !value.is_empty() => value.to_owned(),
+        _ => {
+            if cfg!(windows) {
+                "msedge".to_owned()
+            } else {
+                "chromium".to_owned()
+            }
+        }
     }
 }

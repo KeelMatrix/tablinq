@@ -79,6 +79,9 @@ fn browser_status_snapshot_fixture() -> BrowserStatusSnapshot {
         auth_source: AuthSource::Page,
         extension_required: true,
         last_capability_report_at: Some("2026-04-12T10:00:00Z".to_owned()),
+        action: None,
+        browser_process_closed: None,
+        reason: None,
     }
 }
 

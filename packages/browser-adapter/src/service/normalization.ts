@@ -150,6 +150,9 @@ export function fallbackStatusSnapshot(
     auth_source: "unknown",
     extension_required: args.extensionRequired ?? true,
     last_capability_report_at: null,
+    action: null,
+    browser_process_closed: null,
+    reason: null,
   };
 }
 
