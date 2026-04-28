@@ -4,6 +4,13 @@ import { resolve } from "node:path";
 let probeSource: string | undefined;
 let pageAdapterSource: string | undefined;
 
+const probeRuntimeModuleParts = [
+  "probeRuntime/text.js",
+  "probeRuntime/strategies.js",
+  "probeRuntime/aliases.js",
+  "probeRuntime/documentProbe.js",
+];
+
 const pageAdapterRuntimeModuleParts = [
   "pageAdapterRuntime/00-text.js",
   "pageAdapterRuntime/01-dom.js",
@@ -12,6 +19,8 @@ const pageAdapterRuntimeModuleParts = [
   "pageAdapterRuntime/04-messageFilters.js",
   "pageAdapterRuntime/05-markdown.js",
   "pageAdapterRuntime/06-assistantMessages.js",
+  "pageAdapterRuntime/07a-capabilityDiscovery.js",
+  "pageAdapterRuntime/07b-capabilitySelection.js",
   "pageAdapterRuntime/07-capabilities.js",
   "pageAdapterRuntime/08-research.js",
   "pageAdapterRuntime/09-command.js",
@@ -20,13 +29,9 @@ const pageAdapterRuntimeEntryPart = "pageAdapter.runtime.js";
 
 export function loadProbeSource(): string {
   if (!probeSource) {
-    probeSource = readFileSync(
-      resolveTablinqAssetPath(
-        ["extension", "src", "probe.runtime.js"],
-        ["packages", "extension", "src", "probe.runtime.js"],
-      ),
-      "utf8",
-    ).replace(/^export\s+/gm, "");
+    probeSource = probeRuntimeModuleParts
+      .map((part) => readProbeRuntimePart(part))
+      .join("\n\n");
   }
 
   return probeSource;
@@ -56,6 +61,20 @@ function readPageAdapterRuntimePart(part: string): string {
     ),
     "utf8",
   ).trimEnd();
+}
+
+function readProbeRuntimePart(part: string): string {
+  const segments = part.split("/");
+  return readFileSync(
+    resolveTablinqAssetPath(
+      ["extension", "src", ...segments],
+      ["packages", "extension", "src", ...segments],
+    ),
+    "utf8",
+  )
+    .replace(/^import[\s\S]*?;\n/gm, "")
+    .replace(/^export\s+/gm, "")
+    .trimEnd();
 }
 
 export function resolveTablinqAssetPath(
