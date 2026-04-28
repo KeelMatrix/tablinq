@@ -75,6 +75,40 @@ describe("browser adapter", () => {
     await adapter.shutdown();
   });
 
+  it("scrolls back to the bottom before returning a completed ask", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openTrackedManagedAdapter(harness, server.url);
+    const page = adapter.getManagedPageForTest()!;
+    await page.setViewportSize({ width: 900, height: 600 });
+    await page.evaluate(() => {
+      document.body.insertAdjacentHTML(
+        "afterbegin",
+        "<div style='height: 2400px'>older conversation</div>",
+      );
+      window.scrollTo(0, 0);
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-final-scroll-bottom",
+        prompt: "scroll after final answer",
+      },
+      () => {},
+    );
+
+    const remainingPx = await page.evaluate(() => {
+      const root = document.scrollingElement ?? document.documentElement;
+      return root.scrollHeight - root.clientHeight - root.scrollTop;
+    });
+
+    expect(result.output_text).toBe(
+      "Fake response for: scroll after final answer",
+    );
+    expect(remainingPx).toBeLessThanOrEqual(8);
+
+    await adapter.shutdown();
+  });
+
   it("does not replay the previous reply when a follow-up ask reuses the latest conversation implicitly", async () => {
     const server = await harness.startServer();
     const targetUrl = withHarnessUrl(server.url, {
@@ -332,6 +366,9 @@ describe("browser adapter", () => {
     const fakePage = {
       locator() {
         return fakeLocator;
+      },
+      async evaluate() {
+        return false;
       },
     };
     const fakeHost = {
