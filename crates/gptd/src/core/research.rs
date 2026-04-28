@@ -4,7 +4,8 @@ use super::lifecycle::{
     prepare_job_record, record_terminal_failure, status_for_error_message,
 };
 use super::support::{
-    apply_research_update, lock_browser, lock_cancel_registry, maybe_write_research_output,
+    ResearchUpdateContext, ResearchUpdateProgress, apply_research_update, lock_browser,
+    lock_cancel_registry, maybe_write_research_output,
 };
 use super::{CoreService, ExecutionRecoveryState};
 use anyhow::{Context, Result};
@@ -89,13 +90,17 @@ impl CoreService {
                 let mut report_text_ref = report_text.borrow_mut();
                 let mut next_seq_value = next_seq.get();
                 apply_research_update(
-                    &db,
-                    &prepared.job_id,
-                    prepared.created_at,
-                    &mut conversation_id_ref,
-                    &mut current_url_ref,
-                    &mut report_text_ref,
-                    &mut next_seq_value,
+                    ResearchUpdateContext {
+                        db: &db,
+                        job_id: &prepared.job_id,
+                        created_at: prepared.created_at,
+                    },
+                    ResearchUpdateProgress {
+                        conversation_id: &mut conversation_id_ref,
+                        current_url: &mut current_url_ref,
+                        report_text: &mut report_text_ref,
+                        next_seq: &mut next_seq_value,
+                    },
                     update,
                     &mut |event| {
                         let mut sink = event_sink.borrow_mut();

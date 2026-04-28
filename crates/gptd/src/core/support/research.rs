@@ -14,27 +14,45 @@ use shared_protocol::{
     HealthStatus, JobState, JobStatus, ResearchCommand, SelectorPackSummary, StreamChunk,
     StreamChunkKind,
 };
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use url::Url;
 
+pub(in crate::core) struct ResearchUpdateContext<'a> {
+    pub db: &'a Database,
+    pub job_id: &'a str,
+    pub created_at: DateTime<Utc>,
+}
+
+pub(in crate::core) struct ResearchUpdateProgress<'a> {
+    pub conversation_id: &'a mut Option<String>,
+    pub current_url: &'a mut Option<String>,
+    pub report_text: &'a mut String,
+    pub next_seq: &'a mut u64,
+}
+
 pub(in crate::core) fn apply_research_update<F>(
-    db: &Database,
-    job_id: &str,
-    created_at: chrono::DateTime<Utc>,
-    conversation_id: &mut Option<String>,
-    current_url: &mut Option<String>,
-    report_text: &mut String,
-    next_seq: &mut u64,
+    context: ResearchUpdateContext<'_>,
+    progress: ResearchUpdateProgress<'_>,
     update: ResearchUpdate,
     on_event: &mut F,
 ) -> Result<()>
 where
     F: FnMut(EventPayload) -> Result<()>,
 {
+    let ResearchUpdateContext {
+        db,
+        job_id,
+        created_at,
+    } = context;
+    let ResearchUpdateProgress {
+        conversation_id,
+        current_url,
+        report_text,
+        next_seq,
+    } = progress;
     let updated_at = Utc::now();
     if let Some(value) = update.conversation_id.clone() {
         *conversation_id = Some(value);
