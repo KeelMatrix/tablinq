@@ -4,16 +4,33 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolve(scriptDir, "..");
-const runtimePath = resolve(packageRoot, "src", "probe.runtime.js");
 const contentPath = resolve(packageRoot, "src", "probe.content.js");
+const runtimeModulePaths = [
+  resolve(packageRoot, "src", "probeRuntime", "text.js"),
+  resolve(packageRoot, "src", "probeRuntime", "strategies.js"),
+  resolve(packageRoot, "src", "probeRuntime", "aliases.js"),
+  resolve(packageRoot, "src", "probeRuntime", "documentProbe.js"),
+];
 
-const header = `// Generated from src/probe.runtime.js. Do not edit by hand.
+const header = `// Generated from src/probe.runtime.js and src/probeRuntime/*.js. Do not edit by hand.
 // Run \`pnpm --filter @tablinq/extension run generate:probe-content\` after changing the runtime.
 
 `;
 
 function normalizeLineEndings(source) {
   return source.replace(/\r\n?/g, "\n");
+}
+
+function stripRuntimeModuleSyntax(source) {
+  return normalizeLineEndings(source)
+    .replace(/^import[\s\S]*?;\n/gm, "")
+    .trim();
+}
+
+function readBundledRuntimeSource() {
+  return runtimeModulePaths
+    .map((modulePath) => stripRuntimeModuleSyntax(readFileSync(modulePath, "utf8")))
+    .join("\n\n");
 }
 
 function renderContentProbe(runtimeSource) {
@@ -40,7 +57,7 @@ ${indentedRuntime}
 `;
 }
 
-const runtimeSource = readFileSync(runtimePath, "utf8");
+const runtimeSource = readBundledRuntimeSource();
 const generatedSource = renderContentProbe(runtimeSource);
 
 if (process.argv.includes("--check")) {

@@ -1,20 +1,7 @@
-// Generated from src/probe.runtime.js. Do not edit by hand.
+// Generated from src/probe.runtime.js and src/probeRuntime/*.js. Do not edit by hand.
 // Run `pnpm --filter @tablinq/extension run generate:probe-content` after changing the runtime.
 
 (() => {
-  const controlCandidateSelector = [
-    "button",
-    "[role='button']",
-    "[role='switch']",
-    "[role='tab']",
-    "[role='option']",
-    "[role='menuitem']",
-    "[role='menuitemradio']",
-    "[aria-haspopup]",
-    "label",
-    "a",
-  ].join(", ");
-
   function normalizeProbeText(value) {
     return (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
   }
@@ -186,6 +173,19 @@
       nearby_text: probeNearbyText(element),
     };
   }
+
+  const controlCandidateSelector = [
+    "button",
+    "[role='button']",
+    "[role='switch']",
+    "[role='tab']",
+    "[role='option']",
+    "[role='menuitem']",
+    "[role='menuitemradio']",
+    "[aria-haspopup]",
+    "label",
+    "a",
+  ].join(", ");
 
   function orderCapabilityStrategies({
     capability,
