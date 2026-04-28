@@ -19,8 +19,8 @@ export interface BrowserExecutionHost {
   getLastCapabilityReport(): CapabilityReportPayload | null;
   getDownloadsDir(): string;
   refreshCapabilities(page: Page): Promise<void>;
-  openExecutionPage(targetUrl: string): Promise<Page>;
-  ensureManagedPage(targetUrl: string): Promise<Page>;
+  openExecutionPage(targetUrl: string, forceReload?: boolean): Promise<Page>;
+  ensureManagedPage(targetUrl: string, forceReload?: boolean): Promise<Page>;
   resolveAskTarget(
     conversationId?: string | null,
     newConversation?: boolean,

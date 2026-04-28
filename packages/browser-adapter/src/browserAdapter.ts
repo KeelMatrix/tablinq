@@ -152,8 +152,10 @@ export class BrowserAdapter {
       refreshCapabilities: async (page) => {
         await this.refreshCapabilities(page);
       },
-      openExecutionPage: (targetUrl) => this.openExecutionPage(targetUrl),
-      ensureManagedPage: (targetUrl) => this.ensureManagedPage(targetUrl),
+      openExecutionPage: (targetUrl, forceReload) =>
+        this.openExecutionPage(targetUrl, forceReload),
+      ensureManagedPage: (targetUrl, forceReload) =>
+        this.ensureManagedPage(targetUrl, forceReload),
       resolveAskTarget: (conversationId, newConversation) =>
         this.resolveAskTarget(conversationId, newConversation),
       resolveConversationTarget: (conversationId) =>
@@ -346,12 +348,15 @@ export class BrowserAdapter {
     return this.execution.recoverResearch(command, state, onUpdate, onState);
   }
 
-  private async openExecutionPage(targetUrl: string): Promise<Page> {
+  private async openExecutionPage(
+    targetUrl: string,
+    forceReload = false,
+  ): Promise<Page> {
     await this.session.ensureContext(
       this.session.headless,
       this.session.browserPath ?? undefined,
     );
-    const page = await this.ensureManagedPage(targetUrl);
+    const page = await this.ensureManagedPage(targetUrl, forceReload);
     if (!inferAuthenticated(page.url())) {
       throw new Error(
         "auth required: target browser session is not authenticated",
