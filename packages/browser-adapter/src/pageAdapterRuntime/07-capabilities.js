@@ -96,6 +96,49 @@ function createCapabilityRuntimeModule({
         "effort",
       ]));
 
+  const isComposerModelChip = (element) => {
+    if (!(element instanceof HTMLElement) || !isComposerAdjacent(element)) {
+      return false;
+    }
+    const name = accessibleName(element);
+    return (
+      element.matches(
+        "button.__composer-pill, button[aria-haspopup], [role='button']",
+      ) &&
+      !hasToken(name, ["search", "research", "canvas"]) &&
+      hasToken(name, ["thinking", "reasoning", "standard", "extended"])
+    );
+  };
+
+  const findComposerModelChip = () =>
+    findComposerAdjacentControl({
+      selectors: [
+        "button.__composer-pill",
+        "button[aria-haspopup][aria-label*='Thinking']",
+        "button[aria-haspopup][aria-label*='thinking']",
+      ],
+      tokens: ["thinking", "reasoning", "standard", "extended"],
+      include: isComposerModelChip,
+      exclude: (element) => !isComposerModelChip(element),
+    });
+
+  const findComposerModelChipRemove = () =>
+    findComposerAdjacentControl({
+      selectors: [
+        "button[aria-label*='remove' i][aria-label*='think' i]",
+        "button[aria-label*='remove' i][aria-label*='reason' i]",
+        "button[aria-label*='remove' i][aria-label*='standard' i]",
+        "button[aria-label*='remove' i][aria-label*='extended' i]",
+      ],
+      tokens: ["remove", "thinking", "reasoning", "standard", "extended"],
+      include: (element) =>
+        isComposerModelChip(element) &&
+        accessibleName(element).includes("remove"),
+      exclude: (element) =>
+        !isComposerModelChip(element) ||
+        !accessibleName(element).includes("remove"),
+    });
+
   const isComposerToolsTrigger = (element) =>
     element instanceof HTMLElement &&
     element.getAttribute("aria-haspopup") !== null &&
@@ -594,6 +637,27 @@ function createCapabilityRuntimeModule({
   };
 
   const ensureModelClass = async (report, modelClass) => {
+    if (modelClass === "instant") {
+      const modelChipRemove = findComposerModelChipRemove();
+      if (modelChipRemove) {
+        if (!clickControl(modelChipRemove)) {
+          throwUiDrift("could not clear the active thinking model chip");
+        }
+        await sleep(150);
+        return;
+      }
+    }
+    let control = findConcreteModelControl(report, modelClass);
+    if (control) {
+      if (!isSelected(control) && !clickControl(control)) {
+        throwUiDrift(`could not activate model=${modelClass}`);
+      }
+      await sleep(150);
+      return;
+    }
+    if (modelClass === "instant" && !findComposerModelChip()) {
+      return;
+    }
     if (!report.matrix.model_picker_visible) {
       throwCapabilityMissing(
         "model picker",
@@ -601,7 +665,6 @@ function createCapabilityRuntimeModule({
         report.aliases.model_classes,
       );
     }
-    let control = findConcreteModelControl(report, modelClass);
     if (!control) {
       const trigger = findModelPickerTrigger(
         modelDefaults(modelClass),
