@@ -1,11 +1,7 @@
-
 import type { Page } from "playwright-core";
 
 import type { AskSnapshot } from "../snapshotState";
-import {
-  noteProviderPressure,
-  noteProviderPressureFromText,
-} from "../timing";
+import { noteProviderPressure, noteProviderPressureFromText } from "../timing";
 
 const PROVIDER_GENERATION_FAILURE_CODE =
   "provider_generation_failed_nonretryable";

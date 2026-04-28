@@ -27,7 +27,11 @@ import {
   openManagedHarnessAdapter,
 } from "./helpers/browserFlow";
 import { installBrowserAdapterHarness } from "./helpers/browserAdapterHarness";
-import { fakeArtifactPage, fakeResearchHost, fakeResearchSnapshot } from "./helpers/researchFinalization";
+import {
+  fakeArtifactPage,
+  fakeResearchHost,
+  fakeResearchSnapshot,
+} from "./helpers/researchFinalization";
 
 const harness = installBrowserAdapterHarness();
 

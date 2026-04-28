@@ -127,7 +127,6 @@ fn stale_lock_is_recovered_on_boot() {
 }
 
 #[cfg(windows)]
-
 #[test]
 fn windows_daemon_uses_namespaced_endpoint() {
     let _guard = integration_lock();

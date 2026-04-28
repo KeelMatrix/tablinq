@@ -30,8 +30,7 @@ const harness = installBrowserAdapterHarness();
 
 describe("browser adapter recovery: ask reconciliation recovery", () => {
   it("reloads once and returns when a completed ask still looks like it is streaming", async () => {
-    const previousStall =
-      process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+    const previousStall = process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
     const previousGrace = process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS;
     process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = "250";
     process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS = "150";
@@ -78,8 +77,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
   });
 
   it("returns the streamed ask text after sticky streaming remains running after reload", async () => {
-    const previousStall =
-      process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+    const previousStall = process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
     const previousGrace = process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS;
     process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = "250";
     process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS = "150";

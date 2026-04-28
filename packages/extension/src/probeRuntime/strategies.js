@@ -1,5 +1,3 @@
-
-
 export const controlCandidateSelector = [
   "button",
   "[role='button']",

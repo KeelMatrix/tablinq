@@ -1,4 +1,3 @@
-
 import {
   accessibleProbeName,
   createProbeNeighborhood,
@@ -12,10 +11,7 @@ import {
   controlCandidateSelector,
   orderCapabilityStrategies,
 } from "./strategies.js";
-import {
-  captureProbeAliases,
-  createAliasBuckets,
-} from "./aliases.js";
+import { captureProbeAliases, createAliasBuckets } from "./aliases.js";
 
 export function probeDocument(options = {}) {
   const selectorPackId = options.selectorPackId ?? "chatgpt-default";

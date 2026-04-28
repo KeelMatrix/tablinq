@@ -1,4 +1,3 @@
-
 import type { Locator, Page } from "playwright-core";
 
 import type { CapabilityReportPayload } from "../../contracts";

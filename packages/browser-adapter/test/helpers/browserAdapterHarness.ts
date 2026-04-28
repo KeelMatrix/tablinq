@@ -43,7 +43,8 @@ export function installBrowserAdapterHarness(
 
   return new Proxy({} as BrowserIntegrationHarness, {
     get(_target, property) {
-      const value = currentHarness()[property as keyof BrowserIntegrationHarness];
+      const value =
+        currentHarness()[property as keyof BrowserIntegrationHarness];
       if (typeof value === "function") {
         return value.bind(currentHarness());
       }

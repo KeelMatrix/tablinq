@@ -1,8 +1,4 @@
-
-import type {
-  AskExecutionCommand,
-  AskResultSnapshot,
-} from "../contracts";
+import type { AskExecutionCommand, AskResultSnapshot } from "../contracts";
 import { readAskSnapshot, scrollToBottomIfNeeded } from "../pageRuntime";
 import { safePageUrl } from "../capabilityProbe";
 import type { AskBaseline, AskSnapshot } from "../snapshotState";

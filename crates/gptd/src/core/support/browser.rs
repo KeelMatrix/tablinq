@@ -34,7 +34,10 @@ pub(in crate::core) fn busy_health_snapshot() -> HealthCheck {
     }
 }
 
-pub(in crate::core) fn health_snapshot(config: &AppConfig, browser: BrowserStatusSnapshot) -> HealthCheck {
+pub(in crate::core) fn health_snapshot(
+    config: &AppConfig,
+    browser: BrowserStatusSnapshot,
+) -> HealthCheck {
     let status = if !browser.running || !browser.extension_connected || !browser.authenticated {
         HealthStatus::Degraded
     } else {
