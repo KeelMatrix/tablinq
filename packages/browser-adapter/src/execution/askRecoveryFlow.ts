@@ -1,11 +1,7 @@
-
 import type { Page } from "playwright-core";
 
 import type { AskExecutionCommand } from "../contracts";
-import {
-  isTransientPageError,
-  readAskSnapshot,
-} from "../pageRuntime";
+import { isTransientPageError, readAskSnapshot } from "../pageRuntime";
 import type { AskSnapshot } from "../snapshotState";
 import {
   MAX_RECOVERY_ATTEMPTS,
@@ -18,10 +14,7 @@ import { throwIfProviderGenerationFailed } from "./askProviderFailure";
 import type { AskTiming } from "./askTiming";
 import { sleepForAskRecovery } from "./askTiming";
 import { finalizeAsk, stabilizeAskCompletion } from "./finalization";
-import {
-  recordAskSnapshotProgress,
-  updateAskDoneStreak,
-} from "./askState";
+import { recordAskSnapshotProgress, updateAskDoneStreak } from "./askState";
 import type {
   AskExecutionOptions,
   AskRecoveryResult,
@@ -133,7 +126,8 @@ export async function handleStickyStreamingAskIfNeeded(
   state.stickyStreamReloaded = true;
   await onState({
     state: "interrupted",
-    reason: "stream showed no new assistant text while the provider still looked busy",
+    reason:
+      "stream showed no new assistant text while the provider still looked busy",
     at: new Date().toISOString(),
     conversation_id: state.knownConversationId,
     message_id: state.knownMessageId,

@@ -21,7 +21,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use url::Url;
 
-pub(in crate::core) fn resolve_conversation_target_url(base_url: &str, conversation_id: &str) -> String {
+pub(in crate::core) fn resolve_conversation_target_url(
+    base_url: &str,
+    conversation_id: &str,
+) -> String {
     let normalized_conversation_id = conversation_id.trim();
     if normalized_conversation_id.is_empty() {
         return base_url.to_owned();
@@ -68,7 +71,9 @@ pub(in crate::core) fn conversation_id_from_url(raw_url: &str) -> Option<String>
     }
 }
 
-pub(in crate::core) fn browser_session_identity(snapshot: &BrowserStatusSnapshot) -> (String, String) {
+pub(in crate::core) fn browser_session_identity(
+    snapshot: &BrowserStatusSnapshot,
+) -> (String, String) {
     if snapshot.cdp_attached
         && let Some(tab_id) = snapshot
             .target_tab_id

@@ -8,19 +8,18 @@ export {
   normalizeProbeText,
   probeElementPath,
   probeNearbyText,
-  probeTextHasToken
+  probeTextHasToken,
 } from "./probeRuntime/text.js";
 
 export {
   controlCandidateSelector,
-  orderCapabilityStrategies
+  orderCapabilityStrategies,
 } from "./probeRuntime/strategies.js";
 
 export {
   addProbeAlias,
   captureProbeAliases,
-  createAliasBuckets
+  createAliasBuckets,
 } from "./probeRuntime/aliases.js";
 
 export { probeDocument } from "./probeRuntime/documentProbe.js";
-

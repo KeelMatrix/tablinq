@@ -14,7 +14,6 @@ use shared_protocol::{
 };
 
 impl CoreService {
-
     pub fn status_snapshot(&self) -> shared_protocol::DaemonStatusSnapshot {
         shared_protocol::DaemonStatusSnapshot {
             pid: std::process::id(),

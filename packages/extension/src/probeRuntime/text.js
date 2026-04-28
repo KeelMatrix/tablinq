@@ -1,5 +1,3 @@
-
-
 export function normalizeProbeText(value) {
   return (value ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 }

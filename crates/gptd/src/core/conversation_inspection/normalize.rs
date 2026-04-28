@@ -1,8 +1,8 @@
 use crate::db::ConversationTurnRecord;
 use chrono::Utc;
 use shared_protocol::{
-    ArtifactSummary, ConversationFileReference, ConversationMessage,
-    ConversationMessageExactness, ConversationMessageRole, ConversationMessageSourceKind,
+    ArtifactSummary, ConversationFileReference, ConversationMessage, ConversationMessageExactness,
+    ConversationMessageRole, ConversationMessageSourceKind,
 };
 use std::collections::BTreeMap;
 

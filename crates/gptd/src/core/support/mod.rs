@@ -28,15 +28,14 @@ mod locks;
 mod request;
 mod research;
 
-pub use errors::error_code_for_message;
 pub(super) use browser::{
-    busy_health_snapshot, current_url_requires_login_or_challenge,
-    default_selector_pack_summary, health_snapshot, is_attach_primary_mode, recovery_guidance,
-    supports_managed_profile_reset,
+    busy_health_snapshot, current_url_requires_login_or_challenge, default_selector_pack_summary,
+    health_snapshot, is_attach_primary_mode, recovery_guidance, supports_managed_profile_reset,
 };
 pub(super) use conversation::{
     browser_session_identity, conversation_id_from_url, resolve_conversation_target_url,
 };
+pub use errors::error_code_for_message;
 pub(super) use errors::is_cancelled_message;
 pub(super) use locks::{
     browser_busy_message, lock_browser, lock_cancel_registry, try_lock_browser,

@@ -1,8 +1,4 @@
-
-import type {
-  AskExecutionCommand,
-  AskResultSnapshot,
-} from "../contracts";
+import type { AskExecutionCommand, AskResultSnapshot } from "../contracts";
 
 import { runResearch } from "./research";
 import type {

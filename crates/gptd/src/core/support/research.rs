@@ -126,7 +126,10 @@ fn sanitize_file_stem(value: &str) -> String {
         .collect()
 }
 
-pub(in crate::core) fn unique_destination_path(destination_dir: &Path, file_name: &Path) -> PathBuf {
+pub(in crate::core) fn unique_destination_path(
+    destination_dir: &Path,
+    file_name: &Path,
+) -> PathBuf {
     let candidate = destination_dir.join(file_name);
     if !candidate.exists() {
         return candidate;

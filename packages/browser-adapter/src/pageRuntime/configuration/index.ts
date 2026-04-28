@@ -1,4 +1,3 @@
-
 import type { Page } from "playwright-core";
 
 import type {
@@ -73,7 +72,4 @@ export {
   findVisibleModelPickerTrigger,
 } from "./modelSelection";
 
-export {
-  findVisiblePopupChoicePoint,
-  waitForVisibleLocator,
-} from "./shared";
+export { findVisiblePopupChoicePoint, waitForVisibleLocator } from "./shared";
