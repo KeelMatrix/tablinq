@@ -86,8 +86,8 @@ This is the normal operating path:
    - `gpt browser connection-info`
    - `gpt capabilities`
 8. Run work:
-   - `gpt ask "Summarize the value of Tablinq in one paragraph."`
-   - `gpt research "Investigate launch blockers for a desktop AI tool."`
+   - `gpt ask "Turn this changelog into three release-note bullets."`
+   - `gpt research "Find launch risks for a Windows tray app."`
 
 ## Quick Start
 
@@ -102,7 +102,7 @@ gpt browser start-debug
 # load the extension into the attach target profile, then sign in manually
 gpt browser attach
 gpt doctor
-gpt ask "Summarize the value of Tablinq in one paragraph."
+gpt ask "Turn this changelog into three release-note bullets."
 ```
 
 Repo-checkout development:
@@ -116,7 +116,7 @@ cargo run -p gpt -- daemon start
 cargo run -p gpt -- gateway start
 cargo run -p gpt -- browser start-debug
 cargo run -p gpt -- browser attach
-cargo run -p gpt -- ask "hello from tablinq"
+cargo run -p gpt -- ask "Draft a two-line release note for faster startup."
 ```
 
 If your repo checkout grows large during development, run `cargo clean` to remove the local Rust `target/` build directory. That deletes compiled binaries, PDBs, incremental caches, and packaging-related build outputs, and the next Rust build will rebuild them from scratch.
@@ -136,14 +136,19 @@ Common commands:
 - `gpt gateway start`
 - `gpt gateway status`
 - `gpt gateway stop`
-- `gpt ask "hello"`
-- `gpt ask --mode search "What is the latest stable Rust release?"`
-- `gpt ask --model thinking --effort extended "compare these options"`
-- `gpt ask --file notes.txt "summarize the attachment"`
-- `gpt ask --conversation conv-123 "continue from here"`
-- `gpt ask --new-conversation "start clean"`
-- `gpt research "investigate launch blockers"`
-- `gpt research --file notes.txt --output-dir reports "write a brief"`
+- `gpt ask "Name three edge cases for resumable downloads."`
+- `gpt ask --mode search "Which Rust release first stabilized let-chains?"`
+- `gpt ask --mode research --file roadmap.md "Map which milestones need customer interviews."`
+- `gpt ask --model thinking --effort extended "Choose SQLite or JSONL for a local job ledger."`
+- `gpt ask --mode search --model thinking --effort standard "Find current Windows code-signing costs."`
+- `gpt ask --mode search --conversation conv-123 "Refresh the shipping checklist against current notarization rules."`
+- `gpt ask --file notes.txt "Extract the open decisions from this meeting note."`
+- `gpt ask --file crash.log --file repro.md "Find the first failing step and likely owner."`
+- `gpt ask --conversation conv-123 "Turn the last answer into a migration checklist."`
+- `gpt ask --new-conversation "Sketch a smoke test for a stuck progress bar."`
+- `gpt research "Find launch risks for a Windows tray app."`
+- `gpt research --file notes.txt --output-dir reports "Write a two-page vendor-risk brief."`
+- `gpt research --file roadmap.md --file support.csv --output-dir reports "Prioritize churn risks for next quarter."`
 - `gpt jobs list`
 - `gpt jobs show job-123`
 - `gpt jobs cancel job-123`
@@ -191,40 +196,9 @@ See:
 - [docs/openclaude.md](docs/openclaude.md)
 - [docs/paperclip.md](docs/paperclip.md)
 
-## Antivirus warning on Windows
+## Windows Troubleshooting
 
-Some Windows antivirus products can block packaging, browser startup, local scripts, `node.exe`, `pwsh.exe`, `chrome.exe`, `cmd.exe`, or toolchain binaries such as `esbuild.exe`. If local install, packaging, or test runs fail with `Access is denied` or a blocked-process notification, add the relevant paths to your antivirus exceptions and restore any already-blocked executables from quarantine or notifications.
-
-Paths that may require exceptions in a typical Windows dev or install environment:
-
-- `<repo-root>`
-- `<repo-root>\scripts`
-- `<repo-root>\scripts\*.ps1`
-- `%LOCALAPPDATA%\Tablinq`
-- `%LOCALAPPDATA%\Tablinq\daemon.lock`
-- `%LOCALAPPDATA%\Tablinq\install\bin`
-- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.exe`
-- `%LOCALAPPDATA%\Tablinq\install\bin\gpt.cmd`
-- `%LOCALAPPDATA%\Tablinq\install\bin\tablinq-cli.exe`
-- `%LOCALAPPDATA%\Tablinq\install\bin\gptd.exe`
-- `%LOCALAPPDATA%\Tablinq\install\bin\tablinq-gateway.exe`
-- `%LOCALAPPDATA%\Tablinq\install\bin\tablinq-host.exe`
-- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`
-- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Tablinq Daemon.vbs`
-- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Tablinq Gateway.vbs`
-- `%NVM_SYMLINK%`
-- `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
-- `%SystemRoot%\System32\reg.exe`
-- `%NVM_SYMLINK%\node.exe`
-- `%LOCALAPPDATA%\nvm`
-- `%ProgramFiles%\PowerShell\7\pwsh.exe`
-- `%ProgramFiles%\Google\Chrome\Application\chrome.exe`
-- `%LOCALAPPDATA%\nvm\v20.19.3\node.exe`
-- `%SystemRoot%\System32\cmd.exe`
-- `<repo-root>\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
-- `<repo-root>\node_modules`
-
-Add equivalent paths for your own machine if the install location, browser, or Node version differs.
+See [docs/troubleshooting.md](docs/troubleshooting.md#antivirus-blocking-local-tools-or-browser-startup) for symptoms and exception candidates.
 
 ## Architecture
 

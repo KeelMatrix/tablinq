@@ -24,8 +24,6 @@ $effectiveSkipDependencyInstall = $SkipDependencyInstall -or $usePrebuiltPackage
 $effectiveSkipPackageBuild = $SkipPackageBuild -or $usePrebuiltPackage
 $daemonTaskName = "Tablinq Daemon"
 $gatewayTaskName = "Tablinq Gateway"
-$legacyDaemonLaunchers = @("Tablinq Daemon.cmd")
-$legacyGatewayLaunchers = @("Tablinq Gateway.cmd")
 $script:InstallProgressId = 8701
 $script:CurrentPhase = 0
 $script:TotalPhases = 3
@@ -515,21 +513,6 @@ function Stop-ManagedBrowserProfileProcesses {
   }
 }
 
-function Remove-LegacyStartupLaunchers {
-  $startupFolder = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Startup"
-  foreach ($fileName in @($legacyDaemonLaunchers + $legacyGatewayLaunchers)) {
-    $path = Join-Path $startupFolder $fileName
-    if (Test-Path $path) {
-      try {
-        Remove-Item -Force $path -ErrorAction Stop
-      }
-      catch {
-        Write-Warning "Could not remove legacy startup launcher: $path"
-      }
-    }
-  }
-}
-
 function Remove-AutoStartScheduledTask {
   param([string]$TaskName)
 
@@ -567,7 +550,6 @@ function Remove-RunKeyValue {
 }
 
 function Remove-AutoStartPersistence {
-  Remove-LegacyStartupLaunchers
   foreach ($taskName in @($daemonTaskName, $gatewayTaskName)) {
     Remove-AutoStartScheduledTask -TaskName $taskName
     Remove-RunKeyValue -ValueName $taskName

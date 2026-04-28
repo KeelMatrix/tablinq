@@ -288,14 +288,14 @@ This is the Windows all-in-one local install path. It can:
 - optionally invoke `package.ps1`,
 - stage and replace the installed layout under `%LOCALAPPDATA%\Tablinq\install`,
 - validate that expected binaries and extension files exist,
-- update config and clear legacy autostart persistence,
+- update config and clear scheduled-task and Run-key autostart persistence,
 - register the native host unless skipped,
 - enable logon-time scheduled-task autostart when `-EnableAutoStart` is passed,
 - optionally update PATH,
 - launch the daemon and gateway by default unless `-NoLaunchAfterInstall` is passed,
 - print a short status summary plus the remaining manual browser/extension steps.
 
-It also contains defensive handling for blocked files, registry access, legacy launcher cleanup, and antivirus-related failure modes.
+It also contains defensive handling for blocked files, registry access, and antivirus-related failure modes.
 
 **Why it exists**
 

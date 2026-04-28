@@ -52,8 +52,8 @@ What `scripts/install.ps1` does:
 - initializes the state root under `%LOCALAPPDATA%\Tablinq`
 - registers the user-level native messaging host for Edge and Chrome
 - updates the user `PATH` to include `%LOCALAPPDATA%\Tablinq\install\bin`
-- removes legacy Startup-folder launchers and any existing Tablinq logon-time persistence
-- does not create Startup-folder launchers, Run-key entries, or scheduled tasks by default
+- removes any existing scheduled-task or Run-key logon-time persistence
+- does not create Run-key entries or scheduled tasks by default
 - starts the daemon and gateway by default and reports whether they are healthy
 - prints a compact install summary plus the remaining manual browser steps
 
@@ -118,7 +118,7 @@ After install and attach, run:
 - `gpt doctor`
 - `gpt browser connection-info`
 - `gpt capabilities`
-- `gpt ask "hello from tablinq"`
+- `gpt ask "Draft a two-line release note for faster startup."`
 
 You want to see:
 
@@ -144,27 +144,9 @@ Then use:
 
 `gpt browser reset-profile` is only for managed fallback recovery. It is not part of the recommended attach-first flow.
 
-## Antivirus warning on Windows
+## Windows Install Failures
 
-Local packaging, testing, installation, and browser startup can be blocked by antivirus products. If you see `Access is denied`, blocked-process notifications, or quarantined binaries, add the relevant paths to your antivirus exceptions and restore any already-blocked files from notifications or quarantine.
-
-Example Windows paths that may require exceptions in a typical local environment:
-
-- `<repo-root>`
-- `%LOCALAPPDATA%\Tablinq`
-- `%NVM_SYMLINK%`
-- `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
-- `%NVM_SYMLINK%\node.exe`
-- `<repo-root>\scripts`
-- `%LOCALAPPDATA%\nvm`
-- `%ProgramFiles%\PowerShell\7\pwsh.exe`
-- `%ProgramFiles%\Google\Chrome\Application\chrome.exe`
-- `%LOCALAPPDATA%\nvm\v20.19.3\node.exe`
-- `%SystemRoot%\System32\cmd.exe`
-- `<repo-root>\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
-- `<repo-root>\node_modules`
-
-Adjust those paths for your own install directory, browser, and Node version.
+See [troubleshooting](troubleshooting.md#antivirus-blocking-local-tools-or-browser-startup) for symptoms and exception candidates.
 
 ## State layout
 
