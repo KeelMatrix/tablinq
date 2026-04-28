@@ -37,6 +37,8 @@ if (-not $NoLaunchAfterInstall) {
   $script:TotalPhases += 1
 }
 
+#region Progress and command helpers
+
 function Update-InstallProgress {
   param([string]$Status)
 
@@ -191,6 +193,10 @@ function Invoke-Step {
   }
 }
 
+#endregion
+
+#region Prerequisite and filesystem helpers
+
 function Assert-CommandAvailable {
   param(
     [string]$CommandName,
@@ -273,6 +279,10 @@ function Assert-RegistryWritable {
     Remove-Item -Force $stdoutPath, $stderrPath -ErrorAction SilentlyContinue
   }
 }
+
+#endregion
+
+#region Browser, package, and configuration helpers
 
 function Get-ExtensionIdFromKey {
   param([string]$ManifestPath)
@@ -475,6 +485,10 @@ function Ensure-ManagedBrowserState {
   $profileDir = Join-Path $StateRoot "browser-profile"
   New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
 }
+
+#endregion
+
+#region Process, persistence, and service helpers
 
 function Stop-ManagedProcessByPath {
   param([string]$ExecutablePath)
@@ -802,6 +816,10 @@ function Wait-ForGatewayReady {
   throw "Gateway did not become ready within $TimeoutSeconds seconds."
 }
 
+#endregion
+
+#region Reporting helpers
+
 function Write-GptWrapper {
   param(
     [string]$WrapperPath,
@@ -893,215 +911,329 @@ function Write-ManualSteps {
   Write-Host ("- {0} ask `"hi`"" -f $gptCommand)
 }
 
+#endregion
+
+#region Install phases
+
+function Assert-InstallPrerequisites {
+  param(
+    [bool]$ShouldBuildPackage,
+    [bool]$ShouldInstallDependencies,
+    [bool]$SkipRegistry,
+    [string]$InstallRoot,
+    [string]$StateRoot
+  )
+
+  Start-InstallPhase -Title "Checking prerequisites"
+  if ($ShouldBuildPackage) {
+    Assert-CommandAvailable -CommandName "cargo" -InstallHint "Install Rust and make sure cargo is on PATH."
+    Assert-CommandAvailable -CommandName "node" -InstallHint "Install Node.js 20 or newer and make sure node is on PATH."
+    Assert-CommandAvailable -CommandName "pnpm" -InstallHint "Install pnpm and make sure it is on PATH."
+  }
+  elseif ($ShouldInstallDependencies) {
+    Assert-CommandAvailable -CommandName "pnpm" -InstallHint "Install pnpm and make sure it is on PATH."
+  }
+
+  $powerShellExecutable = Resolve-PowerShellExecutable
+  $browserSelection = Resolve-BrowserSelection
+  if (-not $browserSelection) {
+    throw "Missing required browser. Install Google Chrome or Microsoft Edge and make sure the browser executable is discoverable on this PC."
+  }
+
+  $localAppDataRoot = [Environment]::GetFolderPath("LocalApplicationData")
+  if (-not $localAppDataRoot) {
+    throw "LOCALAPPDATA is unavailable for the current user. A per-user install location is required."
+  }
+
+  $appDataRoot = [Environment]::GetFolderPath("ApplicationData")
+  if (-not $appDataRoot) {
+    throw "APPDATA is unavailable for the current user. A per-user profile is required."
+  }
+
+  Assert-DirectoryWritable -Path $localAppDataRoot -Label "Local application data folder"
+  Assert-DirectoryWritable -Path $InstallRoot -Label "Install root"
+  Assert-DirectoryWritable -Path $StateRoot -Label "State root"
+  Ensure-StateLayout -StateRoot $StateRoot
+
+  if (-not $SkipRegistry) {
+    Assert-RegistryWritable -KeyPath "HKCU\Software"
+  }
+
+  [pscustomobject]@{
+    PowerShellExecutable = $powerShellExecutable
+    BrowserSelection = $browserSelection
+    InstallLogDir = Join-Path $StateRoot "logs"
+  }
+}
+
+function Invoke-WorkspaceDependencyInstall {
+  param(
+    [bool]$ShouldInstallDependencies,
+    [string]$RepoRoot,
+    [string]$InstallLogDir
+  )
+
+  if (-not $ShouldInstallDependencies) {
+    return
+  }
+
+  Start-InstallPhase -Title "Installing workspace dependencies"
+  Invoke-Step -Label "pnpm install" -FilePath "pnpm" -ArgumentList @("install") -WorkingDirectory $RepoRoot -LogPath (Join-Path $InstallLogDir "install-pnpm")
+}
+
+function Invoke-PackageBuildStep {
+  param(
+    [bool]$ShouldBuildPackage,
+    [string]$PowerShellExecutable,
+    [string]$PackageScriptPath,
+    [string]$Profile,
+    [string]$RepoRoot,
+    [string]$InstallLogDir
+  )
+
+  if (-not $ShouldBuildPackage) {
+    return
+  }
+
+  Start-InstallPhase -Title "Building package"
+  Invoke-Step -FilePath $PowerShellExecutable -ArgumentList @(
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    $PackageScriptPath,
+    "-Profile",
+    $Profile
+  ) -WorkingDirectory $RepoRoot -Label "package.ps1" -LogPath (Join-Path $InstallLogDir "install-package")
+}
+
+function Install-PackagePayload {
+  param(
+    [string]$PackageRoot,
+    [string]$InstallRoot,
+    [string]$StateRoot,
+    [pscustomobject]$BrowserSelection,
+    [bool]$SkipRegistry,
+    [bool]$SkipPathUpdate
+  )
+
+  if (-not (Test-Path $PackageRoot)) {
+    throw "Missing package root after packaging: $PackageRoot"
+  }
+
+  Start-InstallPhase -Title "Replacing install directory"
+  $existingBinDir = Join-Path $InstallRoot "bin"
+  Stop-ManagedProcessByPath -ExecutablePath (Join-Path $existingBinDir "tablinq-gateway.exe")
+  Stop-ManagedProcessByPath -ExecutablePath (Join-Path $existingBinDir "gptd.exe")
+  Stop-ManagedBrowserProfileProcesses -StateRoot $StateRoot
+  Start-Sleep -Milliseconds 750
+
+  $stagingRoot = "$InstallRoot.new"
+  $backupRoot = "$InstallRoot.old"
+  Remove-PathIfExists -Path $stagingRoot
+  Remove-PathIfExists -Path $backupRoot
+
+  New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
+  Copy-Item -Path (Join-Path $PackageRoot "*") -Destination $stagingRoot -Recurse -Force -Exclude "bin"
+
+  $binDir = Join-Path $stagingRoot "bin"
+  $publicCliBin = Join-Path $binDir "gpt.exe"
+  $internalCliBin = Join-Path $binDir "tablinq-cli.exe"
+  $daemonBin = Join-Path $binDir "gptd.exe"
+  $gatewayBin = Join-Path $binDir "tablinq-gateway.exe"
+  $hostBin = Join-Path $InstallRoot "bin\tablinq-host.exe"
+  $gptWrapper = Join-Path $binDir "gpt.cmd"
+  $extensionDir = Join-Path $stagingRoot "extension"
+  $extensionManifestPath = Join-Path $extensionDir "manifest.json"
+  $extensionId = Get-ExtensionIdFromKey -ManifestPath $extensionManifestPath
+  $pageAdapterRuntimePath = Join-Path $stagingRoot "browser-adapter\src\pageAdapter.runtime.js"
+
+  New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+  Copy-Item -Path (Join-Path $PackageRoot "bin\gpt.exe") -Destination $publicCliBin -Force
+  Copy-Item -Path (Join-Path $PackageRoot "bin\gpt.exe") -Destination $internalCliBin -Force
+  Copy-Item -Path (Join-Path $PackageRoot "bin\gptd.exe") -Destination $daemonBin -Force
+  Copy-Item -Path (Join-Path $PackageRoot "bin\tablinq-gateway.exe") -Destination $gatewayBin -Force
+  Copy-Item -Path (Join-Path $PackageRoot "bin\tablinq-host.exe") -Destination (Join-Path $binDir "tablinq-host.exe") -Force
+  Write-GptWrapper -WrapperPath $gptWrapper -CliExecutable $internalCliBin
+  Normalize-PageAdapterRuntime -RuntimePath $pageAdapterRuntimePath
+
+  $configPath = Ensure-ConfigFile -StateRoot $StateRoot
+
+  $nativeHostDir = Join-Path $stagingRoot "native-host"
+  if (Test-Path $nativeHostDir) {
+    Remove-Item -Recurse -Force $nativeHostDir
+  }
+  New-Item -ItemType Directory -Force -Path $nativeHostDir | Out-Null
+
+  $chromeManifestPath = Join-Path $nativeHostDir "com.tablinq.bridge.chrome.json"
+  $edgeManifestPath = Join-Path $nativeHostDir "com.tablinq.bridge.edge.json"
+  Write-NativeHostManifest -ManifestPath $chromeManifestPath -HostExecutable $hostBin -ExtensionId $extensionId
+  Write-NativeHostManifest -ManifestPath $edgeManifestPath -HostExecutable $hostBin -ExtensionId $extensionId
+
+  if (-not $SkipRegistry) {
+    foreach ($registryKey in @(
+      "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.tablinq.bridge",
+      "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.tablinq.bridge"
+    )) {
+      if (Test-Path $registryKey) {
+        Remove-Item -Path $registryKey -Recurse -Force
+      }
+    }
+
+    [void](Try-RegisterRegistryDefaultValue -KeyPath "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.tablinq.bridge" -Value $chromeManifestPath)
+    [void](Try-RegisterRegistryDefaultValue -KeyPath "HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.tablinq.bridge" -Value $edgeManifestPath)
+  }
+
+  Set-TomlStringValue -Path $configPath -Key "browser_path" -Value $BrowserSelection.Path
+  Set-TomlStringValue -Path $configPath -Key "browser_channel" -Value $BrowserSelection.ConfigChannel
+  Ensure-ManagedBrowserState -StateRoot $StateRoot
+
+  $connectionMode = Get-TomlStringValue -Path $configPath -Key "browser_connection_mode" -DefaultValue "attach_first"
+  $targetUrl = Get-TomlStringValue -Path $configPath -Key "browser_target_url" -DefaultValue "https://chatgpt.com/"
+
+  if (-not $SkipPathUpdate) {
+    Add-UserPathEntry -Entry (Join-Path $InstallRoot "bin")
+  }
+
+  if (Test-Path $InstallRoot) {
+    Rename-Item -Path $InstallRoot -NewName ([System.IO.Path]::GetFileName($backupRoot)) -Force
+  }
+  Rename-Item -Path $stagingRoot -NewName ([System.IO.Path]::GetFileName($InstallRoot)) -Force
+  Remove-PathIfExists -Path $backupRoot
+
+  Assert-PathExists -Path (Join-Path $InstallRoot "bin\gpt.exe") -Label "Installed CLI"
+  Assert-PathExists -Path (Join-Path $InstallRoot "bin\gptd.exe") -Label "Installed daemon"
+  Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -Label "Installed gateway"
+  Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-host.exe") -Label "Installed native host"
+  Assert-PathExists -Path (Join-Path $InstallRoot "extension\manifest.json") -Label "Installed extension"
+
+  [pscustomobject]@{
+    ConnectionMode = $connectionMode
+    TargetUrl = $targetUrl
+    InstalledCli = Join-Path $InstallRoot "bin\gpt.exe"
+    UsePathCommand = -not $SkipPathUpdate
+  }
+}
+
+function Set-LocalMachineConfiguration {
+  param(
+    [bool]$EnableAutoStart,
+    [string]$InstallRoot,
+    [string]$StateRoot
+  )
+
+  Start-InstallPhase -Title "Configuring local machine"
+  Remove-AutoStartPersistence
+
+  $autoStartMode = "disabled"
+  if ($EnableAutoStart) {
+    $autoStartMode = Install-AutoStartPersistence -DaemonExecutable (Join-Path $InstallRoot "bin\gptd.exe") -GatewayExecutable (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -StateRoot $StateRoot -InstallRoot $InstallRoot
+  }
+
+  $autoStartMode
+}
+
+function Get-InstallServiceState {
+  param(
+    [string]$InstalledCli,
+    [string]$StateRoot,
+    [bool]$NoLaunchAfterInstall
+  )
+
+  $daemonStatus = $null
+  $gatewayStatus = $null
+  $launchMode = "skipped"
+
+  if (-not $NoLaunchAfterInstall) {
+    Start-InstallPhase -Title "Starting services"
+    $null = Invoke-InternalCliJson -CliExecutablePath $InstalledCli -StateRoot $StateRoot -Arguments @("daemon", "start")
+    $daemonStatus = Wait-ForDaemonReady -CliExecutablePath $InstalledCli -StateRoot $StateRoot
+    $null = Invoke-InternalCliJson -CliExecutablePath $InstalledCli -StateRoot $StateRoot -Arguments @("gateway", "start")
+    $gatewayStatus = Wait-ForGatewayReady -CliExecutablePath $InstalledCli -StateRoot $StateRoot
+    $launchMode = "started"
+  }
+  else {
+    $daemonStatus = Get-DaemonStatus -CliExecutablePath $InstalledCli -StateRoot $StateRoot
+    $gatewayStatus = Get-GatewayStatus -CliExecutablePath $InstalledCli -StateRoot $StateRoot
+  }
+
+  [pscustomobject]@{
+    DaemonStatus = $daemonStatus
+    GatewayStatus = $gatewayStatus
+    LaunchMode = $launchMode
+  }
+}
+
+function Write-InstallSummary {
+  param(
+    [string]$InstallRoot,
+    [string]$StateRoot,
+    [pscustomobject]$BrowserSelection,
+    [string]$ConnectionMode,
+    [string]$TargetUrl,
+    [string]$PathState,
+    [string]$AutoStartMode,
+    [string]$LaunchMode,
+    [bool]$NoLaunchAfterInstall,
+    [pscustomobject]$DaemonStatus,
+    [pscustomobject]$GatewayStatus,
+    [bool]$EnableAutoStart,
+    [bool]$SkipPathUpdate,
+    [bool]$UsePathCommand
+  )
+
+  $daemonRunning = [bool]($DaemonStatus -and $DaemonStatus.type -eq "status" -and $DaemonStatus.payload)
+  $gatewayRunning = [bool]($GatewayStatus -and $GatewayStatus.running -eq $true -and $GatewayStatus.ready -eq $true)
+  $daemonDetail = if ($daemonRunning) {
+    $DaemonStatus.payload.ipc_endpoint
+  }
+  elseif ($NoLaunchAfterInstall) {
+    "start later with gpt daemon start"
+  }
+  else {
+    "not ready"
+  }
+  $gatewayDetail = if ($gatewayRunning) {
+    "{0}:{1}" -f $GatewayStatus.host, $GatewayStatus.port
+  }
+  elseif ($NoLaunchAfterInstall) {
+    "start later with gpt gateway start"
+  }
+  else {
+    "not ready"
+  }
+
+  Complete-InstallProgress
+  Write-Host ""
+  Write-Host "Install complete."
+  Write-Host ""
+  Write-Host "Summary:"
+  Write-StatusLine -Label "Install" -State "ok" -Details $InstallRoot
+  Write-StatusLine -Label "State" -State "ok" -Details $StateRoot
+  Write-StatusLine -Label "Browser" -State $BrowserSelection.Name -Details $ConnectionMode
+  Write-StatusLine -Label "PATH" -State $PathState -Details $(if ($SkipPathUpdate) { "gpt not added to PATH" } else { "gpt available in new shells" })
+  Write-StatusLine -Label "Autostart" -State $AutoStartMode -Details $(if ($EnableAutoStart) { "starts on login" } else { "disabled" })
+  Write-StatusLine -Label "Launch" -State $LaunchMode -Details $(if ($NoLaunchAfterInstall) { "use manual steps below" } else { "daemon and gateway checked" })
+  Write-StatusLine -Label "Daemon" -State $(if ($daemonRunning) { "running" } else { "attention" }) -Details $daemonDetail
+  Write-StatusLine -Label "Gateway" -State $(if ($gatewayRunning) { "running" } else { "attention" }) -Details $gatewayDetail
+
+  Write-ManualSteps -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserName $BrowserSelection.Name -ConnectionMode $ConnectionMode -TargetUrl $TargetUrl -DaemonRunning $daemonRunning -GatewayRunning $gatewayRunning -UsePathCommand $UsePathCommand
+}
+
+#endregion
+
 Write-Host "Installing Tablinq on Windows..."
 Write-Host "Defaults: launch now = yes, autostart on login = no"
 if ($usePrebuiltPackage) {
   Write-Host ("Package source: prebuilt bundle ({0})" -f $PackageRoot)
 }
-Start-InstallPhase -Title "Checking prerequisites"
-if (-not $effectiveSkipPackageBuild) {
-  Assert-CommandAvailable -CommandName "cargo" -InstallHint "Install Rust and make sure cargo is on PATH."
-  Assert-CommandAvailable -CommandName "node" -InstallHint "Install Node.js 20 or newer and make sure node is on PATH."
-  Assert-CommandAvailable -CommandName "pnpm" -InstallHint "Install pnpm and make sure it is on PATH."
-}
-elseif (-not $effectiveSkipDependencyInstall) {
-  Assert-CommandAvailable -CommandName "pnpm" -InstallHint "Install pnpm and make sure it is on PATH."
-}
-$powerShellExecutable = Resolve-PowerShellExecutable
 
-$browserSelection = Resolve-BrowserSelection
-if (-not $browserSelection) {
-  throw "Missing required browser. Install Google Chrome or Microsoft Edge and make sure the browser executable is discoverable on this PC."
-}
+$preflight = Assert-InstallPrerequisites -ShouldBuildPackage:(-not $effectiveSkipPackageBuild) -ShouldInstallDependencies:(-not $effectiveSkipDependencyInstall) -SkipRegistry:([bool]$SkipRegistry) -InstallRoot $InstallRoot -StateRoot $StateRoot
+Invoke-WorkspaceDependencyInstall -ShouldInstallDependencies:(-not $effectiveSkipDependencyInstall) -RepoRoot $repoRoot -InstallLogDir $preflight.InstallLogDir
+Invoke-PackageBuildStep -ShouldBuildPackage:(-not $effectiveSkipPackageBuild) -PowerShellExecutable $preflight.PowerShellExecutable -PackageScriptPath $packageScriptPath -Profile $Profile -RepoRoot $repoRoot -InstallLogDir $preflight.InstallLogDir
 
-$localAppDataRoot = [Environment]::GetFolderPath("LocalApplicationData")
-if (-not $localAppDataRoot) {
-  throw "LOCALAPPDATA is unavailable for the current user. A per-user install location is required."
-}
-
-$appDataRoot = [Environment]::GetFolderPath("ApplicationData")
-if (-not $appDataRoot) {
-  throw "APPDATA is unavailable for the current user. A per-user profile is required."
-}
-
-Assert-DirectoryWritable -Path $localAppDataRoot -Label "Local application data folder"
-Assert-DirectoryWritable -Path $InstallRoot -Label "Install root"
-Assert-DirectoryWritable -Path $StateRoot -Label "State root"
-Ensure-StateLayout -StateRoot $StateRoot
-$installLogDir = Join-Path $StateRoot "logs"
-
-if (-not $SkipRegistry) {
-  Assert-RegistryWritable -KeyPath "HKCU\Software"
-}
-
-if (-not $effectiveSkipDependencyInstall) {
-  Start-InstallPhase -Title "Installing workspace dependencies"
-  Invoke-Step -Label "pnpm install" -FilePath "pnpm" -ArgumentList @("install") -WorkingDirectory $repoRoot -LogPath (Join-Path $installLogDir "install-pnpm")
-}
-
-if (-not $effectiveSkipPackageBuild) {
-  Start-InstallPhase -Title "Building package"
-  Invoke-Step -FilePath $powerShellExecutable -ArgumentList @(
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    $packageScriptPath,
-    "-Profile",
-    $Profile
-  ) -WorkingDirectory $repoRoot -Label "package.ps1" -LogPath (Join-Path $installLogDir "install-package")
-}
-
-if (-not (Test-Path $PackageRoot)) {
-  throw "Missing package root after packaging: $PackageRoot"
-}
-
-Start-InstallPhase -Title "Replacing install directory"
-$existingBinDir = Join-Path $InstallRoot "bin"
-Stop-ManagedProcessByPath -ExecutablePath (Join-Path $existingBinDir "tablinq-gateway.exe")
-Stop-ManagedProcessByPath -ExecutablePath (Join-Path $existingBinDir "gptd.exe")
-Stop-ManagedBrowserProfileProcesses -StateRoot $StateRoot
-Start-Sleep -Milliseconds 750
-
-$stagingRoot = "$InstallRoot.new"
-$backupRoot = "$InstallRoot.old"
-Remove-PathIfExists -Path $stagingRoot
-Remove-PathIfExists -Path $backupRoot
-
-New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
-Copy-Item -Path (Join-Path $PackageRoot "*") -Destination $stagingRoot -Recurse -Force -Exclude "bin"
-
-$binDir = Join-Path $stagingRoot "bin"
-$publicCliBin = Join-Path $binDir "gpt.exe"
-$internalCliBin = Join-Path $binDir "tablinq-cli.exe"
-$daemonBin = Join-Path $binDir "gptd.exe"
-$gatewayBin = Join-Path $binDir "tablinq-gateway.exe"
-$hostBin = Join-Path $InstallRoot "bin\tablinq-host.exe"
-$gptWrapper = Join-Path $binDir "gpt.cmd"
-$extensionDir = Join-Path $stagingRoot "extension"
-$extensionManifestPath = Join-Path $extensionDir "manifest.json"
-$extensionId = Get-ExtensionIdFromKey -ManifestPath $extensionManifestPath
-$pageAdapterRuntimePath = Join-Path $stagingRoot "browser-adapter\src\pageAdapter.runtime.js"
-
-New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-Copy-Item -Path (Join-Path $PackageRoot "bin\gpt.exe") -Destination $publicCliBin -Force
-Copy-Item -Path (Join-Path $PackageRoot "bin\gpt.exe") -Destination $internalCliBin -Force
-Copy-Item -Path (Join-Path $PackageRoot "bin\gptd.exe") -Destination $daemonBin -Force
-Copy-Item -Path (Join-Path $PackageRoot "bin\tablinq-gateway.exe") -Destination $gatewayBin -Force
-Copy-Item -Path (Join-Path $PackageRoot "bin\tablinq-host.exe") -Destination (Join-Path $binDir "tablinq-host.exe") -Force
-Write-GptWrapper -WrapperPath $gptWrapper -CliExecutable $internalCliBin
-Normalize-PageAdapterRuntime -RuntimePath $pageAdapterRuntimePath
-
-$configPath = Ensure-ConfigFile -StateRoot $StateRoot
-
-$nativeHostDir = Join-Path $stagingRoot "native-host"
-if (Test-Path $nativeHostDir) {
-  Remove-Item -Recurse -Force $nativeHostDir
-}
-New-Item -ItemType Directory -Force -Path $nativeHostDir | Out-Null
-
-$chromeManifestPath = Join-Path $nativeHostDir "com.tablinq.bridge.chrome.json"
-$edgeManifestPath = Join-Path $nativeHostDir "com.tablinq.bridge.edge.json"
-Write-NativeHostManifest -ManifestPath $chromeManifestPath -HostExecutable $hostBin -ExtensionId $extensionId
-Write-NativeHostManifest -ManifestPath $edgeManifestPath -HostExecutable $hostBin -ExtensionId $extensionId
-
-if (-not $SkipRegistry) {
-  foreach ($registryKey in @(
-    "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.tablinq.bridge",
-    "HKCU:\Software\Microsoft\Edge\NativeMessagingHosts\com.tablinq.bridge"
-  )) {
-    if (Test-Path $registryKey) {
-      Remove-Item -Path $registryKey -Recurse -Force
-    }
-  }
-
-  [void](Try-RegisterRegistryDefaultValue -KeyPath "HKCU\Software\Google\Chrome\NativeMessagingHosts\com.tablinq.bridge" -Value $chromeManifestPath)
-  [void](Try-RegisterRegistryDefaultValue -KeyPath "HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.tablinq.bridge" -Value $edgeManifestPath)
-}
-
-Set-TomlStringValue -Path $configPath -Key "browser_path" -Value $browserSelection.Path
-Set-TomlStringValue -Path $configPath -Key "browser_channel" -Value $browserSelection.ConfigChannel
-Ensure-ManagedBrowserState -StateRoot $StateRoot
-
-$connectionMode = Get-TomlStringValue -Path $configPath -Key "browser_connection_mode" -DefaultValue "attach_first"
-$targetUrl = Get-TomlStringValue -Path $configPath -Key "browser_target_url" -DefaultValue "https://chatgpt.com/"
-
-if (-not $SkipPathUpdate) {
-  Add-UserPathEntry -Entry (Join-Path $InstallRoot "bin")
-}
-
-if (Test-Path $InstallRoot) {
-  Rename-Item -Path $InstallRoot -NewName ([System.IO.Path]::GetFileName($backupRoot)) -Force
-}
-Rename-Item -Path $stagingRoot -NewName ([System.IO.Path]::GetFileName($InstallRoot)) -Force
-Remove-PathIfExists -Path $backupRoot
-
-Assert-PathExists -Path (Join-Path $InstallRoot "bin\gpt.exe") -Label "Installed CLI"
-Assert-PathExists -Path (Join-Path $InstallRoot "bin\gptd.exe") -Label "Installed daemon"
-Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -Label "Installed gateway"
-Assert-PathExists -Path (Join-Path $InstallRoot "bin\tablinq-host.exe") -Label "Installed native host"
-Assert-PathExists -Path (Join-Path $InstallRoot "extension\manifest.json") -Label "Installed extension"
-
-Start-InstallPhase -Title "Configuring local machine"
-Remove-AutoStartPersistence
-
-$autoStartMode = "disabled"
-if ($EnableAutoStart) {
-  $autoStartMode = Install-AutoStartPersistence -DaemonExecutable (Join-Path $InstallRoot "bin\gptd.exe") -GatewayExecutable (Join-Path $InstallRoot "bin\tablinq-gateway.exe") -StateRoot $StateRoot -InstallRoot $InstallRoot
-}
-
-$installedCli = Join-Path $InstallRoot "bin\gpt.exe"
-$usePathCommand = -not $SkipPathUpdate
-$daemonStatus = $null
-$gatewayStatus = $null
-$launchMode = "skipped"
-
-if (-not $NoLaunchAfterInstall) {
-  Start-InstallPhase -Title "Starting services"
-  $null = Invoke-InternalCliJson -CliExecutablePath $installedCli -StateRoot $StateRoot -Arguments @("daemon", "start")
-  $daemonStatus = Wait-ForDaemonReady -CliExecutablePath $installedCli -StateRoot $StateRoot
-  $null = Invoke-InternalCliJson -CliExecutablePath $installedCli -StateRoot $StateRoot -Arguments @("gateway", "start")
-  $gatewayStatus = Wait-ForGatewayReady -CliExecutablePath $installedCli -StateRoot $StateRoot
-  $launchMode = "started"
-}
-else {
-  $daemonStatus = Get-DaemonStatus -CliExecutablePath $installedCli -StateRoot $StateRoot
-  $gatewayStatus = Get-GatewayStatus -CliExecutablePath $installedCli -StateRoot $StateRoot
-}
-
-$daemonRunning = [bool]($daemonStatus -and $daemonStatus.type -eq "status" -and $daemonStatus.payload)
-$gatewayRunning = [bool]($gatewayStatus -and $gatewayStatus.running -eq $true -and $gatewayStatus.ready -eq $true)
+$packageInstall = Install-PackagePayload -PackageRoot $PackageRoot -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserSelection $preflight.BrowserSelection -SkipRegistry:([bool]$SkipRegistry) -SkipPathUpdate:([bool]$SkipPathUpdate)
+$autoStartMode = Set-LocalMachineConfiguration -EnableAutoStart:([bool]$EnableAutoStart) -InstallRoot $InstallRoot -StateRoot $StateRoot
+$serviceState = Get-InstallServiceState -InstalledCli $packageInstall.InstalledCli -StateRoot $StateRoot -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall)
 $pathState = if ($SkipPathUpdate) { "unchanged" } else { "updated" }
-$daemonDetail = if ($daemonRunning) {
-  $daemonStatus.payload.ipc_endpoint
-}
-elseif ($NoLaunchAfterInstall) {
-  "start later with gpt daemon start"
-}
-else {
-  "not ready"
-}
-$gatewayDetail = if ($gatewayRunning) {
-  "{0}:{1}" -f $gatewayStatus.host, $gatewayStatus.port
-}
-elseif ($NoLaunchAfterInstall) {
-  "start later with gpt gateway start"
-}
-else {
-  "not ready"
-}
 
-Complete-InstallProgress
-Write-Host ""
-Write-Host "Install complete."
-Write-Host ""
-Write-Host "Summary:"
-Write-StatusLine -Label "Install" -State "ok" -Details $InstallRoot
-Write-StatusLine -Label "State" -State "ok" -Details $StateRoot
-Write-StatusLine -Label "Browser" -State $browserSelection.Name -Details $connectionMode
-Write-StatusLine -Label "PATH" -State $pathState -Details $(if ($SkipPathUpdate) { "gpt not added to PATH" } else { "gpt available in new shells" })
-Write-StatusLine -Label "Autostart" -State $autoStartMode -Details $(if ($EnableAutoStart) { "starts on login" } else { "disabled" })
-Write-StatusLine -Label "Launch" -State $launchMode -Details $(if ($NoLaunchAfterInstall) { "use manual steps below" } else { "daemon and gateway checked" })
-Write-StatusLine -Label "Daemon" -State $(if ($daemonRunning) { "running" } else { "attention" }) -Details $daemonDetail
-Write-StatusLine -Label "Gateway" -State $(if ($gatewayRunning) { "running" } else { "attention" }) -Details $gatewayDetail
-
-Write-ManualSteps -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserName $browserSelection.Name -ConnectionMode $connectionMode -TargetUrl $targetUrl -DaemonRunning $daemonRunning -GatewayRunning $gatewayRunning -UsePathCommand $usePathCommand
+Write-InstallSummary -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserSelection $preflight.BrowserSelection -ConnectionMode $packageInstall.ConnectionMode -TargetUrl $packageInstall.TargetUrl -PathState $pathState -AutoStartMode $autoStartMode -LaunchMode $serviceState.LaunchMode -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall) -DaemonStatus $serviceState.DaemonStatus -GatewayStatus $serviceState.GatewayStatus -EnableAutoStart:([bool]$EnableAutoStart) -SkipPathUpdate:([bool]$SkipPathUpdate) -UsePathCommand:([bool]$packageInstall.UsePathCommand)
