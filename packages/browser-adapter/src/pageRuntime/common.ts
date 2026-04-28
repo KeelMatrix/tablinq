@@ -22,7 +22,7 @@ interface QuietSurfaceSnapshot {
   quietForMs: number;
 }
 
-export async function resetConversationIdentity(page: Page): Promise<void> {
+export async function startNewConversation(page: Page): Promise<void> {
   const currentUrl =
     safePageUrl(page) ??
     (await page.evaluate(() => {
@@ -31,9 +31,11 @@ export async function resetConversationIdentity(page: Page): Promise<void> {
   const resetUrl = resolveConversationUrl(currentUrl, null);
   await openNewChatWithShortcut(page);
   await waitForConversationTurnsCleared(page);
-  const clickedNewChat = await clickNewChatControl(page);
-  if (clickedNewChat) {
-    await waitForConversationTurnsCleared(page);
+  if (await hasConversationTurns(page)) {
+    const clickedNewChat = await clickNewChatControl(page);
+    if (clickedNewChat) {
+      await waitForConversationTurnsCleared(page);
+    }
   }
   if (await hasConversationTurns(page)) {
     await page
@@ -116,8 +118,8 @@ async function waitForConversationTurnsCleared(page: Page): Promise<void> {
   await page
     .waitForFunction(
       () =>
-        document.querySelectorAll("[data-testid^='conversation-turn']").length ===
-        0,
+        document.querySelectorAll("[data-testid^='conversation-turn']")
+          .length === 0,
       undefined,
       { timeout: 5_000 },
     )

@@ -8,8 +8,8 @@ import {
   fillComposer,
   ensureConfiguredSearchMode,
   readAskBaseline,
-  resetConversationIdentity,
   sleep,
+  startNewConversation,
   uploadAttachments,
   waitForInteractionSurface,
   waitForSubmitReadyAfterUploads,
@@ -46,7 +46,7 @@ export async function prepareAskSubmission(
     (command.newConversation && !command.conversationId) ||
     (!command.conversationId && !conversationIdFromUrl(safePageUrl(page)))
   ) {
-    await resetConversationIdentity(page);
+    await startNewConversation(page);
   }
   await waitForInteractionSurface(page, { reloadOnUnavailable: true });
   const askBaseline = await readAskBaseline(page);

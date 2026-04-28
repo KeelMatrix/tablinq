@@ -103,7 +103,7 @@ describe("browser adapter ask: attach mode", () => {
     await expect(
       adapter
         .getManagedPageForTest()!
-        .evaluate(() => document.body.dataset.newChatClicks),
+        .evaluate(() => document.body.dataset.newChatShortcut),
     ).resolves.toBe("1");
 
     await adapter.shutdown();
@@ -151,6 +151,11 @@ describe("browser adapter ask: attach mode", () => {
         .getManagedPageForTest()!
         .evaluate(() => document.body.innerText.includes("stale root turn")),
     ).resolves.toBe(false);
+    await expect(
+      adapter
+        .getManagedPageForTest()!
+        .evaluate(() => document.body.dataset.newChatShortcut),
+    ).resolves.toBe("1");
 
     await adapter.shutdown();
   });

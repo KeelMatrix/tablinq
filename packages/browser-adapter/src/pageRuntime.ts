@@ -9,7 +9,7 @@ export {
   readArtifactStabilitySignature,
 } from "./pageRuntime/artifacts";
 export {
-  resetConversationIdentity,
+  startNewConversation,
   sleep,
   scrollToBottomIfNeeded,
   pauseForInteraction,
