@@ -31,6 +31,8 @@ export type HarnessUrlOptions = {
     | "done-early"
     | "stall-recover"
     | "stall-recover-transient"
+    | "sticky-stop-after-complete"
+    | "sticky-stop-after-reload"
     | "recover-complete"
     | "recover-message-successor"
     | "recover-done-transient"

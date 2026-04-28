@@ -21,6 +21,8 @@ export const STABLE_DONE_POLLS = 3;
 export const STALL_DETECTION_MIN_MS = 500;
 export const STALL_DETECTION_MAX_MS = 2_000;
 export const ASK_STALL_RECOVERY_GRACE_MS = 5_000;
+export const ASK_STICKY_STREAM_RELOAD_STALL_MS = 30_000;
+export const ASK_STICKY_STREAM_FINAL_GRACE_MS = 20_000;
 export const MAX_RECOVERY_ATTEMPTS = 3;
 export const QUIET_SURFACE_TIMEOUT_MS = 1_500;
 export const QUIET_SURFACE_STABLE_WINDOW_MS = 175;
@@ -370,6 +372,20 @@ export function resetSessionRhythmForTest(): void {
   sessionRhythmState.lastActionAt = 0;
 }
 
+export function askStickyStreamReloadStallMs(): number {
+  return (
+    readPositiveIntegerEnv("TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS") ??
+    ASK_STICKY_STREAM_RELOAD_STALL_MS
+  );
+}
+
+export function askStickyStreamFinalGraceMs(): number {
+  return (
+    readPositiveIntegerEnv("TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS") ??
+    ASK_STICKY_STREAM_FINAL_GRACE_MS
+  );
+}
+
 export function pacingRandomValueFromSeed(seed: string): number {
   let hash = 2_166_136_261;
   for (let index = 0; index < seed.length; index += 1) {
@@ -547,6 +563,15 @@ function readBooleanEnv(name: string): boolean | undefined {
     return false;
   }
   return undefined;
+}
+
+function readPositiveIntegerEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function inferPressureSignalsFromText(

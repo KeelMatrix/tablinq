@@ -5,6 +5,8 @@ export const scenarioRegistry = {
   "done-early": {},
   "stall-recover": {},
   "stall-recover-transient": {},
+  "sticky-stop-after-complete": {},
+  "sticky-stop-after-reload": {},
   "followup-stale": {},
   "followup-rich-text": {},
   "thinking-artifact-messages": {},

@@ -210,6 +210,15 @@ export function createAskRuntime({
     timers.stop();
     state.index = state.responseText.length;
     renderChunk(state);
+    if (
+      scenario === "sticky-stop-after-complete" ||
+      scenario === "sticky-stop-after-reload"
+    ) {
+      setStreamState("running");
+      setStreamingControls(true);
+      persistStreamState(state);
+      return;
+    }
     setStreamState("done");
     setStreamingControls(false);
     prepareArtifact(state.promptText);
@@ -393,6 +402,23 @@ export function createAskRuntime({
     writeConversationState(state.conversationId, state.messageId);
     if (scenario === "recover-complete") {
       finishStream(state);
+      return;
+    }
+    if (scenario === "sticky-stop-after-complete") {
+      state.index = state.responseText.length;
+      renderChunk(state);
+      setStreamState("done");
+      setStreamingControls(false);
+      prepareArtifact(state.promptText);
+      clearStreamState(state.conversationId);
+      return;
+    }
+    if (scenario === "sticky-stop-after-reload") {
+      state.index = state.responseText.length;
+      renderChunk(state);
+      setStreamState("running");
+      setStreamingControls(true);
+      persistStreamState(state);
       return;
     }
     if (scenario === "recover-message-successor") {

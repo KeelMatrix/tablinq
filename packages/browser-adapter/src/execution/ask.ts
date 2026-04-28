@@ -28,7 +28,10 @@ import {
   adaptivePollIntervalMs,
   ASK_STALL_RECOVERY_GRACE_MS,
   ASK_TIMEOUT_MS,
+  askStickyStreamFinalGraceMs,
+  askStickyStreamReloadStallMs,
   MAX_RECOVERY_ATTEMPTS,
+  NAVIGATION_TIMEOUT_MS,
   STABLE_DONE_POLLS,
   SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
   noteProviderPressure,
@@ -167,18 +170,35 @@ export async function runAsk(
       return finalized.result;
     }
 
-    const stallRecovery = await recoverStalledAskIfNeeded(
+    const stickyStreamCompletion = await handleStickyStreamingAskIfNeeded(
       host,
       command,
       page,
       state,
+      snapshot,
       onChunk,
       onState,
       timing,
     );
-    page = stallRecovery.page;
-    if (stallRecovery.result) {
-      return stallRecovery.result;
+    page = stickyStreamCompletion.page;
+    if (stickyStreamCompletion.result) {
+      return stickyStreamCompletion.result;
+    }
+
+    if (state.stickyStreamFallbackAt === null) {
+      const stallRecovery = await recoverStalledAskIfNeeded(
+        host,
+        command,
+        page,
+        state,
+        onChunk,
+        onState,
+        timing,
+      );
+      page = stallRecovery.page;
+      if (stallRecovery.result) {
+        return stallRecovery.result;
+      }
     }
 
     await sleepForAskPoll(state, timing.timeoutAt);
@@ -191,10 +211,19 @@ type AskTiming = {
   timeoutAt: number;
   stallTimeoutMs: number;
   initialStallTimeoutMs: number;
+  stickyStreamReloadStallMs: number;
+  stickyStreamFinalGraceMs: number;
 };
 
 function resolveAskTiming(command: AskExecutionCommand): AskTiming {
-  const executionTimeoutMs = command.timeoutMs ?? ASK_TIMEOUT_MS;
+  const stickyStreamReloadStallMs = askStickyStreamReloadStallMs();
+  const stickyStreamFinalGraceMs = askStickyStreamFinalGraceMs();
+  const executionTimeoutMs =
+    command.timeoutMs ??
+    Math.max(
+      ASK_TIMEOUT_MS,
+      stickyStreamReloadStallMs + stickyStreamFinalGraceMs + 5_000,
+    );
   const stallTimeoutMs = computeStallTimeoutMs(
     command.timeoutMs,
     ASK_TIMEOUT_MS,
@@ -206,6 +235,8 @@ function resolveAskTiming(command: AskExecutionCommand): AskTiming {
       stallTimeoutMs,
       Math.min(ASK_STALL_RECOVERY_GRACE_MS, Math.floor(executionTimeoutMs / 2)),
     ),
+    stickyStreamReloadStallMs,
+    stickyStreamFinalGraceMs,
   };
 }
 
@@ -294,6 +325,10 @@ function createAskRuntimeState(
     askBaseline: options.askBaseline ?? askBaseline,
     pendingTextReconciliation: false,
     lastProgressAt: Date.now(),
+    lastTextChangeAt: Date.now(),
+    lastObservedText: "",
+    stickyStreamReloaded: false,
+    stickyStreamFallbackAt: null,
     recoveryAttempts: 0,
     lastStatusAt: 0,
     lastSnapshotSignature: null,
@@ -402,6 +437,13 @@ async function recordAskSnapshotProgress(
   if (progressed) {
     state.lastProgressAt = Date.now();
   }
+  if (snapshot.text !== state.lastObservedText) {
+    state.lastObservedText = snapshot.text;
+    if (snapshot.text.length > 0) {
+      state.lastTextChangeAt = Date.now();
+      state.stickyStreamFallbackAt = null;
+    }
+  }
 }
 
 function updateAskDoneStreak(
@@ -459,6 +501,106 @@ async function finalizeStableAskIfReady(
   }
   state.doneStreak = 0;
   return { snapshot: stabilized };
+}
+
+async function handleStickyStreamingAskIfNeeded(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+  page: Page,
+  state: AskRuntimeState,
+  snapshot: AskSnapshot,
+  onChunk: ChunkSink,
+  onState: StateSink,
+  timing: AskTiming,
+): Promise<AskRecoveryResult> {
+  if (snapshot.state === "done" || state.lastObservedText.length === 0) {
+    return { page };
+  }
+
+  const now = Date.now();
+  if (
+    state.stickyStreamFallbackAt !== null &&
+    now >= state.stickyStreamFallbackAt
+  ) {
+    state.pendingTextReconciliation = false;
+    return {
+      page,
+      result: await finalizeAsk(host, command, page, state, snapshot, onChunk),
+    };
+  }
+
+  if (now - state.lastTextChangeAt < timing.stickyStreamReloadStallMs) {
+    return { page };
+  }
+
+  if (state.stickyStreamReloaded) {
+    state.stickyStreamFallbackAt =
+      state.stickyStreamFallbackAt ?? now + timing.stickyStreamFinalGraceMs;
+    return { page };
+  }
+
+  state.stickyStreamReloaded = true;
+  await onState({
+    state: "interrupted",
+    reason: "stream showed no new assistant text while the provider still looked busy",
+    at: new Date().toISOString(),
+    conversation_id: state.knownConversationId,
+    message_id: state.knownMessageId,
+    current_url: snapshot.currentUrl,
+    streaming_safe: false,
+  });
+  await page.reload({
+    waitUntil: "domcontentloaded",
+    timeout: NAVIGATION_TIMEOUT_MS,
+  });
+
+  const reloadedSnapshot = await readAskSnapshot(page, state.askBaseline);
+  throwIfProviderGenerationFailed(reloadedSnapshot);
+  await recordAskSnapshotProgress(
+    host,
+    command,
+    state,
+    reloadedSnapshot,
+    onChunk,
+    onState,
+    "observed assistant reply after sticky stream reload",
+  );
+  updateAskDoneStreak(state, reloadedSnapshot);
+
+  if (reloadedSnapshot.state === "done") {
+    const stabilized = await stabilizeAskCompletion(
+      page,
+      state.askBaseline,
+      reloadedSnapshot,
+      timing.timeoutAt,
+    );
+    await recordAskSnapshotProgress(
+      host,
+      command,
+      state,
+      stabilized,
+      onChunk,
+      onState,
+      "observed stabilized assistant identity after sticky stream reload",
+    );
+    if (stabilized.state === "done") {
+      state.pendingTextReconciliation = false;
+      return {
+        page,
+        result: await finalizeAsk(
+          host,
+          command,
+          page,
+          state,
+          stabilized,
+          onChunk,
+        ),
+      };
+    }
+  }
+
+  state.stickyStreamFallbackAt = Date.now() + timing.stickyStreamFinalGraceMs;
+  return { page };
 }
 
 async function recoverStalledAskIfNeeded(
