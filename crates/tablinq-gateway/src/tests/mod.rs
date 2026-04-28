@@ -20,9 +20,11 @@ macro_rules! require_browser_integration_prereqs {
 
 mod capabilities_provider;
 
-mod chat_requests;
+mod chat_completions;
 
 mod conversation_inspection;
+
+mod conversation_routes;
 
 mod failure_recovery_status;
 
@@ -34,4 +36,8 @@ mod scheduler_dsl;
 
 mod scheduler_process_control;
 
-mod uploads_artifacts;
+mod artifact_endpoints;
+
+mod files_artifacts_flow;
+
+mod uploads;
