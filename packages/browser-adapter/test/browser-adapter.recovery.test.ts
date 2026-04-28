@@ -289,6 +289,10 @@ describe("browser adapter", () => {
         },
         pendingTextReconciliation: false,
         lastProgressAt: Date.now(),
+        lastTextChangeAt: Date.now(),
+        lastObservedText: "",
+        stickyStreamReloaded: false,
+        stickyStreamFallbackAt: null,
         recoveryAttempts: 0,
         lastStatusAt: 0,
         lastSnapshotSignature: null,
@@ -408,6 +412,96 @@ describe("browser adapter", () => {
     expect(states).toContain("recovered");
 
     await adapter.shutdown();
+  });
+
+  it("reloads once and returns when a completed ask still looks like it is streaming", async () => {
+    const previousStall =
+      process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+    const previousGrace = process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS;
+    process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = "250";
+    process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS = "150";
+
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "sticky-stop-after-complete",
+    });
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    try {
+      const chunks: string[] = [];
+      const result = await adapter.ask(
+        {
+          jobId: "job-ask-sticky-stop-reload-final",
+          prompt: "finish but leave stop visible",
+          timeoutMs: 5_000,
+        },
+        (chunk) => {
+          if (chunk.kind === "delta") {
+            chunks.push(chunk.text);
+          }
+        },
+      );
+
+      expect(result.output_text).toBe(
+        "Fake response for: finish but leave stop visible",
+      );
+      expect(chunks.join("")).toBe(result.output_text);
+      expect((await adapter.health()).reload_count).toBeGreaterThan(0);
+    } finally {
+      if (previousStall === undefined) {
+        delete process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+      } else {
+        process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = previousStall;
+      }
+      if (previousGrace === undefined) {
+        delete process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS;
+      } else {
+        process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS = previousGrace;
+      }
+      await adapter.shutdown();
+    }
+  });
+
+  it("returns the streamed ask text after sticky streaming remains running after reload", async () => {
+    const previousStall =
+      process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+    const previousGrace = process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS;
+    process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = "250";
+    process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS = "150";
+
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "sticky-stop-after-reload",
+    });
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    try {
+      const result = await adapter.ask(
+        {
+          jobId: "job-ask-sticky-stop-reload-partial",
+          prompt: "return after sticky stop survives reload",
+          timeoutMs: 5_000,
+        },
+        () => {},
+      );
+
+      expect(result.output_text).toBe(
+        "Fake response for: return after sticky stop survives reload",
+      );
+      expect((await adapter.health()).reload_count).toBeGreaterThan(0);
+    } finally {
+      if (previousStall === undefined) {
+        delete process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+      } else {
+        process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = previousStall;
+      }
+      if (previousGrace === undefined) {
+        delete process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS;
+      } else {
+        process.env.TABLINQ_ASK_STICKY_STREAM_FINAL_GRACE_MS = previousGrace;
+      }
+      await adapter.shutdown();
+    }
   });
 
   it("recovers a final result that completed upstream while disconnected", async () => {

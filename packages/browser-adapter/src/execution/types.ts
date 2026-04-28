@@ -41,6 +41,10 @@ export type AskRuntimeState = {
   askBaseline: AskBaseline | null;
   pendingTextReconciliation: boolean;
   lastProgressAt: number;
+  lastTextChangeAt: number;
+  lastObservedText: string;
+  stickyStreamReloaded: boolean;
+  stickyStreamFallbackAt: number | null;
   recoveryAttempts: number;
   lastStatusAt: number;
   lastSnapshotSignature: string | null;
