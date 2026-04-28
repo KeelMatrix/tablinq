@@ -385,6 +385,7 @@ dependencies = [
  "tablinq-gateway",
  "tempfile",
  "thiserror",
+ "url",
 ]
 
 [[package]]

@@ -34,7 +34,7 @@ pub(crate) fn operational_report(state_root: Option<&Path>) -> Result<Value> {
     let daemon_doctor_payload = daemon_doctor
         .as_ref()
         .and_then(|value| daemon_response_payload(value, "doctor"));
-    let gateway = tablinq_gateway::gateway_doctor(state_root)?;
+    let mut gateway = tablinq_gateway::gateway_doctor(state_root)?;
     let health = daemon_doctor_payload
         .and_then(|value| value.get("health"))
         .cloned()
@@ -49,6 +49,7 @@ pub(crate) fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         .and_then(|value| value.get("browser"))
         .cloned()
         .unwrap_or(Value::Null);
+    preserve_detached_browser_fields_in_gateway_admin(&mut gateway, &browser);
     let connectivity = resolved_browser_connectivity(&browser, &health);
     let extension_connected = connectivity.extension_connected;
     let authenticated = connectivity.authenticated;
@@ -100,6 +101,25 @@ pub(crate) fn operational_report(state_root: Option<&Path>) -> Result<Value> {
         "recovery_guidance": recovery_guidance,
         "recovery_commands": browser_recovery_commands(connection_mode),
     }))
+}
+
+fn preserve_detached_browser_fields_in_gateway_admin(gateway: &mut Value, browser: &Value) {
+    if browser.get("action").and_then(Value::as_str) != Some("detached") {
+        return;
+    }
+    let Some(admin_browser) = gateway
+        .get_mut("admin")
+        .and_then(|value| value.get_mut("browser"))
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    for field in ["action", "reason", "browser_process_closed"] {
+        let missing = admin_browser.get(field).map(Value::is_null).unwrap_or(true);
+        if missing && let Some(value) = browser.get(field) {
+            admin_browser.insert(field.to_owned(), value.clone());
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -411,5 +431,30 @@ mod tests {
                 authenticated: true,
             }
         );
+    }
+
+    #[test]
+    fn detached_fields_are_copied_into_gateway_admin_snapshot_when_missing() {
+        let browser = json!({
+            "action": "detached",
+            "reason": "attach-first uses a user-owned Chrome profile; Tablinq only disconnects from CDP",
+            "browser_process_closed": false
+        });
+        let mut gateway = json!({
+            "admin": {
+                "browser": {
+                    "action": null,
+                    "reason": null,
+                    "browser_process_closed": null
+                }
+            }
+        });
+
+        preserve_detached_browser_fields_in_gateway_admin(&mut gateway, &browser);
+
+        let admin_browser = &gateway["admin"]["browser"];
+        assert_eq!(admin_browser["action"], "detached");
+        assert_eq!(admin_browser["browser_process_closed"], false);
+        assert_eq!(admin_browser["reason"], browser["reason"]);
     }
 }
