@@ -13,6 +13,7 @@ serde_json.workspace = true
 shared-protocol = { path = "../shared-protocol" }
 tablinq-gateway = { path = "../tablinq-gateway" }
 thiserror.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true

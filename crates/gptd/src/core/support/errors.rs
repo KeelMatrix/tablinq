@@ -24,6 +24,10 @@ use url::Url;
 pub fn error_code_for_message(message: &str) -> ErrorCode {
     if is_provider_generation_failure_message(message) {
         ErrorCode::ProviderGenerationFailedNonretryable
+    } else if message.contains("attach debug endpoint is not reachable")
+        || message.contains("attach_endpoint_unavailable")
+    {
+        ErrorCode::AttachEndpointUnavailable
     } else if message.contains("profile locked") || message.contains("SingletonLock") {
         ErrorCode::ProfileLocked
     } else if message.contains("auth required") {

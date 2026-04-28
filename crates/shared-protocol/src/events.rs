@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub enum ErrorCode {
     Transport,
     BrowserLaunch,
+    AttachEndpointUnavailable,
     ProfileLocked,
     AuthRequired,
     CapabilityMissing,

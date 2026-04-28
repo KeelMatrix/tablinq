@@ -39,7 +39,9 @@ pub(crate) fn map_openai_error_parts(
             (400, "invalid_request_error", "capability_missing", message)
         }
         ErrorCode::AuthRequired => (503, "authentication_error", "auth_required", message),
-        ErrorCode::BrowserLaunch | ErrorCode::ProfileLocked => (
+        ErrorCode::BrowserLaunch
+        | ErrorCode::AttachEndpointUnavailable
+        | ErrorCode::ProfileLocked => (
             503,
             "service_unavailable_error",
             "browser_unavailable",

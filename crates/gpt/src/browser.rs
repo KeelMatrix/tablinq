@@ -12,6 +12,7 @@ use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::time::Duration;
+use url::Url;
 
 pub(crate) fn run_browser_command(
     state_root: Option<&Path>,
@@ -108,13 +109,20 @@ fn browser_start_debug(
             "debug_port": config.browser_debug_port(),
             "attach_profile_dir": plan.attach_profile_dir.as_ref().map(|path| path.display().to_string()),
             "pid": Value::Null,
+            "launched_pid": Value::Null,
             "launch_args": plan.launch_args,
             "browser_user_owned": true,
             "browser_owner": "external",
+            "action": existing.action,
             "manual_sign_in_required": true,
             "requires_clean_browser_restart_for_fresh_debug_endpoint": true,
             "target_url_opened_or_focused": existing.target_url_opened_or_focused,
+            "target_tab_found_before_open": existing.target_tab_found_before_open,
+            "target_tab_found": existing.target_tab_found,
+            "target_tab_focused": existing.target_tab_focused,
             "reused_existing_debug_endpoint": true,
+            "launched_new_process": false,
+            "existing_process_detected": true,
             "target_tab_id": existing.target_tab_id,
             "next_commands": [
                 "gpt browser attach",
@@ -150,13 +158,18 @@ fn browser_start_debug(
         "debug_port": config.browser_debug_port(),
         "attach_profile_dir": plan.attach_profile_dir.as_ref().map(|path| path.display().to_string()),
         "pid": child.id(),
+        "launched_pid": child.id(),
         "launch_args": plan.launch_args,
         "browser_user_owned": true,
         "browser_owner": "external",
+        "action": "started_debug_browser",
         "manual_sign_in_required": true,
         "requires_clean_browser_restart_for_fresh_debug_endpoint": true,
         "target_url_opened_or_focused": true,
+        "target_tab_found": Value::Null,
         "reused_existing_debug_endpoint": false,
+        "launched_new_process": true,
+        "existing_process_detected": false,
         "next_commands": [
             "gpt browser attach",
             "gpt status",
@@ -169,7 +182,11 @@ fn browser_start_debug(
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ExistingDebugTarget {
     status: &'static str,
+    action: &'static str,
     target_url_opened_or_focused: bool,
+    target_tab_found_before_open: bool,
+    target_tab_found: bool,
+    target_tab_focused: bool,
     target_tab_id: Option<String>,
 }
 
@@ -194,22 +211,50 @@ fn focus_existing_debug_target(
     });
 
     if let Some(target_id) = target_id {
-        let _ = devtools_request(&endpoint, "GET", &format!("/json/activate/{target_id}"));
-        let _ = devtools_request(&endpoint, "GET", &format!("/json/reload/{target_id}"));
+        let focused =
+            devtools_request(&endpoint, "GET", &format!("/json/activate/{target_id}")).is_ok();
         return Some(ExistingDebugTarget {
-            status: "focused_existing",
-            target_url_opened_or_focused: true,
+            status: "already_running",
+            action: "reused_existing_debug_browser",
+            target_url_opened_or_focused: false,
+            target_tab_found_before_open: true,
+            target_tab_found: true,
+            target_tab_focused: focused,
             target_tab_id: Some(target_id),
         });
     }
 
-    let opened = devtools_request(&endpoint, "PUT", &format!("/json/new?{target_url}")).is_ok()
-        || devtools_request(&endpoint, "GET", &format!("/json/new?{target_url}")).is_ok();
+    let created_target_id =
+        create_debug_target(&endpoint, target_url).and_then(|value| target_id_from_value(&value));
     Some(ExistingDebugTarget {
         status: "already_running",
-        target_url_opened_or_focused: opened,
-        target_tab_id: None,
+        action: "opened_target_in_existing_debug_browser",
+        target_url_opened_or_focused: created_target_id.is_some(),
+        target_tab_found_before_open: false,
+        target_tab_found: created_target_id.is_some(),
+        target_tab_focused: false,
+        target_tab_id: created_target_id,
     })
+}
+
+fn create_debug_target(endpoint: &HttpEndpoint, target_url: &str) -> Option<Value> {
+    for method in ["PUT", "GET"] {
+        let response = devtools_request(endpoint, method, &format!("/json/new?{target_url}")).ok();
+        if let Some(response) = response
+            && let Ok(value) = serde_json::from_str(&response)
+        {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn target_id_from_value(value: &Value) -> Option<String> {
+    value
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,7 +296,45 @@ fn devtools_request(endpoint: &HttpEndpoint, method: &str, path: &str) -> Result
 }
 
 fn same_target_url(current_url: &str, target_url: &str) -> bool {
-    current_url.trim().trim_end_matches('/') == target_url.trim().trim_end_matches('/')
+    let Ok(current) = Url::parse(current_url.trim()) else {
+        return current_url.trim().trim_end_matches('/') == target_url.trim().trim_end_matches('/');
+    };
+    let Ok(target) = Url::parse(target_url.trim()) else {
+        return current_url.trim().trim_end_matches('/') == target_url.trim().trim_end_matches('/');
+    };
+    if current.scheme() != target.scheme() || current.host_str() != target.host_str() {
+        return false;
+    }
+    match conversation_id(&target) {
+        Some(target_conversation) => conversation_id(&current) == Some(target_conversation),
+        None => workspace_path(&current) == workspace_path(&target),
+    }
+}
+
+fn conversation_id(url: &Url) -> Option<&str> {
+    let segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())?;
+    if segments.len() >= 2 && segments[segments.len() - 2].eq_ignore_ascii_case("c") {
+        segments.last().copied().filter(|value| !value.is_empty())
+    } else {
+        None
+    }
+}
+
+fn workspace_path(url: &Url) -> String {
+    let mut segments = url
+        .path_segments()
+        .map(|segments| segments.collect::<Vec<_>>())
+        .unwrap_or_default();
+    if segments.len() >= 2 && segments[segments.len() - 2].eq_ignore_ascii_case("c") {
+        segments.truncate(segments.len() - 2);
+    }
+    if segments.is_empty() {
+        "/".to_owned()
+    } else {
+        format!("/{}", segments.join("/"))
+    }
 }
 
 fn build_browser_start_debug_plan(
@@ -672,6 +755,16 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        assert_eq!(
+            value.get("launched_new_process").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("reused_existing_debug_endpoint")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
         assert!(value.get("close_existing_browser_windows_first").is_none());
         assert!(
             value["launch_args"]
@@ -684,10 +777,11 @@ mod tests {
     }
 
     #[test]
-    fn start_debug_focuses_existing_debug_target_without_launching_duplicate() {
+    fn start_debug_reuses_existing_debug_target_without_launching_duplicate() {
         let dir = tempdir().unwrap();
         fs::create_dir_all(dir.path().join("config")).unwrap();
-        let (endpoint, requests) = start_fake_devtools_server("https://chatgpt.com/");
+        let (endpoint, requests) =
+            start_fake_devtools_server(Some("https://chatgpt.com/c/existing"));
         fs::write(
             dir.path().join("config").join("config.toml"),
             format!("version = 2\nbrowser_channel = \"chrome\"\nbrowser_debug_endpoint = \"{endpoint}\"\n"),
@@ -703,14 +797,43 @@ mod tests {
 
         assert_eq!(
             value.get("status").and_then(Value::as_str),
-            Some("focused_existing")
+            Some("already_running")
         );
         assert_eq!(value.get("pid"), Some(&Value::Null));
+        assert_eq!(value.get("launched_pid"), Some(&Value::Null));
+        assert_eq!(
+            value.get("action").and_then(Value::as_str),
+            Some("reused_existing_debug_browser")
+        );
+        assert_eq!(
+            value.get("launched_new_process").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("reused_existing_debug_endpoint")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
         assert_eq!(
             value
                 .get("target_url_opened_or_focused")
                 .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("target_tab_found_before_open")
+                .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            value.get("target_tab_found").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.get("target_tab_id").and_then(Value::as_str),
+            Some("tab-1")
         );
         assert!(request_lines.iter().any(|line| line.contains("/json/list")));
         assert!(
@@ -719,11 +842,68 @@ mod tests {
                 .any(|line| line.contains("/json/activate/tab-1"))
         );
         assert!(
-            request_lines
+            !request_lines
                 .iter()
-                .any(|line| line.contains("/json/reload/tab-1"))
+                .any(|line| line.contains("/json/reload"))
         );
         assert!(!request_lines.iter().any(|line| line.contains("/json/new")));
+    }
+
+    #[test]
+    fn start_debug_opens_one_target_in_existing_debug_browser_when_missing() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("config")).unwrap();
+        let (endpoint, requests) = start_fake_devtools_server(None);
+        fs::write(
+            dir.path().join("config").join("config.toml"),
+            format!("version = 2\nbrowser_channel = \"chrome\"\nbrowser_debug_endpoint = \"{endpoint}\"\n"),
+        )
+        .unwrap();
+        let config = gptd::AppConfig::load_or_create(Some(dir.path())).unwrap();
+        let browser_path = create_fake_browser_launcher(dir.path(), "chrome");
+
+        let value = browser_start_debug(&config, Some("https://chatgpt.com/"), Some(&browser_path))
+            .unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let request_lines = requests.try_iter().collect::<Vec<_>>();
+        let new_requests = request_lines
+            .iter()
+            .filter(|line| line.contains("/json/new"))
+            .count();
+
+        assert_eq!(
+            value.get("status").and_then(Value::as_str),
+            Some("already_running")
+        );
+        assert_eq!(
+            value.get("action").and_then(Value::as_str),
+            Some("opened_target_in_existing_debug_browser")
+        );
+        assert_eq!(
+            value.get("launched_new_process").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value
+                .get("target_tab_found_before_open")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            value.get("target_tab_found").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value
+                .get("target_url_opened_or_focused")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            value.get("target_tab_id").and_then(Value::as_str),
+            Some("created-tab")
+        );
+        assert_eq!(new_requests, 1);
     }
 
     #[test]
@@ -820,12 +1000,12 @@ mod tests {
         path
     }
 
-    fn start_fake_devtools_server(target_url: &str) -> (String, mpsc::Receiver<String>) {
+    fn start_fake_devtools_server(target_url: Option<&str>) -> (String, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let (tx, rx) = mpsc::channel();
-        let target_url = target_url.to_owned();
+        let target_url = target_url.map(ToOwned::to_owned);
         thread::spawn(move || {
             let deadline = std::time::Instant::now() + Duration::from_secs(2);
             while std::time::Instant::now() < deadline {
@@ -839,7 +1019,12 @@ mod tests {
                 let request_line = request.lines().next().unwrap_or("").to_owned();
                 let _ = tx.send(request_line.clone());
                 let body = if request_line.contains("/json/list") {
-                    format!(r#"[{{"id":"tab-1","type":"page","url":"{target_url}"}}]"#)
+                    target_url
+                        .as_ref()
+                        .map(|url| format!(r#"[{{"id":"tab-1","type":"page","url":"{url}"}}]"#))
+                        .unwrap_or_else(|| "[]".to_owned())
+                } else if request_line.contains("/json/new") {
+                    r#"{"id":"created-tab","type":"page","url":"https://chatgpt.com/"}"#.to_owned()
                 } else {
                     "{}".to_owned()
                 };

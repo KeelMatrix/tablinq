@@ -20,7 +20,7 @@ use serde::Deserialize;
 use serde_json::json;
 use shared_protocol::{
     AskCommand, AskResult, BrowserConnectionMode, BrowserOpenRequest, BrowserStatusSnapshot,
-    CapabilityReport, EventPayload, JobStatus, ResearchCommand, ResearchResult,
+    CapabilityReport, ErrorCode, EventPayload, JobStatus, ResearchCommand, ResearchResult,
     SelectorPackSummary, StrategyAttempt, StrategyTelemetryEntry, StreamChunkKind,
 };
 use std::cell::{Cell, RefCell};
@@ -130,13 +130,14 @@ impl BrowserManager {
                 Ok(snapshot)
             }
             Err(err) => {
+                let mapped_error = attach_endpoint_unavailable_error(&self.config, &err);
                 self.teardown_process();
                 self.last_snapshot = idle_snapshot(
                     &self.config,
                     Some(self.current_target()),
                     request_browser_path,
                 );
-                Err(err)
+                Err(mapped_error.unwrap_or(err))
             }
         }
     }
@@ -579,8 +580,66 @@ impl BrowserManager {
     }
 }
 
+fn attach_endpoint_unavailable_error(
+    config: &AppConfig,
+    err: &anyhow::Error,
+) -> Option<anyhow::Error> {
+    if !matches!(
+        config.browser_connection_mode(),
+        BrowserConnectionMode::AttachFirst | BrowserConnectionMode::ManagedFallback
+    ) {
+        return None;
+    }
+    let message = format!("{err:#}");
+    if !message.contains("cdp-connect-failed") && !message.contains("ECONNREFUSED") {
+        return None;
+    }
+    let browser_label = if config.browser_channel().eq_ignore_ascii_case("msedge")
+        || config.browser_channel().eq_ignore_ascii_case("edge")
+    {
+        "Edge"
+    } else {
+        "Chrome"
+    };
+    Some(execution_error(ExecutionErrorMetadata::new(
+        ErrorCode::AttachEndpointUnavailable,
+        format!(
+            "{browser_label} attach debug endpoint is not reachable at {}. Run `gpt browser start-debug`. Then run `gpt browser attach`.",
+            config.browser_debug_endpoint()
+        ),
+        None,
+    )))
+}
+
 impl Drop for BrowserManager {
     fn drop(&mut self) {
         self.teardown_process();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn attach_endpoint_error_is_typed_and_actionable() {
+        let dir = tempdir().unwrap();
+        let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+        config.file.browser_channel = Some("chrome".to_owned());
+        config.file.browser_debug_endpoint = Some("http://127.0.0.1:9222".to_owned());
+        let raw = anyhow::anyhow!(
+            "cdp-connect-failed: browserType.connectOverCDP: connect ECONNREFUSED 127.0.0.1:9222"
+        );
+
+        let err = attach_endpoint_unavailable_error(&config, &raw).unwrap();
+        let metadata = execution_error_metadata(&err).unwrap();
+
+        assert_eq!(metadata.error_code, ErrorCode::AttachEndpointUnavailable);
+        assert_eq!(
+            metadata.message,
+            "Chrome attach debug endpoint is not reachable at http://127.0.0.1:9222. Run `gpt browser start-debug`. Then run `gpt browser attach`."
+        );
+        assert!(!metadata.message.contains("browserType.connectOverCDP"));
     }
 }

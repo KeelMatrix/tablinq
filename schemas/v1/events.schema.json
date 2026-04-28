@@ -263,6 +263,7 @@
           "enum": [
             "transport",
             "browser_launch",
+            "attach_endpoint_unavailable",
             "profile_locked",
             "auth_required",
             "capability_missing",
