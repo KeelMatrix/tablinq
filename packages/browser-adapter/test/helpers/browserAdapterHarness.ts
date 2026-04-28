@@ -1,20 +1,35 @@
-import { resetProviderPressureForTest } from "../../src/browserAdapter";
+import {
+  resetProviderPressureForTest,
+  resetSessionRhythmForTest,
+} from "../../src/browserAdapter";
 import { createBrowserIntegrationHarness } from "../browser-adapter.integration.helpers";
 
 type BrowserIntegrationHarness = ReturnType<
   typeof createBrowserIntegrationHarness
 >;
 
-export function installBrowserAdapterHarness(): BrowserIntegrationHarness {
+type BrowserAdapterHarnessOptions = {
+  resetSessionRhythm?: boolean;
+};
+
+export function installBrowserAdapterHarness(
+  options: BrowserAdapterHarnessOptions = {},
+): BrowserIntegrationHarness {
   let harness: BrowserIntegrationHarness | null = null;
 
   beforeEach(() => {
     harness = createBrowserIntegrationHarness();
     resetProviderPressureForTest();
+    if (options.resetSessionRhythm) {
+      resetSessionRhythmForTest();
+    }
   });
 
   afterEach(async () => {
     resetProviderPressureForTest();
+    if (options.resetSessionRhythm) {
+      resetSessionRhythmForTest();
+    }
     await harness?.cleanup();
     harness = null;
   });
