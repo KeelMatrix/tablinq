@@ -61,13 +61,18 @@ Formatting:
 - `cargo run -p gpt -- daemon status`
 - `cargo run -p gpt -- gateway start`
 - `cargo run -p gpt -- gateway status`
-- `cargo run -p gpt -- ask "hello world"`
-- `cargo run -p gpt -- ask --mode search "What is the latest stable Rust release?"`
-- `cargo run -p gpt -- ask --model thinking --effort extended "compare these ideas"`
-- `cargo run -p gpt -- ask --conversation conv-123 "continue from here"`
-- `cargo run -p gpt -- ask --new-conversation "start clean"`
-- `cargo run -p gpt -- research "investigate launch blockers"`
-- `cargo run -p gpt -- research --file notes.txt --output-dir reports "write a brief"`
+- `cargo run -p gpt -- ask "Name three edge cases for resumable downloads."`
+- `cargo run -p gpt -- ask --mode search "Which Rust release first stabilized let-chains?"`
+- `cargo run -p gpt -- ask --mode research --file roadmap.md "Map which milestones need customer interviews."`
+- `cargo run -p gpt -- ask --model thinking --effort extended "Choose SQLite or JSONL for a local job ledger."`
+- `cargo run -p gpt -- ask --mode search --model thinking --effort standard "Find current Windows code-signing costs."`
+- `cargo run -p gpt -- ask --mode search --conversation conv-123 "Refresh the shipping checklist against current notarization rules."`
+- `cargo run -p gpt -- ask --file crash.log --file repro.md "Find the first failing step and likely owner."`
+- `cargo run -p gpt -- ask --conversation conv-123 "Turn the last answer into a migration checklist."`
+- `cargo run -p gpt -- ask --new-conversation "Sketch a smoke test for a stuck progress bar."`
+- `cargo run -p gpt -- research "Find launch risks for a Windows tray app."`
+- `cargo run -p gpt -- research --file notes.txt --output-dir reports "Write a two-page vendor-risk brief."`
+- `cargo run -p gpt -- research --file roadmap.md --file support.csv --output-dir reports "Prioritize churn risks for next quarter."`
 - `cargo run -p gpt -- jobs list`
 - `cargo run -p gpt -- jobs show job-123`
 - `cargo run -p gpt -- jobs cancel job-123`
@@ -123,7 +128,7 @@ Managed fallback exists only for debugging, CI, harness isolation, and machines 
 - `scripts/package.ps1`
   - builds release Rust binaries, emits browser adapter and extension JavaScript, and assembles `dist/package/tablinq`
 - `scripts/install.ps1`
-  - the Windows all-in-one entry point: installs dependencies, packages the repo, replaces `%LOCALAPPDATA%\Tablinq\install`, registers the native host, removes legacy autostart persistence, starts daemon and gateway by default, optionally enables autostart with `-EnableAutoStart`, and prints the remaining manual browser-extension steps
+  - the Windows all-in-one entry point: installs dependencies, packages the repo, replaces `%LOCALAPPDATA%\Tablinq\install`, registers the native host, removes scheduled-task and Run-key autostart persistence, starts daemon and gateway by default, optionally enables autostart with `-EnableAutoStart`, and prints the remaining manual browser-extension steps
 
 ## CI expectations
 
@@ -182,23 +187,6 @@ Prefer the fake harness first. Use [live-smoke-checklist.md](live-smoke-checklis
 - `packages/extension/src/probe.ts`
   - extension-facing capability probes and alias discovery, with DOM/runtime helpers in `probe.runtime.js`
 
-## Antivirus warning on Windows
+## Windows Toolchain Failures
 
-If packaging, tests, or browser startup fail with `Access is denied`, check antivirus notifications before debugging the repo. On some Windows machines, local toolchain executables such as `node.exe`, `pwsh.exe`, `chrome.exe`, `cmd.exe`, or `esbuild.exe` may need explicit antivirus exceptions.
-
-Common exception candidates:
-
-- `<repo-root>`
-- `%LOCALAPPDATA%\Tablinq`
-- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`
-- `%NVM_SYMLINK%`
-- `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
-- `%NVM_SYMLINK%\node.exe`
-- `<repo-root>\scripts`
-- `%LOCALAPPDATA%\nvm`
-- `%ProgramFiles%\PowerShell\7\pwsh.exe`
-- `%ProgramFiles%\Google\Chrome\Application\chrome.exe`
-- `%LOCALAPPDATA%\nvm\v20.19.3\node.exe`
-- `%SystemRoot%\System32\cmd.exe`
-- `<repo-root>\node_modules\.pnpm\@esbuild+win32-x64@0.27.7\node_modules\@esbuild\win32-x64\esbuild.exe`
-- `<repo-root>\node_modules`
+See [troubleshooting](troubleshooting.md#antivirus-blocking-local-tools-or-browser-startup) before debugging Windows `Access is denied`, blocked-process, or quarantine failures.

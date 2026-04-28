@@ -224,7 +224,6 @@ Example Windows paths that may need exceptions:
 
 - `<repo-root>`
 - `%LOCALAPPDATA%\Tablinq`
-- `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`
 - `%NVM_SYMLINK%`
 - `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`
 - `%NVM_SYMLINK%\node.exe`

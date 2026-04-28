@@ -31,16 +31,18 @@ Also confirm:
 
 ## CLI smoke checks
 
-1. Run `gpt ask "hello from tablinq"` and confirm streamed output appears.
-2. Run `gpt ask --model instant "summarize this in one sentence"` and confirm completion or a clean `capability_missing` failure.
-3. Run `gpt ask --model thinking --effort standard "compare rust and typescript for local tooling"` and confirm completion or a clean capability failure.
-4. Run `gpt ask --model thinking --effort extended "reason carefully about this tradeoff"` and confirm completion or a clean capability failure.
-5. Run `gpt ask --mode search "What is the latest stable Rust release?"` and confirm ChatGPT opens the composer plus/tools menu, selects `Web search`/`Search`, shows a visible `Search` chip before submit, and completes with web-search behavior such as sources or current factual content. If ChatGPT does not expose composer Web search, confirm a clean capability failure.
-6. Run `gpt ask --file path\to\notes.txt "summarize the attached file"` and confirm the page acknowledges the attachment before submit.
-7. After a run that produces an artifact, confirm `gpt artifacts list` shows it and `gpt artifacts pull last --to .` retrieves it.
-8. Run `gpt research "investigate launch blockers"` and confirm progress states advance until completion or typed failure.
-9. After at least one download, confirm the attached normal-browser tab is still usable by running `gpt capabilities` or another `gpt ask`.
-10. Open two ChatGPT tabs, keep the extension active in only one, rerun `gpt browser attach`, and confirm Tablinq returns to the tab with working extension connectivity.
+1. Run `gpt ask "Draft a two-line release note for faster startup."` and confirm streamed output appears.
+2. Run `gpt ask --model instant "Compress this outage note into one Slack update."` and confirm completion or a clean `capability_missing` failure.
+3. Run `gpt ask --model thinking --effort standard "Choose Rust or TypeScript for a crash-report parser."` and confirm completion or a clean capability failure.
+4. Run `gpt ask --model thinking --effort extended "Design a rollback plan for a broken updater."` and confirm completion or a clean capability failure.
+5. Run `gpt ask --mode search "Which Rust release first stabilized let-chains?"` and confirm ChatGPT opens the composer plus/tools menu, selects `Web search`/`Search`, shows a visible `Search` chip before submit, and completes with web-search behavior such as sources or current factual content. If ChatGPT does not expose composer Web search, confirm a clean capability failure.
+6. Run `gpt ask --mode search --model thinking --effort standard "Find current Windows code-signing costs."` and confirm search mode and thinking selection both apply before submit, or fail cleanly if either capability is unavailable.
+7. Run `gpt ask --mode search --conversation conv-123 "Refresh the shipping checklist against current notarization rules."` with a real conversation ID and confirm the existing conversation is reused while search mode applies.
+8. Run `gpt ask --file path\to\notes.txt --file path\to\decisions.csv "Extract the unresolved launch decisions."` and confirm both attachments appear before submit.
+9. After a run that produces an artifact, confirm `gpt artifacts list` shows it and `gpt artifacts pull last --to .` retrieves it.
+10. Run `gpt research "Find launch risks for a Windows tray app."` and confirm progress states advance until completion or typed failure.
+11. After at least one download, confirm the attached normal-browser tab is still usable by running `gpt capabilities` or another `gpt ask`.
+12. Open two ChatGPT tabs, keep the extension active in only one, rerun `gpt browser attach`, and confirm Tablinq returns to the tab with working extension connectivity.
 
 If you want to retain command output or before/after snapshots from a live check, save them under `docs/smoke/`, for example:
 
