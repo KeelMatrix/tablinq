@@ -109,9 +109,6 @@ function resetToNewChat() {
   timers.stop();
   delete document.body.dataset.conversationId;
   delete document.body.dataset.lastMessageId;
-  document.body.dataset.newChatClicks = String(
-    Number.parseInt(document.body.dataset.newChatClicks || "0", 10) + 1,
-  );
   setStreamState("idle");
   setStreamingControls(false);
   const url = new URL(window.location.href);
@@ -122,6 +119,12 @@ function resetToNewChat() {
   }
   messageArticle?.removeAttribute("data-message-id");
   clearComposer();
+}
+
+function incrementDatasetCounter(name) {
+  document.body.dataset[name] = String(
+    Number.parseInt(document.body.dataset[name] || "0", 10) + 1,
+  );
 }
 
 const uploadRuntime = createUploadRuntime({
@@ -311,6 +314,15 @@ composer?.addEventListener("keydown", (event) => {
   submitPrompt("keyboard");
 });
 
+document.addEventListener("keydown", (event) => {
+  if (!(event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "o")) {
+    return;
+  }
+  event.preventDefault();
+  incrementDatasetCounter("newChatShortcut");
+  resetToNewChat();
+});
+
 stopButton?.addEventListener("click", () => {
   window.__tablinqCancelStream();
 });
@@ -326,6 +338,7 @@ document.addEventListener("click", (event) => {
   }
   if (target.closest("[data-testid='create-new-chat-button']")) {
     event.preventDefault();
+    incrementDatasetCounter("newChatClicks");
     resetToNewChat();
   }
 });

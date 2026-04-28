@@ -10,7 +10,6 @@ import {
   ensureResearchComposerFilled,
   isTransientPageError,
   readLiveResearchSnapshot,
-  resetConversationIdentity,
   scrollToBottomIfNeeded,
   sleep,
   submitResearch,
@@ -213,9 +212,6 @@ async function prepareResearchSubmission(
   initialSnapshot: ResearchSnapshot | null;
   timing: ResearchTiming;
 }> {
-  if (!command.conversationId) {
-    await resetConversationIdentity(page);
-  }
   await waitForInteractionSurface(page, { reloadOnUnavailable: true });
   await host.refreshCapabilities(page);
   page = await applyAskConfiguration(
