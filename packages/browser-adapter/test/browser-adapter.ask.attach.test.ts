@@ -74,6 +74,87 @@ describe("browser adapter ask: attach mode", () => {
     await adapter.shutdown();
   });
 
+  it("starts a fresh conversation for new ask requests in attach mode", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = await harness.createAdapterForMode("attach", targetUrl);
+    await adapter.open({ targetUrl, headless: true });
+
+    const first = await adapter.ask(
+      {
+        jobId: "job-ask-attach-first-conversation",
+        prompt: "start attach thread",
+      },
+      () => {},
+    );
+    const fresh = await adapter.ask(
+      {
+        jobId: "job-ask-attach-fresh-conversation",
+        prompt: "start attach fresh thread",
+        newConversation: true,
+      },
+      () => {},
+    );
+
+    expect(fresh.conversation_id).not.toBe(first.conversation_id);
+    expect(conversationIdFromUrl(fresh.current_url)).toBe(
+      fresh.conversation_id,
+    );
+    await expect(
+      adapter
+        .getManagedPageForTest()!
+        .evaluate(() => document.body.dataset.newChatClicks),
+    ).resolves.toBe("1");
+
+    await adapter.shutdown();
+  });
+
+  it("does not submit new ask requests into a stale root conversation", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = await harness.createAdapterForMode("attach", targetUrl);
+    await adapter.open({ targetUrl, headless: true });
+
+    const first = await adapter.ask(
+      {
+        jobId: "job-ask-attach-stale-root-first",
+        prompt: "start stale root thread",
+      },
+      () => {},
+    );
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const url = new URL(window.location.href);
+      url.pathname = "/";
+      window.history.replaceState({}, "", url);
+      const staleTurn = document.createElement("div");
+      staleTurn.setAttribute("data-testid", "conversation-turn-stale");
+      staleTurn.textContent = "stale root turn";
+      document.body.appendChild(staleTurn);
+    });
+
+    const fresh = await adapter.ask(
+      {
+        jobId: "job-ask-attach-stale-root-fresh",
+        prompt: "start stale root fresh thread",
+        newConversation: true,
+      },
+      () => {},
+    );
+
+    expect(fresh.conversation_id).not.toBe(first.conversation_id);
+    expect(conversationIdFromUrl(fresh.current_url)).toBe(
+      fresh.conversation_id,
+    );
+    await expect(
+      adapter
+        .getManagedPageForTest()!
+        .evaluate(() => document.body.innerText.includes("stale root turn")),
+    ).resolves.toBe(false);
+
+    await adapter.shutdown();
+  });
+
   it("drives the live-like harness through ask and artifact persistence in attach mode", async () => {
     const server = await harness.startServer();
     const targetUrl = withHarnessUrl(server.url, {

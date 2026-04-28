@@ -26,8 +26,11 @@ export async function openAskExecutionPage(
   host: BrowserExecutionHost,
   command: AskExecutionCommand,
 ): Promise<Page> {
+  const requiresFreshNavigation =
+    command.newConversation && !command.conversationId;
   const page = await host.openExecutionPage(
     host.resolveAskTarget(command.conversationId, command.newConversation),
+    requiresFreshNavigation,
   );
   await ensureProviderReachable(page);
   return page;

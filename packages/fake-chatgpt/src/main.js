@@ -105,6 +105,25 @@ function clearComposer() {
   composer.dispatchEvent(new InputEvent("input", { bubbles: true }));
 }
 
+function resetToNewChat() {
+  timers.stop();
+  delete document.body.dataset.conversationId;
+  delete document.body.dataset.lastMessageId;
+  document.body.dataset.newChatClicks = String(
+    Number.parseInt(document.body.dataset.newChatClicks || "0", 10) + 1,
+  );
+  setStreamState("idle");
+  setStreamingControls(false);
+  const url = new URL(window.location.href);
+  url.pathname = "/";
+  window.history.replaceState({}, "", url);
+  if (message) {
+    message.textContent = "Streaming output lands here.";
+  }
+  messageArticle?.removeAttribute("data-message-id");
+  clearComposer();
+}
+
 const uploadRuntime = createUploadRuntime({
   document,
   variant,
@@ -303,6 +322,11 @@ document.addEventListener("click", (event) => {
   }
   if (target.closest("[data-testid='retry-button']")) {
     providerRecoveryRuntime.retryButtonClicked();
+    return;
+  }
+  if (target.closest("[data-testid='create-new-chat-button']")) {
+    event.preventDefault();
+    resetToNewChat();
   }
 });
 

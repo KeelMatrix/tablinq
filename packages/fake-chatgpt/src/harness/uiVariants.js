@@ -150,6 +150,7 @@ export function renderHarnessShell({ root, note, window, config }) {
     }
     return `
       <nav class="stacked-toolbar" aria-label="workspace navigation">
+        <a href="/" data-testid="create-new-chat-button">New chat</a>
         <button type="button" class="group __menu-item hoverable w-full">Search chats</button>
         <a href="/apps" data-testid="apps-button">Apps</a>
         ${

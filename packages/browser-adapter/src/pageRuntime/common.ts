@@ -29,11 +29,109 @@ export async function resetConversationIdentity(page: Page): Promise<void> {
       return window.location.href;
     }));
   const resetUrl = resolveConversationUrl(currentUrl, null);
+  await openNewChatWithShortcut(page);
+  await waitForConversationTurnsCleared(page);
+  const clickedNewChat = await clickNewChatControl(page);
+  if (clickedNewChat) {
+    await waitForConversationTurnsCleared(page);
+  }
+  if (await hasConversationTurns(page)) {
+    await page
+      .goto(freshConversationResetUrl(resetUrl), {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      })
+      .catch(() => undefined);
+    await waitForConversationTurnsCleared(page);
+  }
+  if (await hasConversationTurns(page)) {
+    await page
+      .goto("about:blank", {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      })
+      .catch(() => undefined);
+    await page
+      .goto(freshConversationResetUrl(resetUrl), {
+        waitUntil: "domcontentloaded",
+        timeout: 30_000,
+      })
+      .catch(() => undefined);
+    await waitForConversationTurnsCleared(page);
+  }
+  if (await hasConversationTurns(page)) {
+    throw new Error(
+      "new-conversation-reset-failed: ChatGPT still shows the previous conversation after requesting a new chat",
+    );
+  }
   await page.evaluate((nextUrl: string) => {
     delete document.body.dataset.conversationId;
     delete document.body.dataset.lastMessageId;
     history.replaceState({}, "", nextUrl);
   }, resetUrl);
+}
+
+async function openNewChatWithShortcut(page: Page): Promise<void> {
+  await page.bringToFront().catch(() => undefined);
+  await page.keyboard.press("Control+Shift+O").catch(() => undefined);
+}
+
+async function clickNewChatControl(page: Page): Promise<boolean> {
+  const selectors = [
+    "[data-testid='create-new-chat-button']",
+    "a[aria-label='New chat']",
+    "button[aria-label='New chat']",
+    "a:has-text('New chat')",
+    "button:has-text('New chat')",
+  ];
+  for (const selector of selectors) {
+    const candidate = page.locator(selector).first();
+    if ((await candidate.count().catch(() => 0)) === 0) {
+      continue;
+    }
+    if (!(await candidate.isVisible().catch(() => false))) {
+      continue;
+    }
+    try {
+      await candidate.click({ timeout: 5_000 });
+      return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+async function hasConversationTurns(page: Page): Promise<boolean> {
+  return page
+    .evaluate(
+      () =>
+        document.querySelectorAll("[data-testid^='conversation-turn']").length >
+        0,
+    )
+    .catch(() => false);
+}
+
+async function waitForConversationTurnsCleared(page: Page): Promise<void> {
+  await page
+    .waitForFunction(
+      () =>
+        document.querySelectorAll("[data-testid^='conversation-turn']").length ===
+        0,
+      undefined,
+      { timeout: 5_000 },
+    )
+    .catch(() => undefined);
+}
+
+function freshConversationResetUrl(resetUrl: string): string {
+  try {
+    const url = new URL(resetUrl);
+    url.searchParams.set("tablinq_new_chat", String(Date.now()));
+    return url.toString();
+  } catch {
+    return resetUrl;
+  }
 }
 
 export async function scrollToBottomIfNeeded(page: Page): Promise<void> {
