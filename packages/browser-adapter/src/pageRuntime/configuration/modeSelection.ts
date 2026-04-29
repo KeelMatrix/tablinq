@@ -28,68 +28,62 @@ export async function ensureConfiguredMode(
     return page;
   }
 
+  const activeLanding = await waitForDeepResearchLanding(
+    page,
+    INTERACTION_TIMEOUT_MS,
+    {
+      throwOnTimeout: false,
+    },
+  );
+  if (activeLanding) {
+    return activeLanding;
+  }
+
+  try {
+    return await navigateDirectlyToDeepResearch(page, INTERACTION_TIMEOUT_MS);
+  } catch (directNavigationError) {
+    const fallbackPage = await activateLegacyInlineResearchControl(
+      page,
+      report,
+      directNavigationError,
+    );
+    if (fallbackPage) {
+      return fallbackPage;
+    }
+    throw directNavigationError;
+  }
+}
+
+async function activateLegacyInlineResearchControl(
+  page: Page,
+  report: CapabilityReportPayload,
+  directNavigationError: unknown,
+): Promise<Page | null> {
   const visible = report.matrix.research_mode_visible;
   if (!visible) {
-    return await navigateDirectlyToDeepResearch(page, INTERACTION_TIMEOUT_MS);
+    return null;
   }
 
   const locator = await waitForVisibleLocator(
     page.locator(
-      [
-        "[data-mode='research']",
-        "a[data-testid='deep-research-sidebar-item']",
-        "a[href='/deep-research']",
-        "a[href$='/deep-research']",
-        "button[aria-label*='Research']",
-      ].join(", "),
+      ["[data-mode='research']", "button[aria-label*='Research']"].join(", "),
     ),
-    INTERACTION_TIMEOUT_MS,
+    Math.min(2_000, INTERACTION_TIMEOUT_MS),
   );
   if (!locator) {
-    throw new Error(
-      `ui drift: could not find ${mode} mode control after probing it`,
-    );
+    return null;
   }
   const isActive = page.url().toLowerCase().includes("/deep-research");
-  const controlHref = await locator.getAttribute("href").catch(() => null);
   const requiresDeepResearchLandingWait = await locator
     .evaluate((element) => {
       if (!(element instanceof HTMLElement)) {
         return false;
       }
-      const href = element.getAttribute("href") ?? "";
-      return (
-        element.tagName.toLowerCase() === "a" ||
-        element.getAttribute("data-testid") === "deep-research-sidebar-item" ||
-        href.toLowerCase().includes("deep-research")
-      );
+      return element.tagName.toLowerCase() === "a";
     })
     .catch(() => false);
   if (!isActive) {
-    if (requiresDeepResearchLandingWait) {
-      await activateModeControl(page, locator);
-      const activatedPage = await waitForDeepResearchLanding(
-        page,
-        INTERACTION_TIMEOUT_MS,
-        {
-          throwOnTimeout: false,
-        },
-      );
-      if (activatedPage) {
-        return activatedPage;
-      }
-      if (!controlHref) {
-        throw new Error(
-          "research mode activation failed: Deep Research control did not expose a href",
-        );
-      }
-      const resolvedHref = new URL(controlHref, page.url()).toString();
-      await page.evaluate((href) => {
-        window.location.assign(href);
-      }, resolvedHref);
-    } else {
-      await activateModeControl(page, locator);
-    }
+    await activateModeControl(page, locator);
   }
   if (requiresDeepResearchLandingWait) {
     const landingPage = await waitForDeepResearchLanding(
@@ -103,20 +97,23 @@ export async function ensureConfiguredMode(
     }
     return landingPage;
   }
-  if (mode === "research") {
-    const landingPage = await waitForDeepResearchLanding(
-      page,
-      INTERACTION_TIMEOUT_MS,
-      {
-        throwOnTimeout: false,
-      },
-    );
-    if (landingPage) {
-      return landingPage;
-    }
-    return await navigateDirectlyToDeepResearch(page, INTERACTION_TIMEOUT_MS);
+  const landingPage = await waitForDeepResearchLanding(
+    page,
+    INTERACTION_TIMEOUT_MS,
+    {
+      throwOnTimeout: false,
+    },
+  );
+  if (landingPage) {
+    return landingPage;
   }
-  return page;
+  throw new Error(
+    `research mode activation failed after direct navigation failed: ${
+      directNavigationError instanceof Error
+        ? directNavigationError.message
+        : String(directNavigationError)
+    }`,
+  );
 }
 
 export async function ensureConfiguredSearchMode(page: Page): Promise<void> {
