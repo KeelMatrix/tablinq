@@ -38,17 +38,17 @@ export async function applyAskConfiguration(
     );
   }
 
-  if (command.modelClass) {
-    await ensureConfiguredModelClass(page, report, command.modelClass);
-  }
-  if (command.effort) {
-    await ensureConfiguredEffort(page, report, command.effort);
-  }
   if (command.mode && command.mode !== "normal" && command.mode !== "search") {
     await closeOpenComposerMenus(page);
     await waitForInteractionSurface(page);
     await page.waitForTimeout(750);
     page = await ensureConfiguredMode(page, report, command.mode);
+  }
+  if (command.modelClass) {
+    await ensureConfiguredModelClass(page, report, command.modelClass);
+  }
+  if (command.effort) {
+    await ensureConfiguredEffort(page, report, command.effort);
   }
   return page;
 }

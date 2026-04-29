@@ -47,11 +47,11 @@ const harness = installBrowserAdapterHarness({ resetSessionRhythm: true });
 describe("browser adapter foundation: pacing and retry primitives", () => {
   it("bounds the Deep Research start delay jitter to the real user range", () => {
     resetSessionRhythmForTest();
-    expect(deepResearchStartDelayMs(0, true, 1_000)).toBe(4_000);
+    expect(deepResearchStartDelayMs(0, true, 1_000)).toBe(1_500);
     resetSessionRhythmForTest();
-    expect(deepResearchStartDelayMs(0.5, true, 1_000)).toBe(7_000);
+    expect(deepResearchStartDelayMs(0.5, true, 1_000)).toBe(3_250);
     resetSessionRhythmForTest();
-    expect(deepResearchStartDelayMs(1, true, 1_000)).toBe(10_000);
+    expect(deepResearchStartDelayMs(1, true, 1_000)).toBe(5_000);
   });
 
   it("bounds short interaction jitters to human-scale ranges", () => {

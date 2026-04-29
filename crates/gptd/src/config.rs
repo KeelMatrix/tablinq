@@ -178,14 +178,14 @@ impl AppConfig {
     }
 
     pub fn browser_submit_jitter_min_ms(&self) -> u64 {
-        self.file.browser_submit_jitter_min_ms.unwrap_or(2_000)
+        self.file.browser_submit_jitter_min_ms.unwrap_or(800)
     }
 
     pub fn browser_submit_jitter_max_ms(&self) -> u64 {
         let min = self.browser_submit_jitter_min_ms();
         self.file
             .browser_submit_jitter_max_ms
-            .unwrap_or(5_000)
+            .unwrap_or(2_500)
             .max(min)
     }
 
@@ -372,10 +372,10 @@ fn normalize_file_config(mut file: FileConfig) -> FileConfig {
         file.browser_auto_open_target_tab = Some(true);
     }
     if file.browser_submit_jitter_min_ms.is_none() {
-        file.browser_submit_jitter_min_ms = Some(2_000);
+        file.browser_submit_jitter_min_ms = Some(800);
     }
     if file.browser_submit_jitter_max_ms.is_none() {
-        file.browser_submit_jitter_max_ms = Some(5_000);
+        file.browser_submit_jitter_max_ms = Some(2_500);
     }
     let gateway = file.gateway.get_or_insert_with(GatewayFileConfig::default);
     if gateway.host.is_none() {
@@ -463,8 +463,8 @@ mod tests {
         );
         assert!(config.browser_extension_required());
         assert!(config.browser_auto_open_target_tab());
-        assert_eq!(config.browser_submit_jitter_min_ms(), 2_000);
-        assert_eq!(config.browser_submit_jitter_max_ms(), 5_000);
+        assert_eq!(config.browser_submit_jitter_min_ms(), 800);
+        assert_eq!(config.browser_submit_jitter_max_ms(), 2_500);
         assert_eq!(config.gateway_host(), "127.0.0.1");
         assert_eq!(config.gateway_port(), 3847);
         assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
@@ -494,8 +494,8 @@ mod tests {
             parsed.browser_target_url.as_deref(),
             Some("https://chatgpt.com/")
         );
-        assert_eq!(parsed.browser_submit_jitter_min_ms, Some(2_000));
-        assert_eq!(parsed.browser_submit_jitter_max_ms, Some(5_000));
+        assert_eq!(parsed.browser_submit_jitter_min_ms, Some(800));
+        assert_eq!(parsed.browser_submit_jitter_max_ms, Some(2_500));
         assert_eq!(
             parsed.gateway.as_ref().and_then(|value| value.port),
             Some(3847)
