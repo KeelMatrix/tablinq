@@ -24,10 +24,12 @@ import {
   type ResearchSubmissionStateSnapshot,
 } from "../snapshotState";
 import {
+  ACTIVE_RESEARCH_REFRESH_INTERVAL_MS,
   adaptivePollIntervalMs,
   DEEP_RESEARCH_HANDOFF_TIMEOUT_MS,
   INTERACTION_TIMEOUT_MS,
   MAX_RECOVERY_ATTEMPTS,
+  NAVIGATION_TIMEOUT_MS,
   RESEARCH_SUBMISSION_START_TIMEOUT_MS,
   RESEARCH_TIMEOUT_MS,
   noteProviderPressure,
@@ -149,6 +151,38 @@ export async function runResearch(
     );
     if (finalized.result) {
       return finalized.result;
+    }
+
+    const activeRefresh = await refreshActiveResearchPageIfNeeded(
+      page,
+      state,
+      snapshot,
+      timing.timeoutAt,
+    );
+    page = activeRefresh.page;
+    if (activeRefresh.snapshot) {
+      await recordResearchSnapshotProgress(
+        host,
+        state,
+        activeRefresh.snapshot,
+        onUpdate,
+        onState,
+        "observed active research identity after scheduled refresh",
+      );
+      throwIfResearchFailed(activeRefresh.snapshot);
+      const refreshedFinalized = await finalizeCompletedResearchIfReady(
+        host,
+        command,
+        page,
+        state,
+        activeRefresh.snapshot,
+        onUpdate,
+        onState,
+        timing.timeoutAt,
+      );
+      if (refreshedFinalized.result) {
+        return refreshedFinalized.result;
+      }
     }
 
     const stallRecovery = await recoverStalledResearchIfNeeded(
@@ -273,6 +307,7 @@ function createResearchRuntimeState(
     knownConversationId: command.conversationId ?? null,
     knownMessageId: null,
     lastProgressAt: Date.now(),
+    lastActiveRefreshAt: Date.now(),
     recoveryAttempts: 0,
     announcedStart: false,
     submissionConfirmed: !options.submitPrompt,
@@ -439,6 +474,49 @@ async function finalizeCompletedResearchIfReady(
     };
   }
   return {};
+}
+
+export function shouldRefreshActiveResearchPage(
+  state: ResearchRuntimeState,
+  snapshot: ResearchSnapshot,
+  timeoutAt: number,
+  now = Date.now(),
+  intervalMs = ACTIVE_RESEARCH_REFRESH_INTERVAL_MS,
+): boolean {
+  if (now >= timeoutAt || !state.submissionConfirmed) {
+    return false;
+  }
+  if (
+    snapshot.status !== "waiting_for_sources" &&
+    snapshot.status !== "running"
+  ) {
+    return false;
+  }
+  if (snapshot.reportText.length > 0) {
+    return false;
+  }
+  return now - state.lastActiveRefreshAt >= intervalMs;
+}
+
+async function refreshActiveResearchPageIfNeeded(
+  page: Page,
+  state: ResearchRuntimeState,
+  snapshot: ResearchSnapshot,
+  timeoutAt: number,
+): Promise<{ page: Page; snapshot?: ResearchSnapshot }> {
+  const now = Date.now();
+  if (!shouldRefreshActiveResearchPage(state, snapshot, timeoutAt, now)) {
+    return { page };
+  }
+  state.lastActiveRefreshAt = now;
+  await page
+    .reload({
+      waitUntil: "domcontentloaded",
+      timeout: Math.min(NAVIGATION_TIMEOUT_MS, Math.max(1, timeoutAt - now)),
+    })
+    .catch(() => undefined);
+  const refreshed = await readLiveResearchSnapshot(page).catch(() => null);
+  return refreshed ? { page, snapshot: refreshed } : { page };
 }
 
 async function recoverStalledResearchIfNeeded(

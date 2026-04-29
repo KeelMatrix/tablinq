@@ -1,6 +1,7 @@
 export const NAVIGATION_TIMEOUT_MS = 20_000;
 export const ASK_TIMEOUT_MS = 25_000;
 export const RESEARCH_TIMEOUT_MS = 60_000;
+export const ACTIVE_RESEARCH_REFRESH_INTERVAL_MS = 5 * 60_000;
 export const PROBE_TIMEOUT_MS = 5_000;
 export const ATTACH_PROBE_GRACE_MS = 1_500;
 export const INTERACTION_TIMEOUT_MS = 7_500;

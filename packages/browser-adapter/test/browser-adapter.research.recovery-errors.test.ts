@@ -15,6 +15,7 @@ import {
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
 import { finalizeResearch } from "../src/execution/finalization";
+import { shouldRefreshActiveResearchPage } from "../src/execution/research";
 import {
   createIsolatedTempDir,
   listAttachedPages,
@@ -36,6 +37,50 @@ import {
 const harness = installBrowserAdapterHarness();
 
 describe("browser adapter research: recovery and error cases", () => {
+  it("refreshes active research on schedule without changing the final timeout", () => {
+    const now = 1_000_000;
+    const state = {
+      emittedText: "",
+      nextSeq: 0,
+      lastStatus: "waiting_for_sources",
+      lastMessage: "gathering sources",
+      doneStreak: 0,
+      knownConversationId: "conv-refresh",
+      knownMessageId: null,
+      lastProgressAt: now - 30_000,
+      lastActiveRefreshAt: now - 300_000,
+      recoveryAttempts: 0,
+      announcedStart: true,
+      submissionConfirmed: true,
+      lastStatusAt: 0,
+      lastSnapshotSignature: null,
+      lastIdentityUpdateSignature: null,
+    };
+    const snapshot = {
+      status: "waiting_for_sources",
+      statusMessage: "gathering sources",
+      reportText: "",
+      conversationId: "conv-refresh",
+      messageId: null,
+      currentUrl: "https://chatgpt.com/c/conv-refresh",
+    } as const;
+
+    expect(shouldRefreshActiveResearchPage(state, snapshot, now + 1, now)).toBe(
+      true,
+    );
+    expect(shouldRefreshActiveResearchPage(state, snapshot, now, now)).toBe(
+      false,
+    );
+    expect(
+      shouldRefreshActiveResearchPage(
+        state,
+        { ...snapshot, reportText: "partial report" },
+        now + 1,
+        now,
+      ),
+    ).toBe(false);
+  });
+
   it("fails clearly when /deep-research landing submission never starts and does not emit recovery loops", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
