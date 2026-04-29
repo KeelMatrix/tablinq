@@ -25,6 +25,12 @@ import { readResearchSubmissionState } from "./researchSubmission";
 
 const DEEP_RESEARCH_START_BUTTON_NAME = /^Start(?:\s+research)?(?:\s+\d+)?$/i;
 
+interface NestedDeepResearchReport {
+  reportText: string;
+  statusText: string;
+  href: string;
+}
+
 export async function beginDeepResearchRun(
   page: Page,
   timeoutMs: number,
@@ -282,6 +288,10 @@ export async function readDeepResearchFrameSnapshot(
 ): Promise<DeepResearchFrameSnapshot | null> {
   const snapshots: DeepResearchFrameSnapshot[] = [];
   for (const frame of deepResearchCandidateFrames(page)) {
+    const nestedSnapshot = await readNestedDeepResearchFrameSnapshot(frame);
+    if (nestedSnapshot) {
+      snapshots.push(nestedSnapshot);
+    }
     const snapshot = await inspectDeepResearchFrame(frame);
     if (snapshot) {
       snapshots.push(snapshot);
@@ -295,6 +305,64 @@ export async function readDeepResearchFrameSnapshot(
       scoreDeepResearchFrame(right) - scoreDeepResearchFrame(left),
   );
   return snapshots[0] ?? null;
+}
+
+async function readNestedDeepResearchFrameSnapshot(
+  frame: Frame,
+): Promise<DeepResearchFrameSnapshot | null> {
+  const nestedReport = await frame
+    .evaluate<NestedDeepResearchReport | null>(
+      `(() => {
+      const normalize = (value) => String(value ?? "")
+        .replace(/\\u00a0/g, " ")
+        .replace(/\\r/g, "")
+        .trim();
+      const nestedFrame = document.querySelector("iframe#root");
+      const nestedDocument = nestedFrame && "contentDocument" in nestedFrame
+        ? nestedFrame.contentDocument
+        : null;
+      if (!nestedDocument) {
+        return null;
+      }
+      const reportRoot =
+        nestedDocument.querySelector("[class*='reportPage']") ??
+        nestedDocument.querySelector("article, [role='article'], [role='document'], main, body");
+      const statusRoot =
+        nestedDocument.querySelector("[data-deep-research-status], [class*='text-token-text-secondary']") ??
+        nestedDocument.body;
+      return {
+        reportText: normalize(
+          "innerText" in (reportRoot ?? {})
+            ? reportRoot.innerText
+            : reportRoot?.textContent
+        ),
+        statusText: normalize(
+          "innerText" in (statusRoot ?? {})
+            ? statusRoot.innerText
+            : statusRoot?.textContent
+        ),
+        href: nestedDocument.location.href,
+      };
+    })()`,
+    )
+    .catch(() => null);
+  if (!nestedReport?.reportText) {
+    return null;
+  }
+  const lowerText =
+    `${nestedReport.statusText}\n${nestedReport.reportText}`.toLowerCase();
+  const phase: DeepResearchFrameSnapshot["phase"] =
+    lowerText.includes("research completed") || nestedReport.reportText
+      ? "done"
+      : "running";
+  return normalizeDeepResearchFrameSnapshot({
+    phase,
+    statusMessage: nestedReport.statusText || null,
+    reportText: nestedReport.reportText,
+    frameUrl: frame.url() || nestedReport.href,
+    startVisible: false,
+    startEnabled: false,
+  });
 }
 
 export async function inspectDeepResearchFrame(

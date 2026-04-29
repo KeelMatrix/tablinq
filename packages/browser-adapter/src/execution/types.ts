@@ -60,6 +60,7 @@ export type ResearchRuntimeState = {
   knownConversationId: string | null;
   knownMessageId: string | null;
   lastProgressAt: number;
+  lastActiveRefreshAt: number;
   recoveryAttempts: number;
   announcedStart: boolean;
   submissionConfirmed: boolean;
