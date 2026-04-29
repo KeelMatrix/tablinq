@@ -23,6 +23,8 @@ import { callPageAdapter } from "./adapter";
 import { clickWithInteractionJitter, sleep } from "./common";
 import { readResearchSubmissionState } from "./researchSubmission";
 
+const DEEP_RESEARCH_START_BUTTON_NAME = /^Start(?:\s+research)?(?:\s+\d+)?$/i;
+
 export async function beginDeepResearchRun(
   page: Page,
   timeoutMs: number,
@@ -241,7 +243,9 @@ export async function waitForDeepResearchStartConfirmation(
 
 export async function clickDeepResearchStart(page: Page): Promise<boolean> {
   for (const frame of deepResearchCandidateFrames(page)) {
-    const button = frame.getByRole("button", { name: /^Start$/i }).first();
+    const button = frame
+      .getByRole("button", { name: DEEP_RESEARCH_START_BUTTON_NAME })
+      .first();
     const visible = await button.isVisible().catch(() => false);
     if (!visible) {
       continue;
@@ -264,7 +268,13 @@ export async function clickDeepResearchStart(page: Page): Promise<boolean> {
 }
 
 export function deepResearchCandidateFrames(page: Page): Frame[] {
-  return page.frames().filter((frame) => frame !== page.mainFrame());
+  const childFrames = page
+    .frames()
+    .filter((frame) => frame !== page.mainFrame());
+  const includeMainFrame = (safePageUrl(page)?.toLowerCase() ?? "").includes(
+    "/deep-research",
+  );
+  return includeMainFrame ? [page.mainFrame(), ...childFrames] : childFrames;
 }
 
 export async function readDeepResearchFrameSnapshot(
@@ -302,7 +312,9 @@ export async function inspectDeepResearchFrame(
       .isVisible()
       .catch(() => false);
 
-  const startButton = frame.getByRole("button", { name: /^Start$/i }).first();
+  const startButton = frame
+    .getByRole("button", { name: DEEP_RESEARCH_START_BUTTON_NAME })
+    .first();
   const startVisible = await startButton.isVisible().catch(() => false);
   const startEnabled = startVisible
     ? await startButton.isEnabled().catch(() => false)

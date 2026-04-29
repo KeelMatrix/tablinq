@@ -25,7 +25,12 @@ import {
   captureResearchStatuses,
   expectResearchHandoffStatuses,
   openManagedHarnessAdapter,
+  openTrackedManagedAdapter,
 } from "./helpers/browserFlow";
+import {
+  beginDeepResearchRun,
+  readDeepResearchFrameSnapshot,
+} from "../src/pageRuntime";
 import { installBrowserAdapterHarness } from "./helpers/browserAdapterHarness";
 import {
   fakeArtifactPage,
@@ -149,6 +154,104 @@ describe("browser adapter research: startup and configuration", () => {
     await adapter.shutdown();
   });
 
+  it("enters live Deep Research by URL without clicking the sidebar nav", async () => {
+    const server = await harness.startServer();
+    const target = new URL(
+      withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-success",
+      }),
+    );
+    target.pathname = "/c/existing-research-thread";
+    const { adapter } = await openTrackedManagedAdapter(
+      harness,
+      target.toString(),
+    );
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const storageKey = "tablinqDeepResearchNavClicks";
+      localStorage.setItem(storageKey, "0");
+      document
+        .querySelector("#deep-research-nav")
+        ?.addEventListener("click", () => {
+          localStorage.setItem(
+            storageKey,
+            String(Number(localStorage.getItem(storageKey) ?? "0") + 1),
+          );
+        });
+    });
+
+    const result = await adapter.research(
+      {
+        jobId: "job-research-no-sidebar-click",
+        query: "check deep research without sidebar activation",
+        timeoutMs: 8_000,
+      },
+      () => {},
+    );
+    const navClicks = await adapter
+      .getManagedPageForTest()!
+      .evaluate(() => localStorage.getItem("tablinqDeepResearchNavClicks"));
+
+    expect(result.report_text).toContain(
+      "Research report for: check deep research without sidebar activation",
+    );
+    expect(navClicks).toBe("0");
+
+    await adapter.shutdown();
+  });
+
+  it("clicks the updated main-frame Deep Research Start control", async () => {
+    const server = await harness.startServer();
+    const { adapter, targetUrl } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
+        variant: "live",
+        scenario: "research-success",
+      },
+    );
+    const page = adapter.getManagedPageForTest()!;
+    const deepUrl = new URL(targetUrl);
+    deepUrl.pathname = "/deep-research";
+    await page.goto(deepUrl.toString(), { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => {
+      document.body.innerHTML = `
+        <main data-deep-research-root="true">
+          <h1>Deep research</h1>
+          <p>Review the research plan.</p>
+          <button type="button" id="start-research">Start 23</button>
+        </main>
+      `;
+      document
+        .querySelector("#start-research")
+        ?.addEventListener("click", () => {
+          document.body.innerHTML = `
+          <main data-deep-research-root="true">
+            <h1>Deep research</h1>
+            <p data-deep-research-status="true">gathering sources</p>
+            <pre data-deep-research-text="true">Research report started</pre>
+          </main>
+        `;
+        });
+    });
+
+    const before = await readDeepResearchFrameSnapshot(page);
+    expect(before).toMatchObject({
+      phase: "planning",
+      startVisible: true,
+      startEnabled: true,
+    });
+    const started = await beginDeepResearchRun(page, 2_000);
+
+    expect(started).toMatchObject({
+      status: "waiting_for_sources",
+      statusMessage: "gathering sources",
+      reportText: "Research report started",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("does not duplicate research submit after a keyboard submit edge is detected", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
@@ -164,10 +267,52 @@ describe("browser adapter research: startup and configuration", () => {
       }),
     );
     await adapter.open({ targetUrl, headless: true });
-    await adapter.getManagedPageForTest()!.evaluate(() => {
+    const page = adapter.getManagedPageForTest()!;
+    await page.addInitScript(() => {
+      const installKeyboardOnlySubmit = () => {
+        document.querySelector("[data-testid='send-button']")?.remove();
+        if (!document.body) {
+          return;
+        }
+        document.body.dataset.keyboardSubmitReady = "true";
+        const composer = document.querySelector("#prompt-textarea");
+        if (!(composer instanceof HTMLElement)) {
+          return;
+        }
+        if (composer.dataset.tablinqKeyboardCounterInstalled === "true") {
+          return;
+        }
+        composer.dataset.tablinqKeyboardCounterInstalled = "true";
+        composer.addEventListener("keydown", (event) => {
+          if (
+            event instanceof KeyboardEvent &&
+            event.key === "Enter" &&
+            (event.ctrlKey || event.metaKey)
+          ) {
+            document.body.dataset.keyboardSubmitEvents = String(
+              Number(document.body.dataset.keyboardSubmitEvents ?? "0") + 1,
+            );
+          }
+        });
+      };
+      new MutationObserver(installKeyboardOnlySubmit).observe(document, {
+        childList: true,
+        subtree: true,
+      });
+      document.addEventListener("DOMContentLoaded", installKeyboardOnlySubmit);
+      installKeyboardOnlySubmit();
+    });
+    await page.evaluate(() => {
       document.querySelector("[data-testid='send-button']")?.remove();
       document.body.dataset.keyboardSubmitReady = "true";
-      let keyboardSubmits = 0;
+      const composer = document.querySelector("#prompt-textarea");
+      if (!(composer instanceof HTMLElement)) {
+        return;
+      }
+      if (composer.dataset.tablinqKeyboardCounterInstalled === "true") {
+        return;
+      }
+      composer.dataset.tablinqKeyboardCounterInstalled = "true";
       document
         .querySelector("#prompt-textarea")
         ?.addEventListener("keydown", (event) => {
@@ -176,9 +321,9 @@ describe("browser adapter research: startup and configuration", () => {
             event.key === "Enter" &&
             (event.ctrlKey || event.metaKey)
           ) {
-            keyboardSubmits += 1;
-            document.body.dataset.keyboardSubmitEvents =
-              String(keyboardSubmits);
+            document.body.dataset.keyboardSubmitEvents = String(
+              Number(document.body.dataset.keyboardSubmitEvents ?? "0") + 1,
+            );
           }
         });
     });
