@@ -14,7 +14,7 @@ import {
 } from "./helpers";
 
 export type HarnessUrlOptions = {
-  variant?: "classic" | "aria" | "live" | "menu";
+  variant?: "classic" | "aria" | "live" | "menu" | "composer-right";
   scenario?:
     | "success"
     | "timeout"

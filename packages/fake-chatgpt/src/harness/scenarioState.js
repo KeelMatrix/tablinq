@@ -60,7 +60,8 @@ export function createScenarioState(window) {
   const variant =
     requestedVariant === "aria" ||
     requestedVariant === "live" ||
-    requestedVariant === "menu"
+    requestedVariant === "menu" ||
+    requestedVariant === "composer-right"
       ? requestedVariant
       : "classic";
   const scenario = params.get("scenario") || "success";

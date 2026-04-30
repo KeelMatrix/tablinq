@@ -490,19 +490,49 @@
       element instanceof HTMLElement &&
       ["menuitemradio", "menuitem", "option"].includes(elementRole(element));
 
+    const nameLooksLikeComposerModelTrigger = (name) =>
+      hasToken(name, [
+        "instant",
+        "legacy",
+        "gpt",
+        "pro",
+        "standard",
+        "extended",
+      ]) ||
+      /\b5(?:\.\d+)?\b/.test(name) ||
+      (hasToken(name, ["thinking"]) &&
+        !hasToken(name, ["standard", "extended", "effort"]));
+
+    const isComposerRightModelPickerTrigger = (element) =>
+      element instanceof HTMLElement &&
+      element.matches("button.__composer-pill[aria-haspopup]") &&
+      !element.hasAttribute("aria-label") &&
+      isComposerAdjacent(element) &&
+      nameLooksLikeComposerModelTrigger(accessibleName(element));
+
     const isModelPickerTrigger = (element) =>
       element instanceof HTMLElement &&
       element.getAttribute("aria-haspopup") !== null &&
       (element.matches("button[aria-label='Model selector']") ||
         element.matches("button[aria-label='Switch model']") ||
         element.matches("button[data-testid='model-switcher-dropdown-button']") ||
+        isComposerRightModelPickerTrigger(element) ||
         hasToken(accessibleName(element), ["chatgpt", "model", "selector"]));
 
     const isEffortPickerTrigger = (element) =>
       element instanceof HTMLElement &&
       element.getAttribute("aria-haspopup") !== null &&
-      isComposerAdjacent(element) &&
-      (element.matches("button.__composer-pill") ||
+      !isComposerRightModelPickerTrigger(element) &&
+      (element.matches(
+        "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort']",
+      ) ||
+        element.matches(
+          "[data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
+        ) ||
+        (isComposerAdjacent(element) &&
+          element.matches(
+            "#thinking-effort-trigger, button[aria-controls*='effort'], button[aria-label*='Thinking'], button[aria-label*='thinking'], button[aria-label*='Effort'], button[aria-label*='effort']",
+          )) ||
         hasToken(accessibleName(element), [
           "thinking",
           "standard",
@@ -536,6 +566,9 @@
     const isEffortOption = (element) =>
       element instanceof HTMLElement &&
       !isEffortPickerTrigger(element) &&
+      !(element.getAttribute("data-testid") ?? "").startsWith(
+        "model-switcher-",
+      ) &&
       ((element.hasAttribute("data-effort") &&
         (element.getAttribute("aria-pressed") !== null ||
           element.tagName.toLowerCase() === "button")) ||
@@ -674,15 +707,23 @@
         "button[aria-label='Switch model']",
         "button[data-testid='model-switcher-dropdown-button']",
       ]) ??
+      findNamedControl(["instant", "thinking", "legacy", "gpt", "5.3", "5.4"], {
+        include: isComposerRightModelPickerTrigger,
+      }) ??
       findNamedControl(["chatgpt", "model", "selector"], {
         include: isModelPickerTrigger,
       });
 
     const findEffortPickerTrigger = () =>
       firstVisibleBySelectors([
-        "button.__composer-pill[aria-haspopup]",
+        "#thinking-effort-trigger",
+        "button[aria-controls*='effort']",
+        "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort']",
+        "[data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
         "button[aria-haspopup][aria-label*='Thinking']",
         "button[aria-haspopup][aria-label*='thinking']",
+        "button[aria-haspopup][aria-label*='Effort']",
+        "button[aria-haspopup][aria-label*='effort']",
       ]) ??
       findComposerAdjacentNamedControl(
         ["standard", "extended", "effort", "reasoning", "thinking"],

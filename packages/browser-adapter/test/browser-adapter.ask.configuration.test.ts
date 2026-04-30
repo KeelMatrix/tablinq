@@ -177,6 +177,85 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     await adapter.shutdown();
   });
 
+  it("selects Thinking and Standard through the composer-right model menu", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-thinking-standard";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "instant",
+        initialEffort: "extended",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-thinking-standard",
+        prompt: "configure composer right thinking standard",
+        conversationId,
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "standard",
+      modelMenuClicks: "2",
+      effortMenuClicks: "1",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("selects Instant through the composer-right model menu", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-instant";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "thinking",
+        initialEffort: "standard",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-instant",
+        prompt: "configure composer right instant",
+        conversationId,
+        modelClass: "instant",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      model: "instant",
+      modelMenuClicks: "1",
+      effortMenuClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("opens the composer tools menu and selects Web search before submitting", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {

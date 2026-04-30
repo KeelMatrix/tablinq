@@ -306,6 +306,31 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.efforts.extended).toContain("extended");
   });
 
+  it("detects the composer-right model picker before the menu opens", () => {
+    document.body.dataset.uiVariant = "live";
+    document.body.innerHTML = `
+      <main aria-label="chatgpt workspace">
+        <form data-testid="composer-root">
+          <textarea id="prompt-textarea" aria-label="Message ChatGPT"></textarea>
+          <button type="button" class="__composer-pill" aria-haspopup="menu" aria-expanded="false">
+            5.4 Extended
+          </button>
+          <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+        </form>
+      </main>
+    `;
+
+    const message = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(message.report.matrix.model_picker_visible).toBe(true);
+    expect(message.report.matrix.thinking_effort_visible).toBe(false);
+    expect(message.runtime.strategy_matches.model_picker_visible).toBe(
+      "chatgpt-model-trigger",
+    );
+  });
+
   it("detects an active composer Search chip", () => {
     document.body.dataset.uiVariant = "live";
     document.body.innerHTML = `
