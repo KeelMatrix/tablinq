@@ -129,6 +129,97 @@ export async function ensureConfiguredEffort(
   );
 }
 
+export async function ensureConfiguredThinkingEffort(
+  page: Page,
+  _report: CapabilityReportPayload,
+  effort: "standard" | "extended",
+): Promise<boolean> {
+  if (
+    (await visibleComposerModelMatchesThinking(page)) &&
+    (await visibleComposerEffortMatches(page, effort))
+  ) {
+    return true;
+  }
+
+  const directThinkingOption = await findVisibleThinkingChoicePoint(
+    page,
+    effort,
+    750,
+  );
+  if (directThinkingOption) {
+    if (directThinkingOption.checked !== "true") {
+      await clickWithInteractionJitter(
+        directThinkingOption.locator,
+        "choice_select",
+        {
+          force: true,
+        },
+        page,
+      );
+      await page.waitForTimeout(150);
+    }
+    await closeOpenComposerMenus(page);
+    return true;
+  }
+
+  const trigger = await findVisibleModelPickerTriggerForEffort(page);
+  if (!trigger) {
+    return false;
+  }
+
+  await clickWithInteractionJitter(trigger, "picker_trigger", undefined, page);
+
+  const openedThinkingOption = await findVisibleThinkingChoicePoint(
+    page,
+    effort,
+    1_000,
+  );
+  if (openedThinkingOption) {
+    if (openedThinkingOption.checked !== "true") {
+      await clickWithInteractionJitter(
+        openedThinkingOption.locator,
+        "choice_select",
+        {
+          force: true,
+        },
+        page,
+      );
+      await page.waitForTimeout(150);
+    }
+    await closeOpenComposerMenus(page);
+    return true;
+  }
+
+  const nestedTrigger = await findVisibleNestedThinkingEffortTrigger(page, 500);
+  if (nestedTrigger) {
+    await clickWithInteractionJitter(
+      nestedTrigger,
+      "picker_trigger",
+      { force: true },
+      page,
+    );
+    const option = await findVisibleEffortChoicePoint(page, effort, 1_000);
+    if (option) {
+      if (option.checked !== "true") {
+        await clickWithInteractionJitter(
+          option.locator,
+          "choice_select",
+          {
+            force: true,
+          },
+          page,
+        );
+        await page.waitForTimeout(150);
+      }
+      await closeOpenComposerMenus(page);
+      return true;
+    }
+  }
+
+  await closeOpenComposerMenus(page);
+  return false;
+}
+
 export async function trySelectNestedThinkingEffort(
   page: Page,
   effort: "standard" | "extended",
@@ -184,12 +275,7 @@ export async function findVisibleEffortTrigger(
 }
 
 async function openNestedThinkingEffortMenu(page: Page): Promise<boolean> {
-  let nestedTrigger = await waitForVisibleLocator(
-    page.locator(
-      "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort'], [data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
-    ),
-    250,
-  );
+  let nestedTrigger = await findVisibleNestedThinkingEffortTrigger(page, 250);
   if (!nestedTrigger) {
     const modelTrigger = await findVisibleModelPickerTriggerForEffort(page);
     if (!modelTrigger) {
@@ -201,15 +287,7 @@ async function openNestedThinkingEffortMenu(page: Page): Promise<boolean> {
       undefined,
       page,
     );
-    const nestedLocator = page
-      .locator(
-        "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort'], [data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
-      )
-      .first();
-    await nestedLocator
-      .waitFor({ state: "attached", timeout: 1_000 })
-      .catch(() => undefined);
-    nestedTrigger = nestedLocator;
+    nestedTrigger = await findVisibleNestedThinkingEffortTrigger(page, 1_000);
   }
   if (!nestedTrigger) {
     return false;
@@ -256,6 +334,18 @@ async function findVisibleModelPickerTriggerForEffort(
   );
 }
 
+async function findVisibleNestedThinkingEffortTrigger(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  return waitForVisibleLocator(
+    page.locator(
+      "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort'], [data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
+    ),
+    timeoutMs,
+  );
+}
+
 async function visibleComposerEffortMatches(
   page: Page,
   effort: "standard" | "extended",
@@ -287,12 +377,105 @@ async function visibleComposerEffortMatches(
           .trim()
           .toLowerCase();
         if (requestedEffort === "standard") {
-          return text.includes("standard") || text.includes("thinking");
+          return (
+            text.includes("standard") ||
+            (text.includes("thinking") && !text.includes("extended"))
+          );
         }
         return text.includes("extended");
       });
     }, effort)
     .catch(() => false);
+}
+
+async function visibleComposerModelMatchesThinking(
+  page: Page,
+): Promise<boolean> {
+  return page
+    .evaluate(() => {
+      const isVisible = (element: Element) => {
+        if (!(element instanceof HTMLElement)) {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0" &&
+          element.getClientRects().length > 0
+        );
+      };
+      return Array.from(
+        document.querySelectorAll(
+          "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
+        ),
+      ).some((element) => {
+        if (!isVisible(element)) {
+          return false;
+        }
+        const text = (element.textContent ?? "")
+          .replace(/\\s+/g, " ")
+          .trim()
+          .toLowerCase();
+        return (
+          text.includes("thinking") ||
+          text.includes("standard") ||
+          text.includes("extended") ||
+          text.includes("5.4") ||
+          text.includes("5.5")
+        );
+      });
+    })
+    .catch(() => false);
+}
+
+async function findVisibleThinkingChoicePoint(
+  page: Page,
+  effort: "standard" | "extended",
+  timeoutMs: number,
+): Promise<{ locator: Locator; checked: string | null } | null> {
+  const choices = page.locator(
+    "[role='menuitemradio']:visible, [role='option']:visible",
+  );
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const count = await choices.count();
+    for (let index = 0; index < count; index += 1) {
+      const locator = choices.nth(index);
+      const testId = (
+        (await locator.getAttribute("data-testid").catch(() => null)) ?? ""
+      ).toLowerCase();
+      const text = ((await locator.textContent().catch(() => null)) ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      const isThinking =
+        testId.includes("thinking") || text.includes("thinking");
+      if (!isThinking) {
+        continue;
+      }
+      const hasNestedEffort =
+        (await locator
+          .locator(
+            "[data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
+          )
+          .count()
+          .catch(() => 0)) > 0;
+      const matchesEffort =
+        effort === "standard"
+          ? text.includes("standard")
+          : text.includes("extended");
+      if (!matchesEffort) {
+        continue;
+      }
+      return {
+        locator,
+        checked: await locator.getAttribute("aria-checked"),
+      };
+    }
+    await page.waitForTimeout(100);
+  }
+  return null;
 }
 
 async function findVisibleEffortChoicePoint(

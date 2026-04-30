@@ -528,6 +528,45 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     await adapter.shutdown();
   });
 
+  it("keeps Thinking Standard when activating Search resets the model", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      initialModel: "instant",
+      initialEffort: "extended",
+      searchResetsModelOnActivate: true,
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-menu-search-reset-thinking-standard",
+        prompt: "search after reset",
+        mode: "search",
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      toolsMenuClicks: document.body.dataset.toolsMenuClicks ?? "0",
+      searchToolClicks: document.body.dataset.searchToolClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      model: "thinking",
+      effort: "standard",
+      toolsMenuClicks: "1",
+      searchToolClicks: "1",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("selects Instant from the classic inline model controls", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {

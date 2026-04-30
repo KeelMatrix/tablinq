@@ -55,6 +55,7 @@ export type HarnessUrlOptions = {
   initialModel?: "instant" | "thinking";
   initialEffort?: "standard" | "extended";
   searchClicksBeforeActivate?: number;
+  searchResetsModelOnActivate?: boolean;
 };
 
 export type BrowserExecutionMode = "managed" | "attach";
@@ -87,6 +88,9 @@ export function withHarnessUrl(
       "search_clicks_before_activate",
       String(options.searchClicksBeforeActivate),
     );
+  }
+  if (options.searchResetsModelOnActivate) {
+    url.searchParams.set("search_resets_model_on_activate", "true");
   }
   return url.toString();
 }

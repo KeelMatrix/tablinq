@@ -254,6 +254,9 @@ export function createMenuRuntime({
           return;
         }
         document.body.dataset.selectedMode = "search";
+        if (config.searchResetsModelOnActivate) {
+          document.body.dataset.selectedModel = "instant";
+        }
         composerToolsTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();
       });

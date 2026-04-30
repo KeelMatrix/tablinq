@@ -38,6 +38,7 @@ export {
   findVisiblePopupChoicePoint,
   ensureConfiguredModelClass,
   ensureConfiguredEffort,
+  ensureConfiguredThinkingEffort,
   ensureConfiguredSearchMode,
   findVisibleEffortTrigger,
   ensureConfiguredMode,

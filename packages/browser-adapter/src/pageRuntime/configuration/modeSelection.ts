@@ -116,58 +116,60 @@ async function activateLegacyInlineResearchControl(
   );
 }
 
-export async function ensureConfiguredSearchMode(page: Page): Promise<void> {
+export async function ensureConfiguredSearchMode(
+  page: Page,
+): Promise<"already-active" | "activated"> {
   await page.bringToFront().catch(() => undefined);
   if (await searchModeActive(page)) {
-    return;
+    return "already-active";
   }
   await activateSearchModeOnce(page, "locator");
   await page.waitForTimeout(1_500);
   if (await waitForStableSearchChip(page, 10_000)) {
-    return;
+    return "activated";
   }
   await closeOpenComposerMenus(page);
   if (await searchModeActive(page)) {
-    return;
+    return "activated";
   }
 
   const retried = await activateSearchModeOnce(page, "locator");
   if (retried === "already-active") {
-    return;
+    return "already-active";
   }
   await page.waitForTimeout(1_500);
   if (await waitForStableSearchChip(page, 10_000)) {
-    return;
+    return "activated";
   }
   await closeOpenComposerMenus(page);
   if (await searchModeActive(page)) {
-    return;
+    return "activated";
   }
 
   const mouseRetried = await activateSearchModeOnce(page, "mouse");
   if (mouseRetried === "already-active") {
-    return;
+    return "already-active";
   }
   await page.waitForTimeout(1_500);
   if (await waitForStableSearchChip(page, 10_000)) {
-    return;
+    return "activated";
   }
   await closeOpenComposerMenus(page);
   if (await searchModeActive(page)) {
-    return;
+    return "activated";
   }
 
   const keyboardRetried = await activateSearchModeOnce(page, "keyboard-enter");
   if (keyboardRetried === "already-active") {
-    return;
+    return "already-active";
   }
   await page.waitForTimeout(1_500);
   if (await waitForStableSearchChip(page, 10_000)) {
-    return;
+    return "activated";
   }
   await closeOpenComposerMenus(page);
   if (await searchModeActive(page)) {
-    return;
+    return "activated";
   }
 
   const keyboardSpaceRetried = await activateSearchModeOnce(
@@ -175,15 +177,15 @@ export async function ensureConfiguredSearchMode(page: Page): Promise<void> {
     "keyboard-space",
   );
   if (keyboardSpaceRetried === "already-active") {
-    return;
+    return "already-active";
   }
   await page.waitForTimeout(1_500);
   if (await waitForStableSearchChip(page, 10_000)) {
-    return;
+    return "activated";
   }
   await closeOpenComposerMenus(page);
   if (await searchModeActive(page)) {
-    return;
+    return "activated";
   }
 
   throw new Error(

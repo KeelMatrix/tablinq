@@ -5,6 +5,9 @@ import { safePageUrl } from "../capabilityProbe";
 import {
   applyAskConfiguration,
   clickSubmit,
+  ensureConfiguredEffort,
+  ensureConfiguredModelClass,
+  ensureConfiguredThinkingEffort,
   fillComposer,
   ensureConfiguredSearchMode,
   readAskBaseline,
@@ -87,7 +90,30 @@ export async function prepareAskSubmission(
   if (command.mode === "search") {
     await sleep(1_000);
     page = await host.openExecutionPage(safePageUrl(page) ?? page.url());
-    await ensureConfiguredSearchMode(page);
+    const searchState = await ensureConfiguredSearchMode(page);
+    if (searchState === "activated" && (command.modelClass || command.effort)) {
+      const report = host.getLastCapabilityReport();
+      if (!report) {
+        throw new Error(
+          "capability missing: no capability report is available for model selection after search activation",
+        );
+      }
+      if (
+        command.modelClass === "thinking" &&
+        command.effort &&
+        command.effort !== "none" &&
+        (await ensureConfiguredThinkingEffort(page, report, command.effort))
+      ) {
+        // Thinking and effort were selected together from the model picker.
+      } else if (command.modelClass) {
+        await ensureConfiguredModelClass(page, report, command.modelClass);
+        if (command.effort) {
+          await ensureConfiguredEffort(page, report, command.effort);
+        }
+      } else if (command.effort) {
+        await ensureConfiguredEffort(page, report, command.effort);
+      }
+    }
   }
   await maybeApplySubmitJitter(command.submitJitterMs, timing.timeoutAt);
   await clickSubmit(page);
@@ -155,7 +181,8 @@ async function visibleComposerConfigMatchesRequest(
           effort === "none" ||
           texts.some((text) =>
             effort === "standard"
-              ? text.includes("standard") || text.includes("thinking")
+              ? text.includes("standard") ||
+                (text.includes("thinking") && !text.includes("extended"))
               : text.includes(effort),
           );
         return modelMatches && effortMatches;

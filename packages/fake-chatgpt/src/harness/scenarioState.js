@@ -105,6 +105,8 @@ export function createScenarioState(window) {
       definition.providerGenerationFailureTwice,
     ),
     keyboardSubmitEnabled: definition.keyboardSubmit !== false,
+    searchResetsModelOnActivate:
+      params.get("search_resets_model_on_activate") === "true",
     initialModel,
     initialEffort,
     missingControls: new Set(
