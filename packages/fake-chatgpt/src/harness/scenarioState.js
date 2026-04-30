@@ -107,6 +107,7 @@ export function createScenarioState(window) {
     keyboardSubmitEnabled: definition.keyboardSubmit !== false,
     searchResetsModelOnActivate:
       params.get("search_resets_model_on_activate") === "true",
+    effortInConfigureModal: params.get("effort_in_configure_modal") === "true",
     initialModel,
     initialEffort,
     missingControls: new Set(
@@ -135,6 +136,7 @@ export function initializeScenarioDataset(document, window, config) {
   document.body.dataset.lastSubmissionMethod = "";
   document.body.dataset.staleSubmitClicks = "0";
   document.body.dataset.retryClicks = "0";
+  document.body.dataset.intelligenceModalOpen = "false";
   document.body.dataset.keyboardSubmitReady = config.keyboardSubmitEnabled
     ? "true"
     : "false";

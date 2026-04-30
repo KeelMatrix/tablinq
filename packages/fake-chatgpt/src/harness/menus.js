@@ -16,6 +16,11 @@ export function createMenuRuntime({
   const nestedEffortTrigger = document.querySelector(
     "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort']",
   );
+  const configureModalItem = document.querySelector("#model-option-configure");
+  const intelligenceModal = document.querySelector(
+    "#tablinq-intelligence-modal",
+  );
+  const modalEffortCombobox = document.querySelector("#modal-effort-combobox");
 
   function applyPressedState(selector, selectedValue) {
     document.querySelectorAll(selector).forEach((element) => {
@@ -84,6 +89,29 @@ export function createMenuRuntime({
       "#effort-option-extended",
       document.body.dataset.selectedEffort === "extended",
     );
+    syncModernMenuOption(
+      "#modal-effort-standard",
+      document.body.dataset.selectedEffort === "standard",
+    );
+    syncModernMenuOption(
+      "#modal-effort-extended",
+      document.body.dataset.selectedEffort === "extended",
+    );
+    syncModernMenuOption(
+      "#modal-model-instant",
+      document.body.dataset.selectedModel === "instant",
+    );
+    syncModernMenuOption(
+      "#modal-model-thinking",
+      document.body.dataset.selectedModel === "thinking",
+    );
+    syncModernMenuOption("#modal-model-pro", false);
+    if (modalEffortCombobox instanceof HTMLElement) {
+      modalEffortCombobox.textContent =
+        document.body.dataset.selectedEffort === "extended"
+          ? "Extended"
+          : "Standard";
+    }
 
     const modelMenu = document.querySelector("#tablinq-model-menu");
     const modelMenuOpen =
@@ -124,7 +152,8 @@ export function createMenuRuntime({
     }
     const effortMenu = document.querySelector("#tablinq-effort-menu");
     const effortMenuOpen =
-      (effortVisible &&
+      (!config.effortInConfigureModal &&
+        effortVisible &&
         effortToggleIsMenuTrigger &&
         effortToggle.getAttribute("aria-expanded") === "true") ||
       (nestedEffortTrigger instanceof HTMLElement &&
@@ -156,6 +185,21 @@ export function createMenuRuntime({
         element.toggleAttribute("hidden", !toolsMenuOpen);
       });
     syncModernMenuOption("#tool-option-web-search", searchSelected);
+
+    const modalOpen = document.body.dataset.intelligenceModalOpen === "true";
+    intelligenceModal?.toggleAttribute("hidden", !modalOpen);
+    const modalEffortOpen =
+      modalOpen &&
+      modalEffortCombobox instanceof HTMLElement &&
+      modalEffortCombobox.getAttribute("aria-expanded") === "true";
+    document
+      .querySelector("#modal-effort-listbox")
+      ?.toggleAttribute("hidden", !modalEffortOpen);
+    document
+      .querySelectorAll("#modal-effort-listbox [role='option']")
+      .forEach((element) => {
+        element.toggleAttribute("hidden", !modalEffortOpen);
+      });
   }
 
   function registerSelectionEvents() {
@@ -218,6 +262,34 @@ export function createMenuRuntime({
       const expanded =
         nestedEffortTrigger.getAttribute("aria-expanded") === "true";
       nestedEffortTrigger.setAttribute(
+        "aria-expanded",
+        expanded ? "false" : "true",
+      );
+      syncSelectedState();
+    });
+
+    if (config.effortInConfigureModal) {
+      configureModalItem?.addEventListener("click", () => {
+        document.body.dataset.configureModalClicks = String(
+          Number.parseInt(
+            document.body.dataset.configureModalClicks || "0",
+            10,
+          ) + 1,
+        );
+        modelPickerTrigger?.setAttribute("aria-expanded", "false");
+        document.body.dataset.intelligenceModalOpen = "true";
+        syncSelectedState();
+      });
+    }
+
+    modalEffortCombobox?.addEventListener("click", () => {
+      document.body.dataset.effortComboboxClicks = String(
+        Number.parseInt(document.body.dataset.effortComboboxClicks || "0", 10) +
+          1,
+      );
+      const expanded =
+        modalEffortCombobox.getAttribute("aria-expanded") === "true";
+      modalEffortCombobox.setAttribute(
         "aria-expanded",
         expanded ? "false" : "true",
       );
@@ -297,6 +369,61 @@ export function createMenuRuntime({
         nestedEffortTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();
       });
+
+    document
+      .querySelector("#modal-model-thinking")
+      ?.addEventListener("click", () => {
+        document.body.dataset.selectedModel = "thinking";
+        syncSelectedState();
+      });
+
+    document
+      .querySelector("#modal-model-instant")
+      ?.addEventListener("click", () => {
+        document.body.dataset.selectedModel = "instant";
+        syncSelectedState();
+      });
+
+    document
+      .querySelector("#modal-effort-standard")
+      ?.addEventListener("click", () => {
+        document.body.dataset.effortOptionClicks = String(
+          Number.parseInt(document.body.dataset.effortOptionClicks || "0", 10) +
+            1,
+        );
+        document.body.dataset.selectedModel = "thinking";
+        document.body.dataset.selectedEffort = "standard";
+        modalEffortCombobox?.setAttribute("aria-expanded", "false");
+        syncSelectedState();
+      });
+
+    document
+      .querySelector("#modal-effort-extended")
+      ?.addEventListener("click", () => {
+        document.body.dataset.effortOptionClicks = String(
+          Number.parseInt(document.body.dataset.effortOptionClicks || "0", 10) +
+            1,
+        );
+        document.body.dataset.selectedModel = "thinking";
+        document.body.dataset.selectedEffort = "extended";
+        modalEffortCombobox?.setAttribute("aria-expanded", "false");
+        syncSelectedState();
+      });
+
+    document.addEventListener("keydown", (event) => {
+      if (
+        event.key !== "Escape" ||
+        document.body.dataset.intelligenceModalOpen !== "true"
+      ) {
+        return;
+      }
+      if (modalEffortCombobox?.getAttribute("aria-expanded") === "true") {
+        modalEffortCombobox.setAttribute("aria-expanded", "false");
+      } else {
+        document.body.dataset.intelligenceModalOpen = "false";
+      }
+      syncSelectedState();
+    });
 
     document.querySelectorAll("[data-model]").forEach((element) => {
       element.addEventListener("click", () => {

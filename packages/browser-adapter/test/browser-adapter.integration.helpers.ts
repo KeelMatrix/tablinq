@@ -56,6 +56,7 @@ export type HarnessUrlOptions = {
   initialEffort?: "standard" | "extended";
   searchClicksBeforeActivate?: number;
   searchResetsModelOnActivate?: boolean;
+  effortInConfigureModal?: boolean;
 };
 
 export type BrowserExecutionMode = "managed" | "attach";
@@ -91,6 +92,9 @@ export function withHarnessUrl(
   }
   if (options.searchResetsModelOnActivate) {
     url.searchParams.set("search_resets_model_on_activate", "true");
+  }
+  if (options.effortInConfigureModal) {
+    url.searchParams.set("effort_in_configure_modal", "true");
   }
   return url.toString();
 }

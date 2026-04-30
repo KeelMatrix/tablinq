@@ -216,6 +216,13 @@ export async function ensureConfiguredThinkingEffort(
     }
   }
 
+  if (
+    effort === "extended" &&
+    (await selectThinkingEffortFromConfigureModal(page, effort))
+  ) {
+    return true;
+  }
+
   await closeOpenComposerMenus(page);
   return false;
 }
@@ -344,6 +351,148 @@ async function findVisibleNestedThinkingEffortTrigger(
     ),
     timeoutMs,
   );
+}
+
+async function selectThinkingEffortFromConfigureModal(
+  page: Page,
+  effort: "standard" | "extended",
+): Promise<boolean> {
+  const configure = await waitForVisibleLocator(
+    page
+      .locator(
+        "[data-testid='model-configure-modal']:visible, [role='menuitem']:visible",
+      )
+      .filter({ hasText: /configure/i }),
+    500,
+  );
+  if (!configure) {
+    return false;
+  }
+
+  await clickWithInteractionJitter(
+    configure,
+    "choice_select",
+    { force: true },
+    page,
+  );
+  const modal = await findVisibleIntelligenceModal(page, 1_500);
+  if (!modal) {
+    return false;
+  }
+
+  const thinkingRadio = await waitForVisibleLocator(
+    modal.locator("[role='radio']:has-text('Thinking')"),
+    1_000,
+  );
+  if (thinkingRadio) {
+    const checked = await thinkingRadio.getAttribute("aria-checked");
+    if (checked !== "true") {
+      await clickWithInteractionJitter(
+        thinkingRadio,
+        "choice_select",
+        {
+          force: true,
+        },
+        page,
+      );
+      await page.waitForTimeout(150);
+    }
+  }
+
+  const effortCombobox = await waitForVisibleLocator(
+    modal
+      .locator("[role='combobox'], button:visible")
+      .filter({ hasText: /standard|extended/i }),
+    1_000,
+  );
+  if (!effortCombobox) {
+    await closeVisibleIntelligenceModal(page);
+    return false;
+  }
+
+  const currentEffort = (
+    (await effortCombobox.textContent().catch(() => null)) ?? ""
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (!currentEffort.includes(effort)) {
+    await clickWithInteractionJitter(
+      effortCombobox,
+      "picker_trigger",
+      {
+        force: true,
+      },
+      page,
+    );
+    const option = await findVisibleModalEffortOption(page, effort, 1_000);
+    if (!option) {
+      await closeVisibleIntelligenceModal(page);
+      return false;
+    }
+    await clickWithInteractionJitter(
+      option,
+      "choice_select",
+      {
+        force: true,
+      },
+      page,
+    );
+    await page.waitForTimeout(150);
+  }
+
+  await closeVisibleIntelligenceModal(page);
+  return true;
+}
+
+async function findVisibleIntelligenceModal(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  return waitForVisibleLocator(
+    page.locator(
+      [
+        "[data-testid='modal-intelligence-menu']",
+        "[role='dialog']:has-text('Thinking effort')",
+        "[role='dialog']:has-text('Intelligence')",
+      ].join(", "),
+    ),
+    timeoutMs,
+  );
+}
+
+async function findVisibleModalEffortOption(
+  page: Page,
+  effort: "standard" | "extended",
+  timeoutMs: number,
+): Promise<Locator | null> {
+  const options = page.locator("[role='option']:visible");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const count = await options.count();
+    for (let index = 0; index < count; index += 1) {
+      const locator = options.nth(index);
+      const text = ((await locator.textContent().catch(() => null)) ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      if (text.includes(effort)) {
+        return locator;
+      }
+    }
+    await page.waitForTimeout(100);
+  }
+  return null;
+}
+
+async function closeVisibleIntelligenceModal(page: Page): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!(await findVisibleIntelligenceModal(page, 100))) {
+      return;
+    }
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await page.waitForTimeout(250);
+  }
 }
 
 async function visibleComposerEffortMatches(

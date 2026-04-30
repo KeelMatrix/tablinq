@@ -305,6 +305,56 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     await adapter.shutdown();
   });
 
+  it("selects Extended through the current configure modal without reopening the model picker", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-configure-extended";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "thinking",
+        initialEffort: "standard",
+        effortInConfigureModal: true,
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-configure-extended",
+        prompt: "configure composer right thinking extended",
+        conversationId,
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+      configureModalClicks: document.body.dataset.configureModalClicks ?? "0",
+      effortComboboxClicks: document.body.dataset.effortComboboxClicks ?? "0",
+      effortOptionClicks: document.body.dataset.effortOptionClicks ?? "0",
+      modalOpen: document.body.dataset.intelligenceModalOpen,
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "extended",
+      modelMenuClicks: "1",
+      modelOptionClicks: "0",
+      configureModalClicks: "1",
+      effortComboboxClicks: "1",
+      effortOptionClicks: "1",
+      modalOpen: "false",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("treats a visible Thinking effort pill as Standard without opening controls", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
