@@ -108,7 +108,7 @@ fn browser_start_debug(
     if let Some(attached) = attached_daemon_browser(state_root, config, &plan.target_url) {
         return Ok(attached_daemon_browser_output(config, &plan, attached));
     }
-    if let Some(existing) = focus_existing_debug_target(config, &plan.target_url) {
+    if let Some(existing) = focus_existing_debug_target_before_launch(config, &plan.target_url) {
         return Ok(existing_debug_target_output(config, &plan, existing));
     }
     if attach_profile_process_running(plan.attach_profile_dir.as_deref()) {
@@ -382,6 +382,21 @@ fn wait_for_existing_debug_target(
             return Some(existing);
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+    None
+}
+
+fn focus_existing_debug_target_before_launch(
+    config: &gptd::AppConfig,
+    target_url: &str,
+) -> Option<ExistingDebugTarget> {
+    for attempt in 0..5 {
+        if let Some(existing) = focus_existing_debug_target(config, target_url) {
+            return Some(existing);
+        }
+        if attempt < 4 {
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
     None
 }

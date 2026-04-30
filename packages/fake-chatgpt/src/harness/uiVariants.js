@@ -8,6 +8,7 @@ export function renderHarnessShell({ root, note, window, config }) {
     usesStaleSubmitRecovery,
     usesDeepResearchFrame,
     missingControls,
+    effortInConfigureModal,
   } = config;
 
   note.textContent =
@@ -246,7 +247,9 @@ export function renderHarnessShell({ root, note, window, config }) {
             <div>For complex questions</div>
             ${
               variant === "composer-right"
-                ? `<button type="button" role="menuitem" data-testid="model-switcher-gpt-5-4-thinking-thinking-effort" aria-label="Effort" aria-haspopup="menu" aria-controls="tablinq-effort-menu" aria-expanded="false"></button>`
+                ? effortInConfigureModal
+                  ? ""
+                  : `<button type="button" role="menuitem" data-testid="model-switcher-gpt-5-4-thinking-thinking-effort" aria-label="Effort" aria-haspopup="menu" aria-controls="tablinq-effort-menu" aria-expanded="false"></button>`
                 : ""
             }
           </div>
@@ -257,9 +260,15 @@ export function renderHarnessShell({ root, note, window, config }) {
             <div>Pro</div>
             <div>Research-grade intelligence</div>
           </div>
+          ${
+            hasControl("effort") && effortInConfigureModal
+              ? `
           <div id="model-option-configure" role="menuitem" data-testid="model-configure-modal" hidden>
             Configure...
           </div>
+          `
+              : ""
+          }
         </div>
         `
             : ""
@@ -271,6 +280,26 @@ export function renderHarnessShell({ root, note, window, config }) {
           <div class="pill" aria-hidden="true">Thinking effort</div>
           <div id="effort-option-standard" role="menuitemradio" hidden>Standard</div>
           <div id="effort-option-extended" role="menuitemradio" hidden>Extended</div>
+        </div>
+        `
+            : ""
+        }
+        ${
+          hasControl("effort") && effortInConfigureModal
+            ? `
+        <div id="tablinq-intelligence-modal" data-testid="modal-intelligence-menu" hidden>
+          <section role="dialog" aria-label="Intelligence">
+            <h2>Intelligence</h2>
+            <button type="button" role="radio" id="modal-model-instant" aria-checked="false">Instant 5.3 For everyday chats</button>
+            <button type="button" role="radio" id="modal-model-thinking" aria-checked="false">Thinking 5.5 For complex questions</button>
+            <button type="button" role="radio" id="modal-model-pro" aria-checked="false">Pro 5.5 Research-grade intelligence</button>
+            <label for="modal-effort-combobox">Thinking effort</label>
+            <button type="button" id="modal-effort-combobox" role="combobox" aria-expanded="false">Standard</button>
+            <div id="modal-effort-listbox" role="listbox" hidden>
+              <div id="modal-effort-standard" role="option" aria-selected="false" hidden>Standard</div>
+              <div id="modal-effort-extended" role="option" aria-selected="false" hidden>Extended</div>
+            </div>
+          </section>
         </div>
         `
             : ""
