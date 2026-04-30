@@ -9,6 +9,7 @@ import { waitForInteractionSurface } from "../composer";
 
 import {
   ensureConfiguredEffort,
+  ensureConfiguredThinkingEffort,
   trySelectNestedThinkingEffort,
 } from "./effortSelection";
 import { ensureConfiguredMode } from "./modeSelection";
@@ -41,12 +42,24 @@ export async function applyAskConfiguration(
     );
   }
 
-  if (command.mode && command.mode !== "normal" && command.mode !== "search") {
+  if (command.mode && command.mode !== "normal") {
     await closeOpenComposerMenus(page);
     await waitForInteractionSurface(page);
-    await page.waitForTimeout(750);
+    if (command.mode !== "search") {
+      await page.waitForTimeout(750);
+    }
     page = await ensureConfiguredMode(page, report, command.mode);
   }
+  if (
+    command.modelClass === "thinking" &&
+    command.effort &&
+    command.effort !== "none" &&
+    (await ensureConfiguredThinkingEffort(page, report, command.effort))
+  ) {
+    await closeOpenComposerMenus(page);
+    return page;
+  }
+
   const selectedNestedThinkingEffort =
     command.modelClass === "thinking" &&
     command.effort &&
@@ -64,6 +77,7 @@ export async function applyAskConfiguration(
 
 export {
   ensureConfiguredEffort,
+  ensureConfiguredThinkingEffort,
   findVisibleEffortTrigger,
 } from "./effortSelection";
 
