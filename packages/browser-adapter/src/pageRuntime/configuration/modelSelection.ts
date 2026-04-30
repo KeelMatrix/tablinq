@@ -166,6 +166,50 @@ async function visibleComposerModelChipPresent(page: Page): Promise<boolean> {
     .catch(() => false);
 }
 
+async function visibleComposerModelMatches(
+  page: Page,
+  modelClass: "instant" | "thinking",
+): Promise<boolean> {
+  return page
+    .evaluate((requestedModelClass: "instant" | "thinking") => {
+      const textFor = (element: Element) =>
+        (element.textContent ?? "").replace(/\\s+/g, " ").trim().toLowerCase();
+      const isVisible = (element: Element) => {
+        if (!(element instanceof HTMLElement)) {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0" &&
+          element.getClientRects().length > 0
+        );
+      };
+      return Array.from(
+        document.querySelectorAll(
+          "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
+        ),
+      ).some((element) => {
+        if (!isVisible(element)) {
+          return false;
+        }
+        const text = textFor(element);
+        if (requestedModelClass === "instant") {
+          return text.includes("instant") || text.includes("5.3");
+        }
+        return (
+          text.includes("thinking") ||
+          text.includes("standard") ||
+          text.includes("extended") ||
+          text.includes("5.4") ||
+          text.includes("5.5")
+        );
+      });
+    }, modelClass)
+    .catch(() => false);
+}
+
 async function clearVisibleComposerModelChip(page: Page): Promise<boolean> {
   const chip = await findVisibleComposerModelChipRemoveButton(page, 250);
   if (!chip) {
@@ -190,6 +234,10 @@ export async function ensureConfiguredModelClass(
     if (await clearVisibleComposerModelChip(page)) {
       return;
     }
+  }
+
+  if (await visibleComposerModelMatches(page, modelClass)) {
+    return;
   }
 
   if (await selectedChoiceMatches(page, aliasTokens)) {

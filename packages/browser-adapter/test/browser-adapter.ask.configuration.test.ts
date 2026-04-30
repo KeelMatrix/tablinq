@@ -256,6 +256,51 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     await adapter.shutdown();
   });
 
+  it("does not reopen composer-right model or effort menus when Extended is already visible", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-thinking-extended";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "thinking",
+        initialEffort: "extended",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-thinking-extended-selected",
+        prompt: "keep composer right thinking extended",
+        conversationId,
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+      effortOptionClicks: document.body.dataset.effortOptionClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "extended",
+      modelMenuClicks: "0",
+      modelOptionClicks: "0",
+      effortMenuClicks: "0",
+      effortOptionClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("opens the composer tools menu and selects Web search before submitting", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
