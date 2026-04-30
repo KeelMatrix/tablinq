@@ -271,6 +271,9 @@ export function createMenuRuntime({
             1,
         );
         document.body.dataset.selectedEffort = "standard";
+        if (nestedEffortTrigger?.getAttribute("aria-expanded") === "true") {
+          document.body.dataset.selectedModel = "thinking";
+        }
         effortPickerTrigger?.setAttribute("aria-expanded", "false");
         nestedEffortTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();
@@ -284,6 +287,9 @@ export function createMenuRuntime({
             1,
         );
         document.body.dataset.selectedEffort = "extended";
+        if (nestedEffortTrigger?.getAttribute("aria-expanded") === "true") {
+          document.body.dataset.selectedModel = "thinking";
+        }
         effortPickerTrigger?.setAttribute("aria-expanded", "false");
         nestedEffortTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();

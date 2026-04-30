@@ -188,7 +188,7 @@ async function visibleComposerModelMatches(
       };
       return Array.from(
         document.querySelectorAll(
-          "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
+          "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
         ),
       ).some((element) => {
         if (!isVisible(element)) {
