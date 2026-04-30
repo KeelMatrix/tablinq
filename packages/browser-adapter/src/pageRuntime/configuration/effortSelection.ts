@@ -22,6 +22,10 @@ export async function ensureConfiguredEffort(
   }
 
   const aliasTokens = [effort, ...(report.aliases.efforts[effort] ?? [])];
+  if (await visibleComposerEffortMatches(page, effort)) {
+    return;
+  }
+
   if (await selectedChoiceMatches(page, aliasTokens)) {
     return;
   }
@@ -215,6 +219,42 @@ async function findVisibleModelPickerTriggerForEffort(
     ),
     1_000,
   );
+}
+
+async function visibleComposerEffortMatches(
+  page: Page,
+  effort: "standard" | "extended",
+): Promise<boolean> {
+  return page
+    .evaluate((requestedEffort: "standard" | "extended") => {
+      const isVisible = (element: Element) => {
+        if (!(element instanceof HTMLElement)) {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          style.opacity !== "0" &&
+          element.getClientRects().length > 0
+        );
+      };
+      return Array.from(
+        document.querySelectorAll(
+          "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
+        ),
+      ).some((element) => {
+        if (!isVisible(element)) {
+          return false;
+        }
+        const text = (element.textContent ?? "")
+          .replace(/\\s+/g, " ")
+          .trim()
+          .toLowerCase();
+        return text.includes(requestedEffort);
+      });
+    }, effort)
+    .catch(() => false);
 }
 
 async function findVisibleEffortChoicePoint(

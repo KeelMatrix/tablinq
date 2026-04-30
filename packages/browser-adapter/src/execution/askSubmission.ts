@@ -56,12 +56,18 @@ export async function prepareAskSubmission(
     command.effort ||
     (command.mode && command.mode !== "normal")
   ) {
-    page = await applyAskConfiguration(
+    const alreadyConfigured = await visibleComposerConfigMatchesRequest(
       page,
       command,
-      host.getLastCapabilityReport(),
     );
-    await host.refreshCapabilities(page);
+    if (!alreadyConfigured) {
+      page = await applyAskConfiguration(
+        page,
+        command,
+        host.getLastCapabilityReport(),
+      );
+      await host.refreshCapabilities(page);
+    }
   }
   await uploadAttachments(
     page,
@@ -86,6 +92,76 @@ export async function prepareAskSubmission(
   await maybeApplySubmitJitter(command.submitJitterMs, timing.timeoutAt);
   await clickSubmit(page);
   return { page, askBaseline };
+}
+
+async function visibleComposerConfigMatchesRequest(
+  page: Page,
+  command: AskExecutionCommand,
+): Promise<boolean> {
+  if (command.mode && command.mode !== "normal") {
+    return false;
+  }
+  if (!command.modelClass && !command.effort) {
+    return false;
+  }
+  return page
+    .evaluate(
+      ({
+        modelClass,
+        effort,
+      }: {
+        modelClass?: "instant" | "thinking" | null;
+        effort?: "none" | "standard" | "extended" | null;
+      }) => {
+        const texts = Array.from(
+          document.querySelectorAll(
+            "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
+          ),
+        )
+          .filter((element) => {
+            if (!(element instanceof HTMLElement)) {
+              return false;
+            }
+            const style = window.getComputedStyle(element);
+            return (
+              style.display !== "none" &&
+              style.visibility !== "hidden" &&
+              style.opacity !== "0" &&
+              element.getClientRects().length > 0
+            );
+          })
+          .map((element) =>
+            (element.textContent ?? "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .toLowerCase(),
+          );
+        if (texts.length === 0) {
+          return false;
+        }
+        const modelMatches =
+          !modelClass ||
+          texts.some((text) =>
+            modelClass === "instant"
+              ? text.includes("instant") || text.includes("5.3")
+              : text.includes("thinking") ||
+                text.includes("standard") ||
+                text.includes("extended") ||
+                text.includes("5.4") ||
+                text.includes("5.5"),
+          );
+        const effortMatches =
+          !effort ||
+          effort === "none" ||
+          texts.some((text) => text.includes(effort));
+        return modelMatches && effortMatches;
+      },
+      {
+        modelClass: command.modelClass,
+        effort: command.effort,
+      },
+    )
+    .catch(() => false);
 }
 
 async function maybeApplySubmitJitter(

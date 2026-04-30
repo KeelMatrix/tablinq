@@ -98,6 +98,9 @@ function createCapabilitySelectionRuntime({
         return;
       }
     }
+    if (visibleComposerModelMatches(modelClass)) {
+      return;
+    }
     let control = findConcreteModelControl(report, modelClass);
     if (control) {
       if (!isSelected(control) && !clickControl(control)) {
@@ -151,6 +154,9 @@ function createCapabilitySelectionRuntime({
     if (effort === "none") {
       return;
     }
+    if (visibleComposerEffortMatches(effort)) {
+      return;
+    }
     let control = findConcreteEffortControl(report, effort);
     if (!control) {
       const trigger = findEffortPickerTrigger(
@@ -195,4 +201,46 @@ function createCapabilitySelectionRuntime({
     ensureModelClass,
     ensureEffort,
   };
+}
+
+function visibleComposerPillTexts() {
+  return Array.from(
+    document.querySelectorAll(
+      "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
+    ),
+  )
+    .filter((element) => {
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      const style = window.getComputedStyle(element);
+      return (
+        style.display !== "none" &&
+        style.visibility !== "hidden" &&
+        style.opacity !== "0" &&
+        element.getClientRects().length > 0
+      );
+    })
+    .map((element) =>
+      (element.textContent ?? "").replace(/\s+/g, " ").trim().toLowerCase(),
+    );
+}
+
+function visibleComposerModelMatches(modelClass) {
+  return visibleComposerPillTexts().some((text) => {
+    if (modelClass === "instant") {
+      return text.includes("instant") || text.includes("5.3");
+    }
+    return (
+      text.includes("thinking") ||
+      text.includes("standard") ||
+      text.includes("extended") ||
+      text.includes("5.4") ||
+      text.includes("5.5")
+    );
+  });
+}
+
+function visibleComposerEffortMatches(effort) {
+  return visibleComposerPillTexts().some((text) => text.includes(effort));
 }
