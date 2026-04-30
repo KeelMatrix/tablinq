@@ -31,6 +31,7 @@ function createCapabilitySelectionRuntime({
     discoverVisibleModelAliases,
     findConcreteEffortControl,
     findEffortPickerTrigger,
+    openNestedThinkingEffortRoots,
     findOpenEffortMenuControl,
     discoverVisibleEffortAliases,
   } = discoveryRuntime;
@@ -163,6 +164,13 @@ function createCapabilitySelectionRuntime({
           findOpenEffortMenuControl(report, effort) ??
           findConcreteEffortControl(report, effort);
       }
+    }
+    if (!control) {
+      const roots = await openNestedThinkingEffortRoots();
+      control =
+        findConcreteEffortControl(report, effort, roots) ??
+        findOpenEffortMenuControl(report, effort) ??
+        findConcreteEffortControl(report, effort);
     }
     if (!control) {
       const discoveredAliases = mergeAliasBuckets(

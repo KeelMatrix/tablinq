@@ -43,6 +43,26 @@ export async function findVisibleModelPickerTrigger(
   page: Page,
   timeoutMs: number,
 ): Promise<Locator | null> {
+  const composerRightTrigger = await waitForVisibleLocator(
+    page.locator(
+      [
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Instant')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Thinking')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Legacy')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('GPT')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.3')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.4')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.5')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Standard')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Extended')",
+      ].join(", "),
+    ),
+    Math.min(timeoutMs, 250),
+  );
+  if (composerRightTrigger) {
+    return composerRightTrigger;
+  }
+
   return waitForVisibleLocator(
     page.locator(
       "button[aria-label='Model selector'], button[aria-label='Switch model'], button[data-testid='model-switcher-dropdown-button']",
@@ -210,8 +230,14 @@ export async function ensureConfiguredModelClass(
     modelClass === "instant"
       ? "model-switcher-gpt-5-3"
       : "model-switcher-gpt-5-4-thinking";
+  const preferredTestIds =
+    modelClass === "instant"
+      ? ["model-switcher-gpt-5-3-instant", preferredTestId]
+      : [preferredTestId];
   const preferredOption = await waitForVisibleLocator(
-    page.locator(`[data-testid='${preferredTestId}']`),
+    page.locator(
+      preferredTestIds.map((testId) => `[data-testid='${testId}']`).join(", "),
+    ),
     1_000,
   );
   const option =
@@ -258,7 +284,9 @@ export async function ensureConfiguredModelClass(
 
   await clickWithInteractionJitter(trigger, "picker_trigger", undefined, page);
   const reopenedPreferredOption = await waitForVisibleLocator(
-    page.locator(`[data-testid='${preferredTestId}']`),
+    page.locator(
+      preferredTestIds.map((testId) => `[data-testid='${testId}']`).join(", "),
+    ),
     1_000,
   );
   const reopenedOption =

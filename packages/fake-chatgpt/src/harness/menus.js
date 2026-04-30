@@ -6,11 +6,16 @@ export function createMenuRuntime({
   enterDeepResearchLanding,
 }) {
   const { variant, usesDeepResearchLanding } = config;
-  const modelPickerTrigger = document.querySelector("#model-switcher-trigger");
+  const modelPickerTrigger =
+    document.querySelector("#model-switcher-trigger") ??
+    document.querySelector("[data-harness-model-trigger='composer-right']");
   const effortPickerTrigger = document.querySelector(
     "#thinking-effort-trigger",
   );
   const composerToolsTrigger = document.querySelector("#composer-plus-btn");
+  const nestedEffortTrigger = document.querySelector(
+    "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort']",
+  );
 
   function applyPressedState(selector, selectedValue) {
     document.querySelectorAll(selector).forEach((element) => {
@@ -83,6 +88,15 @@ export function createMenuRuntime({
     const modelMenu = document.querySelector("#tablinq-model-menu");
     const modelMenuOpen =
       modelPickerTrigger?.getAttribute("aria-expanded") === "true";
+    if (
+      variant === "composer-right" &&
+      modelPickerTrigger instanceof HTMLElement
+    ) {
+      modelPickerTrigger.textContent =
+        document.body.dataset.selectedModel === "thinking"
+          ? `5.4 ${document.body.dataset.selectedEffort === "extended" ? "Extended" : "Standard"}`
+          : "Instant";
+    }
     modelMenu?.toggleAttribute("hidden", !modelMenuOpen);
     modelMenu
       ?.querySelectorAll("[role='menuitemradio'], [role='menuitem']")
@@ -110,9 +124,11 @@ export function createMenuRuntime({
     }
     const effortMenu = document.querySelector("#tablinq-effort-menu");
     const effortMenuOpen =
-      effortVisible &&
-      effortToggleIsMenuTrigger &&
-      effortToggle.getAttribute("aria-expanded") === "true";
+      (effortVisible &&
+        effortToggleIsMenuTrigger &&
+        effortToggle.getAttribute("aria-expanded") === "true") ||
+      (nestedEffortTrigger instanceof HTMLElement &&
+        nestedEffortTrigger.getAttribute("aria-expanded") === "true");
     effortMenu?.toggleAttribute("hidden", !effortMenuOpen);
     effortMenu
       ?.querySelectorAll("[role='menuitemradio']")
@@ -194,6 +210,20 @@ export function createMenuRuntime({
       syncSelectedState();
     });
 
+    nestedEffortTrigger?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      document.body.dataset.effortMenuClicks = String(
+        Number.parseInt(document.body.dataset.effortMenuClicks || "0", 10) + 1,
+      );
+      const expanded =
+        nestedEffortTrigger.getAttribute("aria-expanded") === "true";
+      nestedEffortTrigger.setAttribute(
+        "aria-expanded",
+        expanded ? "false" : "true",
+      );
+      syncSelectedState();
+    });
+
     composerToolsTrigger?.addEventListener("click", () => {
       document.body.dataset.toolsMenuClicks = String(
         Number.parseInt(document.body.dataset.toolsMenuClicks || "0", 10) + 1,
@@ -242,6 +272,7 @@ export function createMenuRuntime({
         );
         document.body.dataset.selectedEffort = "standard";
         effortPickerTrigger?.setAttribute("aria-expanded", "false");
+        nestedEffortTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();
       });
 
@@ -254,6 +285,7 @@ export function createMenuRuntime({
         );
         document.body.dataset.selectedEffort = "extended";
         effortPickerTrigger?.setAttribute("aria-expanded", "false");
+        nestedEffortTrigger?.setAttribute("aria-expanded", "false");
         syncSelectedState();
       });
 

@@ -13,13 +13,15 @@ export function renderHarnessShell({ root, note, window, config }) {
   note.textContent =
     variant === "aria"
       ? "ARIA-first variant with moved controls, renamed labels, and semantic groups."
-      : variant === "menu"
-        ? "Current menu variant with a ChatGPT trigger, portal menus, and composer-adjacent effort controls."
-        : variant === "live"
-          ? usesComposerPlusTrap
-            ? "Current live variant with a ChatGPT trigger, portal menus, and a composer plus button trap."
-            : "Current live variant with a ChatGPT trigger, portal menus, and composer-adjacent effort controls."
-          : "Classic variant with grouped controls and direct toolbar buttons.";
+      : variant === "composer-right"
+        ? "Composer-right variant with the model picker beside the composer and nested thinking effort controls."
+        : variant === "menu"
+          ? "Current menu variant with a ChatGPT trigger, portal menus, and composer-adjacent effort controls."
+          : variant === "live"
+            ? usesComposerPlusTrap
+              ? "Current live variant with a ChatGPT trigger, portal menus, and a composer plus button trap."
+              : "Current live variant with a ChatGPT trigger, portal menus, and composer-adjacent effort controls."
+            : "Classic variant with grouped controls and direct toolbar buttons.";
 
   function hasControl(name) {
     return !missingControls.has(name);
@@ -145,7 +147,11 @@ export function renderHarnessShell({ root, note, window, config }) {
   }
 
   function liveSidebarNav() {
-    if (variant !== "live" && variant !== "menu") {
+    if (
+      variant !== "live" &&
+      variant !== "menu" &&
+      variant !== "composer-right"
+    ) {
       return "";
     }
     return `
@@ -189,8 +195,30 @@ export function renderHarnessShell({ root, note, window, config }) {
     return liveEffortControls();
   }
 
+  function composerRightModelTrigger() {
+    if (!hasControl("model")) {
+      return "";
+    }
+    return `
+      <button
+        type="button"
+        class="pill __composer-pill"
+        data-harness-model-trigger="composer-right"
+        aria-haspopup="menu"
+        aria-controls="tablinq-model-menu"
+        aria-expanded="false"
+      >
+        Instant
+      </button>
+    `;
+  }
+
   function currentPortalMenus() {
-    if (variant !== "live" && variant !== "menu") {
+    if (
+      variant !== "live" &&
+      variant !== "menu" &&
+      variant !== "composer-right"
+    ) {
       return "";
     }
     return `
@@ -203,7 +231,7 @@ export function renderHarnessShell({ root, note, window, config }) {
           ${
             hasControl("instant-model")
               ? `
-          <div id="model-option-instant" role="menuitemradio" data-testid="model-switcher-gpt-5-3" hidden>
+          <div id="model-option-instant" role="menuitemradio" data-testid="${variant === "composer-right" ? "model-switcher-gpt-5-3-instant" : "model-switcher-gpt-5-3"}" hidden>
             <div>Instant</div>
             <div>For everyday chats</div>
           </div>
@@ -216,6 +244,11 @@ export function renderHarnessShell({ root, note, window, config }) {
           <div id="model-option-thinking" role="menuitemradio" data-testid="model-switcher-gpt-5-4-thinking" hidden>
             <div>Thinking</div>
             <div>For complex questions</div>
+            ${
+              variant === "composer-right"
+                ? `<button type="button" role="menuitem" data-testid="model-switcher-gpt-5-4-thinking-thinking-effort" aria-label="Effort" aria-haspopup="menu" aria-controls="tablinq-effort-menu" aria-expanded="false"></button>`
+                : ""
+            }
           </div>
         `
               : ""
@@ -302,7 +335,7 @@ export function renderHarnessShell({ root, note, window, config }) {
     }
     return `
       <div class="pill">
-        ${liveEffortControls()}
+        ${variant === "composer-right" ? composerRightModelTrigger() : liveEffortControls()}
         ${
           hasControl("search")
             ? `<button type="button" id="search-chip" class="__composer-pill" aria-label="Search" hidden>Search</button>`
@@ -458,12 +491,12 @@ export function renderHarnessShell({ root, note, window, config }) {
           ${currentPortalMenus()}
         </main>
       `
-        : variant === "menu"
+        : variant === "menu" || variant === "composer-right"
           ? `
         <main aria-label="chatgpt workspace">
           ${liveSidebarNav()}
           <section class="stacked-toolbar">
-            ${menuModelControls()}
+            ${variant === "composer-right" ? "" : menuModelControls()}
             ${liveModeControls()}
             ${liveUploadControl()}
           </section>

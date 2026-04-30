@@ -8,7 +8,6 @@ import { clickWithInteractionJitter } from "../common";
 import {
   closeOpenComposerMenus,
   findVisibleInlineChoicePoint,
-  findVisiblePopupChoicePoint,
   selectedChoiceMatches,
   waitForVisibleLocator,
 } from "./shared";
@@ -51,7 +50,7 @@ export async function ensureConfiguredEffort(
     return;
   }
 
-  let option = await findVisiblePopupChoicePoint(page, effort, 750);
+  let option = await findVisibleEffortChoicePoint(page, effort, 750);
   if (option) {
     if (option.checked !== "true") {
       await clickWithInteractionJitter(
@@ -68,6 +67,48 @@ export async function ensureConfiguredEffort(
   }
 
   const trigger = await findVisibleEffortTrigger(page, INTERACTION_TIMEOUT_MS);
+  if (trigger) {
+    await clickWithInteractionJitter(
+      trigger,
+      "picker_trigger",
+      undefined,
+      page,
+    );
+    option = await findVisibleEffortChoicePoint(page, effort);
+    if (option) {
+      if (option.checked !== "true") {
+        await clickWithInteractionJitter(
+          option.locator,
+          "choice_select",
+          {
+            force: true,
+          },
+          page,
+        );
+      }
+      await closeOpenComposerMenus(page);
+      return;
+    }
+  }
+
+  if (await openNestedThinkingEffortMenu(page)) {
+    option = await findVisibleEffortChoicePoint(page, effort);
+    if (option) {
+      if (option.checked !== "true") {
+        await clickWithInteractionJitter(
+          option.locator,
+          "choice_select",
+          {
+            force: true,
+          },
+          page,
+        );
+      }
+      await closeOpenComposerMenus(page);
+      return;
+    }
+  }
+
   if (!trigger) {
     if (!report.matrix.thinking_effort_visible) {
       throw new Error(
@@ -79,24 +120,9 @@ export async function ensureConfiguredEffort(
     );
   }
 
-  await clickWithInteractionJitter(trigger, "picker_trigger", undefined, page);
-  option = await findVisiblePopupChoicePoint(page, effort);
-  if (!option) {
-    throw new Error(
-      `ui drift: could not find a concrete control for effort=${effort} after alias discovery`,
-    );
-  }
-  if (option.checked !== "true") {
-    await clickWithInteractionJitter(
-      option.locator,
-      "choice_select",
-      {
-        force: true,
-      },
-      page,
-    );
-  }
-  await closeOpenComposerMenus(page);
+  throw new Error(
+    `ui drift: could not find a concrete control for effort=${effort} after alias discovery`,
+  );
 }
 
 export async function findVisibleEffortTrigger(
@@ -106,11 +132,122 @@ export async function findVisibleEffortTrigger(
   return waitForVisibleLocator(
     page.locator(
       [
-        "button.__composer-pill[aria-haspopup]",
+        "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort']",
+        "[data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
+        "#thinking-effort-trigger",
         "button[aria-controls*='effort']",
         "button[aria-label*='thinking'][aria-haspopup]",
+        "button[aria-label*='effort'][aria-haspopup]",
       ].join(", "),
     ),
     timeoutMs,
   );
+}
+
+async function openNestedThinkingEffortMenu(page: Page): Promise<boolean> {
+  let nestedTrigger = await waitForVisibleLocator(
+    page.locator(
+      "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort'], [data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
+    ),
+    250,
+  );
+  if (!nestedTrigger) {
+    const modelTrigger = await findVisibleModelPickerTriggerForEffort(page);
+    if (!modelTrigger) {
+      return false;
+    }
+    await clickWithInteractionJitter(
+      modelTrigger,
+      "picker_trigger",
+      undefined,
+      page,
+    );
+    const nestedLocator = page
+      .locator(
+        "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort'], [data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
+      )
+      .first();
+    await nestedLocator
+      .waitFor({ state: "attached", timeout: 1_000 })
+      .catch(() => undefined);
+    nestedTrigger = nestedLocator;
+  }
+  if (!nestedTrigger) {
+    return false;
+  }
+  if ((await nestedTrigger.count().catch(() => 0)) === 0) {
+    return false;
+  }
+  await clickWithInteractionJitter(
+    nestedTrigger,
+    "picker_trigger",
+    { force: true },
+    page,
+  );
+  return true;
+}
+
+async function findVisibleModelPickerTriggerForEffort(
+  page: Page,
+): Promise<Locator | null> {
+  const composerRightTrigger = await waitForVisibleLocator(
+    page.locator(
+      [
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Instant')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Thinking')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Legacy')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('GPT')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.3')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.4')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.5')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Standard')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Extended')",
+      ].join(", "),
+    ),
+    250,
+  );
+  if (composerRightTrigger) {
+    return composerRightTrigger;
+  }
+  return waitForVisibleLocator(
+    page.locator(
+      "button[aria-label='Model selector'], button[aria-label='Switch model'], button[data-testid='model-switcher-dropdown-button']",
+    ),
+    1_000,
+  );
+}
+
+async function findVisibleEffortChoicePoint(
+  page: Page,
+  token: string,
+  timeoutMs = INTERACTION_TIMEOUT_MS,
+): Promise<{ locator: Locator; checked: string | null } | null> {
+  const popupChoices = page.locator(
+    "[role='menuitemradio']:visible, [role='option']:visible",
+  );
+  const deadline = Date.now() + timeoutMs;
+  const expectedToken = token.toLowerCase();
+  while (Date.now() < deadline) {
+    const count = await popupChoices.count();
+    for (let index = 0; index < count; index += 1) {
+      const locator = popupChoices.nth(index);
+      const testId = (await locator.getAttribute("data-testid")) ?? "";
+      if (testId.startsWith("model-switcher-")) {
+        continue;
+      }
+      const text = ((await locator.textContent()) ?? "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      if (!text.includes(expectedToken)) {
+        continue;
+      }
+      return {
+        locator,
+        checked: await locator.getAttribute("aria-checked"),
+      };
+    }
+    await page.waitForTimeout(100);
+  }
+  return null;
 }
