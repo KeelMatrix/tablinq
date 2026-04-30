@@ -177,7 +177,7 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     await adapter.shutdown();
   });
 
-  it("selects Thinking and Standard through the composer-right model menu", async () => {
+  it("selects Thinking and Standard through the composer-right model menu without reopening it", async () => {
     const server = await harness.startServer();
     const conversationId = "composer-right-thinking-standard";
     const targetUrl = withHarnessUrl(
@@ -205,14 +205,18 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
       model: document.body.dataset.selectedModel,
       effort: document.body.dataset.selectedEffort,
       modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
       effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+      effortOptionClicks: document.body.dataset.effortOptionClicks ?? "0",
     }));
 
     expect(state).toEqual({
       model: "thinking",
       effort: "standard",
-      modelMenuClicks: "2",
+      modelMenuClicks: "1",
+      modelOptionClicks: "0",
       effortMenuClicks: "1",
+      effortOptionClicks: "1",
     });
 
     await adapter.shutdown();
@@ -296,6 +300,55 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
       modelOptionClicks: "0",
       effortMenuClicks: "0",
       effortOptionClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("treats a visible Thinking effort pill as Standard without opening controls", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "live",
+      initialModel: "thinking",
+      initialEffort: "standard",
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      document
+        .querySelectorAll("[aria-checked='true'], [aria-pressed='true']")
+        .forEach((element) => {
+          element.setAttribute("aria-checked", "false");
+          element.setAttribute("aria-pressed", "false");
+        });
+      document.querySelectorAll("[data-selected='true']").forEach((element) => {
+        if (element instanceof HTMLElement) {
+          element.dataset.selected = "false";
+        }
+      });
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-live-thinking-standard-visible-pill",
+        prompt: "keep visible thinking standard",
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "standard",
+      modelMenuClicks: "0",
+      effortMenuClicks: "0",
     });
 
     await adapter.shutdown();

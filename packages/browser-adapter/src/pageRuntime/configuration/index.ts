@@ -7,7 +7,10 @@ import type {
 
 import { waitForInteractionSurface } from "../composer";
 
-import { ensureConfiguredEffort } from "./effortSelection";
+import {
+  ensureConfiguredEffort,
+  trySelectNestedThinkingEffort,
+} from "./effortSelection";
 import { ensureConfiguredMode } from "./modeSelection";
 import {
   ensureComposerModelPickerAvailable,
@@ -44,12 +47,18 @@ export async function applyAskConfiguration(
     await page.waitForTimeout(750);
     page = await ensureConfiguredMode(page, report, command.mode);
   }
-  if (command.modelClass) {
+  const selectedNestedThinkingEffort =
+    command.modelClass === "thinking" &&
+    command.effort &&
+    command.effort !== "none" &&
+    (await trySelectNestedThinkingEffort(page, command.effort));
+  if (command.modelClass && !selectedNestedThinkingEffort) {
     await ensureConfiguredModelClass(page, report, command.modelClass);
   }
-  if (command.effort) {
+  if (command.effort && !selectedNestedThinkingEffort) {
     await ensureConfiguredEffort(page, report, command.effort);
   }
+  await closeOpenComposerMenus(page);
   return page;
 }
 

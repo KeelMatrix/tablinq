@@ -115,7 +115,7 @@ async function visibleComposerConfigMatchesRequest(
       }) => {
         const texts = Array.from(
           document.querySelectorAll(
-            "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
+            "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
           ),
         )
           .filter((element) => {
@@ -153,7 +153,11 @@ async function visibleComposerConfigMatchesRequest(
         const effortMatches =
           !effort ||
           effort === "none" ||
-          texts.some((text) => text.includes(effort));
+          texts.some((text) =>
+            effort === "standard"
+              ? text.includes("standard") || text.includes("thinking")
+              : text.includes(effort),
+          );
         return modelMatches && effortMatches;
       },
       {

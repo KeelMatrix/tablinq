@@ -129,6 +129,41 @@ export async function ensureConfiguredEffort(
   );
 }
 
+export async function trySelectNestedThinkingEffort(
+  page: Page,
+  effort: "standard" | "extended",
+): Promise<boolean> {
+  if (await selectedChoiceMatches(page, [effort])) {
+    return false;
+  }
+
+  if (await visibleComposerEffortMatches(page, effort)) {
+    return false;
+  }
+
+  if (!(await openNestedThinkingEffortMenu(page))) {
+    return false;
+  }
+
+  const option = await findVisibleEffortChoicePoint(page, effort, 1_000);
+  if (!option) {
+    return false;
+  }
+
+  if (option.checked !== "true") {
+    await clickWithInteractionJitter(
+      option.locator,
+      "choice_select",
+      {
+        force: true,
+      },
+      page,
+    );
+    await page.waitForTimeout(150);
+  }
+  return true;
+}
+
 export async function findVisibleEffortTrigger(
   page: Page,
   timeoutMs: number,
@@ -241,7 +276,7 @@ async function visibleComposerEffortMatches(
       };
       return Array.from(
         document.querySelectorAll(
-          "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
+          "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
         ),
       ).some((element) => {
         if (!isVisible(element)) {
@@ -251,7 +286,10 @@ async function visibleComposerEffortMatches(
           .replace(/\\s+/g, " ")
           .trim()
           .toLowerCase();
-        return text.includes(requestedEffort);
+        if (requestedEffort === "standard") {
+          return text.includes("standard") || text.includes("thinking");
+        }
+        return text.includes("extended");
       });
     }, effort)
     .catch(() => false);
