@@ -3,9 +3,8 @@ function createCapabilitySelectionRuntime({
   discoveryRuntime,
   reportHelpers,
 }) {
-  const { isSelected, clickControl, findByAliases } = domUtils;
+  const { isSelected, clickControl } = domUtils;
   const {
-    expandAliases,
     throwCapabilityMissing,
     throwUiDrift,
     mergeAliasBuckets,
@@ -19,7 +18,6 @@ function createCapabilitySelectionRuntime({
     isModelOption,
     isEffortOption,
     isSearchMenuItem,
-    isResearchModeControl,
     openPopupRootsFor,
     findConcreteSearchControl,
     findComposerToolsTrigger,
@@ -36,6 +34,20 @@ function createCapabilitySelectionRuntime({
     discoverVisibleEffortAliases,
   } = discoveryRuntime;
 
+  const deepResearchPathname = (pathname) => {
+    const segments = pathname.split("/").filter(Boolean);
+    if (
+      segments.length >= 2 &&
+      segments[segments.length - 2]?.toLowerCase() === "c"
+    ) {
+      segments.splice(segments.length - 2, 2);
+    }
+    if (segments[segments.length - 1]?.toLowerCase() !== "deep-research") {
+      segments.push("deep-research");
+    }
+    return segments.length > 0 ? `/${segments.join("/")}` : "/deep-research";
+  };
+
   const ensureMode = async (report, mode) => {
     if (mode === "normal") {
       return;
@@ -49,22 +61,16 @@ function createCapabilitySelectionRuntime({
       throwCapabilityMissing(`${mode} mode`, mode, report.aliases.modes);
     }
 
-    const control =
-      mode === "search"
-        ? findConcreteSearchControl(report)
-        : findByAliases({
-            selectors: [
-              "a[data-testid='deep-research-sidebar-item']",
-              "a[href='/deep-research']",
-              "a[href$='/deep-research']",
-            ],
-            aliases: expandAliases(report, "modes", mode, [
-              mode,
-              "deep research",
-            ]),
-            fallbackTokens: ["deep research"],
-            include: isResearchModeControl,
-          });
+    if (mode === "research") {
+      const url = new URL(window.location.href);
+      url.pathname = deepResearchPathname(url.pathname);
+      if (url.toString() !== window.location.href) {
+        window.location.assign(url.toString());
+      }
+      return;
+    }
+
+    const control = findConcreteSearchControl(report);
     if (!control && mode === "search") {
       const trigger = findComposerToolsTrigger();
       if (trigger) {

@@ -45,10 +45,11 @@ export async function prepareAskSubmission(
   page: Page,
   timing: AskTiming,
 ): Promise<{ page: Page; askBaseline: AskBaseline }> {
-  if (
-    (command.newConversation && !command.conversationId) ||
-    (!command.conversationId && !conversationIdFromUrl(safePageUrl(page)))
-  ) {
+  const shouldStartFreshAskConversation =
+    command.mode !== "research" &&
+    ((command.newConversation && !command.conversationId) ||
+      (!command.conversationId && !conversationIdFromUrl(safePageUrl(page))));
+  if (shouldStartFreshAskConversation) {
     await startNewConversation(page);
   }
   await waitForInteractionSurface(page, { reloadOnUnavailable: true });
