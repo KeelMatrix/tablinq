@@ -252,6 +252,58 @@ describe("browser adapter research: startup and configuration", () => {
     await adapter.shutdown();
   });
 
+  it("waits through a Deep Research planner countdown shell before start", async () => {
+    const server = await harness.startServer();
+    const { adapter, targetUrl } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
+        variant: "live",
+        scenario: "research-success",
+      },
+    );
+    const page = adapter.getManagedPageForTest()!;
+    const deepUrl = new URL(targetUrl);
+    deepUrl.pathname = "/deep-research";
+    await page.goto(deepUrl.toString(), { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => {
+      document.body.innerHTML = `
+        <main data-deep-research-root="true">
+          <h1>Research outline</h1>
+          <p>Review the proposed research plan.</p>
+          <button type="button">Edit</button>
+          <button type="button">Cancel</button>
+          <p>Plan starts in 57 seconds.</p>
+          <span>57</span>
+        </main>
+      `;
+      window.setTimeout(() => {
+        document.body.innerHTML = `
+          <main data-deep-research-root="true">
+            <h1>Deep research</h1>
+            <p data-deep-research-status="true">gathering sources</p>
+            <pre data-deep-research-text="true">Research report started</pre>
+          </main>
+        `;
+      }, 200);
+    });
+
+    const before = await readDeepResearchFrameSnapshot(page);
+    expect(before).toMatchObject({
+      phase: "planning",
+      startVisible: false,
+    });
+    const started = await beginDeepResearchRun(page, 2_000);
+
+    expect(started).toMatchObject({
+      status: "waiting_for_sources",
+      statusMessage: "gathering sources",
+      reportText: "Research report started",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("reads completed Deep Research reports from the nested sandbox document", async () => {
     const server = await harness.startServer();
     const { adapter, targetUrl } = await openManagedHarnessAdapter(

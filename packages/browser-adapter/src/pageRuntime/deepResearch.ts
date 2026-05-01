@@ -39,7 +39,7 @@ export async function beginDeepResearchRun(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const frameSnapshot = await readDeepResearchFrameSnapshot(page);
-    if (frameSnapshot?.startVisible || frameSnapshot?.phase === "planning") {
+    if (frameSnapshot?.startVisible) {
       if (frameSnapshot.startVisible && !frameSnapshot.startEnabled) {
         await sleep(
           Math.min(
@@ -73,6 +73,16 @@ export async function beginDeepResearchRun(
       throw new Error(
         "research start failed: Deep Research Start was clicked but the job never began",
       );
+    }
+
+    if (frameSnapshot?.phase === "planning") {
+      await sleep(
+        Math.min(
+          adaptivePollIntervalMs("edge", Date.now() - startedAt),
+          Math.max(1, deadline - Date.now()),
+        ),
+      );
+      continue;
     }
 
     const submission = await readResearchSubmissionState(page).catch(

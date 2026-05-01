@@ -352,7 +352,7 @@ export function mergeResearchSnapshots(
     return normalizeResearchSnapshot({
       ...domSnapshot,
       status: "waiting_for_sources",
-      statusMessage: frameSnapshot.statusMessage ?? domSnapshot.statusMessage,
+      statusMessage: "awaiting start confirmation",
       reportText: "",
     });
   }
