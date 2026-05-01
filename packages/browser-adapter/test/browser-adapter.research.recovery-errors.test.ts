@@ -79,6 +79,14 @@ describe("browser adapter research: recovery and error cases", () => {
         now,
       ),
     ).toBe(false);
+    expect(
+      shouldRefreshActiveResearchPage(
+        state,
+        { ...snapshot, statusMessage: "awaiting start confirmation" },
+        now + 1,
+        now,
+      ),
+    ).toBe(false);
   });
 
   it("fails clearly when /deep-research landing submission never starts and does not emit recovery loops", async () => {
