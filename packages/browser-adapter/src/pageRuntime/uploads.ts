@@ -1,6 +1,6 @@
 import { basename, resolve } from "node:path";
 import { stat } from "node:fs/promises";
-import type { Page } from "playwright-core";
+import type { Locator, Page } from "playwright-core";
 
 import type { CapabilityReportPayload } from "../contracts";
 import {
@@ -26,25 +26,6 @@ export async function uploadAttachments(
     return;
   }
 
-  const uploadSurface = page.locator(
-    [
-      "input[type='file']",
-      "[data-slot='upload-entry']",
-      "[data-testid='upload-button']",
-      "button[aria-label*='Add photos']",
-      "button[aria-label*='Add files']",
-      "label[for]",
-    ].join(", "),
-  );
-  if (
-    !report?.matrix.upload_control_visible &&
-    (await uploadSurface.count().catch(() => 0)) === 0
-  ) {
-    throw new Error(
-      "upload failed: no upload control is available in the current browser session",
-    );
-  }
-
   const resolvedFiles = await Promise.all(
     files.map(async (filePath) => {
       const absolutePath = resolve(filePath);
@@ -62,8 +43,14 @@ export async function uploadAttachments(
     }),
   );
 
-  const fileInput = page.locator("input[type='file']").first();
-  if ((await fileInput.count()) > 0) {
+  if (!(await waitForUploadSurface(page, report))) {
+    throw new Error(
+      "upload failed: no upload control is available in the current browser session",
+    );
+  }
+
+  const fileInput = await waitForUploadFileInput(page);
+  if (fileInput) {
     await prepareHighRiskInteraction(page, "upload_entry", fileInput);
     await fileInput.setInputFiles(
       resolvedFiles.map((item) => item.absolutePath),
@@ -112,6 +99,83 @@ export async function uploadAttachments(
       `upload failed: the page did not acknowledge uploaded files: ${expectedNames.join(", ")}`,
     );
   }
+}
+
+function uploadSurfaceLocator(page: Page): Locator {
+  return page.locator(
+    [
+      "input[type='file']",
+      "#composer-plus-btn",
+      "[data-testid='composer-plus-btn']",
+      "[data-slot='upload-entry']",
+      "[data-testid='upload-button']",
+      "button[aria-label*='Add photos' i]",
+      "button[aria-label*='Add files' i]",
+      "button[aria-label*='Attach' i]",
+      "label[for]",
+    ].join(", "),
+  );
+}
+
+async function waitForUploadSurface(
+  page: Page,
+  report: CapabilityReportPayload | null,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  const deadline = Date.now() + INTERACTION_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (
+      (await uploadSurfaceLocator(page)
+        .count()
+        .catch(() => 0)) > 0
+    ) {
+      return true;
+    }
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("upload", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
+  }
+  return (
+    (await uploadSurfaceLocator(page)
+      .count()
+      .catch(() => 0)) > 0 || Boolean(report?.matrix.upload_control_visible)
+  );
+}
+
+async function findUploadFileInput(page: Page): Promise<Locator | null> {
+  const candidates = [
+    page.locator("input#upload-files[type='file']").first(),
+    page.locator("input[type='file']:not([accept])").first(),
+    page.locator("input[type='file']:not([accept*='image' i])").first(),
+    page.locator("input[type='file']").first(),
+  ];
+  for (const candidate of candidates) {
+    if ((await candidate.count().catch(() => 0)) > 0) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function waitForUploadFileInput(page: Page): Promise<Locator | null> {
+  const startedAt = Date.now();
+  const deadline = Date.now() + INTERACTION_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const input = await findUploadFileInput(page);
+    if (input) {
+      return input;
+    }
+    await sleep(
+      Math.min(
+        adaptivePollIntervalMs("upload", Date.now() - startedAt),
+        Math.max(1, deadline - Date.now()),
+      ),
+    );
+  }
+  return findUploadFileInput(page);
 }
 
 async function waitForUploadAcknowledged(

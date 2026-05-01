@@ -17,6 +17,7 @@ import {
 import type { StreamChunkSnapshot } from "../src/browserAdapter";
 import { finalizeAsk } from "../src/execution/finalization";
 import { applyAskSnapshot } from "../src/execution/streaming";
+import { uploadAttachments } from "../src/pageRuntime/uploads";
 import {
   createIsolatedTempDir,
   listAttachedPages,
@@ -243,6 +244,54 @@ describe("browser adapter ask: uploads and artifacts", () => {
       ),
     ).rejects.toThrow(/upload failed/i);
 
+    await adapter.shutdown();
+  });
+
+  it("waits for a delayed Deep Research upload input before attaching files", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const fixture = path.join(root, "brief.txt");
+    await writeFile(fixture, "brief body", "utf8");
+    const { adapter } = await openTrackedManagedAdapter(harness, server.url);
+    const page = adapter.getManagedPageForTest()!;
+
+    await page.setContent(`
+      <main>
+        <form data-testid="composer-root">
+          <textarea id="prompt-textarea" aria-label="Message"></textarea>
+          <button id="composer-plus-btn" type="button" aria-label="Add files and more"></button>
+          <div data-slot="upload-list"></div>
+        </form>
+        <script>
+          document.addEventListener("change", (event) => {
+            const input = event.target;
+            if (!(input instanceof HTMLInputElement)) {
+              return;
+            }
+            const list = document.querySelector("[data-slot='upload-list']");
+            list.innerHTML = Array.from(input.files || [])
+              .map((file) => '<span data-slot="uploaded-file">' + file.name + '</span>')
+              .join("");
+          });
+          setTimeout(() => {
+            const input = document.createElement("input");
+            input.id = "upload-files";
+            input.type = "file";
+            input.multiple = true;
+            input.style.position = "absolute";
+            input.style.width = "1px";
+            input.style.height = "1px";
+            input.style.clipPath = "inset(50%)";
+            document.querySelector("form").append(input);
+          }, 250);
+        </script>
+    `);
+
+    await uploadAttachments(page, [fixture], null);
+
+    await expect(
+      page.locator("[data-slot='uploaded-file']").textContent(),
+    ).resolves.toBe("brief.txt");
     await adapter.shutdown();
   });
 
