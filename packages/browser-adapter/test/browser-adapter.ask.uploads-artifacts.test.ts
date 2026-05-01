@@ -120,6 +120,16 @@ describe("browser adapter ask: uploads and artifacts", () => {
       targetUrl: withHarnessUrl(server.url, { variant: "live" }),
       headless: true,
     });
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      document.body.dataset.deepResearchNavClicks = "0";
+      document
+        .querySelector("#deep-research-nav")
+        ?.addEventListener("click", () => {
+          document.body.dataset.deepResearchNavClicks = String(
+            Number(document.body.dataset.deepResearchNavClicks ?? "0") + 1,
+          );
+        });
+    });
 
     const result = await adapter.ask(
       {
@@ -141,6 +151,9 @@ describe("browser adapter ask: uploads and artifacts", () => {
       currentUrl: window.location.href,
       composerReady: Boolean(document.querySelector("#prompt-textarea")),
       researchLandingVisited: document.body.dataset.researchLandingVisited,
+      newChatShortcut: document.body.dataset.newChatShortcut ?? "0",
+      newChatClicks: document.body.dataset.newChatClicks ?? "0",
+      deepResearchNavClicks: document.body.dataset.deepResearchNavClicks ?? "0",
       sendHidden:
         document
           .querySelector("[data-testid='send-button']")
@@ -160,6 +173,9 @@ describe("browser adapter ask: uploads and artifacts", () => {
       ),
       composerReady: true,
       researchLandingVisited: "true",
+      newChatShortcut: "0",
+      newChatClicks: "0",
+      deepResearchNavClicks: "0",
       sendHidden: false,
       stopHidden: true,
     });
