@@ -1,5 +1,0 @@
-Questions to answer:
-1. Which city has the strongest geography-driven infrastructure constraints?
-2. Which risks are seasonal versus structural?
-3. Which city would be hardest to serve with resilient logistics during a natural disaster?
-4. Which comparison depends most on uncertain or outdated public data?
