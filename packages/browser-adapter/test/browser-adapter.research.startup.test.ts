@@ -354,6 +354,120 @@ describe("browser adapter research: startup and configuration", () => {
     await adapter.shutdown();
   });
 
+  it("ignores composer Start dictation while waiting for the Deep Research planner", async () => {
+    const server = await harness.startServer();
+    const { adapter, targetUrl } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
+        variant: "live",
+        scenario: "research-success",
+      },
+    );
+    const page = adapter.getManagedPageForTest()!;
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => {
+      document.body.innerHTML = `
+        <main>
+          <article data-message-author-role="user">
+            Compare hosted issue trackers with a shared spreadsheet.
+            <button type="button" aria-label="Edit message"></button>
+          </article>
+          <form>
+            <button type="button" aria-label="Deep research, click to remove">
+              Deep research
+            </button>
+            <button type="button" id="dictation" aria-label="Start dictation"></button>
+            <button type="submit" aria-label="Send prompt" disabled></button>
+          </form>
+        </main>
+      `;
+    });
+
+    await expect(readDeepResearchFrameSnapshot(page)).resolves.toBeNull();
+
+    await adapter.shutdown();
+  });
+
+  it("clicks a Deep Research Start countdown control inside the root sandbox frame", async () => {
+    const server = await harness.startServer();
+    const { adapter, targetUrl } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
+        variant: "live",
+        scenario: "research-success",
+      },
+    );
+    const page = adapter.getManagedPageForTest()!;
+    await page.goto(targetUrl, { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => {
+      document.body.innerHTML = `
+        <main>
+          <article data-message-author-role="user">
+            Compare temporary retail permits.
+            <button type="button" aria-label="Edit message"></button>
+          </article>
+          <form>
+            <button type="button" aria-label="Deep research, click to remove">
+              Deep research
+            </button>
+            <button type="button" aria-label="Start dictation"></button>
+            <button type="submit" aria-label="Send prompt" disabled></button>
+          </form>
+          <iframe id="deep-research-frame" name="root"></iframe>
+        </main>
+      `;
+      const iframe = document.querySelector(
+        "#deep-research-frame",
+      ) as HTMLIFrameElement;
+      const sandboxDocument = iframe.contentDocument!;
+      sandboxDocument.open();
+      sandboxDocument.write(`
+        <main>
+          <h1>Night-market vs pop-up permits</h1>
+          <ol>
+            <li>Collect permit rules from official city websites.</li>
+            <li>Analyze staffing, safety, revenue, and weather factors.</li>
+          </ol>
+          <button type="button">Edit</button>
+          <button type="button">Cancel</button>
+          <button type="button" id="start-research">
+            <div><span>Start 55</span></div>
+          </button>
+        </main>
+      `);
+      sandboxDocument.close();
+      sandboxDocument
+        .querySelector("#start-research")
+        ?.addEventListener("click", () => {
+          sandboxDocument.body.innerHTML = `
+            <main data-deep-research-root="true">
+              <h1>Deep research</h1>
+              <p data-deep-research-status="true">gathering sources</p>
+              <pre data-deep-research-text="true">Research report started</pre>
+            </main>
+          `;
+        });
+    });
+
+    const before = await readDeepResearchFrameSnapshot(page);
+    expect(before).toMatchObject({
+      phase: "planning",
+      startVisible: true,
+      startEnabled: true,
+    });
+    const started = await beginDeepResearchRun(page, 2_000);
+
+    expect(started).toMatchObject({
+      status: "waiting_for_sources",
+      statusMessage: "gathering sources",
+      reportText: "Research report started",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("waits through a Deep Research planner countdown shell before start", async () => {
     const server = await harness.startServer();
     const { adapter, targetUrl } = await openManagedHarnessAdapter(

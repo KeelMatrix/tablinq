@@ -1,4 +1,4 @@
-import type { Frame, Page } from "playwright-core";
+import type { Frame, Locator, Page } from "playwright-core";
 
 import type {
   DeepResearchFrameSnapshot,
@@ -23,7 +23,8 @@ import { callPageAdapter } from "./adapter";
 import { clickWithInteractionJitter, sleep } from "./common";
 import { readResearchSubmissionState } from "./researchSubmission";
 
-const DEEP_RESEARCH_START_BUTTON_NAME = /^Start\b/i;
+const DEEP_RESEARCH_START_BUTTON_NAME = /^Start(?:\s+\d+)?$/i;
+const DEEP_RESEARCH_START_BUTTON_SELECTOR = "button, [role='button']";
 
 interface NestedDeepResearchReport {
   reportText: string;
@@ -282,11 +283,8 @@ export async function waitForDeepResearchStartConfirmation(
 
 export async function clickDeepResearchStart(page: Page): Promise<boolean> {
   for (const frame of deepResearchCandidateFrames(page)) {
-    const button = frame
-      .getByRole("button", { name: DEEP_RESEARCH_START_BUTTON_NAME })
-      .first();
-    const visible = await button.isVisible().catch(() => false);
-    if (!visible) {
+    const button = await findDeepResearchStartButton(frame);
+    if (!button) {
       continue;
     }
     const enabled = await button.isEnabled().catch(() => false);
@@ -304,6 +302,26 @@ export async function clickDeepResearchStart(page: Page): Promise<boolean> {
     }
   }
   return false;
+}
+
+async function findDeepResearchStartButton(
+  frame: Frame,
+): Promise<Locator | null> {
+  const candidates = [
+    frame
+      .getByRole("button", { name: DEEP_RESEARCH_START_BUTTON_NAME })
+      .first(),
+    frame
+      .locator(DEEP_RESEARCH_START_BUTTON_SELECTOR)
+      .filter({ hasText: DEEP_RESEARCH_START_BUTTON_NAME })
+      .first(),
+  ];
+  for (const button of candidates) {
+    if (await button.isVisible().catch(() => false)) {
+      return button;
+    }
+  }
+  return null;
 }
 
 export function deepResearchCandidateFrames(page: Page): Frame[] {
@@ -410,10 +428,8 @@ export async function inspectDeepResearchFrame(
       .isVisible()
       .catch(() => false);
 
-  const startButton = frame
-    .getByRole("button", { name: DEEP_RESEARCH_START_BUTTON_NAME })
-    .first();
-  const startVisible = await startButton.isVisible().catch(() => false);
+  const startButton = await findDeepResearchStartButton(frame);
+  const startVisible = startButton !== null;
   const startEnabled = startVisible
     ? await startButton.isEnabled().catch(() => false)
     : false;
