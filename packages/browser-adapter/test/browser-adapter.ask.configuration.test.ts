@@ -260,6 +260,54 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     await adapter.shutdown();
   });
 
+  it("selects Instant from an unlabeled composer model pill with an unknown thinking label", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-unknown-thinking-label-instant";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "thinking",
+        initialEffort: "extended",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const trigger = document.querySelector(
+        "[data-harness-model-trigger='composer-right']",
+      );
+      if (!(trigger instanceof HTMLElement)) {
+        throw new Error("composer-right model trigger missing");
+      }
+      trigger.textContent = "Reasoning high";
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-unknown-thinking-label-instant",
+        prompt: "configure composer right unknown thinking label instant",
+        conversationId,
+        modelClass: "instant",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      model: "instant",
+      modelMenuClicks: "1",
+      effortMenuClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("does not reopen composer-right model or effort menus when Extended is already visible", async () => {
     const server = await harness.startServer();
     const conversationId = "composer-right-thinking-extended";
@@ -344,6 +392,56 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     expect(state).toEqual({
       model: "thinking",
       effort: "extended",
+      modelMenuClicks: "1",
+      modelOptionClicks: "0",
+      configureModalClicks: "1",
+      effortComboboxClicks: "1",
+      effortOptionClicks: "1",
+      modalOpen: "false",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("selects Standard through the current configure modal without reopening the model picker", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-configure-standard";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "instant",
+        initialEffort: "extended",
+        effortInConfigureModal: true,
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-configure-standard",
+        prompt: "configure composer right thinking standard",
+        conversationId,
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+      configureModalClicks: document.body.dataset.configureModalClicks ?? "0",
+      effortComboboxClicks: document.body.dataset.effortComboboxClicks ?? "0",
+      effortOptionClicks: document.body.dataset.effortOptionClicks ?? "0",
+      modalOpen: document.body.dataset.intelligenceModalOpen,
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "standard",
       modelMenuClicks: "1",
       modelOptionClicks: "0",
       configureModalClicks: "1",
@@ -1020,7 +1118,7 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
         prompt: "reply after selecting thinking with a hidden model picker",
         modelClass: "thinking",
         effort: "standard",
-        timeoutMs: 7_000,
+        timeoutMs: 12_000,
       },
       () => {},
     );

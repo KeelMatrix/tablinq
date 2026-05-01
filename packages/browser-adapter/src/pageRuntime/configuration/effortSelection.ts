@@ -216,10 +216,7 @@ export async function ensureConfiguredThinkingEffort(
     }
   }
 
-  if (
-    effort === "extended" &&
-    (await selectThinkingEffortFromConfigureModal(page, effort))
-  ) {
+  if (await selectThinkingEffortFromConfigureModal(page, effort)) {
     return true;
   }
 
@@ -317,6 +314,8 @@ async function findVisibleModelPickerTriggerForEffort(
   const composerRightTrigger = await waitForVisibleLocator(
     page.locator(
       [
+        // Legacy/current explicit labels stay first as stable fallbacks for older ChatGPT picker UIs.
+        // Keep these even though the generic unlabeled composer-pill selector below handles newer labels.
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Instant')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Thinking')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Legacy')",
@@ -326,6 +325,7 @@ async function findVisibleModelPickerTriggerForEffort(
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.5')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Standard')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Extended')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
       ].join(", "),
     ),
     250,
