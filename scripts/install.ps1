@@ -26,7 +26,7 @@ $daemonTaskName = "Tablinq Daemon"
 $gatewayTaskName = "Tablinq Gateway"
 $script:InstallProgressId = 8701
 $script:CurrentPhase = 0
-$script:TotalPhases = 3
+$script:TotalPhases = 4
 if (-not $effectiveSkipDependencyInstall) {
   $script:TotalPhases += 1
 }
@@ -527,6 +527,107 @@ function Stop-ManagedBrowserProfileProcesses {
   }
 }
 
+function Stop-ProcessIdQuietly {
+  param([int]$ProcessId)
+
+  if ($ProcessId -eq $PID) {
+    return
+  }
+
+  try {
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    Wait-Process -Id $ProcessId -Timeout 3 -ErrorAction SilentlyContinue
+  }
+  catch {
+  }
+}
+
+function Test-PathFragmentMatch {
+  param(
+    [string]$Haystack,
+    [string[]]$Needles
+  )
+
+  if (-not $Haystack) {
+    return $false
+  }
+
+  $normalizedHaystack = $Haystack.Replace("/", "\")
+  foreach ($needle in $Needles) {
+    if ($needle -and $normalizedHaystack.IndexOf($needle, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
+function Stop-TablinqRuntimeProcesses {
+  param(
+    [string]$InstallRoot,
+    [string]$StateRoot,
+    [string]$RepoRoot
+  )
+
+  $installRootPath = [System.IO.Path]::GetFullPath($InstallRoot)
+  $stateRootPath = [System.IO.Path]::GetFullPath($StateRoot)
+  $repoRootPath = [System.IO.Path]::GetFullPath($RepoRoot)
+  $targetRootPath = [System.IO.Path]::GetFullPath((Join-Path $repoRootPath "target"))
+  $pathFragments = @($installRootPath, $stateRootPath, $repoRootPath, $targetRootPath)
+  $browserAdapterFragments = @(
+    "\packages\browser-adapter\src\service.ts",
+    "\packages\browser-adapter\dist\src\service.js",
+    "\browser-adapter\src\service.js",
+    "\browser-adapter\src\service.ts",
+    "\browser-adapter\dist\src\service.js"
+  )
+  $runtimeNames = @(
+    "gpt.exe",
+    "tablinq-cli.exe",
+    "gptd.exe",
+    "tablinq-gateway.exe",
+    "tablinq-host.exe"
+  )
+  $stopped = [System.Collections.Generic.List[string]]::new()
+  $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+  foreach ($process in $processes) {
+    $name = $process.Name
+    $commandLine = [string]$process.CommandLine
+    $executablePath = [string]$process.ExecutablePath
+    $isRuntimeBinary =
+      $runtimeNames -contains $name -and
+      (
+        (Test-PathFragmentMatch -Haystack $commandLine -Needles $pathFragments) -or
+        (Test-PathFragmentMatch -Haystack $executablePath -Needles $pathFragments)
+      )
+    $isBrowserAdapter =
+      $name -eq "node.exe" -and
+      (
+        (Test-PathFragmentMatch -Haystack $commandLine -Needles $browserAdapterFragments) -or
+        (
+          (Test-PathFragmentMatch -Haystack $commandLine -Needles @("tablinq")) -and
+          (Test-PathFragmentMatch -Haystack $commandLine -Needles @("browser-adapter"))
+        )
+      )
+
+    if (-not $isRuntimeBinary -and -not $isBrowserAdapter) {
+      continue
+    }
+
+    $stopped.Add(("{0}({1})" -f $name, $process.ProcessId)) | Out-Null
+    Stop-ProcessIdQuietly -ProcessId $process.ProcessId
+  }
+
+  Stop-ManagedBrowserProfileProcesses -StateRoot $StateRoot
+
+  if ($stopped.Count -gt 0) {
+    Write-Host ("  stopped: {0}" -f ($stopped -join ", "))
+  }
+  else {
+    Write-Host "  stopped: no existing Tablinq runtime processes"
+  }
+}
+
 function Remove-AutoStartScheduledTask {
   param([string]$TaskName)
 
@@ -870,12 +971,12 @@ function Write-ManualSteps {
       if ($BrowserName -eq "Chrome") {
         $steps.Add("Fully close Chrome: taskkill /IM chrome.exe /F") | Out-Null
         $steps.Add("$gptCommand browser start-debug") | Out-Null
-        $steps.Add("In the Chrome window opened by that command, open chrome://extensions/, enable Developer mode, remove any previously loaded Tablinq extension in that attach profile, and load the unpacked extension from: $extensionPath") | Out-Null
+        $steps.Add("In that Chrome window, open chrome://extensions/ and enable Developer mode. If Tablinq is missing or disabled, load unpacked from: $extensionPath") | Out-Null
         $steps.Add("Sign in at $TargetUrl in that profile.") | Out-Null
       }
       else {
         $steps.Add("Open edge://extensions/ and enable Developer mode.") | Out-Null
-        $steps.Add("Load the unpacked extension from: $extensionPath") | Out-Null
+        $steps.Add("If Tablinq is missing or disabled, load unpacked from: $extensionPath") | Out-Null
         $steps.Add("Fully close Edge.") | Out-Null
         $steps.Add("$gptCommand browser start-debug") | Out-Null
         $steps.Add("Sign in at $TargetUrl in that profile.") | Out-Null
@@ -1011,6 +1112,7 @@ function Install-PackagePayload {
     [string]$PackageRoot,
     [string]$InstallRoot,
     [string]$StateRoot,
+    [string]$RepoRoot,
     [pscustomobject]$BrowserSelection,
     [bool]$SkipRegistry,
     [bool]$SkipPathUpdate
@@ -1024,7 +1126,7 @@ function Install-PackagePayload {
   $existingBinDir = Join-Path $InstallRoot "bin"
   Stop-ManagedProcessByPath -ExecutablePath (Join-Path $existingBinDir "tablinq-gateway.exe")
   Stop-ManagedProcessByPath -ExecutablePath (Join-Path $existingBinDir "gptd.exe")
-  Stop-ManagedBrowserProfileProcesses -StateRoot $StateRoot
+  Stop-TablinqRuntimeProcesses -InstallRoot $InstallRoot -StateRoot $StateRoot -RepoRoot $RepoRoot
   Start-Sleep -Milliseconds 750
 
   $stagingRoot = "$InstallRoot.new"
@@ -1135,7 +1237,9 @@ function Set-LocalMachineConfiguration {
 function Get-InstallServiceState {
   param(
     [string]$InstalledCli,
+    [string]$InstallRoot,
     [string]$StateRoot,
+    [string]$RepoRoot,
     [bool]$NoLaunchAfterInstall
   )
 
@@ -1145,6 +1249,7 @@ function Get-InstallServiceState {
 
   if (-not $NoLaunchAfterInstall) {
     Start-InstallPhase -Title "Starting services"
+    Stop-TablinqRuntimeProcesses -InstallRoot $InstallRoot -StateRoot $StateRoot -RepoRoot $RepoRoot
     $null = Invoke-InternalCliJson -CliExecutablePath $InstalledCli -StateRoot $StateRoot -Arguments @("daemon", "start")
     $daemonStatus = Wait-ForDaemonReady -CliExecutablePath $InstalledCli -StateRoot $StateRoot
     $null = Invoke-InternalCliJson -CliExecutablePath $InstalledCli -StateRoot $StateRoot -Arguments @("gateway", "start")
@@ -1228,12 +1333,14 @@ if ($usePrebuiltPackage) {
 }
 
 $preflight = Assert-InstallPrerequisites -ShouldBuildPackage:(-not $effectiveSkipPackageBuild) -ShouldInstallDependencies:(-not $effectiveSkipDependencyInstall) -SkipRegistry:([bool]$SkipRegistry) -InstallRoot $InstallRoot -StateRoot $StateRoot
+Start-InstallPhase -Title "Stopping existing Tablinq runtime"
+Stop-TablinqRuntimeProcesses -InstallRoot $InstallRoot -StateRoot $StateRoot -RepoRoot $repoRoot
 Invoke-WorkspaceDependencyInstall -ShouldInstallDependencies:(-not $effectiveSkipDependencyInstall) -RepoRoot $repoRoot -InstallLogDir $preflight.InstallLogDir
 Invoke-PackageBuildStep -ShouldBuildPackage:(-not $effectiveSkipPackageBuild) -PowerShellExecutable $preflight.PowerShellExecutable -PackageScriptPath $packageScriptPath -Profile $Profile -RepoRoot $repoRoot -InstallLogDir $preflight.InstallLogDir
 
-$packageInstall = Install-PackagePayload -PackageRoot $PackageRoot -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserSelection $preflight.BrowserSelection -SkipRegistry:([bool]$SkipRegistry) -SkipPathUpdate:([bool]$SkipPathUpdate)
+$packageInstall = Install-PackagePayload -PackageRoot $PackageRoot -InstallRoot $InstallRoot -StateRoot $StateRoot -RepoRoot $repoRoot -BrowserSelection $preflight.BrowserSelection -SkipRegistry:([bool]$SkipRegistry) -SkipPathUpdate:([bool]$SkipPathUpdate)
 $autoStartMode = Set-LocalMachineConfiguration -EnableAutoStart:([bool]$EnableAutoStart) -InstallRoot $InstallRoot -StateRoot $StateRoot
-$serviceState = Get-InstallServiceState -InstalledCli $packageInstall.InstalledCli -StateRoot $StateRoot -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall)
+$serviceState = Get-InstallServiceState -InstalledCli $packageInstall.InstalledCli -InstallRoot $InstallRoot -StateRoot $StateRoot -RepoRoot $repoRoot -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall)
 $pathState = if ($SkipPathUpdate) { "unchanged" } else { "updated" }
 
 Write-InstallSummary -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserSelection $preflight.BrowserSelection -ConnectionMode $packageInstall.ConnectionMode -TargetUrl $packageInstall.TargetUrl -PathState $pathState -AutoStartMode $autoStartMode -LaunchMode $serviceState.LaunchMode -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall) -DaemonStatus $serviceState.DaemonStatus -GatewayStatus $serviceState.GatewayStatus -EnableAutoStart:([bool]$EnableAutoStart) -SkipPathUpdate:([bool]$SkipPathUpdate) -UsePathCommand:([bool]$packageInstall.UsePathCommand)
