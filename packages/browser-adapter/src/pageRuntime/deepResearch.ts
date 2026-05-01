@@ -23,7 +23,7 @@ import { callPageAdapter } from "./adapter";
 import { clickWithInteractionJitter, sleep } from "./common";
 import { readResearchSubmissionState } from "./researchSubmission";
 
-const DEEP_RESEARCH_START_BUTTON_NAME = /^Start(?:\s+research)?(?:\s+\d+)?$/i;
+const DEEP_RESEARCH_START_BUTTON_NAME = /^Start\b/i;
 
 interface NestedDeepResearchReport {
   reportText: string;
@@ -85,24 +85,28 @@ export async function beginDeepResearchRun(
       continue;
     }
 
+    if (frameSnapshot) {
+      const merged = await readLiveResearchSnapshot(page).catch(() => null);
+      if (
+        merged &&
+        merged.status !== "idle" &&
+        merged.statusMessage !== "awaiting start confirmation"
+      ) {
+        return merged;
+      }
+    }
+
+    const shellPresent = await deepResearchShellPresent(page);
     const submission = await readResearchSubmissionState(page).catch(
       () => null,
     );
     if (
+      !shellPresent &&
       submission &&
       !submission.onDeepResearchLanding &&
       submission.status !== "idle"
     ) {
       return researchSubmissionStateToSnapshot(submission);
-    }
-
-    const merged = await readLiveResearchSnapshot(page).catch(() => null);
-    if (
-      merged &&
-      merged.status !== "idle" &&
-      merged.statusMessage !== "awaiting start confirmation"
-    ) {
-      return merged;
     }
 
     await sleep(
@@ -116,6 +120,25 @@ export async function beginDeepResearchRun(
   throw new Error(
     "research start failed: Deep Research planner never became actionable",
   );
+}
+
+async function deepResearchShellPresent(page: Page): Promise<boolean> {
+  if ((safePageUrl(page)?.toLowerCase() ?? "").includes("/deep-research")) {
+    return true;
+  }
+  return page
+    .evaluate(() =>
+      Array.from(document.querySelectorAll("iframe")).some((frame) => {
+        const haystack =
+          `${frame.id} ${frame.title} ${frame.name} ${frame.src}`.toLowerCase();
+        return (
+          haystack.includes("deep-research") ||
+          haystack.includes("deep_research") ||
+          haystack.includes("oaiusercontent")
+        );
+      }),
+    )
+    .catch(() => false);
 }
 
 export async function candidateDeepResearchPages(page: Page): Promise<Page[]> {
@@ -287,10 +310,7 @@ export function deepResearchCandidateFrames(page: Page): Frame[] {
   const childFrames = page
     .frames()
     .filter((frame) => frame !== page.mainFrame());
-  const includeMainFrame = (safePageUrl(page)?.toLowerCase() ?? "").includes(
-    "/deep-research",
-  );
-  return includeMainFrame ? [page.mainFrame(), ...childFrames] : childFrames;
+  return [page.mainFrame(), ...childFrames];
 }
 
 export async function readDeepResearchFrameSnapshot(
@@ -401,6 +421,28 @@ export async function inspectDeepResearchFrame(
     (await visibleRole(/^Edit$/i)) || (await visibleRole(/^Cancel$/i));
   const stopResearchVisible =
     (await visibleRole(/^Stop$/i)) || (await visibleRole(/^Stop research$/i));
+  const explicitDeepResearchRoot = frame
+    .locator(
+      "[data-deep-research-root], [data-deep-research-status], [data-deep-research-text]",
+    )
+    .first();
+  const explicitDeepResearchVisible = await explicitDeepResearchRoot
+    .isVisible()
+    .catch(() => false);
+  const isMainFrame = frame === frame.page().mainFrame();
+  const mainFrameConversationShell =
+    isMainFrame &&
+    !(safePageUrl(frame.page())?.toLowerCase() ?? "").includes(
+      "/deep-research",
+    );
+  if (
+    mainFrameConversationShell &&
+    !startVisible &&
+    !stopResearchVisible &&
+    !explicitDeepResearchVisible
+  ) {
+    return null;
+  }
   const explicitReportRoot = frame
     .locator(
       "[data-deep-research-text], [class*='reportPage'], article, [role='article'], [role='document'], pre",
@@ -440,7 +482,6 @@ export async function inspectDeepResearchFrame(
   const candidate =
     startVisible ||
     lowerUrl.includes("deep_research") ||
-    lowerUrl.includes("oaiusercontent") ||
     lowerText.includes("deep research") ||
     stopResearchVisible ||
     lowerText.includes("gathering sources") ||

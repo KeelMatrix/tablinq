@@ -18,7 +18,6 @@ import {
   waitForSubmitReadyAfterUploads,
 } from "../pageRuntime";
 import {
-  computeStallTimeoutMs,
   researchSubmissionStateToSnapshot,
   type ResearchSnapshot,
   type ResearchSubmissionStateSnapshot,
@@ -185,20 +184,6 @@ export async function runResearch(
       }
     }
 
-    const stallRecovery = await recoverStalledResearchIfNeeded(
-      host,
-      command,
-      page,
-      state,
-      onUpdate,
-      onState,
-      timing,
-    );
-    page = stallRecovery.page;
-    if (stallRecovery.result) {
-      return stallRecovery.result;
-    }
-
     await sleepForResearchPoll(state, timing.timeoutAt);
   }
 
@@ -208,7 +193,6 @@ export async function runResearch(
 type ResearchTiming = {
   executionTimeoutMs: number;
   timeoutAt: number;
-  stallTimeoutMs: number;
 };
 
 function resolveResearchTiming(
@@ -218,10 +202,6 @@ function resolveResearchTiming(
   return {
     executionTimeoutMs,
     timeoutAt: Date.now() + executionTimeoutMs,
-    stallTimeoutMs: computeStallTimeoutMs(
-      command.timeoutMs,
-      RESEARCH_TIMEOUT_MS,
-    ),
   };
 }
 
@@ -486,6 +466,9 @@ export function shouldRefreshActiveResearchPage(
   if (now >= timeoutAt || !state.submissionConfirmed) {
     return false;
   }
+  if (isAwaitingResearchStart(snapshot)) {
+    return false;
+  }
   if (
     snapshot.status !== "waiting_for_sources" &&
     snapshot.status !== "running"
@@ -519,33 +502,8 @@ async function refreshActiveResearchPageIfNeeded(
   return refreshed ? { page, snapshot: refreshed } : { page };
 }
 
-async function recoverStalledResearchIfNeeded(
-  host: BrowserExecutionHost,
-  command: ResearchExecutionCommand,
-  page: Page,
-  state: ResearchRuntimeState,
-  onUpdate: ResearchUpdateSink,
-  onState: StateSink,
-  timing: ResearchTiming,
-): Promise<ResearchRecoveryResult> {
-  if (
-    !state.submissionConfirmed ||
-    Date.now() - state.lastProgressAt < timing.stallTimeoutMs ||
-    state.recoveryAttempts >= MAX_RECOVERY_ATTEMPTS
-  ) {
-    return { page };
-  }
-  noteProviderPressure("recovery_loop");
-  return reconcileResearchAfterInterruption(
-    host,
-    page,
-    command,
-    state,
-    onUpdate,
-    onState,
-    "stream stalled while waiting for provider output",
-    timing.timeoutAt,
-  );
+function isAwaitingResearchStart(snapshot: ResearchSnapshot): boolean {
+  return snapshot.statusMessage === "awaiting start confirmation";
 }
 
 async function sleepForResearchRecovery(
