@@ -106,3 +106,21 @@
 - No speculative changes
 - No broad formatting churn
 - Briefly mention what global / local SKILLS were used and why
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `KeelMatrix/tablinq`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The default five-label triage vocabulary is used. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context domain docs are expected at the repo root. See `docs/agents/domain.md`.
+
+### Skill selection
+
+For Tablinq tasks where the user did not explicitly name a skill, start with `tablinq-skill-selector` to choose the narrowest relevant repo-local and installed engineering skills.
