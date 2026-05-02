@@ -4,6 +4,7 @@ mod conversation_inspection;
 mod job_operations;
 mod lifecycle;
 mod operations;
+mod provider_failure_recovery;
 mod recovery;
 mod recovery_manifest;
 mod research;
