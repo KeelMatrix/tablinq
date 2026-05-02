@@ -235,7 +235,7 @@ impl AppConfig {
             .gateway
             .as_ref()
             .and_then(|value| value.queue_timeout_ms)
-            .unwrap_or(4_800_000)
+            .unwrap_or(7_230_000)
     }
 
     pub fn gateway_per_client_limit(&self) -> u32 {
@@ -257,7 +257,7 @@ impl AppConfig {
             .gateway
             .as_ref()
             .and_then(|value| value.ask_timeout_ms)
-            .unwrap_or(15_000)
+            .unwrap_or(3_600_000)
     }
 
     pub fn extended_thinking_timeout_ms(&self) -> u64 {
@@ -265,7 +265,7 @@ impl AppConfig {
             .gateway
             .as_ref()
             .and_then(|value| value.extended_thinking_timeout_ms)
-            .unwrap_or(1_500_000)
+            .unwrap_or(3_000_000)
     }
 
     pub fn research_timeout_ms(&self) -> u64 {
@@ -273,7 +273,7 @@ impl AppConfig {
             .gateway
             .as_ref()
             .and_then(|value| value.research_timeout_ms)
-            .unwrap_or(30_000)
+            .unwrap_or(7_200_000)
     }
 
     pub fn gateway_safe_mode_behavior(&self) -> &str {
@@ -394,19 +394,19 @@ fn normalize_file_config(mut file: FileConfig) -> FileConfig {
         gateway.queue_length = Some(32);
     }
     if gateway.queue_timeout_ms.is_none() {
-        gateway.queue_timeout_ms = Some(4_800_000);
+        gateway.queue_timeout_ms = Some(7_230_000);
     }
     if gateway.per_client_limit.is_none() {
         gateway.per_client_limit = Some(8);
     }
     if gateway.ask_timeout_ms.is_none() {
-        gateway.ask_timeout_ms = Some(360_000);
+        gateway.ask_timeout_ms = Some(3_600_000);
     }
     if gateway.extended_thinking_timeout_ms.is_none() {
-        gateway.extended_thinking_timeout_ms = Some(1_500_000);
+        gateway.extended_thinking_timeout_ms = Some(3_000_000);
     }
     if gateway.research_timeout_ms.is_none() {
-        gateway.research_timeout_ms = Some(4_800_000);
+        gateway.research_timeout_ms = Some(7_200_000);
     }
     if gateway.safe_mode_behavior.is_none() {
         gateway.safe_mode_behavior = Some("reject_execution".to_owned());
@@ -469,12 +469,12 @@ mod tests {
         assert_eq!(config.gateway_port(), 3847);
         assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
         assert_eq!(config.gateway_queue_length(), 32);
-        assert_eq!(config.gateway_queue_timeout_ms(), 4_800_000);
+        assert_eq!(config.gateway_queue_timeout_ms(), 7_230_000);
         assert_eq!(config.gateway_per_client_limit(), 8);
-        assert_eq!(config.gateway_request_timeout_ms(), 4_800_000);
-        assert_eq!(config.ask_timeout_ms(), 360_000);
-        assert_eq!(config.extended_thinking_timeout_ms(), 1_500_000);
-        assert_eq!(config.research_timeout_ms(), 4_800_000);
+        assert_eq!(config.gateway_request_timeout_ms(), 7_200_000);
+        assert_eq!(config.ask_timeout_ms(), 3_600_000);
+        assert_eq!(config.extended_thinking_timeout_ms(), 3_000_000);
+        assert_eq!(config.research_timeout_ms(), 7_200_000);
         assert_eq!(config.gateway_safe_mode_behavior(), "reject_execution");
         assert!(config.gateway_api_key().is_some());
     }
@@ -512,7 +512,7 @@ mod tests {
                 .gateway
                 .as_ref()
                 .and_then(|value| value.queue_timeout_ms),
-            Some(4_800_000)
+            Some(7_230_000)
         );
         assert_eq!(
             parsed
@@ -526,14 +526,21 @@ mod tests {
                 .gateway
                 .as_ref()
                 .and_then(|value| value.extended_thinking_timeout_ms),
-            Some(1_500_000)
+            Some(3_000_000)
         );
         assert_eq!(
             parsed
                 .gateway
                 .as_ref()
                 .and_then(|value| value.research_timeout_ms),
-            Some(4_800_000)
+            Some(7_200_000)
+        );
+        assert_eq!(
+            parsed
+                .gateway
+                .as_ref()
+                .and_then(|value| value.ask_timeout_ms),
+            Some(3_600_000)
         );
         assert!(
             parsed

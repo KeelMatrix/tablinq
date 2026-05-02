@@ -4,7 +4,7 @@ use crate::cli::{
 use crate::daemon::{install_execution_interrupt_sender, request_job_cancellation};
 use anyhow::{Context, Result, bail};
 use shared_protocol::{
-    DaemonRequest, DaemonResponse, EventPayload, StreamChunkKind, build_state_paths,
+    DaemonRequest, DaemonResponse, EventPayload, JobStatus, StreamChunkKind, build_state_paths,
     resolve_state_root,
 };
 use std::io::{self, IsTerminal, Write};
@@ -179,6 +179,9 @@ pub(crate) fn execute_research_with_terminal_presentation(
     let mut response_stream = ResponseStreamState::default();
     let green_responses = ansi_green_enabled_for_stdout();
     let mut last_status: Option<JobStatusLine> = None;
+    let mut research_running_announced = false;
+    let mut research_plan_printed = false;
+    let mut research_result_label_printed = false;
     let started_at = Instant::now();
     let mut current_job_id: Option<String> = None;
     thread::spawn(move || {
@@ -228,6 +231,10 @@ pub(crate) fn execute_research_with_terminal_presentation(
                     StreamChunkKind::Delta if !chunk.text.is_empty() => {
                         current_job_id = Some(chunk.job_id.clone());
                         if stream_responses {
+                            if !research_result_label_printed {
+                                write_research_result_label(&mut stdout)?;
+                                research_result_label_printed = true;
+                            }
                             buffer_response_chunk(
                                 &mut stdout,
                                 &chunk.text,
@@ -240,14 +247,26 @@ pub(crate) fn execute_research_with_terminal_presentation(
                 },
                 EventPayload::JobState(state) => {
                     current_job_id = Some(state.job_id.clone());
-                    let next = JobStatusLine {
-                        status: format!("{:?}", state.status).to_lowercase(),
-                        message: state.message.unwrap_or_default(),
-                    };
-                    if last_status.as_ref() != Some(&next) {
-                        writeln!(stderr, "[{}] {}", next.status, next.message)?;
-                        stderr.flush()?;
-                        last_status = Some(next);
+                    if let Some(next) =
+                        research_progress_status_line(&state, research_running_announced)
+                    {
+                        if next.status == "running" {
+                            research_running_announced = true;
+                        }
+                        if last_status.as_ref() != Some(&next) {
+                            writeln!(stderr, "[{}] {}", next.status, next.message)?;
+                            stderr.flush()?;
+                            last_status = Some(next);
+                        }
+                    }
+                    if !research_plan_printed
+                        && !research_result_label_printed
+                        && let Some(message) = state.message.as_deref()
+                        && let Some(plan) = extract_research_plan(message)
+                    {
+                        writeln!(stdout, "RESEARCH PLAN:\n{plan}\n")?;
+                        stdout.flush()?;
+                        research_plan_printed = true;
                     }
                 }
                 _ => {}
@@ -268,6 +287,9 @@ pub(crate) fn execute_research_with_terminal_presentation(
     match response {
         DaemonResponse::Research(result) => {
             if stream_responses {
+                if !result.report_text.is_empty() && !research_result_label_printed {
+                    write_research_result_label(&mut stdout)?;
+                }
                 reconcile_streamed_response_with_rewrite_safety(
                     &mut stdout,
                     &response_stream.printed_text,
@@ -278,6 +300,7 @@ pub(crate) fn execute_research_with_terminal_presentation(
                     false,
                 )?;
             } else if !result.report_text.is_empty() {
+                write_research_result_label(&mut stdout)?;
                 write_complete_response(&mut stdout, &result.report_text, green_responses)?;
             }
             Ok(())
@@ -309,4 +332,89 @@ pub(super) fn ask_progress_status_line(state: &shared_protocol::JobState) -> Opt
         status: format!("{:?}", state.status).to_lowercase(),
         message: message.to_owned(),
     })
+}
+
+pub(super) fn research_progress_status_line(
+    state: &shared_protocol::JobState,
+    running_announced: bool,
+) -> Option<JobStatusLine> {
+    let status = format!("{:?}", state.status).to_lowercase();
+    match state.status {
+        JobStatus::Queued => Some(JobStatusLine {
+            status,
+            message: non_empty_job_message(state)
+                .unwrap_or_else(|| "queued research job".to_owned()),
+        }),
+        JobStatus::WaitingForSources => {
+            if non_empty_job_message(state).as_deref() == Some("awaiting start confirmation") {
+                Some(JobStatusLine {
+                    status,
+                    message: "awaiting start confirmation".to_owned(),
+                })
+            } else {
+                None
+            }
+        }
+        JobStatus::Running if !running_announced => Some(JobStatusLine {
+            status,
+            message: "research started".to_owned(),
+        }),
+        JobStatus::Failed
+        | JobStatus::Cancelled
+        | JobStatus::Interrupted
+        | JobStatus::Recovered => Some(JobStatusLine {
+            status,
+            message: non_empty_job_message(state).unwrap_or_default(),
+        }),
+        _ => None,
+    }
+}
+
+pub(super) fn extract_research_plan(message: &str) -> Option<String> {
+    let lines: Vec<&str> = message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let plan_start = lines.iter().position(|line| {
+        matches!(
+            line.to_ascii_lowercase().as_str(),
+            "update" | "edit" | "cancel"
+        )
+    })? + 1;
+
+    let mut plan = Vec::new();
+    for line in lines.iter().skip(plan_start) {
+        let lower = line.to_ascii_lowercase();
+        if lower == "stop research"
+            || lower == "researching..."
+            || lower.ends_with("...")
+            || lower.contains("searches")
+            || lower.contains("citations")
+            || lower == "update"
+            || lower == "edit"
+            || lower == "cancel"
+            || line.chars().all(|ch| ch.is_ascii_digit())
+        {
+            break;
+        }
+        plan.push((*line).to_owned());
+    }
+
+    if plan.is_empty() {
+        None
+    } else {
+        Some(plan.join("\n"))
+    }
+}
+
+fn non_empty_job_message(state: &shared_protocol::JobState) -> Option<String> {
+    let message = state.message.as_deref()?.trim();
+    (!message.is_empty()).then(|| message.to_owned())
+}
+
+fn write_research_result_label(stdout: &mut impl Write) -> Result<()> {
+    writeln!(stdout, "RESEARCH RESULT:")?;
+    stdout.flush()?;
+    Ok(())
 }

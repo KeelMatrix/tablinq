@@ -7,7 +7,9 @@ use super::ansi::{
     ANSI_GREEN, ANSI_RESET, ansi_color_supported, format_cli_error_with_color,
     shell_background_is_black,
 };
-use super::execution::{JobStatusLine, ask_progress_status_line};
+use super::execution::{
+    JobStatusLine, ask_progress_status_line, extract_research_plan, research_progress_status_line,
+};
 use super::response::{
     ResponseStreamState, buffer_response_chunk, reconcile_streamed_response_with_rewrite_safety,
     rewrite_response_line_is_safe,
@@ -123,6 +125,103 @@ fn ask_progress_status_line_only_emits_provider_recovery_messages() {
         artifacts: vec![],
     };
     assert_eq!(ask_progress_status_line(&ignored), None);
+}
+
+#[test]
+fn research_progress_status_line_keeps_research_output_minimal() {
+    let queued = research_job_state(
+        shared_protocol::JobStatus::Queued,
+        Some("queued research job"),
+    );
+    assert_eq!(
+        research_progress_status_line(&queued, false),
+        Some(JobStatusLine {
+            status: "queued".to_owned(),
+            message: "queued research job".to_owned(),
+        })
+    );
+
+    let waiting = research_job_state(
+        shared_protocol::JobStatus::WaitingForSources,
+        Some("awaiting start confirmation"),
+    );
+    assert_eq!(
+        research_progress_status_line(&waiting, false),
+        Some(JobStatusLine {
+            status: "waitingforsources".to_owned(),
+            message: "awaiting start confirmation".to_owned(),
+        })
+    );
+
+    let running = research_job_state(
+        shared_protocol::JobStatus::Running,
+        Some("Research plan\nUpdate\nCollect sources.\nStop research"),
+    );
+    assert_eq!(
+        research_progress_status_line(&running, false),
+        Some(JobStatusLine {
+            status: "running".to_owned(),
+            message: "research started".to_owned(),
+        })
+    );
+    assert_eq!(research_progress_status_line(&running, true), None);
+
+    let noisy_running = research_job_state(
+        shared_protocol::JobStatus::Running,
+        Some("155 searches\n0\n1"),
+    );
+    assert_eq!(research_progress_status_line(&noisy_running, true), None);
+
+    let failed = research_job_state(shared_protocol::JobStatus::Failed, Some("adapter failed"));
+    assert_eq!(
+        research_progress_status_line(&failed, true),
+        Some(JobStatusLine {
+            status: "failed".to_owned(),
+            message: "adapter failed".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn extract_research_plan_omits_controls_and_activity_status() {
+    let plan = extract_research_plan(
+        "Geography comparative brief\n\
+         Update\n\
+         Extract and validate city facts from the attached dataset and metadata.\n\
+         Collect authoritative geography, climate, and hazard data for each city.\n\
+         Identify contradictions and quantify uncertainty across sources.\n\
+         Rank cities by geography-driven infrastructure difficulty with justification.\n\
+         Draft concise brief including summary, table, risks, confidence, and questions.\n\
+         \n\
+         Citing file content from uploaded materials...\n\
+         \n\
+         Stop research",
+    );
+
+    assert_eq!(
+        plan.as_deref(),
+        Some(
+            "Extract and validate city facts from the attached dataset and metadata.\n\
+             Collect authoritative geography, climate, and hazard data for each city.\n\
+             Identify contradictions and quantify uncertainty across sources.\n\
+             Rank cities by geography-driven infrastructure difficulty with justification.\n\
+             Draft concise brief including summary, table, risks, confidence, and questions."
+        )
+    );
+}
+
+fn research_job_state(
+    status: shared_protocol::JobStatus,
+    message: Option<&str>,
+) -> shared_protocol::JobState {
+    shared_protocol::JobState {
+        job_id: "job-1".to_owned(),
+        status,
+        message: message.map(str::to_owned),
+        conversation_id: None,
+        updated_at: chrono::Utc::now(),
+        artifacts: vec![],
+    }
 }
 
 fn render_reconciled_response(
