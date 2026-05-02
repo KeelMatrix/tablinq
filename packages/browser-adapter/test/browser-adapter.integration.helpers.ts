@@ -44,6 +44,7 @@ export type HarnessUrlOptions = {
     | "provider-generation-failure-recover"
     | "provider-generation-failure-after-success"
     | "provider-generation-failure-twice"
+    | "conversation-load-failure"
     | "research-success"
     | "research-starting-shell"
     | "research-failure"

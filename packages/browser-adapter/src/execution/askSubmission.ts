@@ -36,6 +36,7 @@ export async function openAskExecutionPage(
   const page = await host.openExecutionPage(
     host.resolveAskTarget(command.conversationId, command.newConversation),
     requiresFreshNavigation,
+    { providerConversationId: command.conversationId ?? null },
   );
   await ensureProviderReachable(page);
   return page;

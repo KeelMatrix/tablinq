@@ -70,6 +70,7 @@ import {
 } from "./browserAdapter/diagnostics";
 import { BrowserPageRegistry } from "./browserAdapter/pageRegistry";
 import { BrowserSessionController } from "./browserAdapter/sessionController";
+import { ensureProviderConversationLoaded } from "./execution/askProviderFailure";
 
 type StatusSnapshotOptions = {
   recoverManagedPage: boolean;
@@ -152,8 +153,8 @@ export class BrowserAdapter {
       refreshCapabilities: async (page) => {
         await this.refreshCapabilities(page);
       },
-      openExecutionPage: (targetUrl, forceReload) =>
-        this.openExecutionPage(targetUrl, forceReload),
+      openExecutionPage: (targetUrl, forceReload, options) =>
+        this.openExecutionPage(targetUrl, forceReload, options),
       ensureManagedPage: (targetUrl, forceReload) =>
         this.ensureManagedPage(targetUrl, forceReload),
       resolveAskTarget: (conversationId, newConversation) =>
@@ -177,6 +178,10 @@ export class BrowserAdapter {
     await this.session.ensureContext(headless, browserPath ?? undefined);
 
     const page = await this.ensureManagedPage(targetUrl, forceReload);
+    await ensureProviderConversationLoaded(
+      page,
+      conversationIdFromUrl(targetUrl),
+    );
     await this.refreshCapabilities(page);
     return this.health();
   }
@@ -351,6 +356,10 @@ export class BrowserAdapter {
   private async openExecutionPage(
     targetUrl: string,
     forceReload = false,
+    options: {
+      failOnProviderConversationMismatch?: boolean;
+      providerConversationId?: string | null;
+    } = {},
   ): Promise<Page> {
     await this.session.ensureContext(
       this.session.headless,
@@ -362,6 +371,15 @@ export class BrowserAdapter {
         "auth required: target browser session is not authenticated",
       );
     }
+    await ensureProviderConversationLoaded(
+      page,
+      Object.prototype.hasOwnProperty.call(options, "providerConversationId")
+        ? options.providerConversationId
+        : conversationIdFromUrl(targetUrl),
+      {
+        failOnUrlMismatch: options.failOnProviderConversationMismatch ?? true,
+      },
+    );
     return page;
   }
 

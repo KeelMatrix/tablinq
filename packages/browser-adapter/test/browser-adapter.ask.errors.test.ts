@@ -141,4 +141,68 @@ describe("browser adapter ask: error paths", () => {
 
     await adapter.shutdown();
   });
+
+  it("refuses to open a missing provider conversation", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(`${server.url}/c/provider-missing`, {
+      variant: "live",
+      scenario: "conversation-load-failure",
+    });
+    const { adapter } = await openTrackedManagedAdapter(harness, server.url);
+
+    let error: any = null;
+    try {
+      await adapter.open({ targetUrl, headless: true });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeTruthy();
+    expect(error.code).toBe("provider_conversation_load_failed");
+    expect(error.message).toContain(
+      "ChatGPT did not load conversation provider-missing",
+    );
+
+    await adapter.shutdown();
+  });
+
+  it("refuses conversation asks before composer mutation when the provider conversation cannot load", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "conversation-load-failure",
+    });
+    const adapter = await harness.createAdapterForMode("attach", targetUrl);
+    await adapter.open({ targetUrl, headless: true });
+
+    let error: any = null;
+    try {
+      await adapter.ask(
+        {
+          jobId: "job-ask-provider-conversation-load-failure",
+          prompt: "should not be submitted",
+          conversationId: "provider-missing",
+        },
+        () => {},
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeTruthy();
+    expect(error.code).toBe("provider_conversation_load_failed");
+    await expect(
+      adapter.getManagedPageForTest()!.evaluate(() => ({
+        composerValue:
+          (document.querySelector("#prompt-textarea") as HTMLTextAreaElement)
+            ?.value ?? "",
+        lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+      })),
+    ).resolves.toEqual({
+      composerValue: "",
+      lastSubmissionMethod: "",
+    });
+
+    await adapter.shutdown();
+  });
 });

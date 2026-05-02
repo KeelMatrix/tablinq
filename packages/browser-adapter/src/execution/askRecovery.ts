@@ -284,6 +284,8 @@ export async function reconcileAskAfterInterruption(
         state.askBaseline?.conversationId ??
         conversationIdFromUrl(safePageUrl(page)),
     ),
+    false,
+    { failOnProviderConversationMismatch: false },
   );
   if (Date.now() >= timeoutAt) {
     throw new Error("ask timed out while reconciling the interrupted request");
