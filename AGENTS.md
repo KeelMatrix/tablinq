@@ -12,7 +12,6 @@
 - Test harness for browser flows: `packages/fake-chatgpt`
 - Selector data: `selector-packs/v1`
 - Preferred search order: exact command/file -> owning crate/package entry -> matching tests -> shared protocol/schema -> selector pack/runtime
-- Ignore: `target/`, `node_modules/`, `.pnpm-store/`, `dist/`, `build/`, `coverage/`, `playwright-report/`, `test-results/`, `logs/`, `.vscode/`, `.vs/`, `.idea/`, `tmp/`, `temp/`
 
 ## Ignore
 
