@@ -23,6 +23,12 @@ Start from the user-facing entrypoint that owns the behavior:
 - Touch shared protocol or schemas only when the external or cross-process contract actually changes.
 - Prefer extending existing tests near the owning layer over introducing a new wide integration path.
 
+## Skill composition
+
+- Start with `/grill-with-docs` when the design is ambiguous or the behavior change is non-trivial.
+- Use `/tdd` for testable behavior changes.
+- Use `tablinq-test-selection` when choosing post-change validation.
+
 ## Decision checks
 
 Before editing, confirm:

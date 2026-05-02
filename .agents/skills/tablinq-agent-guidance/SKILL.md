@@ -5,34 +5,33 @@ description: guidance for agents working on the tablinq codebase. use when asked
 
 # Tablinq Agent Guidance
 
-## Core Rules
+Follow `AGENTS.md` as the baseline policy. Use this skill only for extra guidance on broad refactors, implementation quality, code review, file-size discipline, and browser or GPT interaction behavior.
 
-Prefer correctness, truthfulness, and maintainability over speed. State uncertainty instead of guessing. Do not add speculative features, backward-compatibility layers, abstractions, or configuration unless the task requires them.
+## Truthfulness and evidence
 
-Keep changes local to the active execution path. Preserve existing behavior unless the user explicitly asks for a behavior change. Read nearby tests and contracts before editing, then validate with the narrowest relevant checks.
+- Never fake success, validation, coverage, or browser state.
+- For documentation or agent-guidance work, describe only behavior supported by code, scripts, schemas, or tests.
+- Remove stale instructions instead of preserving outdated operational stories.
 
-For documentation or agent-guidance work, only document behavior that is present in code, scripts, schemas, or tests. Remove stale instructions instead of preserving old operational stories.
+## File-size discipline
 
-## File Size Discipline
+- Do not keep expanding already-large files when a smaller cohesive module boundary is available.
+- When editing a large file, look first for a safe split point: cohesive types, protocol mapping, command handling, selectors, persistence, UI interaction, tests, or pure helpers.
+- Extract focused modules when that improves structure without changing requested behavior.
+- Avoid broad formatting churn or cosmetic file moves.
 
-Do not create large files. Do not keep expanding already-large files when a smaller module boundary is available.
+## Implementation quality
 
-When editing a large file, first look for a safe split point: cohesive types, protocol mapping, command handling, selectors, persistence, UI interaction, tests, or pure helpers. Extract into focused modules without changing public behavior. Prefer several small, named modules over one broad utility file.
+- Prefer explicit data flow, typed contracts, and small cohesive modules.
+- Use patterns only when they materially improve locality, testability, or change isolation.
+- During broad refactors, preserve behavior unless the user explicitly asked to change it.
 
-Avoid broad formatting churn. Move code only when the move improves structure or is needed for the requested change.
+## Browser and GPT interaction
 
-## Design Guidance
+- Avoid robotic pacing; prefer readiness checks, bounded waits, retries, and small jitter only when human-like pacing matters.
+- If interaction state is ambiguous, stop and gather evidence before proceeding.
+- Prefer fixture or test coverage over live browser or GPT interaction unless live behavior is the point of the task.
 
-Use clear domain boundaries, explicit data flow, typed contracts, and small functions. Prefer simple design patterns that reduce duplication or isolate change. Do not introduce patterns by name only; use them only when they make the code easier to test and reason about.
+## Code review focus
 
-Keep protocol, schema, and cross-layer changes synchronized only when required. Avoid cross-layer refactors unless they are necessary for the requested task.
-
-## Browser and GPT Interaction
-
-When automating browser or GPT interactions, avoid robotic pacing. Use bounded waits, jitter, retries, and state checks where appropriate. Prefer observable readiness over fixed sleeps, but add small randomized delays around clicks, typing, and submit actions when simulating human interaction matters.
-
-Never fake success. If interaction state is ambiguous, report the ambiguity and collect evidence before proceeding.
-
-## Output Expectations
-
-Return minimal diffs and concise explanations. Mention validation performed or why it was not run. Do not include repo tours, speculative follow-ups, or unrelated cleanup.
+Prioritize regressions, hidden coupling, missing tests, oversized files, fake-seeming success paths, and browser interaction risk.
