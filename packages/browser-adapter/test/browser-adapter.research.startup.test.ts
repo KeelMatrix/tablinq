@@ -978,6 +978,58 @@ describe("browser adapter research: startup and configuration", () => {
     await adapter.shutdown();
   });
 
+  it("does not treat an active nested Deep Research plan shell as completed", async () => {
+    const server = await harness.startServer();
+    const { adapter, targetUrl } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
+        variant: "live",
+        scenario: "research-success",
+      },
+    );
+    const page = adapter.getManagedPageForTest()!;
+    const deepUrl = new URL(targetUrl);
+    deepUrl.pathname = "/deep-research";
+    await page.goto(deepUrl.toString(), { waitUntil: "domcontentloaded" });
+    await page.evaluate(() => {
+      document.body.innerHTML = `
+        <iframe id="root" src="about:blank"></iframe>
+      `;
+      const nested = document.querySelector("#root");
+      const doc =
+        nested instanceof HTMLIFrameElement ? nested.contentDocument : null;
+      if (!doc) {
+        throw new Error("nested sandbox document was not available");
+      }
+      doc.open();
+      doc.write(`
+        <main>
+          <h1>Geography comparative brief</h1>
+          <button type="button">Update</button>
+          <ol>
+            <li>Ingest and validate attached dataset files.</li>
+            <li>Verify city facts using official sources.</li>
+            <li>Draft concise brief with confidence scores.</li>
+          </ol>
+          <p>Deciding how to proceed with inspecting files...</p>
+          <button type="button">Stop research</button>
+        </main>
+      `);
+      doc.close();
+    });
+
+    const snapshot = await readDeepResearchFrameSnapshot(page);
+
+    expect(snapshot).toMatchObject({
+      phase: "running",
+      reportText: "",
+    });
+    expect(snapshot?.statusMessage).not.toBe("research completed");
+
+    await adapter.shutdown();
+  });
+
   it("does not duplicate research submit after a keyboard submit edge is detected", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");

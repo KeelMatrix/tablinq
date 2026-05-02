@@ -853,6 +853,16 @@ async function readNestedDeepResearchFrameSnapshot(
       const startButton = Array.from(
         nestedDocument.querySelectorAll("button, [role='button']")
       ).find(isStartButton);
+      const stopResearchVisible = Array.from(
+        nestedDocument.querySelectorAll("button, [role='button']")
+      ).some((element) => {
+        if (!isVisible(element)) {
+          return false;
+        }
+        const label = normalize(element.innerText || element.textContent);
+        const aria = normalize(element.getAttribute("aria-label"));
+        return /^stop( research)?$/i.test(label || aria);
+      });
       const nativeDisabled =
         startButton &&
         "disabled" in startButton &&
@@ -869,7 +879,7 @@ async function readNestedDeepResearchFrameSnapshot(
             : statusRoot?.textContent
         ),
         href: nestedDocument.location.href,
-        phase: startButton ? "planning" : null,
+        phase: startButton ? "planning" : stopResearchVisible ? "running" : null,
         startVisible: Boolean(startButton),
         startEnabled: Boolean(
           startButton &&
@@ -886,17 +896,31 @@ async function readNestedDeepResearchFrameSnapshot(
   }
   const lowerText =
     `${nestedReport.statusText}\n${nestedReport.reportText}`.toLowerCase();
+  const activeShell =
+    lowerText.includes("stop research") ||
+    lowerText.includes("researching") ||
+    lowerText.includes("deciding how to proceed") ||
+    lowerText.includes("deciding how to cite") ||
+    lowerText.includes("inspecting files") ||
+    lowerText.includes("drafting report") ||
+    lowerText.includes("writing report") ||
+    lowerText.includes("analyzing") ||
+    lowerText.includes("working");
+  const waitingShell =
+    lowerText.includes("gathering sources") ||
+    lowerText.includes("collecting sources") ||
+    lowerText.includes("searching") ||
+    lowerText.includes("reviewing sources") ||
+    lowerText.includes("forming a plan");
+  const completed = lowerText.includes("research completed");
   const phase: DeepResearchFrameSnapshot["phase"] =
     nestedReport.phase ??
-    (lowerText.includes("research completed")
+    (completed
       ? "done"
-      : lowerText.includes("gathering sources") ||
-          lowerText.includes("collecting sources") ||
-          lowerText.includes("searching") ||
-          lowerText.includes("reviewing sources") ||
-          lowerText.includes("forming a plan")
+      : waitingShell
         ? "waiting_for_sources"
-        : lowerText.includes("starting") ||
+        : activeShell ||
+            lowerText.includes("starting") ||
             lowerText.includes("getting ready") ||
             lowerText.includes("preparing")
           ? "running"
@@ -908,7 +932,10 @@ async function readNestedDeepResearchFrameSnapshot(
     statusMessage: nestedReport.startVisible
       ? "awaiting start confirmation"
       : nestedReport.statusText || null,
-    reportText: nestedReport.startVisible ? "" : nestedReport.reportText,
+    reportText:
+      nestedReport.startVisible || activeShell || waitingShell
+        ? ""
+        : nestedReport.reportText,
     frameUrl: frame.url() || nestedReport.href,
     startVisible: nestedReport.startVisible,
     startEnabled: nestedReport.startEnabled,
