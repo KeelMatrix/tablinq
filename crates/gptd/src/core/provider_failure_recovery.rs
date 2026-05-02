@@ -89,7 +89,10 @@ impl CoreService {
             None
         };
         let recovery_allowed = should_auto_recover_provider_generation_failure(
-            input.prepared.command.auto_recover_provider_generation_failure,
+            input
+                .prepared
+                .command
+                .auto_recover_provider_generation_failure,
             input.recovery_attempt_count,
         );
         let recovery_attempted = input.recovery_attempt_count > 0 || recovery_allowed;
@@ -165,8 +168,8 @@ impl CoreService {
                 .as_deref()
                 .and_then(conversation_id_from_url);
         }
-        let packet = build_provider_generation_recovery_packet(
-            ProviderGenerationRecoveryPacketInput {
+        let packet =
+            build_provider_generation_recovery_packet(ProviderGenerationRecoveryPacketInput {
                 original_input: &input.prepared.command.prompt,
                 mode: input.prepared.command.mode,
                 model_class: input.prepared.command.model_class,
@@ -179,8 +182,7 @@ impl CoreService {
                 prior_request_id,
                 prior_conversation_id: prior_conversation_id.clone(),
                 recovery_attempt_count: effective_attempt_count,
-            },
-        );
+            });
 
         let failed_at = Utc::now();
         record_failure_checkpoint(
@@ -199,7 +201,12 @@ impl CoreService {
             ));
         }
 
-        emit_provider_recovery_progress(input.db, input.prepared, &prior_conversation_id, on_event)?;
+        emit_provider_recovery_progress(
+            input.db,
+            input.prepared,
+            &prior_conversation_id,
+            on_event,
+        )?;
 
         if let Err(reload_err) = lock_browser(&self.browser)?.reload_target_page() {
             let message = format!("{reload_err:#}");
