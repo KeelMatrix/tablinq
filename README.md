@@ -138,7 +138,6 @@ Common commands:
 - `gpt gateway stop`
 - `gpt ask "Name three edge cases for resumable downloads."`
 - `gpt ask --mode search "Which Rust release first stabilized let-chains?"`
-- `gpt ask --mode research --file roadmap.md "Map which milestones need customer interviews."`
 - `gpt ask --model thinking --effort extended "Choose SQLite or JSONL for a local job ledger."`
 - `gpt ask --mode search --model thinking --effort standard "Find current Windows code-signing costs."`
 - `gpt ask --mode search --conversation conv-123 "Refresh the shipping checklist against current notarization rules."`

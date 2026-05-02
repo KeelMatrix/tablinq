@@ -176,7 +176,12 @@ export class BrowserSessionController {
     let page = this.managedPage;
 
     if (this.cdpAttached) {
-      const preferred = await this.findAttachedTargetPage(targetUrl);
+      const preferred = this.attachedActivePageCanNavigateDirectly(
+        page,
+        targetUrl,
+      )
+        ? page
+        : await this.findAttachedTargetPage(targetUrl);
       if (preferred && preferred !== page) {
         this.context = preferred.context();
         this.observeContext(this.context);
@@ -573,6 +578,54 @@ export class BrowserSessionController {
   private pageMatchesTargetWorkspace(page: Page, targetUrl: string): boolean {
     const currentUrl = safePageUrl(page);
     return Boolean(currentUrl && matchesTargetWorkspace(currentUrl, targetUrl));
+  }
+
+  private attachedActivePageCanNavigateDirectly(
+    page: Page | undefined,
+    targetUrl: string,
+  ): page is Page {
+    if (!page || page.isClosed() || !this.isDeepResearchTarget(targetUrl)) {
+      return false;
+    }
+    const currentUrl = safePageUrl(page);
+    return Boolean(
+      currentUrl &&
+      inferAuthenticated(currentUrl) &&
+      this.matchesDeepResearchWorkspace(currentUrl, targetUrl),
+    );
+  }
+
+  private matchesDeepResearchWorkspace(
+    currentUrl: string,
+    targetUrl: string,
+  ): boolean {
+    if (matchesTargetWorkspace(currentUrl, targetUrl)) {
+      return true;
+    }
+    try {
+      const url = new URL(targetUrl);
+      const segments = url.pathname.split("/").filter(Boolean);
+      if (segments[segments.length - 1]?.toLowerCase() !== "deep-research") {
+        return false;
+      }
+      segments.pop();
+      url.pathname = segments.length > 0 ? `/${segments.join("/")}` : "/";
+      return matchesTargetWorkspace(currentUrl, url.toString());
+    } catch {
+      return false;
+    }
+  }
+
+  private isDeepResearchTarget(targetUrl: string): boolean {
+    try {
+      return new URL(targetUrl).pathname
+        .toLowerCase()
+        .split("/")
+        .filter(Boolean)
+        .includes("deep-research");
+    } catch {
+      return targetUrl.toLowerCase().includes("deep-research");
+    }
   }
 
   private async isUsableAttachedTargetPage(page: Page): Promise<boolean> {

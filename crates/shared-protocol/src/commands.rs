@@ -98,6 +98,12 @@ impl AskCommand {
                 message: "conversation_id cannot be combined with new_conversation".to_owned(),
             });
         }
+        if self.mode == Mode::Research {
+            return Err(ValidationError::InvalidFieldCombination {
+                field: "mode".to_owned(),
+                message: "research must use the dedicated research command".to_owned(),
+            });
+        }
         validate_paths("files", &self.files)
     }
 }

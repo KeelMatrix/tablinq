@@ -190,7 +190,6 @@ pub enum BrowserCommand {
 pub enum CliMode {
     Normal,
     Search,
-    Research,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -264,7 +263,6 @@ fn map_mode(value: CliMode) -> Mode {
     match value {
         CliMode::Normal => Mode::Normal,
         CliMode::Search => Mode::Search,
-        CliMode::Research => Mode::Research,
     }
 }
 
@@ -460,6 +458,13 @@ mod tests {
             "conv-123",
             "--new-conversation",
         ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn ask_command_rejects_research_mode() {
+        let result = Cli::try_parse_from(["gpt", "ask", "hello world", "--mode", "research"]);
+
         assert!(result.is_err());
     }
 

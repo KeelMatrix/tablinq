@@ -1,6 +1,7 @@
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { JSDOM } from "jsdom";
+import type { Page } from "playwright-core";
 import {
   BrowserAdapter,
   chooseUniqueArtifactPath,
@@ -35,6 +36,71 @@ import {
 
 const harness = installBrowserAdapterHarness();
 
+async function installResearchStartupInteractionGuard(
+  page: Page,
+): Promise<void> {
+  const guardScript = () => {
+    const global = window as Window & {
+      __tablinqResearchStartupGuardInstalled?: boolean;
+    };
+    if (global.__tablinqResearchStartupGuardInstalled) {
+      return;
+    }
+    global.__tablinqResearchStartupGuardInstalled = true;
+    const increment = (key: string) => {
+      localStorage.setItem(
+        key,
+        String(Number(localStorage.getItem(key) ?? "0") + 1),
+      );
+    };
+    document.addEventListener(
+      "click",
+      (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+          return;
+        }
+        if (target.closest("#deep-research-nav")) {
+          increment("tablinqDeepResearchNavClicks");
+        }
+        if (
+          target.closest(
+            "nav, [data-testid='create-new-chat-button'], [aria-label*='sidebar' i]",
+          )
+        ) {
+          increment("tablinqSidebarInteractions");
+        }
+      },
+      true,
+    );
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (
+          event.ctrlKey &&
+          event.shiftKey &&
+          event.key.toLowerCase() === "o"
+        ) {
+          increment("tablinqNewChatShortcuts");
+        }
+      },
+      true,
+    );
+  };
+
+  await page.evaluate(() => {
+    for (const key of [
+      "tablinqDeepResearchNavClicks",
+      "tablinqSidebarInteractions",
+      "tablinqNewChatShortcuts",
+    ]) {
+      localStorage.setItem(key, "0");
+    }
+  });
+  await page.addInitScript(guardScript);
+  await page.evaluate(guardScript);
+}
+
 describe("browser adapter research: attach mode", () => {
   it("runs research jobs with progress updates in attach mode", async () => {
     const server = await harness.startServer();
@@ -68,6 +134,53 @@ describe("browser adapter research: attach mode", () => {
       "Research report for: investigate attach launch risks",
     );
     expect(result.artifacts).toHaveLength(1);
+
+    await adapter.shutdown();
+  }, 30_000);
+
+  it("enters Deep Research in attach mode without sidebar or new-chat controls", async () => {
+    const server = await harness.startServer();
+    const target = new URL(
+      withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "research-success",
+      }),
+    );
+    target.pathname = "/c/existing-research-thread";
+    const adapter = await harness.createAdapterForMode(
+      "attach",
+      target.toString(),
+    );
+    await adapter.open({ targetUrl: target.toString(), headless: true });
+    const page = adapter.getManagedPageForTest()!;
+    await installResearchStartupInteractionGuard(page);
+
+    const result = await adapter.research(
+      {
+        jobId: "job-research-attach-no-sidebar",
+        query: "check attach research without sidebar activation",
+        timeoutMs: 8_000,
+      },
+      () => {},
+    );
+    const pageState = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      navClicks: localStorage.getItem("tablinqDeepResearchNavClicks"),
+      sidebarInteractions: localStorage.getItem("tablinqSidebarInteractions"),
+      newChatShortcuts: localStorage.getItem("tablinqNewChatShortcuts"),
+      newChatClicks: document.body.dataset.newChatClicks ?? "0",
+      researchLandingVisited: document.body.dataset.researchLandingVisited,
+    }));
+
+    expect(result.report_text).toContain(
+      "Research report for: check attach research without sidebar activation",
+    );
+    expect(pageState).toMatchObject({
+      navClicks: "0",
+      sidebarInteractions: "0",
+      newChatShortcuts: "0",
+      newChatClicks: "0",
+      researchLandingVisited: "true",
+    });
 
     await adapter.shutdown();
   }, 30_000);

@@ -1,9 +1,6 @@
 import type { Page } from "playwright-core";
 
-import type {
-  AskExecutionCommand,
-  CapabilityReportPayload,
-} from "../../contracts";
+import type { CapabilityReportPayload } from "../../contracts";
 
 import { waitForInteractionSurface } from "../composer";
 
@@ -19,9 +16,15 @@ import {
 } from "./modelSelection";
 import { closeOpenComposerMenus } from "./shared";
 
+export type ConfiguredExecutionCommand = {
+  mode?: "normal" | "search" | "research";
+  modelClass?: "instant" | "thinking" | null;
+  effort?: "none" | "standard" | "extended" | null;
+};
+
 export async function applyAskConfiguration(
   page: Page,
-  command: AskExecutionCommand,
+  command: ConfiguredExecutionCommand,
   report: CapabilityReportPayload | null,
 ): Promise<Page> {
   await waitForInteractionSurface(page);

@@ -3,7 +3,6 @@ import { readAskSnapshot, scrollToBottomIfNeeded } from "../pageRuntime";
 import { safePageUrl } from "../capabilityProbe";
 import type { AskBaseline, AskSnapshot } from "../snapshotState";
 
-import { runAskAsResearch } from "./askAsResearch";
 import { throwIfProviderGenerationFailed } from "./askProviderFailure";
 import {
   recoverAskSnapshotRead,
@@ -34,10 +33,6 @@ export async function runAsk(
   onState: StateSink,
   options: AskExecutionOptions,
 ): Promise<AskResultSnapshot> {
-  if (command.mode === "research") {
-    return runAskAsResearch(host, command, onChunk, onState, options);
-  }
-
   const timing = resolveAskTiming(command);
   let page = await openAskExecutionPage(host, command);
   await scrollToBottomIfNeeded(page);

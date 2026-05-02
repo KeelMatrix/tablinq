@@ -377,7 +377,7 @@ fn daemon_handles_configured_asks_on_renamed_controls() {
             prompt: "configured aria ask".to_owned(),
             conversation_id: None,
             new_conversation: false,
-            mode: Mode::Research,
+            mode: Mode::Normal,
             model_class: Some(ModelClass::Thinking),
             effort: Some(Effort::Extended),
             files: vec![],
