@@ -1,24 +1,17 @@
 use super::lifecycle::{
     ConversationFinalization, JobLifecycle, JobLifecycleRef, PrepareJobInput, TerminalFailure,
     emit_job_state, ensure_prompt_execution_allowed, final_status_and_message, persist_artifacts,
-    prepare_job_record, record_failure_checkpoint, record_terminal_failure,
-    status_for_error_message,
+    prepare_job_record, record_terminal_failure, status_for_error_message,
 };
-use super::recovery::{
-    ProviderGenerationRecoveryPacketInput, build_provider_generation_context_summary,
-    build_provider_generation_recovery_packet, build_provider_generation_recovery_trace,
-    build_provider_generation_replay_files, build_provider_generation_replay_prompt,
-    provider_recovery_attempt_request_id, should_auto_recover_provider_generation_failure,
+use super::provider_failure_recovery::{
+    ProviderFailureRecoveryInput, ProviderFailureRecoveryOutcome,
 };
-use super::recovery_manifest::write_provider_generation_recovery_manifest_attachment;
 use super::support::{conversation_id_from_url, lock_browser, lock_cancel_registry};
-use super::{CoreService, ExecutionRecoveryState, error_code_for_message};
-use crate::browser::{execution_error, execution_error_metadata};
+use super::{CoreService, ExecutionRecoveryState};
+use crate::browser::execution_error_metadata;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use shared_protocol::{
-    AskCommand, AskResult, ErrorCode, EventPayload, JobKind, JobState, JobStatus,
-};
+use shared_protocol::{AskCommand, AskResult, EventPayload, JobKind, JobState, JobStatus};
 use std::cell::RefCell;
 
 #[derive(Debug, Clone)]
@@ -142,217 +135,37 @@ impl CoreService {
                 }
                 Err(err) => {
                     let latest_update = latest_lifecycle_update.borrow().clone();
-                    let current_url = latest_update
-                        .as_ref()
-                        .and_then(|update| update.current_url.clone());
-                    let typed_error = execution_error_metadata(&err);
-                    if !matches!(
-                        typed_error.as_ref().map(|error| error.error_code),
-                        Some(ErrorCode::ProviderGenerationFailedNonretryable)
-                    ) {
-                        if let (Some(trace), Some(packet)) =
-                            (recovery_trace.clone(), recovery_packet.clone())
-                        {
-                            let message = format!("{err:#}");
-                            break Err(execution_error(
-                                crate::browser::ExecutionErrorMetadata::new(
-                                    error_code_for_message(&message),
-                                    message,
-                                    current_url,
-                                )
-                                .with_recovery(trace, packet),
-                            ));
-                        }
-                        break Err(err);
-                    }
-
-                    let provider_error = typed_error.expect("provider failure metadata missing");
-                    let prior_conversation_id = latest_update
-                        .as_ref()
-                        .and_then(|update| update.conversation_id.clone())
-                        .or_else(|| current_command.conversation_id.clone())
-                        .or_else(|| {
-                            provider_error
-                                .current_url
-                                .as_deref()
-                                .and_then(conversation_id_from_url)
-                        });
-                    let prior_conversation =
-                        if let Some(conversation_id) = prior_conversation_id.as_deref() {
-                            db.find_conversation(conversation_id)?
-                        } else {
-                            None
-                        };
-                    let prior_manifest =
-                        if let Some(conversation_id) = prior_conversation_id.as_deref() {
-                            db.conversation_recovery_manifest(conversation_id)?
-                        } else {
-                            None
-                        };
-                    let recovery_allowed = should_auto_recover_provider_generation_failure(
-                        prepared.command.auto_recover_provider_generation_failure,
-                        recovery_attempt_count,
-                    );
-                    let recovery_attempted = recovery_attempt_count > 0 || recovery_allowed;
-                    let effective_attempt_count = if recovery_allowed {
-                        recovery_attempt_count + 1
-                    } else {
-                        recovery_attempt_count
-                    };
-                    let prior_request_id =
-                        Some(provider_recovery_attempt_request_id(&prepared.job_id, 0));
-                    let failure_bundle_id = if let Some(trace) = recovery_trace.as_ref() {
-                        trace.failure_bundle_id.clone()
-                    } else {
-                        self.capture_failure_bundle(
-                            Some(prepared.command.mode),
-                            &provider_error.message,
-                            None,
-                        )
-                        .ok()
-                        .map(|bundle| bundle.bundle_id)
-                    };
-                    let context_summary = build_provider_generation_context_summary(
-                        prior_manifest.as_ref(),
-                        prior_conversation.as_ref(),
-                        prior_conversation_id.as_deref(),
-                    );
-                    let previous_recovery_packet = recovery_packet.as_ref().cloned();
-                    let recovery_manifest_path = if recovery_allowed {
-                        prior_manifest
-                            .as_ref()
-                            .map(|manifest| {
-                                write_provider_generation_recovery_manifest_attachment(
-                                    &self.config.paths.state_root,
-                                    &prepared.job_id,
-                                    effective_attempt_count,
-                                    manifest,
-                                )
-                            })
-                            .transpose()?
-                    } else {
-                        previous_recovery_packet
-                            .as_ref()
-                            .and_then(|packet| packet.recovery_manifest_path.clone())
-                    };
-                    let replay_files = if recovery_allowed {
-                        build_provider_generation_replay_files(
-                            &prepared.command.files,
-                            prior_manifest.as_ref(),
-                            recovery_manifest_path.as_deref(),
-                        )
-                    } else {
-                        previous_recovery_packet
-                            .as_ref()
-                            .map(|packet| packet.replay_files.clone())
-                            .unwrap_or_else(|| prepared.command.files.clone())
-                    };
-                    let mut trace = build_provider_generation_recovery_trace(
-                        failure_bundle_id,
-                        prior_request_id.clone(),
-                        prior_conversation_id.clone(),
-                        effective_attempt_count,
-                        recovery_attempted,
-                    );
-                    if effective_attempt_count > 0 {
-                        trace.replacement_request_id =
-                            Some(provider_recovery_attempt_request_id(&prepared.job_id, 1));
-                        trace.replacement_conversation_id = provider_error
-                            .current_url
-                            .as_deref()
-                            .and_then(conversation_id_from_url);
-                    }
-                    let packet = build_provider_generation_recovery_packet(
-                        ProviderGenerationRecoveryPacketInput {
-                            original_input: &prepared.command.prompt,
-                            mode: prepared.command.mode,
-                            model_class: prepared.command.model_class,
-                            effort: prepared.command.effort,
-                            files: &prepared.command.files,
-                            context_summary: context_summary.clone(),
-                            context_manifest: prior_manifest.clone(),
-                            recovery_manifest_path: recovery_manifest_path.clone(),
-                            replay_files: replay_files.clone(),
-                            prior_request_id,
-                            prior_conversation_id: prior_conversation_id.clone(),
-                            recovery_attempt_count: effective_attempt_count,
-                        },
-                    );
-                    recovery_trace = Some(trace.clone());
-                    recovery_packet = Some(packet.clone());
-
-                    let failed_at = Utc::now();
-                    record_failure_checkpoint(
-                        &db,
-                        &prepared.job_id,
-                        failed_at,
-                        &provider_error.message,
-                        provider_error.current_url.as_deref(),
-                        Some(&trace),
-                        Some(&packet),
-                    )?;
-
-                    if !recovery_allowed {
-                        break Err(execution_error(provider_error.with_recovery(trace, packet)));
-                    }
-
-                    for message in [
-                        "Provider generation failed. Page Retry disabled.",
-                        "Reloading tab and starting a fresh conversation...",
-                        "Replaying request with preserved context snapshot...",
-                    ] {
-                        let updated_at = Utc::now();
-                        db.insert_job(
-                            &prepared.job_id,
-                            JobStatus::Running,
-                            Some(message),
-                            prior_conversation_id
-                                .as_deref()
-                                .or(prepared.command.conversation_id.as_deref()),
-                            prepared.created_at,
-                            updated_at,
-                        )?;
+                    let recovery_outcome = {
                         let mut sink = event_sink.borrow_mut();
-                        (*sink)(EventPayload::JobState(JobState {
-                            job_id: prepared.job_id.clone(),
-                            status: JobStatus::Running,
-                            message: Some(message.to_owned()),
-                            conversation_id: prior_conversation_id.clone(),
-                            updated_at,
-                            artifacts: vec![],
-                        }))?;
-                    }
-
-                    if let Err(reload_err) = lock_browser(&self.browser)?.reload_target_page() {
-                        let message = format!("{reload_err:#}");
-                        break Err(execution_error(
-                            crate::browser::ExecutionErrorMetadata::new(
-                                error_code_for_message(&message),
-                                message,
-                                None,
-                            )
-                            .with_recovery(trace, packet),
-                        ));
-                    }
-
-                    recovery_attempt_count = effective_attempt_count;
-                    current_command = AskCommand {
-                        prompt: build_provider_generation_replay_prompt(
-                            &prepared.command.prompt,
-                            context_summary.as_deref(),
-                            recovery_manifest_path
-                                .as_deref()
-                                .and_then(|path| std::path::Path::new(path).file_name())
-                                .and_then(|value| value.to_str()),
-                        ),
-                        conversation_id: None,
-                        new_conversation: true,
-                        mode: prepared.command.mode,
-                        model_class: prepared.command.model_class,
-                        effort: prepared.command.effort,
-                        files: replay_files,
-                        auto_recover_provider_generation_failure: false,
+                        self.handle_provider_failure_recovery(
+                            ProviderFailureRecoveryInput {
+                                db: &db,
+                                prepared,
+                                current_command: &current_command,
+                                latest_update,
+                                err,
+                                recovery_trace: recovery_trace.as_ref(),
+                                recovery_packet: recovery_packet.as_ref(),
+                                recovery_attempt_count,
+                            },
+                            &mut **sink,
+                        )?
                     };
+
+                    match recovery_outcome {
+                        ProviderFailureRecoveryOutcome::Replay {
+                            trace,
+                            packet,
+                            next_command,
+                            attempt_count,
+                        } => {
+                            recovery_trace = Some(*trace);
+                            recovery_packet = Some(*packet);
+                            recovery_attempt_count = attempt_count;
+                            current_command = next_command;
+                        }
+                        ProviderFailureRecoveryOutcome::TerminalError(err) => break Err(err),
+                    }
                 }
             }
         };
