@@ -9,14 +9,17 @@ pub(crate) fn map_openai_error_parts(
         && matches!(
             metadata.error_code,
             ErrorCode::ProviderGenerationFailedNonretryable
+                | ErrorCode::ProviderConversationLoadFailed
         )
     {
-        return (
-            502,
-            "provider_error",
-            "provider_generation_failed_nonretryable",
-            metadata.message,
-        );
+        let code = match metadata.error_code {
+            ErrorCode::ProviderGenerationFailedNonretryable => {
+                "provider_generation_failed_nonretryable"
+            }
+            ErrorCode::ProviderConversationLoadFailed => "provider_conversation_load_failed",
+            _ => unreachable!(),
+        };
+        return (502, "provider_error", code, metadata.message);
     }
 
     let message = format!("{err:#}");
@@ -52,6 +55,12 @@ pub(crate) fn map_openai_error_parts(
             502,
             "provider_error",
             "provider_generation_failed_nonretryable",
+            message,
+        ),
+        ErrorCode::ProviderConversationLoadFailed => (
+            502,
+            "provider_error",
+            "provider_conversation_load_failed",
             message,
         ),
         ErrorCode::UiDrift => (502, "provider_error", "ui_drift", message),

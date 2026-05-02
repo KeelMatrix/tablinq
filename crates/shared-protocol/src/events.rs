@@ -20,6 +20,7 @@ pub enum ErrorCode {
     UploadFailed,
     ResearchJobFailed,
     ProviderGenerationFailedNonretryable,
+    ProviderConversationLoadFailed,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

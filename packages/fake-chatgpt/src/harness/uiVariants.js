@@ -7,6 +7,7 @@ export function renderHarnessShell({ root, note, window, config }) {
     usesComposerPlusTrap,
     usesStaleSubmitRecovery,
     usesDeepResearchFrame,
+    usesConversationLoadFailure,
     missingControls,
     effortInConfigureModal,
   } = config;
@@ -169,6 +170,19 @@ export function renderHarnessShell({ root, note, window, config }) {
         <a href="/gpts" data-testid="explore-gpts-button">GPTs</a>
         <button type="button" id="projects-nav-button">Projects</button>
       </nav>
+    `;
+  }
+
+  function conversationLoadFailureBanner() {
+    if (!usesConversationLoadFailure) {
+      return "";
+    }
+    const pathSegments = window.location.pathname.split("/").filter(Boolean);
+    const conversationId = pathSegments[pathSegments.length - 1] ?? "unknown";
+    return `
+      <div role="alert" class="bg-token-bg-danger">
+        Unable to load conversation ${conversationId}
+      </div>
     `;
   }
 
@@ -462,6 +476,7 @@ export function renderHarnessShell({ root, note, window, config }) {
         ? `
         <main aria-label="chatgpt workspace">
           ${liveSidebarNav()}
+          ${conversationLoadFailureBanner()}
           <section class="stacked-toolbar">
             ${liveModelControls()}
             ${liveModeControls()}
@@ -524,6 +539,7 @@ export function renderHarnessShell({ root, note, window, config }) {
           ? `
         <main aria-label="chatgpt workspace">
           ${liveSidebarNav()}
+          ${conversationLoadFailureBanner()}
           <section class="stacked-toolbar">
             ${variant === "composer-right" ? "" : menuModelControls()}
             ${liveModeControls()}

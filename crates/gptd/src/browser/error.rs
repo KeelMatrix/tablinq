@@ -53,6 +53,7 @@ pub fn adapter_error_code(value: &str) -> Option<ErrorCode> {
         "provider_generation_failed_nonretryable" => {
             Some(ErrorCode::ProviderGenerationFailedNonretryable)
         }
+        "provider_conversation_load_failed" => Some(ErrorCode::ProviderConversationLoadFailed),
         _ => None,
     }
 }
