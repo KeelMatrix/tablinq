@@ -510,6 +510,7 @@ async function refreshActiveResearchPageIfNeeded(
       timeout: Math.min(NAVIGATION_TIMEOUT_MS, Math.max(1, timeoutAt - now)),
     })
     .catch(() => undefined);
+  await scrollToBottomIfNeeded(page).catch(() => undefined);
   const refreshed = await readLiveResearchSnapshot(page).catch(() => null);
   return refreshed ? { page, snapshot: refreshed } : { page };
 }
