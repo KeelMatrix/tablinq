@@ -92,7 +92,7 @@ export interface AskExecutionCommand {
   newConversation?: boolean;
   timeoutMs?: number;
   submitJitterMs?: number;
-  mode?: "normal" | "search" | "research";
+  mode?: "normal" | "search";
   modelClass?: "instant" | "thinking" | null;
   effort?: "none" | "standard" | "extended" | null;
   files?: string[];

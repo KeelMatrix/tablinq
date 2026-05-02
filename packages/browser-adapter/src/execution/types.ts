@@ -79,11 +79,6 @@ export type AskExecutionOptions = {
   askBaseline?: AskBaseline | null;
 };
 
-export type ResearchSelection = {
-  modelClass?: "instant" | "thinking";
-  effort?: "none" | "standard" | "extended";
-};
-
 export type AskRecoveryResolution = {
   candidate: AskSnapshot;
   relation: ReturnType<typeof textRelation>;
@@ -120,5 +115,4 @@ export type ResearchExecutionFn = (
   onUpdate: ResearchUpdateSink,
   onState: StateSink,
   options: AskExecutionOptions,
-  selection?: ResearchSelection,
 ) => Promise<ResearchResultSnapshot>;

@@ -46,9 +46,8 @@ export async function prepareAskSubmission(
   timing: AskTiming,
 ): Promise<{ page: Page; askBaseline: AskBaseline }> {
   const shouldStartFreshAskConversation =
-    command.mode !== "research" &&
-    ((command.newConversation && !command.conversationId) ||
-      (!command.conversationId && !conversationIdFromUrl(safePageUrl(page))));
+    (command.newConversation && !command.conversationId) ||
+    (!command.conversationId && !conversationIdFromUrl(safePageUrl(page)));
   if (shouldStartFreshAskConversation) {
     await startNewConversation(page);
   }

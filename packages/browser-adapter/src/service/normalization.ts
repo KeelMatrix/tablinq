@@ -28,6 +28,7 @@ export type ResearchRecoveryState = {
 export function normalizeAskCommand(
   request: AskRequest | RecoverAskRequest,
 ): AskExecutionCommand {
+  const mode = normalizeAskMode(request.mode);
   return {
     jobId: request.job_id,
     prompt: request.prompt,
@@ -35,7 +36,7 @@ export function normalizeAskCommand(
     newConversation: request.new_conversation,
     timeoutMs: request.timeout_ms,
     submitJitterMs: request.submit_jitter_ms,
-    mode: request.mode,
+    mode,
     modelClass: request.model_class,
     effort: request.effort,
     files: request.files ?? [],
@@ -166,4 +167,14 @@ function normalizeAskBaseline(request: RecoverAskRequest): AskBaseline | null {
     messageId: request.baseline_message_id ?? null,
     text: request.baseline_text ?? "",
   };
+}
+
+function normalizeAskMode(mode: unknown): AskExecutionCommand["mode"] {
+  if (mode == null) {
+    return undefined;
+  }
+  if (mode === "normal" || mode === "search") {
+    return mode;
+  }
+  throw new Error("ask mode unsupported: use the dedicated research command");
 }

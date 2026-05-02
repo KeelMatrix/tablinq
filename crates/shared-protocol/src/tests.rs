@@ -153,6 +153,29 @@ fn ask_command_accepts_up_to_ten_files() {
 }
 
 #[test]
+fn ask_command_rejects_research_mode() {
+    let command = AskCommand {
+        prompt: "hello".to_owned(),
+        conversation_id: None,
+        new_conversation: false,
+        mode: Mode::Research,
+        model_class: Some(ModelClass::Instant),
+        effort: None,
+        files: vec![],
+        auto_recover_provider_generation_failure: true,
+    };
+
+    let err = command.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ValidationError::InvalidFieldCombination {
+            field: "mode".to_owned(),
+            message: "research must use the dedicated research command".to_owned(),
+        }
+    );
+}
+
+#[test]
 fn research_command_rejects_more_than_ten_files() {
     let command = ResearchCommand {
         query: "investigate".to_owned(),

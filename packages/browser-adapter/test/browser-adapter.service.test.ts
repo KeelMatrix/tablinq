@@ -99,6 +99,17 @@ describe("browser adapter service helpers", () => {
     ).toBeNull();
   });
 
+  it("rejects research mode on ask service requests", () => {
+    expect(() =>
+      normalizeAskCommand({
+        type: "ask",
+        job_id: "job-a",
+        prompt: "hi",
+        mode: "research",
+      } as any),
+    ).toThrow(/dedicated research command/i);
+  });
+
   it("maps recover_research state fields with the existing defaults", () => {
     expect(
       normalizeResearchRecoveryState(recoverResearchRequestFixture()),

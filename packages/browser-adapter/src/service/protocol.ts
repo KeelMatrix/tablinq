@@ -35,7 +35,7 @@ export type AskRequest = {
   new_conversation?: boolean;
   timeout_ms?: number;
   submit_jitter_ms?: number;
-  mode?: "normal" | "search" | "research";
+  mode?: "normal" | "search";
   model_class?: "instant" | "thinking" | null;
   effort?: "none" | "standard" | "extended" | null;
   files?: string[];

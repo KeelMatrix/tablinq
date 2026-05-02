@@ -160,50 +160,6 @@ describe("browser adapter ask: attach mode", () => {
     await adapter.shutdown();
   });
 
-  it("drives the live-like harness through ask and artifact persistence in attach mode", async () => {
-    const server = await harness.startServer();
-    const targetUrl = withHarnessUrl(server.url, {
-      variant: "live",
-      initialModel: "thinking",
-      initialEffort: "extended",
-    });
-    const adapter = await harness.createAdapterForMode("attach", targetUrl);
-    const fixtureRoot = await harness.createWorkspace("browser");
-    const fixture = path.join(fixtureRoot, "brief.txt");
-    await writeFile(fixture, "brief body", "utf8");
-    await adapter.open({ targetUrl, headless: true });
-
-    const result = await adapter.ask(
-      {
-        jobId: "job-ask-live-attach",
-        prompt: "configure attach live",
-        mode: "research",
-        modelClass: "thinking",
-        effort: "extended",
-        files: [fixture],
-      },
-      () => {},
-    );
-    const artifactBody = await readFile(
-      result.artifacts[0]!.storage_path,
-      "utf8",
-    );
-
-    expect(result.output_text).toContain(
-      "Research report for: configure attach live",
-    );
-    expect(result.artifacts).toHaveLength(1);
-    expect(artifactBody).toContain("Model: thinking");
-    expect(artifactBody).toContain("Effort: extended");
-    expect(artifactBody).toContain("Uploads: brief.txt");
-    expect(result.current_url).toContain(`/c/${result.conversation_id}`);
-    expect(conversationIdFromUrl(result.current_url)).toBe(
-      result.conversation_id,
-    );
-
-    await adapter.shutdown();
-  });
-
   it("waits for a stabilized final ask snapshot in attach mode", async () => {
     const server = await harness.startServer();
     const targetUrl = withHarnessUrl(server.url, {

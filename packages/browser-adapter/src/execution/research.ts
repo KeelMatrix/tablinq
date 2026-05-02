@@ -5,7 +5,6 @@ import type {
 } from "../contracts";
 import type { Page } from "playwright-core";
 import {
-  applyAskConfiguration,
   beginDeepResearchRun,
   ensureResearchComposerFilled,
   isTransientPageError,
@@ -14,7 +13,7 @@ import {
   sleep,
   submitResearch,
   uploadAttachments,
-  waitForInteractionSurface,
+  waitForDeepResearchLanding,
   waitForSubmitReadyAfterUploads,
 } from "../pageRuntime";
 import {
@@ -34,6 +33,7 @@ import {
   noteProviderPressure,
   noteProviderPressureFromText,
 } from "../timing";
+import { deepResearchPathname } from "../urls";
 
 import { finalizeResearch, stabilizeResearchCompletion } from "./finalization";
 import { reconcileResearchAfterInterruption } from "./researchRecovery";
@@ -43,7 +43,6 @@ import type {
   BrowserExecutionHost,
   ResearchRecoveryResult,
   ResearchRuntimeState,
-  ResearchSelection,
   ResearchUpdateSink,
   StateSink,
 } from "./types";
@@ -54,22 +53,15 @@ export async function runResearch(
   onUpdate: ResearchUpdateSink,
   onState: StateSink,
   options: AskExecutionOptions,
-  selection: ResearchSelection = {},
 ): Promise<ResearchResultSnapshot> {
   let timing = resolveResearchTiming(command);
-  let page = await openResearchExecutionPage(host, command);
+  let page = await openResearchExecutionPage(host, command, options);
   await scrollToBottomIfNeeded(page);
   let submissionState: ResearchSubmissionStateSnapshot | null = null;
   let initialSnapshot: ResearchSnapshot | null = null;
 
   if (options.submitPrompt) {
-    const prepared = await prepareResearchSubmission(
-      host,
-      command,
-      page,
-      timing,
-      selection,
-    );
+    const prepared = await prepareResearchSubmission(command, page, timing);
     page = prepared.page;
     submissionState = prepared.submissionState;
     initialSnapshot = prepared.initialSnapshot;
@@ -137,6 +129,28 @@ export async function runResearch(
     );
 
     throwIfResearchFailed(snapshot);
+
+    if (isAwaitingResearchStart(snapshot)) {
+      const started = await beginDeepResearchRun(
+        page,
+        Math.min(
+          DEEP_RESEARCH_HANDOFF_TIMEOUT_MS,
+          Math.max(1, timing.timeoutAt - Date.now()),
+        ),
+      );
+      if (started) {
+        state.submissionConfirmed = true;
+        await recordResearchSnapshotProgress(
+          host,
+          state,
+          started,
+          onUpdate,
+          onState,
+          "observed research start confirmation",
+        );
+      }
+      continue;
+    }
 
     const finalized = await finalizeCompletedResearchIfReady(
       host,
@@ -208,43 +222,41 @@ function resolveResearchTiming(
 async function openResearchExecutionPage(
   host: BrowserExecutionHost,
   command: ResearchExecutionCommand,
+  options: AskExecutionOptions,
 ): Promise<Page> {
-  return host.openExecutionPage(
-    host.resolveConversationTarget(command.conversationId),
-  );
+  const targetUrl = options.submitPrompt
+    ? resolveDeepResearchSubmissionTarget(host, command)
+    : host.resolveConversationTarget(command.conversationId);
+  return host.openExecutionPage(targetUrl);
+}
+
+function resolveDeepResearchSubmissionTarget(
+  host: BrowserExecutionHost,
+  command: ResearchExecutionCommand,
+): string {
+  const baseUrl = host.resolveConversationTarget(command.conversationId);
+  try {
+    const url = new URL(baseUrl);
+    url.pathname = deepResearchPathname(url.pathname);
+    return url.toString();
+  } catch {
+    return baseUrl;
+  }
 }
 
 async function prepareResearchSubmission(
-  host: BrowserExecutionHost,
   command: ResearchExecutionCommand,
   page: Page,
   timing: ResearchTiming,
-  selection: ResearchSelection,
 ): Promise<{
   page: Page;
   submissionState: ResearchSubmissionStateSnapshot;
   initialSnapshot: ResearchSnapshot | null;
   timing: ResearchTiming;
 }> {
-  await waitForInteractionSurface(page, { reloadOnUnavailable: true });
-  await host.refreshCapabilities(page);
-  page = await applyAskConfiguration(
-    page,
-    {
-      jobId: command.jobId,
-      prompt: command.query,
-      mode: "research",
-      modelClass: selection.modelClass,
-      effort: selection.effort,
-    },
-    host.getLastCapabilityReport(),
-  );
-  await host.refreshCapabilities(page);
-  await uploadAttachments(
-    page,
-    command.files ?? [],
-    host.getLastCapabilityReport(),
-  );
+  page =
+    (await waitForDeepResearchLanding(page, INTERACTION_TIMEOUT_MS)) ?? page;
+  await uploadAttachments(page, command.files ?? [], null);
   await ensureResearchComposerFilled(
     page,
     command.query,
@@ -327,7 +339,7 @@ async function recordInitialResearchIdentity(
       onState,
       "observed in-flight research identity",
     );
-    state.submissionConfirmed = true;
+    state.submissionConfirmed = !isAwaitingResearchStart(initialSnapshot);
   }
 }
 

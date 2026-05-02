@@ -63,7 +63,6 @@ Formatting:
 - `cargo run -p gpt -- gateway status`
 - `cargo run -p gpt -- ask "Name three edge cases for resumable downloads."`
 - `cargo run -p gpt -- ask --mode search "Which Rust release first stabilized let-chains?"`
-- `cargo run -p gpt -- ask --mode research --file roadmap.md "Map which milestones need customer interviews."`
 - `cargo run -p gpt -- ask --model thinking --effort extended "Choose SQLite or JSONL for a local job ledger."`
 - `cargo run -p gpt -- ask --mode search --model thinking --effort standard "Find current Windows code-signing costs."`
 - `cargo run -p gpt -- ask --mode search --conversation conv-123 "Refresh the shipping checklist against current notarization rules."`

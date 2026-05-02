@@ -119,6 +119,14 @@ try {
     $cargoArgs += @("--target-dir", $cargoTargetRoot)
   }
   Invoke-Step cargo $cargoArgs $repoRoot
+  foreach ($distDir in @(
+    (Join-Path $repoRoot "packages\\browser-adapter\\dist"),
+    (Join-Path $repoRoot "packages\\extension\\dist")
+  )) {
+    if (Test-Path $distDir) {
+      Remove-Item -Recurse -Force $distDir
+    }
+  }
   Invoke-Step pnpm @("--filter", "@tablinq/browser-adapter", "build") $repoRoot
   Invoke-Step pnpm @("--filter", "@tablinq/extension", "build") $repoRoot
   if (Test-Path $browserAdapterStagingRoot) {

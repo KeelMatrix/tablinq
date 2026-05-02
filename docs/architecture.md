@@ -110,6 +110,7 @@ Those states are persisted and surfaced through the CLI and gateway so clients c
 
 - `gpt ask` becomes `DaemonRequest::Ask`, which streams `EventPayload` frames followed by a final `DaemonResponse`.
 - `gpt research` becomes `DaemonRequest::Research`, which runs through a durable job path with progress updates and artifact persistence.
+- Research is only exposed through the dedicated research command, not through an ask mode.
 - The daemon persists jobs, sessions, conversations, request summaries, artifacts, and failure bundles in SQLite and the state root.
 - The gateway reuses the same core service instead of duplicating execution logic.
 
