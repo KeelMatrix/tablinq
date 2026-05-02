@@ -86,6 +86,8 @@ export {
 
 export {
   activateModeControl,
+  clearConfiguredSearchMode,
+  clearIrrelevantComposerChips,
   ensureConfiguredMode,
   ensureConfiguredSearchMode,
   navigateDirectlyToDeepResearch,

@@ -193,6 +193,46 @@ export async function ensureConfiguredSearchMode(
   );
 }
 
+export async function clearConfiguredSearchMode(
+  page: Page,
+): Promise<"already-inactive" | "cleared"> {
+  await page.bringToFront().catch(() => undefined);
+  if (!(await searchModeActive(page))) {
+    return "already-inactive";
+  }
+
+  const chip = await findVisibleSearchModeChip(page, 1_500);
+  if (!chip) {
+    throw new Error(
+      "ui drift: search mode is active but no removable Search chip was found",
+    );
+  }
+  await activateModeControl(page, chip);
+  await page.waitForTimeout(500);
+  if (await searchModeActive(page)) {
+    throw new Error(
+      "ui drift: Search chip remained active after clearing normal ask mode",
+    );
+  }
+  return "cleared";
+}
+
+export async function clearIrrelevantComposerChips(
+  page: Page,
+): Promise<"already-clear" | "cleared"> {
+  let clearedAny = false;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const chip = await findVisibleIrrelevantComposerChip(page, 250);
+    if (!chip) {
+      break;
+    }
+    clearedAny = true;
+    await activateModeControl(page, chip);
+    await page.waitForTimeout(150);
+  }
+  return clearedAny ? "cleared" : "already-clear";
+}
+
 async function activateSearchModeOnce(
   page: Page,
   method: "locator" | "mouse" | "keyboard-enter" | "keyboard-space",
@@ -247,6 +287,63 @@ async function searchModeActive(page: Page): Promise<boolean> {
   return searchModeChipActive(page);
 }
 
+async function findVisibleSearchModeChip(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  return waitForVisibleLocator(
+    page.locator(
+      [
+        "[data-testid='composer-root'] button.__composer-pill[aria-label*='Search' i][aria-label*='remove' i]",
+        "[data-testid='composer-root'] button.__composer-pill[aria-label*='Search' i]",
+        "form button.__composer-pill[aria-label*='Search' i][aria-label*='remove' i]",
+        "form button.__composer-pill[aria-label*='Search' i]",
+      ].join(", "),
+    ),
+    timeoutMs,
+  );
+}
+
+async function findVisibleIrrelevantComposerChip(
+  page: Page,
+  timeoutMs: number,
+): Promise<Locator | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const chips = page.locator(
+      [
+        "[data-testid='composer-root'] button[aria-label*='remove' i]",
+        "[data-testid='composer-root'] button[aria-label*='click to remove' i]",
+        "form button[aria-label*='remove' i]",
+        "form button[aria-label*='click to remove' i]",
+      ].join(", "),
+    );
+    const count = await chips.count().catch(() => 0);
+    for (let index = 0; index < count; index += 1) {
+      const chip = chips.nth(index);
+      if (!(await chip.isVisible().catch(() => false))) {
+        continue;
+      }
+      const text = [
+        (await chip.textContent().catch(() => null)) ?? "",
+        (await chip.getAttribute("aria-label").catch(() => null)) ?? "",
+      ]
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      if (
+        /\b(search|web search|research|deep research|canvas)\b/.test(text) &&
+        !/\b(search chats)\b/.test(text)
+      ) {
+        return chip;
+      }
+    }
+    await page.waitForTimeout(50);
+  }
+  return null;
+}
+
 async function searchModeChipActive(page: Page): Promise<boolean> {
   return page
     .evaluate<boolean>(
@@ -288,13 +385,22 @@ async function searchModeChipActive(page: Page): Promise<boolean> {
         const inComposer =
           element.closest("[data-testid='composer-root']") !== null ||
           element.closest("form") !== null;
+        const webSearchChip = /\\bweb search\\b/.test(name);
+        const activeSearchSignal =
+          name.includes("click to remove") ||
+          element.classList.contains("__composer-pill") ||
+          element.getAttribute("aria-pressed") === "true" ||
+          element.getAttribute("aria-checked") === "true" ||
+          element.getAttribute("data-selected") === "true";
         return (
           inComposer &&
           /\\bsearch\\b/.test(name) &&
           !/\\bsearch chats\\b/.test(name) &&
-          (name.includes("click to remove") ||
-            element.classList.contains("__composer-pill") ||
+          activeSearchSignal &&
+          (!webSearchChip ||
+            element.id === "search-chip" ||
             element.getAttribute("aria-pressed") === "true" ||
+            element.getAttribute("aria-checked") === "true" ||
             element.getAttribute("data-selected") === "true")
         );
       });
