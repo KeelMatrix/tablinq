@@ -30,8 +30,8 @@ pub(super) struct ProviderFailureRecoveryInput<'a> {
 
 pub(super) enum ProviderFailureRecoveryOutcome {
     Replay {
-        trace: RecoveryTrace,
-        packet: RecoveryPacket,
+        trace: Box<RecoveryTrace>,
+        packet: Box<RecoveryPacket>,
         next_command: AskCommand,
         attempt_count: u32,
     },
@@ -241,8 +241,8 @@ impl CoreService {
         };
 
         Ok(ProviderFailureRecoveryOutcome::Replay {
-            trace,
-            packet,
+            trace: Box::new(trace),
+            packet: Box::new(packet),
             next_command,
             attempt_count: effective_attempt_count,
         })

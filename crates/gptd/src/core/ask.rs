@@ -159,8 +159,8 @@ impl CoreService {
                             next_command,
                             attempt_count,
                         } => {
-                            recovery_trace = Some(trace);
-                            recovery_packet = Some(packet);
+                            recovery_trace = Some(*trace);
+                            recovery_packet = Some(*packet);
                             recovery_attempt_count = attempt_count;
                             current_command = next_command;
                         }

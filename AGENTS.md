@@ -93,7 +93,6 @@
 - Read matching tests before expanding search radius
 - Stop after identifying the owning layer
 - Do not reopen files already ruled out
-- Do not spawn subagents
 - Do not rerun unchanged commands
 - Run narrow tests before suite-wide tests
 - Escalate from file test -> package test -> full suite only if needed
