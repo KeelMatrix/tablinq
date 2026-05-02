@@ -1151,21 +1151,17 @@
       downloadable_artifacts_observable: false,
     };
 
-    const runtime = {
-      ui_signature: [
-        window.location.hostname || "unknown-host",
-        body?.dataset.uiVariant || "unlabelled",
-        body?.querySelector("#prompt-textarea")
-          ? "prompt-textarea"
-          : "no-prompt-id",
-        body?.querySelector("[data-slot]") ? "slot-ui" : "aria-ui",
-        body?.querySelector("[role='textbox']")
-          ? "role-textbox"
-          : "native-textbox",
-      ].join(":"),
-      strategy_matches: {},
-      dom_neighborhoods: [],
-    };
+    const uiSignature = [
+      window.location.hostname || "unknown-host",
+      body?.dataset.uiVariant || "unlabelled",
+      body?.querySelector("#prompt-textarea")
+        ? "prompt-textarea"
+        : "no-prompt-id",
+      body?.querySelector("[data-slot]") ? "slot-ui" : "aria-ui",
+      body?.querySelector("[role='textbox']") ? "role-textbox" : "native-textbox",
+    ].join(":");
+    const strategyMatches = {};
+    const domNeighborhoods = [];
 
     for (const definition of definitions) {
       const ordered = orderStrategies(definition.key, definition.strategies);
@@ -1186,13 +1182,35 @@
         continue;
       }
 
-      runtime.strategy_matches[definition.key] = strategyId;
-      runtime.dom_neighborhoods.push(
+      strategyMatches[definition.key] = strategyId;
+      domNeighborhoods.push(
         createNeighborhood(definition.key, strategyId, match),
       );
       captureAliases(definition.key, match);
     }
 
+    return buildCapabilityProbeReport({
+      reportedAt,
+      selectorPackId,
+      selectorPackVersion,
+      matrix,
+      aliases,
+      uiSignature,
+      strategyMatches,
+      domNeighborhoods,
+    });
+  }
+
+  function buildCapabilityProbeReport({
+    reportedAt,
+    selectorPackId,
+    selectorPackVersion,
+    matrix,
+    aliases,
+    uiSignature,
+    strategyMatches,
+    domNeighborhoods,
+  }) {
     return {
       type: "capability_report",
       report: {
@@ -1202,7 +1220,11 @@
         matrix,
         aliases,
       },
-      runtime,
+      runtime: {
+        ui_signature: uiSignature,
+        strategy_matches: strategyMatches,
+        dom_neighborhoods: domNeighborhoods,
+      },
     };
   }
 
