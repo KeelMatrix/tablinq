@@ -2,7 +2,8 @@ use super::interruption::{
     DownstreamInterruption, DownstreamRecovery, final_response_disconnect_message,
     mark_downstream_interrupted, recover_downstream_interruption, stream_disconnect_message,
 };
-use super::preparation::{PreparedChatJob, PreparedChatRequest};
+use super::job_execution::{ChatJobExecution, ChatJobKind, execute_prepared_chat_job};
+use super::preparation::PreparedChatRequest;
 use super::response::{build_chat_completion_response, recovery_reason_for_trace};
 use super::sse_writer::{
     write_stream_delta, write_stream_done, write_stream_error, write_stream_finish_chunk,
@@ -20,13 +21,6 @@ use gptd::CoreService;
 use gptd::logging::JsonLogger;
 use shared_protocol::{EventPayload, RecoveryPacket, RecoveryTrace};
 use std::net::TcpStream;
-
-struct ChatExecutionResult {
-    conversation_id: String,
-    low_confidence: bool,
-    recovery_trace: Option<RecoveryTrace>,
-    recovery_packet: Option<RecoveryPacket>,
-}
 
 struct NonStreamingExecution {
     response: HttpResponse,
@@ -160,45 +154,18 @@ fn execute_prepared_job_streaming(
     prepared: &PreparedChatRequest,
     stream_id: &str,
     downstream_interruption: &mut Option<DownstreamInterruption>,
-) -> Result<ChatExecutionResult> {
-    match &prepared.job {
-        PreparedChatJob::Research(job) => core
-            .execute_prepared_research(job, |event| {
-                write_event_delta_or_record_interruption(
-                    stream,
-                    core,
-                    context,
-                    prepared,
-                    stream_id,
-                    downstream_interruption,
-                    event,
-                )
-            })
-            .map(|result| ChatExecutionResult {
-                conversation_id: result.conversation_id,
-                low_confidence: result.low_confidence,
-                recovery_trace: None,
-                recovery_packet: None,
-            }),
-        PreparedChatJob::Ask(job) => core
-            .execute_prepared_ask(job, |event| {
-                write_event_delta_or_record_interruption(
-                    stream,
-                    core,
-                    context,
-                    prepared,
-                    stream_id,
-                    downstream_interruption,
-                    event,
-                )
-            })
-            .map(|result| ChatExecutionResult {
-                conversation_id: result.conversation_id,
-                low_confidence: result.low_confidence,
-                recovery_trace: result.recovery_trace,
-                recovery_packet: result.recovery_packet,
-            }),
-    }
+) -> Result<ChatJobExecution> {
+    execute_prepared_chat_job(core, prepared, |event| {
+        write_event_delta_or_record_interruption(
+            stream,
+            core,
+            context,
+            prepared,
+            stream_id,
+            downstream_interruption,
+            event,
+        )
+    })
 }
 
 fn write_event_delta_or_record_interruption(
@@ -243,7 +210,7 @@ fn finish_streaming_success(
     prepared: &PreparedChatRequest,
     stream_id: &str,
     downstream_interruption: Option<DownstreamInterruption>,
-    result: ChatExecutionResult,
+    result: ChatJobExecution,
 ) -> Result<RequestOutcome> {
     let recovered_at = recovered_at_for_trace(result.recovery_trace.as_ref());
     let recovery_reason = result
@@ -402,52 +369,32 @@ fn execute_prepared_job_non_streaming(
     context: &RequestContext,
     prepared: &PreparedChatRequest,
 ) -> Result<NonStreamingExecution> {
-    match &prepared.job {
-        PreparedChatJob::Research(job) => {
-            let result = core.execute_prepared_research(job, |_event| Ok(()))?;
-            let conversation = core.find_conversation(&result.conversation_id)?;
-            Ok(NonStreamingExecution {
-                response: build_chat_completion_response(
-                    &context.request_id,
-                    prepared.job_id(),
-                    prepared.model_id,
-                    prepared.request_role,
-                    prepared.parent_request_id.as_deref(),
-                    Some(&result.conversation_id),
-                    conversation.as_ref().map(|item| item.session_id.as_str()),
-                    &result.report_text,
-                    "stop",
-                    None,
-                ),
-                conversation_id: Some(result.conversation_id),
-                low_confidence: result.low_confidence,
-                recovery_trace: None,
-                recovery_packet: None,
-            })
-        }
-        PreparedChatJob::Ask(job) => {
-            let result = core.execute_prepared_ask(job, |_event| Ok(()))?;
-            let conversation = core.find_conversation(&result.conversation_id)?;
-            Ok(NonStreamingExecution {
-                response: build_chat_completion_response(
-                    &context.request_id,
-                    prepared.job_id(),
-                    prepared.model_id,
-                    prepared.request_role,
-                    prepared.parent_request_id.as_deref(),
-                    Some(&result.conversation_id),
-                    conversation.as_ref().map(|item| item.session_id.as_str()),
-                    &result.output_text,
-                    "stop",
-                    result.recovery_trace.as_ref(),
-                ),
-                conversation_id: Some(result.conversation_id),
-                low_confidence: result.low_confidence,
-                recovery_trace: result.recovery_trace,
-                recovery_packet: result.recovery_packet,
-            })
-        }
-    }
+    let result = execute_prepared_chat_job(core, prepared, |_event| Ok(()))?;
+    let conversation = core.find_conversation(&result.conversation_id)?;
+    let recovery_trace = match result.kind {
+        ChatJobKind::Ask => result.recovery_trace.as_ref(),
+        ChatJobKind::Research => None,
+    };
+    let response = build_chat_completion_response(
+        &context.request_id,
+        prepared.job_id(),
+        prepared.model_id,
+        prepared.request_role,
+        prepared.parent_request_id.as_deref(),
+        Some(&result.conversation_id),
+        conversation.as_ref().map(|item| item.session_id.as_str()),
+        &result.output_text,
+        "stop",
+        recovery_trace,
+    );
+
+    Ok(NonStreamingExecution {
+        response,
+        conversation_id: Some(result.conversation_id),
+        low_confidence: result.low_confidence,
+        recovery_trace: result.recovery_trace,
+        recovery_packet: result.recovery_packet,
+    })
 }
 
 fn recovered_at_for_trace(recovery_trace: Option<&RecoveryTrace>) -> Option<chrono::DateTime<Utc>> {
