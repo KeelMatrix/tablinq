@@ -116,6 +116,12 @@ mod tests {
     }
 
     #[test]
+    fn native_message_rejects_zero_length_payload() {
+        let err = read_native_message([0, 0, 0, 0].as_slice()).unwrap_err();
+        assert!(err.to_string().contains("must not be zero"));
+    }
+
+    #[test]
     fn persist_message_writes_log_file() {
         let dir = tempdir().unwrap();
         let logs_dir = build_state_paths(dir.path()).logs_dir;

@@ -60,14 +60,18 @@ _Avoid_: blind retry, automatic resend
 A failure surfaced by the ChatGPT page itself, such as `provider_generation_failed_nonretryable`, where Tablinq does not click the page Retry button and uses the documented fresh-conversation recovery path.
 _Avoid_: local automation failure, transport failure
 
+**Local automation failure**:
+A non-provider-page failure in Tablinq's attach, capability, selector, page-action, upload, download, timeout, or transport control path. Diagnose these failures from **Failure bundle** evidence; do not use the provider page failure replay policy unless the browser page itself reported a **Provider page failure**.
+_Avoid_: provider page failure, ChatGPT outage
+
 ## Relationships
 
-- A **Gateway** request and a CLI request both route into the durable control plane owned by the **Daemon** / shared core service.
+- A **Gateway** request and a CLI request both route into the same durable control-plane implementation, but not through the same process boundary: the CLI sends daemon requests over local IPC, while the Gateway owns an in-process shared core service and only consults a running Daemon for selected health and doctor status snapshots.
 - The **Daemon** supervises one **Browser adapter** process for browser-backed execution.
 - The **Browser adapter** attaches to the user's browser in **Attach-first**, or launches owned browser context only in **Managed fallback** or **Managed only**.
 - The **Extension bridge** publishes **Capability probe** data that references a **Selector pack**.
 - The **State root** contains persisted **Durable job**, **Recovery**, and **Failure bundle** state.
-- A **Provider page failure** is classified separately from local attach, capability, selector, timeout, upload, download, or transport failures.
+- A **Provider page failure** is classified separately from **Local automation failure** categories such as attach, capability, selector, timeout, upload, download, or transport failures.
 
 ## Example dialogue
 
@@ -76,8 +80,3 @@ _Avoid_: local automation failure, transport failure
 
 > **Dev:** "Can I reset the profile to fix Chrome attach-first?"
 > **Domain expert:** "No. `reset-profile` belongs to managed fallback recovery; attach-first uses the user-owned attach target, or the dedicated Chrome attach profile under the state root."
-
-## Flagged ambiguities
-
-- "Local automation failure" is not currently a canonical code or schema term. Should it become the umbrella name for non-provider-page failures such as attach endpoint failure, capability missing, UI drift, action timeout, upload/download failure, and transport failure?
-- Existing docs say the gateway is backed by the same core service and diagrams show `Gateway -> Daemon`. Should future docs say "same core service" rather than imply every gateway call crosses the daemon IPC boundary?

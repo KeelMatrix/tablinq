@@ -25,7 +25,7 @@ The old managed Playwright-owned login path is no longer the primary model. That
 
 1. `gpt` parses local commands and sends daemon requests over local IPC.
 2. `gptd` owns durable execution, persistence, request lifecycle state, and one supervised browser adapter process.
-3. `tablinq-gateway` exposes an OpenAI-compatible HTTP surface backed by the same core service.
+3. `tablinq-gateway` exposes an OpenAI-compatible HTTP surface backed by an in-process instance of the same core service used by the daemon path.
 4. The browser adapter attaches to an attachable Chrome or Edge browser session through a local debug endpoint, or launches managed fallback explicitly when configured.
    Current Chrome attach-first uses a dedicated persistent real Chrome profile under the Tablinq state root so Chrome will expose that endpoint.
 5. The extension probes the page and publishes capability and alias data back to the control loop.
@@ -36,12 +36,15 @@ The old managed Playwright-owned login path is no longer the primary model. That
 flowchart LR
     CLI["gpt CLI"] --> IPC["local IPC"]
     IPC --> Daemon["gptd daemon"]
-    Daemon --> DB["SQLite + state root"]
-    Daemon --> Adapter["browser adapter"]
+    Daemon --> Core["shared core service"]
+    Gateway["OpenAI-compatible HTTP gateway"] --> GatewayCore["in-process shared core service"]
+    Core --> DB["SQLite + state root"]
+    GatewayCore --> DB
+    Core --> Adapter["browser adapter"]
+    GatewayCore --> Adapter
     Adapter --> Browser["attachable Chrome / Edge profile"]
     Browser --> Extension["MV3 extension"]
     Extension --> Page["ChatGPT tab"]
-    Gateway["OpenAI-compatible HTTP gateway"] --> Daemon
 ```
 
 ## Browser runtime model
@@ -112,7 +115,7 @@ Those states are persisted and surfaced through the CLI and gateway so clients c
 - `gpt research` becomes `DaemonRequest::Research`, which runs through a durable job path with progress updates and artifact persistence.
 - Research is only exposed through the dedicated research command, not through an ask mode.
 - The daemon persists jobs, sessions, conversations, request summaries, artifacts, and failure bundles in SQLite and the state root.
-- The gateway reuses the same core service instead of duplicating execution logic.
+- The gateway reuses the same core service implementation in-process instead of duplicating execution logic or forwarding every chat request through daemon IPC.
 
 ## Capability and selector model
 
@@ -150,6 +153,8 @@ Typed failures are surfaced for:
 - provider generation failures that should not use the page Retry button
 - research-specific failures
 - reconciliation failures after interruption
+
+Failure classification keeps provider page failures distinct from local automation failures. A provider page failure is evidence from the ChatGPT page itself and uses the documented fresh-conversation recovery path. Local automation failures cover Tablinq-controlled attach, capability, selector, page-action, upload, download, timeout, and transport paths; they are diagnosed from failure bundle evidence rather than provider-thread replay.
 
 Failure bundles are written under `crash-bundles/` and recorded in SQLite with screenshot, DOM snapshot, ARIA snapshot, active URL, selector attempts, and linked logs.
 
