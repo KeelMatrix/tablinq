@@ -28,7 +28,7 @@ where
 {
     match &prepared.job {
         PreparedChatJob::Research(job) => {
-            let result = core.execute_prepared_research(job, |event| on_event(event))?;
+            let result = core.execute_prepared_research(job, &mut on_event)?;
             Ok(ChatJobExecution {
                 kind: ChatJobKind::Research,
                 conversation_id: result.conversation_id,
@@ -39,7 +39,7 @@ where
             })
         }
         PreparedChatJob::Ask(job) => {
-            let result = core.execute_prepared_ask(job, |event| on_event(event))?;
+            let result = core.execute_prepared_ask(job, on_event)?;
             Ok(ChatJobExecution {
                 kind: ChatJobKind::Ask,
                 conversation_id: result.conversation_id,
