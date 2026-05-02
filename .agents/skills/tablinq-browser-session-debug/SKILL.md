@@ -1,6 +1,6 @@
 ---
 name: tablinq-browser-session-debug
-description: project-local guidance for debugging tablinq browser-attached chatgpt flows through codex or other coding agents. use when work touches a real signed-in browser session, chrome attachment, chatgpt dom inspection, gpt ask, chat completions, research prompts, file uploads, streaming output, cli/api rendering, or any test/debug action that may trigger real chatgpt responses while working on tablinq.
+description: Use only when Tablinq work may interact with a real signed-in ChatGPT browser session or send a real prompt/upload; avoid for static code inspection or fixture-only tests.
 ---
 
 # Tablinq Browser Session Debug
@@ -30,7 +30,7 @@ This skill is not for bypassing platform limits, bot detection, access controls,
 
 If the task only requires static code inspection, tests, or fixture editing, do not interact with the live browser.
 
-If the task touches any of these areas, use the live-browser workflow:
+Use the live-browser workflow only when static code inspection, fixtures, and automated tests are insufficient for one of these areas:
 
 - Chrome attach-first behavior
 - ChatGPT DOM scraping or selector logic
