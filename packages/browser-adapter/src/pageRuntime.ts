@@ -39,6 +39,8 @@ export {
   ensureConfiguredModelClass,
   ensureConfiguredEffort,
   ensureConfiguredThinkingEffort,
+  clearConfiguredSearchMode,
+  clearIrrelevantComposerChips,
   ensureConfiguredSearchMode,
   findVisibleEffortTrigger,
   ensureConfiguredMode,

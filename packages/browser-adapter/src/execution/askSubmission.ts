@@ -4,6 +4,8 @@ import type { AskExecutionCommand } from "../contracts";
 import { safePageUrl } from "../capabilityProbe";
 import {
   applyAskConfiguration,
+  clearConfiguredSearchMode,
+  clearIrrelevantComposerChips,
   clickSubmit,
   ensureConfiguredEffort,
   ensureConfiguredModelClass,
@@ -52,26 +54,37 @@ export async function prepareAskSubmission(
     await startNewConversation(page);
   }
   await waitForInteractionSurface(page, { reloadOnUnavailable: true });
-  const askBaseline = await readAskBaseline(page);
   await host.refreshCapabilities(page);
+  if (command.mode !== "search") {
+    await clearConfiguredSearchMode(page);
+    if (!command.modelClass && !command.effort) {
+      const chipClearState = await clearIrrelevantComposerChips(page);
+      if (chipClearState === "cleared") {
+        await waitForInteractionSurface(page, { reloadOnUnavailable: true });
+        await host.refreshCapabilities(page);
+      }
+    }
+  }
   if (
     command.modelClass ||
     command.effort ||
     (command.mode && command.mode !== "normal")
   ) {
-    const alreadyConfigured = await visibleComposerConfigMatchesRequest(
-      page,
-      command,
-    );
+    const alreadyConfigured =
+      command.modelClass || command.effort
+        ? false
+        : await visibleComposerConfigMatchesRequest(page, command);
     if (!alreadyConfigured) {
       page = await applyAskConfiguration(
         page,
         command,
         host.getLastCapabilityReport(),
       );
+      await waitForInteractionSurface(page, { reloadOnUnavailable: true });
       await host.refreshCapabilities(page);
     }
   }
+  const askBaseline = await readAskBaseline(page);
   await uploadAttachments(
     page,
     command.files ?? [],
