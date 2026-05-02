@@ -4,6 +4,7 @@ pub mod build_info;
 mod capabilities;
 mod chat;
 mod connection;
+mod core_status;
 mod errors;
 mod handlers;
 mod http;
