@@ -188,9 +188,9 @@ pub(in crate::core) fn recovery_guidance(
                     .to_owned(),
             );
         }
-        if !diagnostics.profile_accessible && supports_managed_profile_reset(browser.attach_mode) {
+        if !diagnostics.profile_accessible {
             guidance.push(
-                "browser profile is not writable; close other managed browser instances or run `gpt browser reset-profile`"
+                "browser profile is not writable; close other managed browser instances before retrying `gpt browser open`"
                     .to_owned(),
             );
         }
@@ -267,13 +267,6 @@ pub(in crate::core) fn is_attach_primary_mode(mode: BrowserConnectionMode) -> bo
     matches!(
         mode,
         BrowserConnectionMode::AttachFirst | BrowserConnectionMode::ManagedFallback
-    )
-}
-
-pub(in crate::core) fn supports_managed_profile_reset(mode: BrowserConnectionMode) -> bool {
-    matches!(
-        mode,
-        BrowserConnectionMode::ManagedFallback | BrowserConnectionMode::ManagedOnly
     )
 }
 

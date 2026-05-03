@@ -198,9 +198,6 @@ Persist `request_id` and inspect request status when a client connection drops u
 - `gpt browser attach`
 - `gpt browser connection-info`
 - `gpt browser open`
-- `gpt browser logout`
-- `gpt browser switch-account`
-- `gpt browser reset-profile`
 - `gpt gateway stop`
 - `gpt daemon stop`
 - `gpt daemon start`

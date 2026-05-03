@@ -172,7 +172,7 @@ Actions:
 
 - set `browser_connection_mode = "managed_only"` in `config/config.toml`
 - run `gpt browser open`
-- use `gpt browser reset-profile` only for managed fallback profile recovery
+- close managed browser instances before retrying `gpt browser open` if the managed profile is locked or wedged
 
 ## Browser adapter fails after install
 
@@ -246,7 +246,7 @@ Use the smallest reset that matches the problem:
 - delete `crash-bundles/`
 - delete `gateway-uploads/`
 
-`gpt browser reset-profile` is a managed fallback recovery tool only.
+Tablinq no longer exposes a browser profile reset command.
 
 Do not delete the full state root unless you want to discard local history and config.
 

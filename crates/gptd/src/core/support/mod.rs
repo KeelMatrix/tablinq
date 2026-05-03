@@ -30,7 +30,7 @@ mod research;
 
 pub(super) use browser::{
     busy_health_snapshot, current_url_requires_login_or_challenge, default_selector_pack_summary,
-    health_snapshot, is_attach_primary_mode, recovery_guidance, supports_managed_profile_reset,
+    health_snapshot, is_attach_primary_mode, recovery_guidance,
 };
 pub(super) use conversation::{
     browser_session_identity, conversation_id_from_url, resolve_conversation_target_url,

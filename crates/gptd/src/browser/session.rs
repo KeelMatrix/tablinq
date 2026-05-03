@@ -4,12 +4,11 @@ use super::recovery::{idle_snapshot, normalize_snapshot};
 use super::{BrowserManager, ExecutionErrorMetadata, execution_error};
 use crate::config::AppConfig;
 use crate::logging::JsonLogger;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::json;
 use shared_protocol::{
     BrowserConnectionMode, BrowserOpenRequest, BrowserStatusSnapshot, ErrorCode,
 };
-use std::fs;
 
 impl BrowserManager {
     pub fn open(&mut self, request: BrowserOpenRequest) -> Result<BrowserStatusSnapshot> {
@@ -104,17 +103,6 @@ impl BrowserManager {
         Ok(snapshot)
     }
 
-    pub fn logout(&mut self) -> Result<BrowserStatusSnapshot> {
-        let target_url = self.current_target();
-        let browser_path = self.last_snapshot.browser_path.clone();
-        self.reset_profile()?;
-        self.open(BrowserOpenRequest {
-            target_url: Some(target_url),
-            browser_path,
-            headless: Some(false),
-        })
-    }
-
     pub fn reload_target_page(&mut self) -> Result<BrowserStatusSnapshot> {
         self.ensure_process()?;
 
@@ -175,22 +163,6 @@ impl BrowserManager {
                 Ok(snapshot)
             }
         }
-    }
-
-    pub fn reset_profile(&mut self) -> Result<BrowserStatusSnapshot> {
-        let _ = self.close();
-        if self.config.paths.browser_profile_dir.exists() {
-            fs::remove_dir_all(&self.config.paths.browser_profile_dir).with_context(|| {
-                format!("remove {}", self.config.paths.browser_profile_dir.display())
-            })?;
-        }
-        fs::create_dir_all(&self.config.paths.browser_profile_dir).with_context(|| {
-            format!("create {}", self.config.paths.browser_profile_dir.display())
-        })?;
-
-        let snapshot = idle_snapshot(&self.config, None, None);
-        self.last_snapshot = snapshot.clone();
-        Ok(snapshot)
     }
 
     pub(super) fn ensure_process(&mut self) -> Result<()> {

@@ -2,8 +2,7 @@
 use super::super::CoreService;
 use super::super::support::{
     browser_busy_message, browser_session_identity, default_selector_pack_summary, health_snapshot,
-    is_attach_primary_mode, recovery_guidance, resolve_conversation_target_url,
-    supports_managed_profile_reset, try_lock_browser,
+    is_attach_primary_mode, recovery_guidance, resolve_conversation_target_url, try_lock_browser,
 };
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;

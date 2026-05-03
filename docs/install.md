@@ -142,7 +142,7 @@ Then use:
 
 - `gpt browser open`
 
-`gpt browser reset-profile` is only for managed fallback recovery. It is not part of the recommended attach-first flow.
+Tablinq no longer exposes a browser profile reset command. If a managed fallback profile is wedged, close managed browser instances before retrying `gpt browser open`.
 
 ## Windows Install Failures
 
