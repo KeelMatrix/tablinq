@@ -44,6 +44,50 @@ jobs:
       - name: Run Rust tests
         run: cargo test --workspace --locked
 
+  rust-browser-recovery:
+    name: Rust browser recovery
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --prefer-offline
+
+      - name: Verify browser is available
+        shell: pwsh
+        run: |
+          $paths = @(
+            "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+            "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe",
+            "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe",
+            "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+          )
+          if (-not ($paths | Where-Object { Test-Path $_ } | Select-Object -First 1)) {
+            throw "No Chrome or Edge executable found for browser-backed recovery tests."
+          }
+
+      - name: Run browser-backed recovery tests
+        run: cargo test -p gptd --test core_service_recovery --locked -- --nocapture
+
   typescript-core:
     name: TypeScript core checks
     runs-on: ubuntu-latest
@@ -78,22 +122,10 @@ jobs:
       - name: Run fast TypeScript tests
         run: pnpm run test:ts:fast
 
-  typescript-browser-adapter:
-    name: TypeScript browser adapter (${{ matrix.shard }})
+  typescript-tests:
+    name: TypeScript full tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - shard: foundation
-            script: test:browser-adapter:foundation
-          - shard: ask
-            script: test:browser-adapter:ask
-          - shard: research
-            script: test:browser-adapter:research
-          - shard: recovery
-            script: test:browser-adapter:recovery
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -112,5 +144,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
 
-      - name: Run browser-adapter shard
-        run: pnpm run ${{ matrix.script }}
+      - name: Run full TypeScript tests
+        run: pnpm test
