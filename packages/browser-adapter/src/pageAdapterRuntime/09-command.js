@@ -35,14 +35,14 @@ function createCommandRuntime({
           "capability missing: no capability report is available for model or mode selection",
         );
       }
+      if (request.mode) {
+        await capabilityRuntime.ensureMode(report, request.mode);
+      }
       if (request.modelClass) {
         await capabilityRuntime.ensureModelClass(report, request.modelClass);
       }
       if (request.effort) {
         await capabilityRuntime.ensureEffort(report, request.effort);
-      }
-      if (request.mode) {
-        await capabilityRuntime.ensureMode(report, request.mode);
       }
       return true;
     },

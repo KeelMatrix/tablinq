@@ -2,6 +2,7 @@ import type { Page } from "playwright-core";
 
 import type { CapabilityReportPayload } from "../../contracts";
 
+import { callPageAdapter } from "../adapter";
 import { waitForInteractionSurface } from "../composer";
 
 import {
@@ -23,6 +24,37 @@ export type ConfiguredExecutionCommand = {
 };
 
 export async function applyAskConfiguration(
+  page: Page,
+  command: ConfiguredExecutionCommand,
+  report: CapabilityReportPayload | null,
+): Promise<Page> {
+  try {
+    return await applyAskConfigurationPrimary(page, command, report);
+  } catch (error) {
+    if (!isSemanticConfigurationFallbackError(error)) {
+      throw error;
+    }
+    await closeOpenComposerMenus(page);
+    try {
+      await callPageAdapter<boolean>(page, "applyAskConfiguration", {
+        report,
+        request: command,
+      });
+      await closeOpenComposerMenus(page);
+      return page;
+    } catch (fallbackError) {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}; semantic fallback failed: ${
+          fallbackError instanceof Error
+            ? fallbackError.message
+            : String(fallbackError)
+        }`,
+      );
+    }
+  }
+}
+
+async function applyAskConfigurationPrimary(
   page: Page,
   command: ConfiguredExecutionCommand,
   report: CapabilityReportPayload | null,
@@ -76,6 +108,11 @@ export async function applyAskConfiguration(
   }
   await closeOpenComposerMenus(page);
   return page;
+}
+
+function isSemanticConfigurationFallbackError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(capability missing|ui drift)\b/i.test(message);
 }
 
 export {

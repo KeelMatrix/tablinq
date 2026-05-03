@@ -875,6 +875,57 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     await adapter.shutdown();
   });
 
+  it("falls back to semantic runtime when TypeScript model selectors drift", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      initialModel: "instant",
+      initialEffort: "extended",
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const trigger = document.querySelector("#model-switcher-trigger");
+      if (!(trigger instanceof HTMLElement)) {
+        throw new Error("model trigger missing");
+      }
+      trigger.removeAttribute("data-testid");
+      trigger.setAttribute("aria-label", "Choose engine");
+      trigger.textContent = "Engine";
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-semantic-fallback-search-thinking-standard",
+        prompt: "semantic fallback search thinking standard",
+        mode: "search",
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      searchChipVisible: !document
+        .querySelector("#search-chip")
+        ?.hasAttribute("hidden"),
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      model: "thinking",
+      effort: "standard",
+      searchChipVisible: true,
+    });
+    expect(result.output_text).toContain(
+      "Fake response for: semantic fallback search thinking standard",
+    );
+
+    await adapter.shutdown();
+  });
+
   it("selects Instant from the classic inline model controls", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
