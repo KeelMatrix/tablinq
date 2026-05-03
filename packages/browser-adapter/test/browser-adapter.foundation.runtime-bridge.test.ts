@@ -44,6 +44,53 @@ import { installBrowserAdapterHarness } from "./helpers/browserAdapterHarness";
 
 const harness = installBrowserAdapterHarness({ resetSessionRhythm: true });
 
+const readAssistantMarkdownSnapshotText = (
+  markdownHtml: string,
+  streamState = "done",
+) => {
+  const runtimeSource = loadPageAdapterSource();
+  const dom = new JSDOM("<!doctype html><html><body></body></html>", {
+    url: "https://chatgpt.com/c/conv-markdown-math",
+    runScripts: "outside-only",
+  });
+  try {
+    const { window } = dom;
+    const article = window.document.createElement("article");
+    article.setAttribute("data-slot", "assistant-message");
+    article.hidden = false;
+    article.setAttribute("data-message-author-role", "assistant");
+    article.setAttribute("data-message-id", "msg-markdown-math");
+    article.innerHTML = `<div class="markdown">${markdownHtml}</div>`;
+    window.document.body.append(article);
+    window.document.body.dataset.conversationId = "conv-markdown-math";
+    window.document.body.dataset.lastMessageId = "msg-markdown-math";
+    window.document.body.dataset.streamState = streamState;
+
+    const snapshot = window.eval(
+      `${runtimeSource.replace(
+        /^export\s+/gm,
+        "",
+      )}\ncreateTablinqPageAdapterRuntime().readAskSnapshot();`,
+    ) as { text: string };
+    return snapshot.text;
+  } finally {
+    dom.window.close();
+  }
+};
+
+const katexHtml = (tex: string, visibleHtml = "VISIBLE TOKEN SOUP") =>
+  `<span class="katex">
+    <span class="katex-mathml" hidden>
+      <math>
+        <semantics>
+          <mrow></mrow>
+          <annotation encoding="application/x-tex">${tex}</annotation>
+        </semantics>
+      </math>
+    </span>
+    <span class="katex-html">${visibleHtml}</span>
+  </span>`;
+
 describe("browser adapter foundation: page runtime bridge behavior", () => {
   it("loads a self-contained page adapter runtime source", () => {
     const factory = new Function(
@@ -631,6 +678,57 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
 
     expect(snapshot.text).toBe(expected);
     dom.window.close();
+  });
+
+  it("serializes inline KaTeX annotations as Markdown math", () => {
+    const tex = String.raw`z_k=e^{2\pi i k/5}`;
+    const text = readAssistantMarkdownSnapshotText(`
+      <p>
+        The roots satisfy
+        ${katexHtml(
+          tex,
+          "<span>z</span><span>k</span><span>=</span><span>e</span><span>2</span><span>π</span><span>i</span><span>k</span><span>/</span><span>5</span>",
+        )}.
+      </p>
+    `);
+
+    expect(text).toBe(`The roots satisfy $${tex}$.`);
+  });
+
+  it("serializes display KaTeX annotations as Markdown math blocks", () => {
+    const tex = String.raw`\oint_\gamma f(z)\,dz = 2\pi i \sum \operatorname{Res}(f,a_k)`;
+    const text = readAssistantMarkdownSnapshotText(`
+      <div class="katex-display">
+        ${katexHtml(tex)}
+      </div>
+    `);
+
+    expect(text).toBe(["$$", tex, "$$"].join("\n"));
+  });
+
+  it("uses TeX annotations instead of rendered KaTeX token spans", () => {
+    const tex = String.raw`\frac{x^2+y^2}{z_1}`;
+    const text = readAssistantMarkdownSnapshotText(`
+      <p>${katexHtml(
+        tex,
+        "<span>VISIBLE</span><span>TOKENIZED</span><span>FRACTION</span>",
+      )}</p>
+    `);
+
+    expect(text).toBe(`$${tex}$`);
+    expect(text).not.toContain("VISIBLE");
+    expect(text).not.toContain("TOKENIZED");
+  });
+
+  it("keeps complex streaming math expressions as a single LaTeX expression", () => {
+    const tex = String.raw`\int_{|z|=2} \frac{e^z}{z(z-1)}\,dz = 2\pi i(e-1)`;
+    const text = readAssistantMarkdownSnapshotText(
+      `<p>The contour integral is ${katexHtml(tex)}.</p>`,
+      "running",
+    );
+
+    expect(text).toBe(`The contour integral is $${tex}$.`);
+    expect(text.split("\n")).toHaveLength(1);
   });
 
   it("serializes complex markdown table cells without breaking table columns", async () => {
