@@ -266,7 +266,7 @@ fn operational_recovery_guidance(
         "managed mode is fallback/debug-only; use `gpt browser open` to start the managed fallback browser tab",
         "sign in to ChatGPT in the managed fallback tab before running ask or research",
         "use managed mode for debugging, CI/local harness isolation, or when attach-first cannot expose a local debug endpoint",
-        "if the managed browser profile is wedged, run `gpt browser reset-profile`",
+        "if the managed browser profile is wedged, close managed browser instances before retrying `gpt browser open`",
     ])
 }
 

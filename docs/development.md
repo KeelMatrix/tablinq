@@ -91,9 +91,6 @@ Formatting:
 - `cargo run -p gpt -- browser connection-info`
 - `cargo run -p gpt -- browser open`
 - `cargo run -p gpt -- browser detach`
-- `cargo run -p gpt -- browser logout`
-- `cargo run -p gpt -- browser switch-account`
-- `cargo run -p gpt -- browser reset-profile`
 - `cargo run -p gpt -- browser profile-info`
 
 ## Local cleanup

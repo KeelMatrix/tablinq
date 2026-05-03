@@ -164,12 +164,9 @@ Common commands:
 - `gpt browser connection-info`
 - `gpt browser open`
 - `gpt browser detach`
-- `gpt browser logout`
-- `gpt browser switch-account`
-- `gpt browser reset-profile`
 - `gpt browser profile-info`
 
-`attach_first` is the default mode. `gpt browser detach` disconnects Tablinq from the user-owned browser and does not close Chrome. `gpt browser reset-profile` is for `managed_only` and `managed_fallback` only.
+`attach_first` is the default mode. `gpt browser detach` disconnects Tablinq from the user-owned browser and does not close Chrome. Tablinq does not provide CLI commands to log out, switch ChatGPT accounts, or reset browser profiles; manage those actions directly in the attached browser profile.
 
 ## Provider mode
 

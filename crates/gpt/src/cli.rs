@@ -167,10 +167,6 @@ pub enum BrowserCommand {
         about = "Detach Tablinq from an attach-first browser session; does not close the user-owned browser"
     )]
     Detach,
-    Logout,
-    #[command(name = "switch-account")]
-    SwitchAccount,
-    ResetProfile,
     #[command(
         name = "start-debug",
         about = "Start or reuse an external persistent browser debug profile for attach-first mode"
@@ -472,28 +468,6 @@ mod tests {
     fn jobs_show_command_matches_golden_shape() {
         let cli = parse(&["gpt", "jobs", "show", "job-123"]);
         assert!(matches!(cli.command, Command::Jobs { .. }));
-    }
-
-    #[test]
-    fn browser_logout_command_matches_golden_shape() {
-        let cli = parse(&["gpt", "browser", "logout"]);
-        assert!(matches!(
-            cli.command,
-            Command::Browser {
-                command: BrowserCommand::Logout
-            }
-        ));
-    }
-
-    #[test]
-    fn browser_switch_account_command_matches_golden_shape() {
-        let cli = parse(&["gpt", "browser", "switch-account"]);
-        assert!(matches!(
-            cli.command,
-            Command::Browser {
-                command: BrowserCommand::SwitchAccount
-            }
-        ));
     }
 
     #[test]

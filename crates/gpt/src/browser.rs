@@ -1,6 +1,6 @@
 use crate::cli::BrowserCommand;
 use crate::daemon::send_daemon_request;
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use shared_protocol::{
     BrowserConnectionMode, BrowserOpenRequest, CHROME_ATTACH_PROFILE_NOTE, DaemonRequest,
@@ -38,17 +38,6 @@ pub(crate) fn run_browser_command(
             }),
         ),
         BrowserCommand::Detach => send_daemon_request(state_root, DaemonRequest::BrowserClose),
-        BrowserCommand::Logout | BrowserCommand::SwitchAccount => {
-            send_daemon_request(state_root, DaemonRequest::BrowserLogout)
-        }
-        BrowserCommand::ResetProfile => {
-            if !supports_managed_profile_reset(config.browser_connection_mode()) {
-                bail!(
-                    "browser reset-profile is only available in managed_fallback or managed_only; current mode is attach_first"
-                );
-            }
-            send_daemon_request(state_root, DaemonRequest::BrowserResetProfile)
-        }
         BrowserCommand::StartDebug {
             target_url,
             browser_path,
@@ -918,7 +907,6 @@ pub(crate) fn browser_recovery_commands(mode: BrowserConnectionMode) -> Vec<&'st
         commands.push("gpt browser open");
     } else {
         commands.push("gpt browser open");
-        commands.push("gpt browser reset-profile");
     }
     commands.push("gpt gateway stop");
     commands.push("gpt daemon stop");
@@ -929,13 +917,6 @@ pub(crate) fn is_attach_primary(mode: BrowserConnectionMode) -> bool {
     matches!(
         mode,
         BrowserConnectionMode::AttachFirst | BrowserConnectionMode::ManagedFallback
-    )
-}
-
-pub(crate) fn supports_managed_profile_reset(mode: BrowserConnectionMode) -> bool {
-    matches!(
-        mode,
-        BrowserConnectionMode::ManagedFallback | BrowserConnectionMode::ManagedOnly
     )
 }
 
@@ -1403,20 +1384,5 @@ mod tests {
             }
         });
         (endpoint, rx)
-    }
-
-    #[test]
-    fn reset_profile_is_rejected_in_attach_first_mode() {
-        let dir = tempdir().unwrap();
-        let cli = Cli::parse_from([
-            "gpt",
-            "--state-root",
-            dir.path().to_str().unwrap(),
-            "browser",
-            "reset-profile",
-        ]);
-
-        let err = run(&cli).unwrap_err();
-        assert!(format!("{err:#}").contains("managed_fallback or managed_only"));
     }
 }

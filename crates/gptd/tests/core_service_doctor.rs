@@ -83,18 +83,6 @@ fn doctor_report_health_matches_live_browser_snapshot() {
 }
 
 #[test]
-fn browser_reset_profile_is_rejected_in_attach_first_mode() {
-    let _guard = integration_lock();
-    let dir = tempdir().unwrap();
-
-    let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
-    let core = CoreService::new(config).unwrap();
-    let err = core.browser_reset_profile().unwrap_err();
-
-    assert!(format!("{err:#}").contains("managed browser recovery"));
-}
-
-#[test]
 fn browser_close_in_attach_first_reports_detach_without_edge_fallback() {
     let _guard = integration_lock();
     let dir = tempdir().unwrap();
