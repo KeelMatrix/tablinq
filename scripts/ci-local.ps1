@@ -99,6 +99,35 @@ function Run-RustTestJob {
   }
 }
 
+function Run-RustBrowserRecoveryJob {
+  param([string]$RepoRoot)
+
+  Write-Host "==> Rust browser recovery tests"
+  Ensure-PnpmInstall $RepoRoot
+  $previousSkip = $env:TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS
+  try {
+    Remove-Item Env:TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS -ErrorAction SilentlyContinue
+    Invoke-Step cargo @(
+      "test",
+      "-p",
+      "gptd",
+      "--test",
+      "core_service_recovery",
+      "--locked",
+      "--",
+      "--nocapture"
+    ) $RepoRoot
+  }
+  finally {
+    if ($null -eq $previousSkip) {
+      Remove-Item Env:TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS -ErrorAction SilentlyContinue
+    }
+    else {
+      $env:TABLINQ_SKIP_BROWSER_INTEGRATION_TESTS = $previousSkip
+    }
+  }
+}
+
 function Run-TypeScriptJob {
   param([string]$RepoRoot)
 
@@ -108,6 +137,14 @@ function Run-TypeScriptJob {
   Invoke-Step pnpm @("lint") $RepoRoot
   Invoke-Step pnpm @("build") $RepoRoot
   Invoke-Step pnpm @("run", "test:ts:fast") $RepoRoot
+}
+
+function Run-TypeScriptTestJob {
+  param([string]$RepoRoot)
+
+  Write-Host "==> TypeScript full tests"
+  Ensure-PnpmInstall $RepoRoot
+  Invoke-Step pnpm @("test") $RepoRoot
 }
 
 function Run-TypeScriptFormatJob {
@@ -203,7 +240,9 @@ $validJobs = @(
   "rust-fmt",
   "rust-clippy",
   "rust-test",
+  "rust-browser-recovery",
   "typescript",
+  "typescript-test",
   "typescript-format",
   "browser-adapter-foundation",
   "browser-adapter-ask",
@@ -237,8 +276,9 @@ $jobs = foreach ($name in $requestedJobs) {
     }
     "all" {
       "rust"
+      "rust-browser-recovery"
       "typescript"
-      "browser-adapter"
+      "typescript-test"
     }
     "browser-adapter" {
       "browser-adapter-foundation"
@@ -256,7 +296,9 @@ foreach ($name in $jobs) {
     "rust-fmt" { Run-RustFormatJob -RepoRoot $repoRoot }
     "rust-clippy" { Run-RustClippyJob -RepoRoot $repoRoot }
     "rust-test" { Run-RustTestJob -RepoRoot $repoRoot }
+    "rust-browser-recovery" { Run-RustBrowserRecoveryJob -RepoRoot $repoRoot }
     "typescript" { Run-TypeScriptJob -RepoRoot $repoRoot }
+    "typescript-test" { Run-TypeScriptTestJob -RepoRoot $repoRoot }
     "typescript-format" { Run-TypeScriptFormatJob -RepoRoot $repoRoot }
     "browser-adapter-foundation" { Run-BrowserAdapterFoundationJob -RepoRoot $repoRoot }
     "browser-adapter-ask" { Run-BrowserAdapterAskJob -RepoRoot $repoRoot }
