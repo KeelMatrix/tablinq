@@ -53,6 +53,10 @@ export const scenarioRegistry = {
   },
   "provider-generation-failure-twice": { providerGenerationFailureTwice: true },
   "conversation-load-failure": { conversationLoadFailure: true },
+  "conversation-load-failure-delayed": {
+    conversationLoadFailure: true,
+    delayedConversationLoadFailure: true,
+  },
 };
 
 export function createScenarioState(window) {
@@ -106,6 +110,9 @@ export function createScenarioState(window) {
       definition.providerGenerationFailureTwice,
     ),
     usesConversationLoadFailure: Boolean(definition.conversationLoadFailure),
+    usesDelayedConversationLoadFailure: Boolean(
+      definition.delayedConversationLoadFailure,
+    ),
     keyboardSubmitEnabled: definition.keyboardSubmit !== false,
     searchResetsModelOnActivate:
       params.get("search_resets_model_on_activate") === "true",

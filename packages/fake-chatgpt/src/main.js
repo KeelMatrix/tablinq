@@ -29,6 +29,13 @@ const {
 
 initializeScenarioDataset(document, window, scenarioState);
 renderHarnessShell({ root, note, window, config: scenarioState });
+if (scenarioState.usesDelayedConversationLoadFailure) {
+  window.setTimeout(() => {
+    document
+      .querySelector("[data-delayed-conversation-load-failure]")
+      ?.removeAttribute("hidden");
+  }, 900);
+}
 
 function hasControl(name) {
   return !scenarioState.missingControls.has(name);

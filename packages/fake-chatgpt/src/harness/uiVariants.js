@@ -8,6 +8,7 @@ export function renderHarnessShell({ root, note, window, config }) {
     usesStaleSubmitRecovery,
     usesDeepResearchFrame,
     usesConversationLoadFailure,
+    usesDelayedConversationLoadFailure,
     missingControls,
     effortInConfigureModal,
   } = config;
@@ -179,8 +180,11 @@ export function renderHarnessShell({ root, note, window, config }) {
     }
     const pathSegments = window.location.pathname.split("/").filter(Boolean);
     const conversationId = pathSegments[pathSegments.length - 1] ?? "unknown";
+    const hidden = usesDelayedConversationLoadFailure
+      ? "hidden data-delayed-conversation-load-failure"
+      : "";
     return `
-      <div role="alert" class="bg-token-bg-danger">
+      <div role="alert" class="bg-token-bg-danger" ${hidden}>
         Unable to load conversation ${conversationId}
       </div>
     `;

@@ -118,13 +118,18 @@ export async function ensureProviderConversationLoaded(
         lastState.loadErrorText,
       );
     }
-    if (conversationIdFromUrl(lastState.currentUrl) === conversationId) {
-      matchedSince ??= Date.now();
-      if (Date.now() - matchedSince >= PROVIDER_CONVERSATION_LOADED_STABLE_MS) {
-        return;
+    if (!failOnUrlMismatch) {
+      if (conversationIdFromUrl(lastState.currentUrl) === conversationId) {
+        matchedSince ??= Date.now();
+        if (
+          Date.now() - matchedSince >=
+          PROVIDER_CONVERSATION_LOADED_STABLE_MS
+        ) {
+          return;
+        }
+      } else {
+        matchedSince = null;
       }
-    } else {
-      matchedSince = null;
     }
     await sleep(PROVIDER_CONVERSATION_LOAD_POLL_MS);
   }

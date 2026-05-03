@@ -146,7 +146,7 @@ describe("browser adapter ask: error paths", () => {
     const server = await harness.startServer();
     const targetUrl = withHarnessUrl(`${server.url}/c/provider-missing`, {
       variant: "live",
-      scenario: "conversation-load-failure",
+      scenario: "conversation-load-failure-delayed",
     });
     const { adapter } = await openTrackedManagedAdapter(harness, server.url);
 
