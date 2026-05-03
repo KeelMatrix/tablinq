@@ -100,16 +100,16 @@ fn execute(cli: &Cli) -> Result<CliExecution> {
                         request,
                     )?))
                 } else {
-                    render_conversation_new(cli.state_root.as_deref(), request)
+                    render_conversation_selection(cli.state_root.as_deref(), request)
                 }
             }
-            ConversationsCommand::Switch { .. } => Ok(CliExecution::Json(send_daemon_request(
+            ConversationsCommand::Switch { .. } => render_conversation_selection(
                 cli.state_root.as_deref(),
                 DaemonRequest::ConversationSelect(
                     crate::cli::build_conversation_select_command(command)
                         .expect("non-list conversation command"),
                 ),
-            )?)),
+            ),
         },
         Command::Jobs { command } => match command {
             JobsCommand::List => Ok(CliExecution::Json(send_daemon_request(
@@ -173,7 +173,7 @@ fn render_conversations_list(state_root: Option<&Path>) -> Result<CliExecution> 
     )))
 }
 
-fn render_conversation_new(
+fn render_conversation_selection(
     state_root: Option<&Path>,
     request: DaemonRequest,
 ) -> Result<CliExecution> {
