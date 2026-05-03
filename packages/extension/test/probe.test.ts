@@ -471,6 +471,105 @@ describe("extension capability probe", () => {
       "aria-textbox",
     );
   });
+
+  it("executes unknown selector-pack strategies generically for known capabilities", () => {
+    document.body.innerHTML = `
+      <section>
+        <div role="textbox" aria-label="Message ChatGPT" contenteditable="true"></div>
+        <button type="button" aria-label="Launch message" data-custom-submit>Launch</button>
+      </section>
+    `;
+
+    const message = probeDocument({
+      selectorPack: {
+        format_version: 1,
+        pack_id: "custom-pack",
+        description: "test pack",
+        updated_at: "2026-04-12T10:00:00Z",
+        capabilities: {
+          submit_available: [
+            {
+              strategy_id: "custom-submit-control",
+              kind: "css",
+              selector: "[data-custom-submit]",
+              score: 1,
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(message.report.matrix.submit_available).toBe(true);
+    expect(message.runtime.strategy_matches.submit_available).toBe(
+      "custom-submit-control",
+    );
+  });
+
+  it("keeps current stable strategies ahead of lower-score generic selector-pack entries", () => {
+    document.body.innerHTML = `
+      <section>
+        <textarea data-slot="composer" aria-label="Prompt composer"></textarea>
+        <div role="textbox" aria-label="Message ChatGPT" contenteditable="true"></div>
+      </section>
+    `;
+
+    const message = probeDocument({
+      selectorPack: {
+        format_version: 1,
+        pack_id: "custom-pack",
+        description: "test pack",
+        updated_at: "2026-04-12T10:00:00Z",
+        capabilities: {
+          composer_ready: [
+            {
+              strategy_id: "custom-contenteditable-composer",
+              kind: "css",
+              selector: "[contenteditable='true']",
+              score: 0.5,
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(message.runtime.strategy_matches.composer_ready).toBe(
+      "data-slot-composer",
+    );
+  });
+
+  it("lets preferred strategies outrank selector-pack generic reordering", () => {
+    document.body.innerHTML = `
+      <section>
+        <textarea data-slot="composer" aria-label="Prompt composer"></textarea>
+        <button type="button" data-action="submit">Send</button>
+        <button type="button" aria-label="Launch message" data-custom-submit>Launch</button>
+      </section>
+    `;
+
+    const message = probeDocument({
+      preferredStrategies: { submit_available: "data-action-submit" },
+      selectorPack: {
+        format_version: 1,
+        pack_id: "custom-pack",
+        description: "test pack",
+        updated_at: "2026-04-12T10:00:00Z",
+        capabilities: {
+          submit_available: [
+            {
+              strategy_id: "custom-submit-control",
+              kind: "css",
+              selector: "[data-custom-submit]",
+              score: 1,
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(message.runtime.strategy_matches.submit_available).toBe(
+      "data-action-submit",
+    );
+  });
 });
 
 describe("service worker bridge", () => {

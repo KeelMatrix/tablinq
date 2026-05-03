@@ -200,6 +200,179 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
     dom.window.close();
   });
 
+  it("resolves renamed semantic controls without ChatGPT test ids or composer pill classes", async () => {
+    const runtimeSource = loadPageAdapterSource();
+    const dom = new JSDOM(
+      `<!doctype html><html><body data-stream-state="done" data-selected-effort="standard">
+        <main>
+          <form>
+            <div role="textbox" aria-label="Ask anything" contenteditable="true"></div>
+            <button
+              id="engine-trigger"
+              type="button"
+              aria-label="Choose engine"
+              aria-haspopup="listbox"
+              aria-controls="engine-list"
+              aria-expanded="false"
+            >Engine</button>
+            <button
+              id="depth-trigger"
+              type="button"
+              aria-label="Reasoning depth"
+              aria-haspopup="listbox"
+              aria-controls="reasoning-depth-list"
+              aria-expanded="false"
+            >Depth</button>
+            <button
+              id="tools-trigger"
+              type="button"
+              aria-label="Composer tools"
+              aria-haspopup="menu"
+              aria-controls="tools-menu"
+              aria-expanded="false"
+            >Tools</button>
+            <button id="semantic-submit" type="button" aria-label="Launch message">Launch</button>
+          </form>
+          <div id="engine-list" role="listbox" hidden>
+            <div id="engine-fast" role="option" aria-selected="true" hidden>Quick answer</div>
+            <div id="engine-thinking" role="option" aria-selected="false" hidden>Deep reasoning</div>
+          </div>
+          <div id="reasoning-depth-list" role="listbox" hidden>
+            <div id="depth-standard" role="option" aria-selected="true" hidden>Balanced</div>
+            <div id="depth-extended" role="option" aria-selected="false" hidden>Deep analysis</div>
+          </div>
+          <div id="tools-menu" role="menu" hidden>
+            <div id="browse-online" role="option" aria-selected="false" hidden>Browse online</div>
+          </div>
+        </main>
+      </body></html>`,
+      {
+        url: "https://chatgpt.com/c/conv-semantic-runtime",
+        runScripts: "outside-only",
+      },
+    );
+    const { window } = dom;
+    const adapter = window.eval(
+      `${runtimeSource.replace(
+        /^export\s+/gm,
+        "",
+      )}\ncreateTablinqPageAdapterRuntime();`,
+    );
+    const showControlled = (triggerId: string) => {
+      const trigger = window.document.querySelector(`#${triggerId}`);
+      if (!(trigger instanceof window.HTMLElement)) {
+        throw new Error(`missing ${triggerId}`);
+      }
+      const root = window.document.getElementById(
+        trigger.getAttribute("aria-controls") ?? "",
+      );
+      if (!(root instanceof window.HTMLElement)) {
+        throw new Error(`missing controlled root for ${triggerId}`);
+      }
+      trigger.addEventListener("click", () => {
+        const expanded = trigger.getAttribute("aria-expanded") === "true";
+        trigger.setAttribute("aria-expanded", expanded ? "false" : "true");
+        root.toggleAttribute("hidden", expanded);
+        root
+          .querySelectorAll("[role='option']")
+          .forEach((element) => element.toggleAttribute("hidden", expanded));
+      });
+    };
+    showControlled("engine-trigger");
+    showControlled("depth-trigger");
+    showControlled("tools-trigger");
+
+    window.document
+      .querySelector("#engine-thinking")
+      ?.addEventListener("click", () => {
+        window.document.body.dataset.selectedModel = "thinking";
+        window.document
+          .querySelector("#engine-trigger")
+          ?.setAttribute("aria-expanded", "false");
+        window.document
+          .querySelector("#engine-list")
+          ?.setAttribute("hidden", "");
+        window.document
+          .querySelectorAll("#engine-list [role='option']")
+          .forEach((element) => {
+            element.setAttribute(
+              "aria-selected",
+              element.id === "engine-thinking" ? "true" : "false",
+            );
+            element.setAttribute("hidden", "");
+          });
+      });
+    window.document
+      .querySelector("#depth-standard")
+      ?.addEventListener("click", () => {
+        window.document.body.dataset.selectedEffort = "standard";
+      });
+    window.document
+      .querySelector("#browse-online")
+      ?.addEventListener("click", () => {
+        window.document.body.dataset.selectedMode = "search";
+        window.document
+          .querySelector("#tools-trigger")
+          ?.setAttribute("aria-expanded", "false");
+        window.document
+          .querySelector("#tools-menu")
+          ?.setAttribute("hidden", "");
+        window.document
+          .querySelector("#browse-online")
+          ?.setAttribute("aria-selected", "true");
+        window.document
+          .querySelector("#browse-online")
+          ?.setAttribute("hidden", "");
+      });
+    window.document
+      .querySelector("#semantic-submit")
+      ?.addEventListener("click", () => {
+        window.document.body.dataset.submitted = "true";
+      });
+
+    expect(adapter.composerReady()).toBe(true);
+    expect(adapter.readSubmitState()).toMatchObject({
+      submitVisible: true,
+      submitEnabled: true,
+      keyboardReady: false,
+    });
+
+    adapter.fillComposer({ prompt: "Semantic runtime prompt" });
+    await adapter.applyAskConfiguration({
+      report: {
+        matrix: {
+          search_mode_visible: true,
+          research_mode_visible: false,
+          model_picker_visible: true,
+          thinking_effort_visible: true,
+        },
+        aliases: {
+          modes: { search: ["browse online"] },
+          model_classes: {
+            instant: ["quick answer"],
+            thinking: ["deep reasoning"],
+          },
+          efforts: {
+            standard: ["balanced"],
+            extended: ["deep analysis"],
+          },
+        },
+      },
+      request: {
+        mode: "search",
+        modelClass: "thinking",
+        effort: "standard",
+      },
+    });
+    expect(window.document.body.dataset.selectedMode).toBe("search");
+    expect(window.document.body.dataset.selectedModel).toBe("thinking");
+    expect(window.document.body.dataset.selectedEffort).toBe("standard");
+
+    expect(adapter.clickSubmit()).toBe(true);
+    expect(window.document.body.dataset.submitted).toBe("true");
+    dom.window.close();
+  });
+
   it("serializes rich assistant markdown into terminal-safe markdown text", async () => {
     const runtimeSource = loadPageAdapterSource();
     const expected = [

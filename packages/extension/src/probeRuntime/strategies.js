@@ -16,6 +16,7 @@ export function orderCapabilityStrategies({
   strategies,
   selectorPack,
   preferredStrategies,
+  createGenericStrategy,
 }) {
   const fromPack =
     selectorPack?.capabilities?.[capability]
@@ -23,7 +24,10 @@ export function orderCapabilityStrategies({
         const match = strategies.find(
           (strategy) => strategy.id === entry.strategy_id,
         );
-        return match ? { ...match, score: entry.score } : null;
+        if (match) {
+          return { ...match, score: entry.score };
+        }
+        return createGenericStrategy?.(entry) ?? null;
       })
       .filter(Boolean) ?? [];
   const orderedStrategies =

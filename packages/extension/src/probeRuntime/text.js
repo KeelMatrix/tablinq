@@ -111,6 +111,11 @@ export function accessibleProbeName(element, documentRoot = document) {
     }
   }
 
+  const title = element.getAttribute("title");
+  if (title) {
+    return normalizeProbeText(title);
+  }
+
   return normalizeProbeText(element.textContent);
 }
 

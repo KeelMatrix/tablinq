@@ -172,7 +172,12 @@ export function probeDocument(options = {}) {
       element.matches("button[aria-label='Switch model']") ||
       element.matches("button[data-testid='model-switcher-dropdown-button']") ||
       isComposerRightModelPickerTrigger(element) ||
-      hasToken(accessibleName(element), ["chatgpt", "model", "selector"]));
+      hasToken(accessibleName(element), [
+        "chatgpt",
+        "model",
+        "selector",
+        "engine",
+      ]));
 
   const isEffortPickerTrigger = (element) =>
     element instanceof HTMLElement &&
@@ -365,7 +370,7 @@ export function probeDocument(options = {}) {
     findNamedControl(["instant", "thinking", "legacy", "gpt", "5.3", "5.4"], {
       include: isComposerRightModelPickerTrigger,
     }) ??
-    findNamedControl(["chatgpt", "model", "selector"], {
+    findNamedControl(["chatgpt", "model", "selector", "engine"], {
       include: isModelPickerTrigger,
     });
 
@@ -470,6 +475,295 @@ export function probeDocument(options = {}) {
 
   const createNeighborhood = (capability, strategyId, element) =>
     createProbeNeighborhood(capability, strategyId, element);
+
+  const safeQueryAll = (root, selector) => {
+    try {
+      return Array.from(root.querySelectorAll(selector));
+    } catch {
+      return [];
+    }
+  };
+
+  const normalizedSelectorText = (selector) => normalizeText(selector);
+
+  const elementFingerprint = (element) =>
+    normalizeText(
+      [
+        accessibleName(element),
+        element.textContent ?? "",
+        element.getAttribute?.("title") ?? "",
+        element.getAttribute?.("placeholder") ?? "",
+        element.getAttribute?.("aria-label") ?? "",
+        element.getAttribute?.("data-testid") ?? "",
+        element.getAttribute?.("data-slot") ?? "",
+        element.getAttribute?.("data-action") ?? "",
+        element.getAttribute?.("data-mode") ?? "",
+        element.getAttribute?.("data-model") ?? "",
+        element.getAttribute?.("data-effort") ?? "",
+      ].join(" "),
+    );
+
+  const selectorTextMatches = (element, selector) => {
+    const expected = normalizedSelectorText(selector);
+    if (!expected) {
+      return false;
+    }
+    const fingerprint = elementFingerprint(element);
+    return (
+      fingerprint === expected ||
+      fingerprint.includes(expected) ||
+      hasToken(fingerprint, [expected])
+    );
+  };
+
+  const genericControlSelector = [
+    controlCandidateSelector,
+    "textarea",
+    "[role='textbox']",
+    "[contenteditable='true']",
+    "input[type='file']",
+    "input[type='submit']",
+    "a[download]",
+  ].join(", ");
+
+  const visibleGenericControls = (roots = [documentRoot]) => {
+    const seen = new Set();
+    const controls = [];
+    for (const root of roots) {
+      for (const element of safeQueryAll(root, genericControlSelector)) {
+        if (!isVisible(element) || seen.has(element)) {
+          continue;
+        }
+        seen.add(element);
+        controls.push(element);
+      }
+    }
+    return controls;
+  };
+
+  const isUploadLikeControl = (element) =>
+    element instanceof HTMLElement &&
+    (element.matches(
+      [
+        "[data-slot='upload-entry']",
+        "[data-testid='upload-button']",
+        "label[for]",
+        "input[type='file']",
+      ].join(", "),
+    ) ||
+      hasToken(elementFingerprint(element), [
+        "add files",
+        "add photos",
+        "attach",
+        "upload",
+        "file",
+        "files",
+        "photo",
+        "photos",
+      ]));
+
+  const isSubmitLikeControl = (element) =>
+    element instanceof HTMLElement &&
+    !isUploadLikeControl(element) &&
+    !hasToken(elementFingerprint(element), ["stop", "cancel"]) &&
+    (element.matches(
+      [
+        "[data-action='submit']",
+        "[data-testid='send-button']",
+        "button",
+        "[role='button']",
+        "input[type='submit']",
+      ].join(", "),
+    ) ||
+      hasToken(elementFingerprint(element), ["send", "submit", "ask"]));
+
+  const isTextboxLikeComposer = (element) =>
+    element instanceof HTMLElement &&
+    (element.matches(
+      [
+        "[data-slot='composer']",
+        "#prompt-textarea",
+        "textarea",
+        "[role='textbox']",
+        "[contenteditable='true']",
+      ].join(", "),
+    ) ||
+      hasToken(elementFingerprint(element), [
+        "prompt",
+        "message",
+        "composer",
+        "ask",
+        "chat",
+      ]));
+
+  const isDownloadLikeControl = (element) =>
+    element instanceof HTMLElement &&
+    (element.matches("a[download], [data-slot='artifact-link']") ||
+      hasToken(elementFingerprint(element), [
+        "download",
+        "artifact",
+        "export",
+        "save",
+      ]));
+
+  const genericCapabilityInclude = (capability, element, selector = "") => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (capability === "composer_ready") {
+      return isTextboxLikeComposer(element);
+    }
+    if (capability === "submit_available") {
+      return isSubmitLikeControl(element);
+    }
+    if (capability === "model_picker_visible") {
+      return (
+        isModelPickerTrigger(element) ||
+        isModelOption(element) ||
+        selectorTextMatches(element, selector) ||
+        hasToken(elementFingerprint(element), [
+          "model",
+          "engine",
+          "chatgpt",
+          "instant",
+          "thinking",
+          "pro",
+        ])
+      );
+    }
+    if (capability === "thinking_effort_visible") {
+      return (
+        isEffortPickerTrigger(element) ||
+        isEffortOption(element) ||
+        selectorTextMatches(element, selector) ||
+        hasToken(elementFingerprint(element), [
+          "effort",
+          "reasoning",
+          "thinking",
+          "standard",
+          "extended",
+        ])
+      );
+    }
+    if (capability === "search_mode_visible") {
+      return (
+        isSearchModeControl(element) ||
+        (selectorTextMatches(element, selector) &&
+          isSearchModeLabel(elementFingerprint(element)))
+      );
+    }
+    if (capability === "research_mode_visible") {
+      return (
+        isResearchModeControl(element) ||
+        (selectorTextMatches(element, selector) &&
+          hasToken(elementFingerprint(element), ["research", "deep research"]))
+      );
+    }
+    if (capability === "upload_control_visible") {
+      return isUploadLikeControl(element);
+    }
+    if (capability === "downloadable_artifacts_observable") {
+      return isDownloadLikeControl(element);
+    }
+    return false;
+  };
+
+  const firstGenericMatch = (capability, elements, selector) => {
+    for (const element of elements) {
+      if (genericCapabilityInclude(capability, element, selector)) {
+        return element;
+      }
+    }
+    return null;
+  };
+
+  const genericTextMatch = (capability, selector) =>
+    firstGenericMatch(
+      capability,
+      visibleGenericControls().filter((element) =>
+        selectorTextMatches(element, selector),
+      ),
+      selector,
+    );
+
+  const genericAriaRoleMatch = (capability, selector) => {
+    const cssMatches = firstGenericMatch(
+      capability,
+      visibleGenericControls().filter((element) =>
+        safeQueryAll(documentRoot, selector).includes(element),
+      ),
+      selector,
+    );
+    if (cssMatches) {
+      return cssMatches;
+    }
+
+    const expected = normalizedSelectorText(selector).replace(/^role=/, "");
+    const roleMatches = visibleGenericControls().filter((element) => {
+      const role = normalizeText(
+        element.getAttribute("role") ?? implicitRole(element) ?? "",
+      );
+      return role === expected || selectorTextMatches(element, selector);
+    });
+    return firstGenericMatch(capability, roleMatches, selector);
+  };
+
+  const genericDomNeighborhoodMatch = (capability, selector) => {
+    const selectorMatches = safeQueryAll(documentRoot, selector).filter(
+      (element) => element instanceof HTMLElement && isVisible(element),
+    );
+    const candidates =
+      selectorMatches.length > 0 ? selectorMatches : visibleGenericControls();
+    let best = null;
+    let bestScore = 0;
+    for (const element of candidates) {
+      if (!genericCapabilityInclude(capability, element, selector)) {
+        continue;
+      }
+      let score = 1;
+      if (isComposerAdjacent(element)) {
+        score += 5;
+      }
+      if (selectorTextMatches(element, selector)) {
+        score += 3;
+      }
+      if (element.closest(popupRootSelector)) {
+        score += 2;
+      }
+      if (score > bestScore) {
+        best = element;
+        bestScore = score;
+      }
+    }
+    return best;
+  };
+
+  const createGenericStrategyFromPackEntry = (capability, entry) => ({
+    id: entry.strategy_id,
+    score: entry.score,
+    find: () => {
+      if (entry.kind === "hotkey") {
+        return null;
+      }
+      if (entry.kind === "css") {
+        return firstGenericMatch(
+          capability,
+          safeQueryAll(documentRoot, entry.selector).filter(isVisible),
+          entry.selector,
+        );
+      }
+      if (entry.kind === "text") {
+        return genericTextMatch(capability, entry.selector);
+      }
+      if (entry.kind === "aria_role") {
+        return genericAriaRoleMatch(capability, entry.selector);
+      }
+      if (entry.kind === "dom_neighborhood") {
+        return genericDomNeighborhoodMatch(capability, entry.selector);
+      }
+      return null;
+    },
+  });
 
   const definitions = [
     {
@@ -774,6 +1068,8 @@ export function probeDocument(options = {}) {
       strategies,
       selectorPack,
       preferredStrategies,
+      createGenericStrategy: (entry) =>
+        createGenericStrategyFromPackEntry(capability, entry),
     });
 
   const aliases = createAliasBuckets();

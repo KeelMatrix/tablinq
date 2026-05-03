@@ -4,7 +4,7 @@ function createCapabilityDiscoveryRuntime({
   composerRuntime,
   reportHelpers,
 }) {
-  const { unique, hasToken } = textUtils;
+  const { normalizeText, unique, hasToken } = textUtils;
   const {
     isVisible,
     firstVisible,
@@ -46,6 +46,20 @@ function createCapabilityDiscoveryRuntime({
     (hasToken(name, ["thinking"]) &&
       !hasToken(name, ["standard", "extended", "effort"]));
 
+  const controlledPopupHasToken = (element, tokens) => {
+    const controlledId = element?.getAttribute?.("aria-controls");
+    if (!controlledId) {
+      return false;
+    }
+    const controlled = document.getElementById(controlledId);
+    if (!(controlled instanceof HTMLElement)) {
+      return false;
+    }
+    return visibleUnique(controlled.querySelectorAll(menuOptionSelector)).some(
+      (option) => hasToken(accessibleName(option), tokens),
+    );
+  };
+
   const isComposerRightModelPickerTrigger = (element) =>
     element instanceof HTMLElement &&
     element.matches("button.__composer-pill[aria-haspopup]") &&
@@ -60,7 +74,13 @@ function createCapabilityDiscoveryRuntime({
       element.matches("button[aria-label='Switch model']") ||
       element.matches("button[data-testid='model-switcher-dropdown-button']") ||
       isComposerRightModelPickerTrigger(element) ||
-      hasToken(accessibleName(element), ["chatgpt", "model", "selector"]));
+      hasToken(accessibleName(element), [
+        "chatgpt",
+        "model",
+        "selector",
+        "engine",
+      ]) ||
+      controlledPopupHasToken(element, ["instant", "thinking", "pro"]));
 
   const isEffortPickerTrigger = (element) =>
     element instanceof HTMLElement &&
@@ -78,6 +98,8 @@ function createCapabilityDiscoveryRuntime({
         )) ||
       hasToken(accessibleName(element), [
         "thinking",
+        "reasoning",
+        "depth",
         "standard",
         "extended",
         "effort",
@@ -139,22 +161,90 @@ function createCapabilityDiscoveryRuntime({
         "more",
       ]));
 
-  const isModelOption = (element) =>
-    element instanceof HTMLElement &&
-    !isModelPickerTrigger(element) &&
-    isPopupOption(element) &&
-    element.closest(popupRootSelector) !== null &&
-    hasToken(accessibleName(element), ["instant", "thinking", "pro"]);
+  const nameLooksLikeEffortOption = (name) =>
+    hasToken(name, ["standard", "extended", "effort", "depth", "balanced"]);
 
-  const isEffortOption = (element) =>
-    element instanceof HTMLElement &&
-    !isEffortPickerTrigger(element) &&
-    !(element.getAttribute("data-testid") ?? "").startsWith(
-      "model-switcher-",
-    ) &&
-    isPopupOption(element) &&
-    element.closest(popupRootSelector) !== null &&
-    hasToken(accessibleName(element), ["standard", "extended"]);
+  const nameLooksLikeModelOption = (name) =>
+    hasToken(name, [
+      "instant",
+      "thinking",
+      "pro",
+      "gpt",
+      "model",
+      "fast",
+      "deep",
+      "deeper",
+    ]);
+
+  const popupRootLooksLikeEffort = (element) => {
+    const root = element.closest(popupRootSelector);
+    if (!(root instanceof HTMLElement)) {
+      return false;
+    }
+    const fingerprint = normalizeText(
+      [
+        root.id,
+        root.getAttribute("aria-label") ?? "",
+        root.getAttribute("aria-labelledby") ?? "",
+        root.getAttribute("data-testid") ?? "",
+      ].join(" "),
+    );
+    return hasToken(fingerprint, ["effort", "reasoning", "depth"]);
+  };
+
+  const isModelOption = (element) => {
+    if (
+      !(element instanceof HTMLElement) ||
+      isModelPickerTrigger(element) ||
+      !isPopupOption(element) ||
+      element.closest(popupRootSelector) === null
+    ) {
+      return false;
+    }
+    const testId = element.getAttribute("data-testid") ?? "";
+    const name = accessibleName(element);
+    if (testId.startsWith("model-switcher-") && !testId.includes("effort")) {
+      return true;
+    }
+    if (element.hasAttribute("data-model") || nameLooksLikeModelOption(name)) {
+      return true;
+    }
+    return (
+      !popupRootLooksLikeEffort(element) &&
+      !nameLooksLikeEffortOption(name) &&
+      !hasToken(name, [
+        "search",
+        "web search",
+        "browse online",
+        "browse the web",
+        "research",
+        "download",
+        "upload",
+      ])
+    );
+  };
+
+  const isEffortOption = (element) => {
+    if (
+      !(element instanceof HTMLElement) ||
+      isEffortPickerTrigger(element) ||
+      !isPopupOption(element) ||
+      element.closest(popupRootSelector) === null
+    ) {
+      return false;
+    }
+    const testId = element.getAttribute("data-testid") ?? "";
+    const name = accessibleName(element);
+    if (testId.startsWith("model-switcher-") && !testId.includes("effort")) {
+      return false;
+    }
+    return (
+      element.hasAttribute("data-effort") ||
+      nameLooksLikeEffortOption(name) ||
+      (popupRootLooksLikeEffort(element) &&
+        !hasToken(name, ["instant", "model", "pro"]))
+    );
+  };
 
   const elementPathname = (element) => {
     if (!(element instanceof HTMLElement)) {
@@ -177,7 +267,9 @@ function createCapabilityDiscoveryRuntime({
     pathname.split("/").filter(Boolean).includes(segment);
 
   const isSearchModeLabel = (name) =>
-    (hasToken(name, ["search"]) || hasToken(name, ["web search"])) &&
+    (hasToken(name, ["search"]) ||
+      hasToken(name, ["web search"]) ||
+      hasToken(name, ["browse online", "browse the web"])) &&
     !name.includes("search chats");
 
   const isSearchChip = (element) =>
@@ -337,6 +429,13 @@ function createCapabilityDiscoveryRuntime({
         "button[aria-haspopup][aria-label*='effort']",
       ],
       aliases,
+      tokens: unique([
+        ...aliases,
+        "effort",
+        "reasoning",
+        "depth",
+        ...fallbackTokens,
+      ]),
       fallbackTokens: unique([
         "effort",
         "reasoning",
