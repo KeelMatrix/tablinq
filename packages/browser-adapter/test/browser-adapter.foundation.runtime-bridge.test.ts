@@ -373,6 +373,170 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
     dom.window.close();
   });
 
+  it("keeps selectorless runtime actions anchored to the active composer", async () => {
+    const runtimeSource = loadPageAdapterSource();
+    const dom = new JSDOM(
+      `<!doctype html><html><body data-stream-state="done" data-selected-model="thinking" data-selected-effort="extended">
+        <main>
+          <section id="selectorless-decoys">
+            <button type="button" aria-label="Search chats">Search chats</button>
+            <button type="button" id="stale-send" aria-label="Send prompt">Send</button>
+          </section>
+          <form>
+            <div role="textbox" aria-label="Message ChatGPT" contenteditable="true"></div>
+            <button
+              id="engine-trigger"
+              type="button"
+              aria-label="Choose engine"
+              aria-haspopup="listbox"
+              aria-controls="engine-list"
+              aria-expanded="false"
+            >Engine</button>
+            <button
+              id="depth-trigger"
+              type="button"
+              aria-label="Reasoning depth"
+              aria-haspopup="listbox"
+              aria-controls="depth-list"
+              aria-expanded="false"
+            >Depth</button>
+            <button
+              id="tools-trigger"
+              type="button"
+              aria-label="Add files and more"
+              aria-haspopup="listbox"
+              aria-controls="tools-list"
+              aria-expanded="false"
+            >Tools</button>
+            <button id="active-send" type="button" aria-label="Send message">Send</button>
+          </form>
+          <aside>
+            <div id="engine-list" role="listbox" hidden>
+              <div id="engine-instant" role="option" data-model="instant" aria-selected="false" hidden>Instant</div>
+              <div id="engine-thinking" role="option" data-model="thinking" aria-selected="true" hidden>Thinking</div>
+            </div>
+            <div id="depth-list" role="listbox" hidden>
+              <div id="depth-standard" role="option" data-effort="standard" aria-selected="false" hidden>Standard</div>
+              <div id="depth-extended" role="option" data-effort="extended" aria-selected="true" hidden>Extended</div>
+            </div>
+            <div id="tools-list" role="listbox" hidden>
+              <div id="browse-web" role="option" data-mode="search" aria-selected="false" hidden>Browse the web</div>
+            </div>
+          </aside>
+        </main>
+      </body></html>`,
+      {
+        url: "https://chatgpt.com/c/conv-selectorless-runtime",
+        runScripts: "outside-only",
+      },
+    );
+    const { window } = dom;
+    const adapter = window.eval(
+      `${runtimeSource.replace(
+        /^export\s+/gm,
+        "",
+      )}\ncreateTablinqPageAdapterRuntime();`,
+    );
+    const openControlled = (triggerId: string) => {
+      const trigger = window.document.getElementById(triggerId);
+      if (!(trigger instanceof window.HTMLElement)) {
+        throw new Error(`missing ${triggerId}`);
+      }
+      const root = window.document.getElementById(
+        trigger.getAttribute("aria-controls") ?? "",
+      );
+      if (!(root instanceof window.HTMLElement)) {
+        throw new Error(`missing popup for ${triggerId}`);
+      }
+      trigger.addEventListener("click", () => {
+        trigger.setAttribute("aria-expanded", "true");
+        root.removeAttribute("hidden");
+        root
+          .querySelectorAll("[role='option']")
+          .forEach((element) => element.removeAttribute("hidden"));
+      });
+    };
+    openControlled("engine-trigger");
+    openControlled("depth-trigger");
+    openControlled("tools-trigger");
+
+    window.document
+      .querySelector("#engine-instant")
+      ?.addEventListener("click", () => {
+        window.document.body.dataset.selectedModel = "instant";
+      });
+    window.document
+      .querySelector("#depth-standard")
+      ?.addEventListener("click", () => {
+        window.document.body.dataset.selectedEffort = "standard";
+      });
+    window.document
+      .querySelector("#browse-web")
+      ?.addEventListener("click", () => {
+        window.document.body.dataset.selectedMode = "search";
+      });
+    window.document
+      .querySelector("#stale-send")
+      ?.addEventListener("click", () => {
+        window.document.body.dataset.staleSendClicks = String(
+          Number.parseInt(
+            window.document.body.dataset.staleSendClicks ?? "0",
+            10,
+          ) + 1,
+        );
+      });
+    window.document
+      .querySelector("#active-send")
+      ?.addEventListener("click", () => {
+        window.document.body.dataset.submitted = "true";
+      });
+
+    expect(adapter.composerReady()).toBe(true);
+    expect(adapter.readSubmitState()).toMatchObject({
+      submitVisible: true,
+      submitEnabled: true,
+      keyboardReady: false,
+    });
+
+    adapter.fillComposer({ prompt: "Selectorless runtime prompt" });
+    expect(
+      window.document.querySelector("[role='textbox']")?.textContent?.trim(),
+    ).toBe("Selectorless runtime prompt");
+
+    await adapter.applyAskConfiguration({
+      report: {
+        matrix: {
+          search_mode_visible: true,
+          research_mode_visible: false,
+          model_picker_visible: true,
+          thinking_effort_visible: true,
+        },
+        aliases: {
+          modes: { search: ["browse the web"] },
+          model_classes: {
+            instant: ["instant"],
+            thinking: ["thinking"],
+          },
+          efforts: {
+            standard: ["standard"],
+            extended: ["extended"],
+          },
+        },
+      },
+      request: {
+        mode: "search",
+        modelClass: "instant",
+      },
+    });
+    expect(window.document.body.dataset.selectedMode).toBe("search");
+    expect(window.document.body.dataset.selectedModel).toBe("instant");
+
+    expect(adapter.clickSubmit()).toBe(true);
+    expect(window.document.body.dataset.submitted).toBe("true");
+    expect(window.document.body.dataset.staleSendClicks ?? "0").toBe("0");
+    dom.window.close();
+  });
+
   it("serializes rich assistant markdown into terminal-safe markdown text", async () => {
     const runtimeSource = loadPageAdapterSource();
     const expected = [

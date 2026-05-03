@@ -82,6 +82,13 @@ export function createScenarioState(window) {
     requestedInitialEffort === "extended"
       ? requestedInitialEffort
       : "standard";
+  const requestedDriftProfile = params.get("drift_profile");
+  const driftProfile =
+    requestedDriftProfile === "semantic" ||
+    requestedDriftProfile === "selectorless" ||
+    requestedDriftProfile === "ambiguous"
+      ? requestedDriftProfile
+      : null;
 
   return {
     params,
@@ -117,6 +124,7 @@ export function createScenarioState(window) {
     searchResetsModelOnActivate:
       params.get("search_resets_model_on_activate") === "true",
     effortInConfigureModal: params.get("effort_in_configure_modal") === "true",
+    driftProfile,
     initialModel,
     initialEffort,
     missingControls: new Set(

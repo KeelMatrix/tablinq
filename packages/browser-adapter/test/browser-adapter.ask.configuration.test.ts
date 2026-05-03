@@ -793,6 +793,223 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     await adapter.shutdown();
   });
 
+  it("activates Search under semantic drift without ChatGPT test ids", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      driftProfile: "semantic",
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-semantic-drift-search",
+        prompt: "semantic drift search",
+        mode: "search",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      searchChipVisible: !document
+        .querySelector("#search-chip")
+        ?.hasAttribute("hidden"),
+      toolsMenuClicks: document.body.dataset.toolsMenuClicks ?? "0",
+      searchToolClicks: document.body.dataset.searchToolClicks ?? "0",
+    }));
+
+    expect(result.output_text).toContain(
+      "Fake response for: semantic drift search",
+    );
+    expect(state).toEqual({
+      mode: "search",
+      searchChipVisible: true,
+      toolsMenuClicks: "1",
+      searchToolClicks: "1",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("selects Thinking Standard under semantic drift", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      driftProfile: "semantic",
+      initialModel: "instant",
+      initialEffort: "extended",
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-semantic-drift-thinking-standard",
+        prompt: "semantic drift thinking standard",
+        mode: "search",
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+    }));
+
+    expect(result.output_text).toContain(
+      "Fake response for: semantic drift thinking standard",
+    );
+    expect(state).toEqual({
+      mode: "search",
+      model: "thinking",
+      effort: "standard",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("selects Instant under selectorless drift without clicking decoys", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      driftProfile: "selectorless",
+      initialModel: "thinking",
+      initialEffort: "standard",
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-selectorless-drift-instant",
+        prompt: "selectorless drift instant",
+        modelClass: "instant",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      selectorlessStaleSendClicks:
+        document.body.dataset.selectorlessStaleSendClicks ?? "0",
+    }));
+
+    expect(result.output_text).toContain(
+      "Fake response for: selectorless drift instant",
+    );
+    expect(state).toEqual({
+      model: "instant",
+      modelMenuClicks: "1",
+      selectorlessStaleSendClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("clears stale search and tool chips under selectorless drift", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      driftProfile: "selectorless",
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      document.body.dataset.selectedMode = "search";
+      (
+        window as unknown as { syncSelectedState?: () => void }
+      ).syncSelectedState?.();
+      const composer = document.querySelector("form");
+      if (!(composer instanceof HTMLElement)) {
+        throw new Error("selectorless composer missing");
+      }
+      for (const label of ["Deep research", "Canvas"]) {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.textContent = label;
+        chip.setAttribute("aria-label", `${label}, click to remove`);
+        chip.addEventListener("click", () => {
+          chip.remove();
+        });
+        composer.appendChild(chip);
+      }
+    });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-selectorless-drift-clears-chips",
+        prompt: "selectorless drift clear chips",
+        mode: "normal",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      remainingToolChips: Array.from(
+        document.querySelectorAll("form button[aria-label*='remove' i]"),
+      ).map((element) => element.textContent),
+      toolsMenuClicks: document.body.dataset.toolsMenuClicks ?? "0",
+      searchToolClicks: document.body.dataset.searchToolClicks ?? "0",
+      selectorlessStaleSendClicks:
+        document.body.dataset.selectorlessStaleSendClicks ?? "0",
+    }));
+
+    expect(result.output_text).toContain(
+      "Fake response for: selectorless drift clear chips",
+    );
+    expect(state).toEqual({
+      mode: "normal",
+      remainingToolChips: [],
+      toolsMenuClicks: "0",
+      searchToolClicks: "0",
+      selectorlessStaleSendClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("does not reopen tools when semantic drift Search is already selected", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      driftProfile: "semantic",
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      document.body.dataset.selectedMode = "search";
+      (
+        window as unknown as { syncSelectedState?: () => void }
+      ).syncSelectedState?.();
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-semantic-drift-search-active",
+        prompt: "semantic drift keep search active",
+        mode: "search",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      mode: document.body.dataset.selectedMode,
+      toolsMenuClicks: document.body.dataset.toolsMenuClicks ?? "0",
+      searchToolClicks: document.body.dataset.searchToolClicks ?? "0",
+      searchChipVisible: !document
+        .querySelector("#search-chip")
+        ?.hasAttribute("hidden"),
+    }));
+
+    expect(state).toEqual({
+      mode: "search",
+      toolsMenuClicks: "0",
+      searchToolClicks: "0",
+      searchChipVisible: true,
+    });
+
+    await adapter.shutdown();
+  });
+
   it("retries search activation only when Web search remains unchecked", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
@@ -1063,6 +1280,71 @@ describe("browser adapter ask: mode, model, and effort configuration", () => {
     ).rejects.toThrow(
       /ui drift: could not find a concrete control for model=instant/i,
     );
+
+    await adapter.shutdown();
+  });
+
+  it("fails safely with diagnostics when drift removes reliable model signals", async () => {
+    const server = await harness.startServer();
+    const { adapter, root } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
+        variant: "menu",
+        driftProfile: "ambiguous",
+        initialModel: "instant",
+      },
+    );
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-ambiguous-drift-thinking",
+          prompt: "ambiguous drift should fail",
+          modelClass: "thinking",
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/capability missing|ui drift/i);
+
+    const pageState = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      selectedModel: document.body.dataset.selectedModel,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+    }));
+    expect(pageState).toEqual({
+      selectedModel: "instant",
+      modelMenuClicks: "0",
+      modelOptionClicks: "0",
+    });
+
+    const diagnostics = await adapter.diagnostics(path.join(root, "bundle"));
+    expect(diagnostics.current_url).toContain(server.url);
+    expect(diagnostics.capability_matrix).toMatchObject({
+      composer_ready: true,
+      submit_available: true,
+      model_picker_visible: false,
+    });
+    expect(diagnostics.dom_snapshot).toContain('"dom_text"');
+    expect(diagnostics.aria_snapshot).toContain('"role"');
+    expect(diagnostics.selector_pack?.pack_id).toBe("chatgpt-default");
+    expect(Array.isArray(diagnostics.strategy_telemetry)).toBe(true);
+    for (const capability of [
+      "composer_ready",
+      "submit_available",
+      "model_picker_visible",
+      "thinking_effort_visible",
+      "search_mode_visible",
+      "research_mode_visible",
+      "upload_control_visible",
+      "downloadable_artifacts_observable",
+    ]) {
+      expect(
+        diagnostics.strategy_attempts.some(
+          (attempt) => attempt.capability === capability,
+        ),
+      ).toBe(true);
+    }
 
     await adapter.shutdown();
   });

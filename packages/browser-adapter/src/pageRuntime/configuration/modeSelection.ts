@@ -296,8 +296,12 @@ async function findVisibleSearchModeChip(
       [
         "[data-testid='composer-root'] button.__composer-pill[aria-label*='Search' i][aria-label*='remove' i]",
         "[data-testid='composer-root'] button.__composer-pill[aria-label*='Search' i]",
+        "[data-testid='composer-root'] button[aria-label*='Search' i][aria-label*='remove' i]",
+        "[data-testid='composer-root'] button[aria-label*='Search' i][data-selected='true']",
         "form button.__composer-pill[aria-label*='Search' i][aria-label*='remove' i]",
         "form button.__composer-pill[aria-label*='Search' i]",
+        "form button[aria-label*='Search' i][aria-label*='remove' i]",
+        "form button[aria-label*='Search' i][data-selected='true']",
       ].join(", "),
     ),
     timeoutMs,

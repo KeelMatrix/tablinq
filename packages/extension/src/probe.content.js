@@ -485,6 +485,30 @@
         (container) => container === element || container.contains(element),
       );
 
+    const composerAdjacencyScore = (element) => {
+      const composer = findTextbox();
+      if (
+        !(composer instanceof HTMLElement) ||
+        !(element instanceof HTMLElement)
+      ) {
+        return 0;
+      }
+      let score = 0;
+      if (element.closest("form") === composer.closest("form")) {
+        score += 6;
+      }
+      if (element.parentElement === composer.parentElement) {
+        score += 4;
+      }
+      if (element.closest("section") === composer.closest("section")) {
+        score += 2;
+      }
+      if (element.closest("main") === composer.closest("main")) {
+        score += 1;
+      }
+      return score;
+    };
+
     const findComposerAdjacentNamedControl = (tokens, options = {}) =>
       findNamedControl(tokens, {
         ...options,
@@ -768,38 +792,43 @@
     };
 
     const findSubmitNearComposer = () => {
-      const explicit = firstVisibleBySelectors([
+      const exact = firstVisibleBySelectors([
         "[data-action='submit']",
         "[data-testid='send-button']",
         "button[aria-label='Submit prompt']",
-        "button[aria-label*='Send']",
         "button[type='submit']",
       ]);
-      if (explicit) {
-        return explicit;
+      if (exact) {
+        return exact;
       }
       const composer = findTextbox();
       const containers = composer
         ? [
-            composer.parentElement,
             composer.closest("form"),
+            composer.parentElement,
             composer.closest("section"),
+            composer.closest("main"),
           ]
         : [];
       for (const container of containers) {
         if (!container) {
           continue;
         }
-        const candidate = firstVisible(
-          container.querySelectorAll(
-            "button, [role='button'], input[type='submit']",
-          ),
-        );
+        const candidate =
+          firstVisible(
+            container.querySelectorAll(
+              [
+                "button[aria-label*='Send']",
+                "button[aria-label*='Submit']",
+                "button, [role='button'], input[type='submit']",
+              ].join(", "),
+            ),
+          ) ?? null;
         if (candidate) {
           return candidate;
         }
       }
-      return null;
+      return firstVisibleBySelector("button[aria-label*='Send']");
     };
 
     const findUploadLabel = () => {
@@ -1076,7 +1105,7 @@
         }
         let score = 1;
         if (isComposerAdjacent(element)) {
-          score += 5;
+          score += 2 + composerAdjacencyScore(element);
         }
         if (selectorTextMatches(element, selector)) {
           score += 3;
@@ -1176,12 +1205,7 @@
           {
             id: "chatgpt-send-button",
             score: 0.97,
-            find: () =>
-              firstVisibleBySelectors([
-                "[data-testid='send-button']",
-                "button[aria-label='Send prompt']",
-                "button[aria-label*='Send']",
-              ]),
+            find: () => findSubmitNearComposer(),
           },
           {
             id: "button-send",

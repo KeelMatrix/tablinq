@@ -21,6 +21,8 @@ export function createMenuRuntime({
     "#tablinq-intelligence-modal",
   );
   const modalEffortCombobox = document.querySelector("#modal-effort-combobox");
+  const menuChoiceSelector =
+    "[role='menuitemradio'], [role='menuitem'], [role='option']";
 
   function applyPressedState(selector, selectedValue) {
     document.querySelectorAll(selector).forEach((element) => {
@@ -40,6 +42,7 @@ export function createMenuRuntime({
       return;
     }
     element.setAttribute("aria-checked", selected ? "true" : "false");
+    element.setAttribute("aria-selected", selected ? "true" : "false");
     element.dataset.selected = selected ? "true" : "false";
   }
 
@@ -126,11 +129,9 @@ export function createMenuRuntime({
           : "Instant";
     }
     modelMenu?.toggleAttribute("hidden", !modelMenuOpen);
-    modelMenu
-      ?.querySelectorAll("[role='menuitemradio'], [role='menuitem']")
-      .forEach((element) => {
-        element.toggleAttribute("hidden", !modelMenuOpen);
-      });
+    modelMenu?.querySelectorAll(menuChoiceSelector).forEach((element) => {
+      element.toggleAttribute("hidden", !modelMenuOpen);
+    });
 
     const currentUiVariant = variant === "live" || variant === "menu";
     const effortVisible =
@@ -159,11 +160,9 @@ export function createMenuRuntime({
       (nestedEffortTrigger instanceof HTMLElement &&
         nestedEffortTrigger.getAttribute("aria-expanded") === "true");
     effortMenu?.toggleAttribute("hidden", !effortMenuOpen);
-    effortMenu
-      ?.querySelectorAll("[role='menuitemradio']")
-      .forEach((element) => {
-        element.toggleAttribute("hidden", !effortMenuOpen);
-      });
+    effortMenu?.querySelectorAll(menuChoiceSelector).forEach((element) => {
+      element.toggleAttribute("hidden", !effortMenuOpen);
+    });
 
     const searchSelected = selectedMode === "search";
     const searchChip = document.querySelector("#search-chip");
@@ -179,11 +178,9 @@ export function createMenuRuntime({
     const toolsMenuOpen =
       composerToolsTrigger?.getAttribute("aria-expanded") === "true";
     toolsMenu?.toggleAttribute("hidden", !toolsMenuOpen);
-    toolsMenu
-      ?.querySelectorAll("[role='menuitemradio'], [role='menuitem']")
-      .forEach((element) => {
-        element.toggleAttribute("hidden", !toolsMenuOpen);
-      });
+    toolsMenu?.querySelectorAll(menuChoiceSelector).forEach((element) => {
+      element.toggleAttribute("hidden", !toolsMenuOpen);
+    });
     syncModernMenuOption("#tool-option-web-search", searchSelected);
 
     const modalOpen = document.body.dataset.intelligenceModalOpen === "true";

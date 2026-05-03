@@ -56,6 +56,7 @@ export type HarnessUrlOptions = {
   conversationStyle?: "query" | "path";
   initialModel?: "instant" | "thinking";
   initialEffort?: "standard" | "extended";
+  driftProfile?: "semantic" | "selectorless" | "ambiguous";
   searchClicksBeforeActivate?: number;
   searchResetsModelOnActivate?: boolean;
   effortInConfigureModal?: boolean;
@@ -85,6 +86,9 @@ export function withHarnessUrl(
   }
   if (options.initialEffort) {
     url.searchParams.set("initial_effort", options.initialEffort);
+  }
+  if (options.driftProfile) {
+    url.searchParams.set("drift_profile", options.driftProfile);
   }
   if (options.searchClicksBeforeActivate) {
     url.searchParams.set(
