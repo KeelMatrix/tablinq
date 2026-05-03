@@ -13,6 +13,10 @@ const PROVIDER_CONVERSATION_LOAD_TIMEOUT_MS = 5_000;
 const PROVIDER_CONVERSATION_LOADED_STABLE_MS = 500;
 const PROVIDER_CONVERSATION_LOAD_POLL_MS = 150;
 
+type ProviderReachableResult =
+  | { ok: true }
+  | { ok: false; timedOut: boolean; reason?: string };
+
 class AskProviderFailure extends Error {
   readonly code = PROVIDER_GENERATION_FAILURE_CODE;
   readonly currentUrl: string;
@@ -57,7 +61,9 @@ export function throwIfProviderGenerationFailed(snapshot: AskSnapshot): void {
 }
 
 export async function ensureProviderReachable(page: Page): Promise<void> {
-  const result = await page.evaluate(async (timeoutMs) => {
+  const result = (await page.evaluate(
+    `(async () => {
+    const timeoutMs = ${PROVIDER_NETWORK_PREFLIGHT_TIMEOUT_MS};
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -69,22 +75,23 @@ export async function ensureProviderReachable(page: Page): Promise<void> {
       });
       if (!response.ok) {
         return {
-          ok: false as const,
+          ok: false,
           timedOut: false,
-          reason: `status ${response.status}`,
+          reason: "status " + response.status,
         };
       }
-      return { ok: true as const };
+      return { ok: true };
     } catch (error) {
       return {
-        ok: false as const,
+        ok: false,
         timedOut: controller.signal.aborted,
         reason: error instanceof Error ? error.message : String(error),
       };
     } finally {
       window.clearTimeout(timeoutId);
     }
-  }, PROVIDER_NETWORK_PREFLIGHT_TIMEOUT_MS);
+  })()`,
+  )) as ProviderReachableResult;
   if (result.ok) {
     return;
   }
@@ -155,23 +162,7 @@ type ProviderConversationLoadState = {
 async function readProviderConversationLoadState(
   page: Page,
 ): Promise<ProviderConversationLoadState> {
-  return page.evaluate(() => {
-    const visibleText = (element: Element): string => {
-      if (!(element instanceof HTMLElement)) {
-        return "";
-      }
-      const style = window.getComputedStyle(element);
-      if (
-        style.display === "none" ||
-        style.visibility === "hidden" ||
-        style.opacity === "0" ||
-        element.getClientRects().length === 0
-      ) {
-        return "";
-      }
-      return (element.textContent ?? "").replace(/\s+/g, " ").trim();
-    };
-
+  return page.evaluate(`(() => {
     const candidates = [
       ...Array.from(document.querySelectorAll('[role="alert"]')),
       ...Array.from(document.querySelectorAll("[aria-live]")),
@@ -179,14 +170,14 @@ async function readProviderConversationLoadState(
     ];
     const loadErrorText =
       candidates
-        .map(visibleText)
+        .map((element) => (element.textContent ?? "").replace(/\\s+/g, " ").trim())
         .find((text) => /unable to load conversation/i.test(text)) ?? null;
 
     return {
       currentUrl: window.location.href,
       loadErrorText,
     };
-  });
+  })()`);
 }
 
 function sleep(ms: number): Promise<void> {

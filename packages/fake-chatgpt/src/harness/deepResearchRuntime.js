@@ -206,7 +206,7 @@ export function createDeepResearchRuntime({
       state.waitTicks += 1;
       setResearchState("waiting_for_sources", "gathering sources");
       persistResearchState(state);
-      if (state.waitTicks >= 3) {
+      if (state.waitTicks >= 10) {
         state.phase = "running";
       }
       timers.set(() => tickResearch(state), 80);
