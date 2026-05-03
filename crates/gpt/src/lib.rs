@@ -7,7 +7,7 @@ mod terminal;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
-use shared_protocol::{CancelJobCommand, DaemonRequest, PullArtifactCommand};
+use shared_protocol::{CancelJobCommand, ClearStateResult, DaemonRequest, PullArtifactCommand};
 use std::path::Path;
 
 use crate::browser::run_browser_command;
@@ -19,11 +19,14 @@ use crate::terminal::{
 };
 
 pub use crate::cli::{
-    ArtifactsCommand, AskArgs, BrowserCommand, Cli, CliEffort, CliMode, CliModelClass, Command,
-    ConfigCommand, ConversationsCommand, DaemonCommand, GatewayCommand, JobsCommand, ResearchArgs,
-    SessionsCommand, VersionArgs,
+    ArtifactsCommand, AskArgs, BrowserCommand, ClearArgs, Cli, CliEffort, CliMode, CliModelClass,
+    Command, ConfigCommand, ConversationsCommand, DaemonCommand, GatewayCommand, JobsCommand,
+    ResearchArgs, SessionsCommand, VersionArgs,
 };
 pub use crate::terminal::format_cli_error;
+
+const CLEAR_SAFETY_MESSAGE: &str =
+    "Refusing to clear Tablinq state. Re-run as: gpt clear --all --force";
 
 pub fn run(cli: &Cli) -> Result<String> {
     render_execution(execute(cli)?)
@@ -135,6 +138,7 @@ fn execute(cli: &Cli) -> Result<CliExecution> {
             execute_research_with_terminal_presentation(cli.state_root.as_deref(), args)?;
             Ok(CliExecution::Printed)
         }
+        Command::Clear(args) => run_clear_command(cli.state_root.as_deref(), args),
         Command::Capabilities => Ok(CliExecution::Json(send_daemon_request(
             cli.state_root.as_deref(),
             DaemonRequest::Capabilities,
@@ -189,6 +193,31 @@ fn render_conversation_selection(
     )))
 }
 
+fn run_clear_command(state_root: Option<&Path>, args: &ClearArgs) -> Result<CliExecution> {
+    if !(args.all && args.force) {
+        anyhow::bail!(CLEAR_SAFETY_MESSAGE);
+    }
+
+    let response = send_daemon_response(state_root, DaemonRequest::ClearAllState)?;
+    if let shared_protocol::DaemonResponse::Error(error) = &response {
+        anyhow::bail!("{}", error.message);
+    }
+    let shared_protocol::DaemonResponse::ClearState(result) = response else {
+        anyhow::bail!("unexpected clear response: {response:?}");
+    };
+    Ok(CliExecution::Text(format_clear_result(&result)))
+}
+
+fn format_clear_result(result: &ClearStateResult) -> String {
+    format!(
+        "Cleared Tablinq state: {} database rows, {} artifact files deleted, {} missing, {} failed.",
+        result.database_rows_deleted(),
+        result.artifact_files_deleted,
+        result.artifact_files_missing,
+        result.artifact_files_failed
+    )
+}
+
 pub(crate) fn render_execution(execution: CliExecution) -> Result<String> {
     match execution {
         CliExecution::Text(text) => Ok(text),
@@ -212,5 +241,123 @@ fn run_artifacts_command(state_root: Option<&Path>, command: &ArtifactsCommand) 
                 destination_dir: destination_dir.display().to_string(),
             }),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use clap::Parser;
+    use shared_protocol::{ArtifactMetadata, JobKind, JobStatus};
+    use std::thread;
+    use std::time::Duration;
+    use tempfile::tempdir;
+
+    #[test]
+    fn clear_command_refuses_without_all_and_force() {
+        let cli = Cli::parse_from(["gpt", "clear", "--all"]);
+
+        let err = run(&cli).unwrap_err();
+
+        assert!(format!("{err:#}").contains("gpt clear --all --force"));
+    }
+
+    #[test]
+    fn clear_all_force_clears_sessions_conversations_jobs_artifacts_and_files() {
+        let dir = tempdir().unwrap();
+        let config = gptd::AppConfig::load_or_create(Some(dir.path())).unwrap();
+        let artifact_path = dir.path().join("artifact.txt");
+        std::fs::write(&artifact_path, "artifact").unwrap();
+        seed_clear_fixture(&config, artifact_path.display().to_string());
+        let daemon = start_test_daemon(config.clone());
+
+        let cli = Cli::parse_from([
+            "gpt",
+            "--state-root",
+            dir.path().to_str().unwrap(),
+            "clear",
+            "--all",
+            "--force",
+        ]);
+        let output = run(&cli).unwrap();
+
+        assert!(output.contains("Cleared Tablinq state"));
+        assert!(output.contains("1 artifact files deleted"));
+        assert!(!artifact_path.exists());
+        let db = gptd::Database::open(&config.paths.db_path).unwrap();
+        assert!(db.list_sessions().unwrap().sessions.is_empty());
+        assert!(db.list_conversations().unwrap().conversations.is_empty());
+        assert!(db.list_jobs().unwrap().jobs.is_empty());
+        assert!(db.list_artifacts().unwrap().artifacts.is_empty());
+
+        stop_test_daemon(&config, daemon);
+    }
+
+    fn seed_clear_fixture(config: &gptd::AppConfig, artifact_path: String) {
+        let db = gptd::Database::open(&config.paths.db_path).unwrap();
+        let now = Utc::now();
+        db.upsert_session(
+            "session-clear",
+            "Session",
+            Some("https://chatgpt.com/"),
+            now,
+        )
+        .unwrap();
+        db.upsert_conversation(
+            "conv-clear",
+            "session-clear",
+            "Conversation",
+            Some("https://chatgpt.com/c/conv-clear"),
+            Some("prompt"),
+            Some("response"),
+            None,
+            now,
+        )
+        .unwrap();
+        db.insert_job(
+            "job-clear",
+            JobStatus::Completed,
+            Some("complete"),
+            Some("conv-clear"),
+            now,
+            now,
+        )
+        .unwrap();
+        db.upsert_job_detail("job-clear", JobKind::Ask, Some("prompt"), None)
+            .unwrap();
+        db.insert_artifact(
+            &ArtifactMetadata {
+                artifact_id: "artifact-clear".to_owned(),
+                conversation_id: Some("conv-clear".to_owned()),
+                message_id: Some("msg-clear".to_owned()),
+                file_name: "artifact.txt".to_owned(),
+                content_type: "text/plain".to_owned(),
+                size_bytes: 8,
+                sha256: "sha-clear".to_owned(),
+                storage_path: artifact_path,
+            },
+            now,
+        )
+        .unwrap();
+        db.link_job_artifact("job-clear", "artifact-clear").unwrap();
+    }
+
+    fn start_test_daemon(config: gptd::AppConfig) -> thread::JoinHandle<anyhow::Result<()>> {
+        let endpoint = config.paths.ipc_endpoint.clone();
+        let service_config = config.clone();
+        let handle = thread::spawn(move || gptd::run_service(service_config));
+        for _ in 0..50 {
+            if gptd::daemon_is_responsive(&endpoint) {
+                return handle;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("test daemon did not start at {endpoint}");
+    }
+
+    fn stop_test_daemon(config: &gptd::AppConfig, handle: thread::JoinHandle<anyhow::Result<()>>) {
+        let _ = gptd::send_request(&config.paths.ipc_endpoint, &DaemonRequest::Shutdown);
+        handle.join().unwrap().unwrap();
     }
 }

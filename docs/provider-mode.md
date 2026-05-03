@@ -42,6 +42,8 @@ Recommended posture:
 
 - `GET /health`
 - `GET /ready`
+- `GET /admin/status`
+- `POST /admin/clear`
 - `GET /v1/models`
 - `GET /v1/capabilities`
 - `GET /v1/provider`
@@ -64,6 +66,8 @@ Recommended posture:
 - `GET /v1/artifacts/{id}`
 - `GET /v1/artifacts/{id}/content`
 - `POST /v1/requests/{request_id}/cancel`
+
+`POST /admin/clear` is destructive and requires an authenticated JSON body of `{"all":true,"force":true}`.
 
 ## Recommended models
 

@@ -246,6 +246,9 @@ Use the smallest reset that matches the problem:
 - delete `crash-bundles/`
 - delete `gateway-uploads/`
 
+To discard persisted Tablinq history and artifact metadata, run `gpt clear --all --force`.
+This deletes conversations, sessions, jobs, request history, recovery state, artifact rows, and artifact files; it keeps config and browser profiles.
+
 Tablinq no longer exposes a browser profile reset command.
 
 Do not delete the full state root unless you want to discard local history and config.

@@ -53,6 +53,47 @@ fn gateway_rejects_unauthorized_admin_requests() {
 }
 
 #[test]
+fn gateway_admin_clear_removes_database_state_and_artifact_files() {
+    let _guard = integration_lock();
+    let (dir, config) = test_config();
+    let artifact_path = dir.path().join("artifact.txt");
+    fs::write(&artifact_path, "artifact").unwrap();
+    seed_gateway_clear_fixture(&config, artifact_path.display().to_string());
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config.clone());
+    let snapshot = &gateway.snapshot;
+
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        crate::routes::ADMIN_CLEAR_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        br#"{"all":true,"force":true}"#,
+        3_000,
+    )
+    .unwrap();
+
+    assert_eq!(response.status_code, 200);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["cleared"], true);
+    assert_eq!(body["result"]["sessions_deleted"], 1);
+    assert_eq!(body["result"]["conversations_deleted"], 1);
+    assert_eq!(body["result"]["jobs_deleted"], 1);
+    assert_eq!(body["result"]["artifacts_deleted"], 1);
+    assert_eq!(body["result"]["artifact_files_deleted"], 1);
+    assert!(!artifact_path.exists());
+    let db = Database::open(&config.paths.db_path).unwrap();
+    assert!(db.list_sessions().unwrap().sessions.is_empty());
+    assert!(db.list_conversations().unwrap().conversations.is_empty());
+    assert!(db.list_jobs().unwrap().jobs.is_empty());
+    assert!(db.list_artifacts().unwrap().artifacts.is_empty());
+}
+
+#[test]
 fn gateway_propagates_request_ids_in_headers_and_logs() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();
@@ -185,4 +226,58 @@ fn gateway_health_and_admin_follow_daemon_browser_health() {
     stop_gateway_process(Some(&state_root)).unwrap();
     gateway_handle.join().unwrap().unwrap();
     stop_daemon(&state_root, daemon);
+}
+
+fn seed_gateway_clear_fixture(config: &AppConfig, artifact_path: String) {
+    let db = Database::open(&config.paths.db_path).unwrap();
+    let now = Utc::now();
+    db.upsert_session(
+        "session-clear",
+        "Session",
+        Some("https://chatgpt.com/"),
+        now,
+    )
+    .unwrap();
+    db.upsert_conversation(
+        "conv-clear",
+        "session-clear",
+        "Conversation",
+        Some("https://chatgpt.com/c/conv-clear"),
+        Some("prompt"),
+        Some("response"),
+        None,
+        now,
+    )
+    .unwrap();
+    db.insert_job(
+        "job-clear",
+        shared_protocol::JobStatus::Completed,
+        Some("complete"),
+        Some("conv-clear"),
+        now,
+        now,
+    )
+    .unwrap();
+    db.upsert_job_detail(
+        "job-clear",
+        shared_protocol::JobKind::Ask,
+        Some("prompt"),
+        None,
+    )
+    .unwrap();
+    db.insert_artifact(
+        &shared_protocol::ArtifactMetadata {
+            artifact_id: "artifact-clear".to_owned(),
+            conversation_id: Some("conv-clear".to_owned()),
+            message_id: Some("msg-clear".to_owned()),
+            file_name: "artifact.txt".to_owned(),
+            content_type: "text/plain".to_owned(),
+            size_bytes: 8,
+            sha256: "sha-clear".to_owned(),
+            storage_path: artifact_path,
+        },
+        now,
+    )
+    .unwrap();
+    db.link_job_artifact("job-clear", "artifact-clear").unwrap();
 }

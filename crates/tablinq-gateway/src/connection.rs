@@ -101,6 +101,14 @@ pub(crate) fn handle_connection(
             Ok(()) => health_admin::handle_admin_shutdown_request(shutdown, &context.request_id),
             Err(response) => response,
         },
+        Route::AdminClear => match authorize_request(config, &context.request, false) {
+            Ok(()) => health_admin::handle_admin_clear_request(
+                core,
+                &context.request.body,
+                &context.request_id,
+            )?,
+            Err(response) => response,
+        },
         Route::Models => match authorize_request(config, &context.request, true) {
             Ok(()) => metadata::handle_models_request(
                 core,

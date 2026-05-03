@@ -7,6 +7,7 @@ pub(crate) const HEALTH_PATH: &str = "/health";
 pub(crate) const READY_PATH: &str = "/ready";
 pub(crate) const ADMIN_STATUS_PATH: &str = "/admin/status";
 pub(crate) const ADMIN_SHUTDOWN_PATH: &str = "/admin/shutdown";
+pub(crate) const ADMIN_CLEAR_PATH: &str = "/admin/clear";
 pub(crate) const V1_MODELS_PATH: &str = "/v1/models";
 pub(crate) const V1_CAPABILITIES_PATH: &str = "/v1/capabilities";
 pub(crate) const V1_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
@@ -31,6 +32,7 @@ pub(crate) enum Route {
     Ready,
     AdminStatus,
     AdminShutdown,
+    AdminClear,
     Models,
     Capabilities,
     Provider,
@@ -62,6 +64,7 @@ pub(crate) fn match_route(method: &str, path: &str) -> Route {
         ("GET", READY_PATH) => Route::Ready,
         ("GET", ADMIN_STATUS_PATH) => Route::AdminStatus,
         ("POST", ADMIN_SHUTDOWN_PATH) => Route::AdminShutdown,
+        ("POST", ADMIN_CLEAR_PATH) => Route::AdminClear,
         ("GET", V1_MODELS_PATH) => Route::Models,
         ("GET", V1_CAPABILITIES_PATH) => Route::Capabilities,
         ("GET", V1_PROVIDER_PATH) => Route::Provider,
@@ -321,6 +324,7 @@ mod tests {
     #[test]
     fn route_matching_centralizes_dynamic_gateway_paths() {
         assert_eq!(match_route("GET", "/health"), Route::Health);
+        assert_eq!(match_route("POST", "/admin/clear"), Route::AdminClear);
         assert_eq!(
             match_route("GET", "/v1/conversations/conv-1/messages?limit=5"),
             Route::ConversationMessages

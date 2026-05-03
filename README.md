@@ -159,6 +159,7 @@ Common commands:
 - `gpt conversations new --json`
 - `gpt artifacts list`
 - `gpt artifacts pull last --to .`
+- `gpt clear --all --force`
 - `gpt browser start-debug`
 - `gpt browser attach`
 - `gpt browser connection-info`

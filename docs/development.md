@@ -83,6 +83,7 @@ Formatting:
 - `cargo run -p gpt -- conversations new --json`
 - `cargo run -p gpt -- artifacts list`
 - `cargo run -p gpt -- artifacts pull last --to .`
+- `cargo run -p gpt -- clear --all --force`
 - `cargo run -p gpt -- doctor`
 - `cargo run -p gpt -- capabilities`
 - `cargo run -p gpt -- config show`
