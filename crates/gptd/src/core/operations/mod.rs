@@ -1,4 +1,5 @@
 mod browser;
+mod clear;
 mod conversations;
 mod status;
 

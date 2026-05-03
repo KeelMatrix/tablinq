@@ -7,6 +7,7 @@ pub const CHROME_ATTACH_PROFILE_NOTE: &str = "Chrome attach-first uses a dedicat
 
 mod artifacts;
 mod browser;
+mod clear;
 mod commands;
 mod config;
 mod conversations;
@@ -20,6 +21,7 @@ mod validation;
 
 pub use artifacts::*;
 pub use browser::*;
+pub use clear::*;
 pub use commands::*;
 pub use config::*;
 pub use conversations::*;

@@ -1,9 +1,9 @@
 use crate::{
     AckEvent, ArtifactList, ArtifactPullResult, AskCommand, AskResult, BrowserOpenRequest,
-    BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot, ConfigSnapshot, ConversationList,
-    ConversationSelectCommand, ConversationSelection, DoctorReport, ErrorCode, EventPayload,
-    HealthCheck, JobDetail, JobList, PullArtifactCommand, RecoveryPacket, RecoveryTrace,
-    ResearchCommand, ResearchResult, SessionList,
+    BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot, ClearStateResult, ConfigSnapshot,
+    ConversationList, ConversationSelectCommand, ConversationSelection, DoctorReport, ErrorCode,
+    EventPayload, HealthCheck, JobDetail, JobList, PullArtifactCommand, RecoveryPacket,
+    RecoveryTrace, ResearchCommand, ResearchResult, SessionList,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -27,6 +27,7 @@ pub enum DaemonRequest {
     JobsCancel(CancelJobCommand),
     ArtifactsList,
     ArtifactPull(PullArtifactCommand),
+    ClearAllState,
     BrowserOpen(BrowserOpenRequest),
     BrowserClose,
     BrowserProfileInfo,
@@ -51,6 +52,7 @@ pub enum DaemonResponse {
     Job(JobDetail),
     Artifacts(ArtifactList),
     ArtifactPull(ArtifactPullResult),
+    ClearState(ClearStateResult),
     Browser(BrowserStatusSnapshot),
     Error(DaemonErrorResponse),
 }

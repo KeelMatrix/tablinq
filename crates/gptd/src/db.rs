@@ -1,4 +1,5 @@
 mod artifacts;
+mod clear;
 mod conversations;
 mod failure_bundles;
 mod jobs;
@@ -11,7 +12,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
 use shared_protocol::{
-    ArtifactList, ArtifactMetadata, ArtifactSummary, ConversationList,
+    ArtifactList, ArtifactMetadata, ArtifactSummary, ClearStateResult, ConversationList,
     ConversationRecoveryManifest, ConversationSessionInfo, ConversationSummary, FailureBundle,
     JobDetail, JobKind, JobList, JobStatus, RecoveryPacket, RecoveryTrace, RequestHistory,
     RequestListPage, RequestSummary, SessionList,
@@ -32,6 +33,12 @@ pub struct ConversationTurnRecord {
     pub request: Option<RequestSummary>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DatabaseClearStateResult {
+    pub result: ClearStateResult,
+    pub artifact_storage_paths: Vec<String>,
+}
+
 impl Database {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).with_context(|| format!("open {}", path.display()))?;
@@ -41,6 +48,10 @@ impl Database {
 
     pub fn migration_count(&self) -> Result<u32> {
         migrations::count(&self.conn)
+    }
+
+    pub fn clear_all_state(&mut self) -> Result<DatabaseClearStateResult> {
+        clear::clear_all_state(&mut self.conn)
     }
 
     pub fn list_sessions(&self) -> Result<SessionList> {

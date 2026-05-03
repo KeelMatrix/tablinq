@@ -19,6 +19,7 @@ pub enum Command {
     Status,
     Ask(AskArgs),
     Research(ResearchArgs),
+    Clear(ClearArgs),
     Capabilities,
     Doctor,
     Gateway {
@@ -85,6 +86,14 @@ pub struct ResearchArgs {
     pub files: Vec<PathBuf>,
     #[arg(long)]
     pub output_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args, PartialEq, Eq)]
+pub struct ClearArgs {
+    #[arg(long)]
+    pub all: bool,
+    #[arg(long)]
+    pub force: bool,
 }
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
@@ -534,6 +543,18 @@ mod tests {
             Command::Browser {
                 command: BrowserCommand::ConnectionInfo
             }
+        ));
+    }
+
+    #[test]
+    fn clear_command_accepts_required_safety_flags() {
+        let cli = parse(&["gpt", "clear", "--all", "--force"]);
+        assert!(matches!(
+            cli.command,
+            Command::Clear(ClearArgs {
+                all: true,
+                force: true
+            })
         ));
     }
 

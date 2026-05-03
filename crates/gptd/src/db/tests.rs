@@ -1,6 +1,9 @@
 use super::*;
 use chrono::Duration;
-use shared_protocol::{RequestExecutionKind, RequestUsage, SessionList};
+use shared_protocol::{
+    ArtifactMetadata, CapabilityMatrix, ConversationRecoveryManifest, FailureBundle, JobKind,
+    RequestExecutionKind, RequestUsage, SessionList,
+};
 use std::fs;
 use tempfile::{TempDir, tempdir};
 
@@ -415,4 +418,133 @@ fn session_queries_return_default_list_shape_when_empty() {
         SessionList { sessions: vec![] }
     );
     assert!(db.find_session_info("missing").unwrap().is_none());
+}
+
+#[test]
+fn clear_all_state_removes_persisted_rows_but_keeps_migrations() {
+    let (dir, mut db) = test_db();
+    let now = Utc::now();
+    let artifact_path = dir.path().join("artifact-clear.txt");
+    fs::write(&artifact_path, "artifact").unwrap();
+    let manifest = ConversationRecoveryManifest {
+        conversation_id: "conv-clear".to_owned(),
+        archived_context: vec!["summary".to_owned()],
+        recent_turns: vec![],
+        tracked_input_files: vec![],
+        tracked_generated_artifacts: vec![],
+        updated_at: now,
+    };
+    let recovery_trace = recovery_trace_fixture();
+    let recovery_packet = recovery_packet_fixture(now);
+
+    db.upsert_session(
+        "session-clear",
+        "Session",
+        Some("https://chatgpt.com/"),
+        now,
+    )
+    .unwrap();
+    db.upsert_conversation(
+        "conv-clear",
+        "session-clear",
+        "Conversation",
+        Some("https://chatgpt.com/c/conv-clear"),
+        Some("prompt"),
+        Some("response"),
+        Some(&manifest),
+        now,
+    )
+    .unwrap();
+    db.insert_job(
+        "job-clear",
+        JobStatus::Recovered,
+        Some("recovered"),
+        Some("conv-clear"),
+        now,
+        now,
+    )
+    .unwrap();
+    db.upsert_job_detail("job-clear", JobKind::Ask, Some("prompt"), None)
+        .unwrap();
+    db.update_job_recovery_metadata("job-clear", Some(&recovery_trace), Some(&recovery_packet))
+        .unwrap();
+    db.upsert_request_summary(&RequestSummary {
+        recovery_trace: Some(recovery_trace),
+        recovery_packet: Some(recovery_packet),
+        ..request_summary_fixture("req-clear", "job-clear", now)
+    })
+    .unwrap();
+    db.insert_artifact(
+        &ArtifactMetadata {
+            artifact_id: "artifact-clear".to_owned(),
+            conversation_id: Some("conv-clear".to_owned()),
+            message_id: Some("msg-clear".to_owned()),
+            file_name: "artifact-clear.txt".to_owned(),
+            content_type: "text/plain".to_owned(),
+            size_bytes: 8,
+            sha256: "sha-clear".to_owned(),
+            storage_path: artifact_path.display().to_string(),
+        },
+        now,
+    )
+    .unwrap();
+    db.link_job_artifact("job-clear", "artifact-clear").unwrap();
+    db.insert_failure_bundle(&FailureBundle {
+        bundle_id: "bundle-clear".to_owned(),
+        error_code: shared_protocol::ErrorCode::ProviderGenerationFailedNonretryable,
+        message: "failure".to_owned(),
+        created_at: now,
+        url: None,
+        mode: None,
+        screenshot_path: None,
+        dom_snapshot_path: None,
+        aria_snapshot_path: None,
+        logs_path: None,
+        strategy_attempts: vec![],
+        capability_matrix: CapabilityMatrix::default(),
+        gateway_request: None,
+    })
+    .unwrap();
+
+    let cleared = db.clear_all_state().unwrap();
+
+    assert_eq!(cleared.result.sessions_deleted, 1);
+    assert_eq!(cleared.result.conversations_deleted, 1);
+    assert_eq!(cleared.result.jobs_deleted, 1);
+    assert_eq!(cleared.result.job_details_deleted, 1);
+    assert_eq!(cleared.result.request_history_deleted, 1);
+    assert_eq!(cleared.result.artifacts_deleted, 1);
+    assert_eq!(cleared.result.artifact_links_deleted, 1);
+    assert_eq!(cleared.result.failure_bundles_deleted, 1);
+    assert_eq!(
+        cleared.artifact_storage_paths,
+        vec![artifact_path.display().to_string()]
+    );
+
+    for table in [
+        "sessions",
+        "conversations",
+        "jobs",
+        "job_details",
+        "request_history",
+        "artifacts",
+        "job_artifacts",
+        "failure_bundles",
+    ] {
+        let count: u64 = db
+            .conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "{table} should be empty");
+    }
+    assert_eq!(
+        db.migration_count().unwrap(),
+        migrations::MIGRATIONS.len() as u32
+    );
+    assert!(
+        artifact_path.exists(),
+        "database clear does not delete files"
+    );
 }

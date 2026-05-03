@@ -7,8 +7,21 @@ use crate::process_control::GatewayStatusSnapshot;
 use crate::scheduler::SchedulerSnapshot;
 use anyhow::Result;
 use gptd::{AppConfig, CoreService};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+const CLEAR_SAFETY_MESSAGE: &str =
+    "Refusing to clear Tablinq state. Re-run with all=true and force=true.";
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClearStateRequest {
+    #[serde(default)]
+    all: bool,
+    #[serde(default)]
+    force: bool,
+}
 
 pub(crate) fn handle_health_request(
     config: &AppConfig,
@@ -88,4 +101,52 @@ pub(crate) fn handle_admin_shutdown_request(
             "accepted": true,
         }),
     )
+}
+
+pub(crate) fn handle_admin_clear_request(
+    core: &CoreService,
+    body: &[u8],
+    request_id: &str,
+) -> Result<HttpResponse> {
+    let request = if body.is_empty() {
+        ClearStateRequest {
+            all: false,
+            force: false,
+        }
+    } else {
+        match serde_json::from_slice::<ClearStateRequest>(body) {
+            Ok(request) => request,
+            Err(err) => {
+                return Ok(json_response(
+                    400,
+                    json!({
+                        "request_id": request_id,
+                        "error": "invalid_request_json",
+                        "message": format!("{err:#}"),
+                    }),
+                ));
+            }
+        }
+    };
+
+    if !(request.all && request.force) {
+        return Ok(json_response(
+            400,
+            json!({
+                "request_id": request_id,
+                "error": "clear_requires_all_force",
+                "message": CLEAR_SAFETY_MESSAGE,
+            }),
+        ));
+    }
+
+    let result = core.clear_all_state()?;
+    Ok(json_response(
+        200,
+        json!({
+            "request_id": request_id,
+            "cleared": true,
+            "result": result,
+        }),
+    ))
 }

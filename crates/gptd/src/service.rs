@@ -238,6 +238,7 @@ fn handle_request(core: &CoreService, request: DaemonRequest) -> Result<DaemonRe
         DaemonRequest::ArtifactPull(command) => {
             DaemonResponse::ArtifactPull(core.pull_artifact(command)?)
         }
+        DaemonRequest::ClearAllState => DaemonResponse::ClearState(core.clear_all_state()?),
         DaemonRequest::BrowserOpen(request) => DaemonResponse::Browser(core.browser_open(request)?),
         DaemonRequest::BrowserClose => DaemonResponse::Browser(core.browser_close()?),
         DaemonRequest::BrowserProfileInfo => DaemonResponse::Browser(core.browser_profile_info()?),
