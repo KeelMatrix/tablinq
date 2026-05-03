@@ -14,6 +14,167 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     findMessageContentRoot,
   } = messageFilters;
 
+  const TEX_ANNOTATION_SELECTOR = "annotation[encoding^='application/x-tex']";
+  const TEX_ANNOTATION_CANDIDATE_SELECTOR = "annotation[encoding]";
+  const MATHML_TAGS = new Set([
+    "annotation",
+    "maction",
+    "math",
+    "menclose",
+    "merror",
+    "mfenced",
+    "mfrac",
+    "mi",
+    "mmultiscripts",
+    "mn",
+    "mo",
+    "mover",
+    "mpadded",
+    "mphantom",
+    "mprescripts",
+    "mroot",
+    "mrow",
+    "ms",
+    "mspace",
+    "msqrt",
+    "mstyle",
+    "msub",
+    "msubsup",
+    "msup",
+    "mtable",
+    "mtd",
+    "mtext",
+    "mtr",
+    "munder",
+    "munderover",
+    "semantics",
+  ]);
+
+  const isTexAnnotationElement = (element) => {
+    if (!(element instanceof Element)) {
+      return false;
+    }
+    const encoding = (element.getAttribute("encoding") ?? "")
+      .trim()
+      .toLowerCase();
+    return (
+      element.tagName.toLowerCase() === "annotation" &&
+      encoding.startsWith("application/x-tex")
+    );
+  };
+
+  const findTexAnnotation = (element) => {
+    if (!(element instanceof Element)) {
+      return null;
+    }
+    if (isTexAnnotationElement(element)) {
+      return element;
+    }
+    const direct = element.querySelector(TEX_ANNOTATION_SELECTOR);
+    if (isTexAnnotationElement(direct)) {
+      return direct;
+    }
+    return (
+      Array.from(
+        element.querySelectorAll(TEX_ANNOTATION_CANDIDATE_SELECTOR),
+      ).find(isTexAnnotationElement) ?? null
+    );
+  };
+
+  const hasMathClass = (element) => {
+    if (!(element instanceof Element)) {
+      return false;
+    }
+    return Array.from(element.classList).some((token) => {
+      const normalized = token.toLowerCase();
+      return (
+        normalized === "katex" ||
+        normalized === "math" ||
+        normalized === "mathjax" ||
+        normalized === "inline-math" ||
+        normalized === "display-math" ||
+        normalized.startsWith("katex-") ||
+        normalized.startsWith("math-") ||
+        normalized.startsWith("mathjax-")
+      );
+    });
+  };
+
+  const isMathTreeElement = (element) => {
+    if (!(element instanceof Element)) {
+      return false;
+    }
+    const tag = element.tagName.toLowerCase();
+    return (
+      hasMathClass(element) ||
+      tag === "mjx-container" ||
+      tag.startsWith("mjx-") ||
+      MATHML_TAGS.has(tag)
+    );
+  };
+
+  const isTightMathWrapper = (element) => {
+    if (!(element instanceof Element) || !findTexAnnotation(element)) {
+      return false;
+    }
+    const children = Array.from(element.childNodes);
+    if (children.length === 0) {
+      return false;
+    }
+    return children.every((child) => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        return !collapseInlineText(child.textContent);
+      }
+      if (!(child instanceof Element)) {
+        return false;
+      }
+      return isMathTreeElement(child) || isTightMathWrapper(child);
+    });
+  };
+
+  const isMathElement = (element) => {
+    if (!(element instanceof Element)) {
+      return false;
+    }
+    const tag = element.tagName.toLowerCase();
+    const canBeClasslessMathWrapper = ![
+      "blockquote",
+      "li",
+      "p",
+      "td",
+      "th",
+    ].includes(tag);
+    return (
+      hasMathClass(element) ||
+      tag === "mjx-container" ||
+      tag.startsWith("mjx-") ||
+      (canBeClasslessMathWrapper && isTightMathWrapper(element))
+    );
+  };
+
+  const collectMathTex = (element) => {
+    if (!(element instanceof Element)) {
+      return "";
+    }
+    const annotation = findTexAnnotation(element);
+    const tex = annotation?.textContent?.trim();
+    if (tex) {
+      return tex;
+    }
+
+    const aria = element.getAttribute("aria-label")?.trim();
+    if (aria) {
+      return collapseInlineText(aria);
+    }
+
+    const alt = element.getAttribute("alt")?.trim();
+    if (alt) {
+      return collapseInlineText(alt);
+    }
+
+    return "";
+  };
+
   const collectCodeBlockText = (element) => {
     if (!(element instanceof HTMLElement)) {
       return "";
@@ -194,6 +355,10 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       return (node.textContent ?? "").replace(/\s+/g, " ");
     }
     if (!(node instanceof HTMLElement)) {
+      if (node instanceof Element && isMathElement(node)) {
+        const tex = collectMathTex(node);
+        return tex ? `$${tex}$` : "";
+      }
       return "";
     }
     if (!isVisible(node)) {
@@ -201,6 +366,10 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     }
     if (isIgnoredMessageChrome(node)) {
       return "";
+    }
+    if (isMathElement(node)) {
+      const tex = collectMathTex(node);
+      return tex ? `$${tex}$` : "";
     }
     const tag = node.tagName.toLowerCase();
     if (tag === "button") {
@@ -331,6 +500,10 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
   };
 
   const serializeBlock = (element, options = {}) => {
+    if (element instanceof Element && isMathElement(element)) {
+      const tex = collectMathTex(element);
+      return tex ? `$$\n${tex}\n$$` : "";
+    }
     if (!(element instanceof HTMLElement)) {
       return "";
     }
