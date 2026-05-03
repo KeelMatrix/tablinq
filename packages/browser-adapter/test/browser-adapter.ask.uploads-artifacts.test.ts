@@ -226,7 +226,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
     await adapter.shutdown();
   });
 
-  it("recovers when upload acknowledgment leaves a stale visible send control ahead of the active composer", async () => {
+  it("ignores a stale visible send control ahead of the active composer after upload acknowledgment", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
     const fixture = path.join(root, "brief.txt");
@@ -263,7 +263,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
     expect(result.output_text).toBe("Fake response for: repeat attached file");
     expect(state).toEqual({
       lastSubmissionMethod: "button",
-      staleSubmitClicks: "1",
+      staleSubmitClicks: "0",
       keyboardSubmitReady: "false",
     });
 

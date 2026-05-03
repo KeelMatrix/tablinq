@@ -379,6 +379,170 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.modes.search).toBeUndefined();
   });
 
+  it("probes semantic drift shapes with generic selector-pack strategies", () => {
+    document.body.dataset.uiVariant = "menu";
+    document.body.innerHTML = `
+      <main aria-label="chatgpt workspace">
+        <nav>
+          <button type="button" aria-label="Search chats">Search chats</button>
+        </nav>
+        <form class="stacked-composer">
+          <div
+            role="textbox"
+            aria-label="Message ChatGPT"
+            contenteditable="true"
+            data-drift-composer="true"
+          ></div>
+          <button
+            type="button"
+            id="engine-trigger"
+            aria-label="Choose engine"
+            aria-haspopup="listbox"
+            aria-controls="engine-list"
+          >Engine</button>
+          <button
+            type="button"
+            id="depth-trigger"
+            aria-label="Reasoning depth"
+            aria-haspopup="listbox"
+            aria-controls="depth-list"
+          >Depth</button>
+          <button
+            type="button"
+            id="tools-trigger"
+            aria-label="Add files and more"
+            aria-haspopup="listbox"
+            aria-controls="tools-list"
+          >Tools</button>
+          <button type="button" aria-label="Send message">Send</button>
+        </form>
+        <aside id="semantic-drift-portal-host">
+          <div id="engine-list" role="listbox">
+            <div role="option" data-model="instant">Instant</div>
+            <div role="option" data-model="thinking" aria-selected="true">Thinking</div>
+          </div>
+          <div id="depth-list" role="listbox">
+            <div role="option" data-effort="standard" aria-selected="true">Standard</div>
+            <div role="option" data-effort="extended">Extended</div>
+          </div>
+          <div id="tools-list" role="listbox">
+            <div role="option" data-mode="search" aria-label="Browse the web">Browse the web</div>
+          </div>
+        </aside>
+        <article data-message-author-role="assistant">
+          <a href="/artifact.txt" download aria-label="Download report">Download report</a>
+        </article>
+      </main>
+    `;
+
+    const message = probeDocument({
+      selectorPack: {
+        format_version: 1,
+        pack_id: "semantic-drift-pack",
+        description: "test semantic drift pack",
+        updated_at: "2026-04-12T10:00:00Z",
+        capabilities: {
+          composer_ready: [
+            {
+              strategy_id: "semantic-drift-contenteditable",
+              kind: "css",
+              selector: "[data-drift-composer='true']",
+              score: 1,
+            },
+          ],
+          search_mode_visible: [
+            {
+              strategy_id: "semantic-drift-browse-web",
+              kind: "text",
+              selector: "Browse the web",
+              score: 1,
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(message.report.matrix).toMatchObject({
+      composer_ready: true,
+      submit_available: true,
+      model_picker_visible: true,
+      thinking_effort_visible: true,
+      search_mode_visible: true,
+      downloadable_artifacts_observable: true,
+    });
+    expect(message.runtime.strategy_matches.composer_ready).toBe(
+      "semantic-drift-contenteditable",
+    );
+    expect(message.runtime.strategy_matches.search_mode_visible).toBe(
+      "semantic-drift-browse-web",
+    );
+    expect(message.report.aliases.modes.search).toContain("browse the web");
+    expect(message.report.aliases.modes.search).not.toContain("search chats");
+    expect(message.report.aliases.model_classes.thinking).toContain("thinking");
+  });
+
+  it("keeps selectorless submit probing anchored to the active composer", () => {
+    document.body.dataset.uiVariant = "menu";
+    document.body.innerHTML = `
+      <main aria-label="chatgpt workspace">
+        <section id="selectorless-decoys">
+          <button type="button" aria-label="Search chats">Search chats</button>
+          <button type="button" id="selectorless-stale-send" aria-label="Send prompt">Send</button>
+        </section>
+        <form class="stacked-composer">
+          <div role="textbox" aria-label="Message ChatGPT" contenteditable="true"></div>
+          <button
+            type="button"
+            id="engine-trigger"
+            aria-label="Choose engine"
+            aria-haspopup="listbox"
+            aria-controls="engine-list"
+          >Engine</button>
+          <button type="button" id="active-send" aria-label="Send message">Send</button>
+        </form>
+        <div id="engine-list" role="listbox">
+          <div role="option" data-model="instant" aria-selected="true">Instant</div>
+          <div role="option" data-model="thinking">Thinking</div>
+        </div>
+      </main>
+    `;
+
+    const message = probeDocument({
+      selectorPack: {
+        format_version: 1,
+        pack_id: "selectorless-pack",
+        description: "test selectorless pack",
+        updated_at: "2026-04-12T10:00:00Z",
+        capabilities: {
+          submit_available: [
+            {
+              strategy_id: "selectorless-submit-neighborhood",
+              kind: "dom_neighborhood",
+              selector: "button[aria-label*='Send']",
+              score: 1,
+            },
+          ],
+        },
+      } as never,
+    });
+
+    const submitNeighborhood = message.runtime.dom_neighborhoods.find(
+      (entry) =>
+        entry.capability === "submit_available" &&
+        entry.strategy_id === "selectorless-submit-neighborhood",
+    );
+    expect(message.report.matrix.submit_available).toBe(true);
+    expect(message.runtime.strategy_matches.submit_available).toBe(
+      "selectorless-submit-neighborhood",
+    );
+    expect(submitNeighborhood?.anchor_path).toContain("button#active-send");
+    expect(submitNeighborhood?.anchor_path).not.toContain(
+      "selectorless-stale-send",
+    );
+    expect(message.report.matrix.search_mode_visible).toBe(false);
+    expect(message.report.aliases.modes.search).toBeUndefined();
+  });
+
   it("reports missing controls without inventing aliases", () => {
     document.body.innerHTML = `
       <section>
@@ -397,6 +561,31 @@ describe("extension capability probe", () => {
     expect(message.report.matrix.model_picker_visible).toBe(false);
     expect(message.report.aliases.modes.search).toBeUndefined();
     expect(message.report.aliases.model_classes.instant).toBeUndefined();
+  });
+
+  it("does not invent model aliases for ambiguous selectorless controls", () => {
+    document.body.dataset.uiVariant = "menu";
+    document.body.innerHTML = `
+      <main>
+        <form>
+          <div role="textbox" aria-label="Message ChatGPT" contenteditable="true"></div>
+          <button type="button" aria-label="Send message">Send</button>
+          <button type="button">Options</button>
+        </form>
+        <section>
+          <button type="button">Choice</button>
+          <button type="button">Choice</button>
+        </section>
+      </main>
+    `;
+
+    const message = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(message.report.matrix.model_picker_visible).toBe(false);
+    expect(message.report.aliases.model_classes.instant).toBeUndefined();
+    expect(message.report.aliases.model_classes.thinking).toBeUndefined();
   });
 
   it("infers instant and thinking aliases from the current ChatGPT trigger before the menu opens", () => {

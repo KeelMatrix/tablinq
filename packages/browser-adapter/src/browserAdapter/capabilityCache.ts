@@ -196,17 +196,41 @@ export class CapabilityStrategyCache {
         continue;
       }
 
+      const first = strategies[0];
+      if (!first) {
+        continue;
+      }
+
+      if (!lastCapabilityReport) {
+        attempts.push({
+          capability,
+          strategy_id: first.strategy_id,
+          score: first.score,
+          outcome: "missing",
+          detail: "no capability report available after probe attempt",
+        });
+        continue;
+      }
+
       if (matrix && !matrix[capability]) {
-        const first = strategies[0];
-        if (first) {
-          attempts.push({
-            capability,
-            strategy_id: first.strategy_id,
-            score: first.score,
-            outcome: "missing",
-            detail: "probe did not find a matching visible control",
-          });
-        }
+        attempts.push({
+          capability,
+          strategy_id: first.strategy_id,
+          score: first.score,
+          outcome: "missing",
+          detail: "probe did not find a matching visible control",
+        });
+        continue;
+      }
+
+      if (matrix?.[capability]) {
+        attempts.push({
+          capability,
+          strategy_id: first.strategy_id,
+          score: first.score,
+          outcome: "detected",
+          detail: "capability visible but no strategy match recorded",
+        });
       }
     }
 

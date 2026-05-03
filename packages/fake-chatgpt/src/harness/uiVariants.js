@@ -615,4 +615,194 @@ export function renderHarnessShell({ root, note, window, config }) {
           </div>
         </section>
       `;
+
+  applyDriftProfile({ root, document: window.document, config });
+}
+
+function applyDriftProfile({ root, document, config }) {
+  if (!config.driftProfile) {
+    return;
+  }
+  document.body.dataset.driftProfile = config.driftProfile;
+  if (config.driftProfile === "semantic") {
+    applySemanticDrift({ root, document, config });
+    return;
+  }
+  if (config.driftProfile === "selectorless") {
+    applySelectorlessDrift({ root, document, config });
+    return;
+  }
+  if (config.driftProfile === "ambiguous") {
+    applyAmbiguousDrift({ document });
+  }
+}
+
+function replaceComposerTextareaWithContenteditable(document) {
+  const textarea = document.querySelector("#prompt-textarea");
+  if (!(textarea instanceof HTMLElement)) {
+    return;
+  }
+  const editor = document.createElement("div");
+  editor.setAttribute("role", "textbox");
+  editor.setAttribute("aria-label", "Message ChatGPT");
+  editor.setAttribute("contenteditable", "true");
+  editor.setAttribute("spellcheck", "false");
+  editor.setAttribute("data-drift-composer", "true");
+  editor.className = textarea.className;
+  textarea.replaceWith(editor);
+}
+
+function removeAttributeFromAll(document, selector, attribute) {
+  document.querySelectorAll(selector).forEach((element) => {
+    element.removeAttribute(attribute);
+  });
+}
+
+function removeClassFromAll(document, selector, className) {
+  document.querySelectorAll(selector).forEach((element) => {
+    if (element instanceof HTMLElement) {
+      element.classList.remove(className);
+    }
+  });
+}
+
+function convertMenusToListboxes(document) {
+  document.querySelectorAll("[role='menu']").forEach((element) => {
+    element.setAttribute("role", "listbox");
+  });
+  document
+    .querySelectorAll("[role='menuitemradio'], [role='menuitem']")
+    .forEach((element) => {
+      element.setAttribute("role", "option");
+      const checked = element.getAttribute("aria-checked");
+      if (checked !== null) {
+        element.setAttribute("aria-selected", checked);
+      }
+    });
+  document.querySelectorAll("[aria-haspopup='menu']").forEach((element) => {
+    element.setAttribute("aria-haspopup", "listbox");
+  });
+}
+
+function movePortal(document) {
+  const portal = document.querySelector("[data-slot='portal-root']");
+  const main = document.querySelector("main");
+  if (!(portal instanceof HTMLElement) || !(main instanceof HTMLElement)) {
+    return;
+  }
+  const host = document.createElement("aside");
+  host.id = "semantic-drift-portal-host";
+  host.setAttribute("aria-label", "semantic drift popups");
+  portal.removeAttribute("data-slot");
+  portal.dataset.driftPortalRoot = "true";
+  host.append(portal);
+  main.append(host);
+}
+
+function addSelectorlessDecoys(document) {
+  const main = document.querySelector("main");
+  if (!(main instanceof HTMLElement)) {
+    return;
+  }
+  const decoys = document.createElement("section");
+  decoys.id = "selectorless-decoys";
+  decoys.setAttribute("aria-label", "decoy controls");
+  decoys.innerHTML = `
+    <button type="button" aria-label="Search chats">Search chats</button>
+    <button type="button" id="selectorless-stale-send" aria-label="Send prompt">Send</button>
+  `;
+  main.prepend(decoys);
+  decoys
+    .querySelector("#selectorless-stale-send")
+    ?.addEventListener("click", () => {
+      document.body.dataset.selectorlessStaleSendClicks = String(
+        Number.parseInt(
+          document.body.dataset.selectorlessStaleSendClicks || "0",
+          10,
+        ) + 1,
+      );
+    });
+}
+
+function applySemanticDrift({ root, document, config }) {
+  if (config.variant === "menu" || config.variant === "live") {
+    replaceComposerTextareaWithContenteditable(document);
+  }
+  removeAttributeFromAll(
+    document,
+    [
+      "#model-switcher-trigger",
+      "[data-testid='upload-button']",
+      "[data-testid='artifact-download']",
+      "[data-testid^='model-switcher-']",
+    ].join(", "),
+    "data-testid",
+  );
+  removeClassFromAll(document, ".__composer-pill", "__composer-pill");
+  convertMenusToListboxes(document);
+  movePortal(document);
+  const modelTrigger = document.querySelector("#model-switcher-trigger");
+  if (modelTrigger instanceof HTMLElement) {
+    modelTrigger.setAttribute("aria-label", "Choose engine");
+    modelTrigger.textContent = "Engine";
+  }
+  const submit = document.querySelector("[data-testid='send-button']");
+  if (submit instanceof HTMLElement) {
+    submit.removeAttribute("data-testid");
+    submit.setAttribute("aria-label", "Send message");
+  }
+  root
+    .querySelector("#tool-option-web-search")
+    ?.setAttribute("aria-label", "Browse the web");
+}
+
+function applySelectorlessDrift({ document, config }) {
+  if (config.variant !== "menu" && config.variant !== "live") {
+    return;
+  }
+  replaceComposerTextareaWithContenteditable(document);
+  addSelectorlessDecoys(document);
+  document
+    .querySelector("[data-testid='composer-root']")
+    ?.removeAttribute("data-testid");
+  const submit = document.querySelector("[data-testid='send-button']");
+  if (submit instanceof HTMLElement) {
+    submit.removeAttribute("data-testid");
+    submit.setAttribute("aria-label", "Send message");
+  }
+  const modelTrigger = document.querySelector("#model-switcher-trigger");
+  if (modelTrigger instanceof HTMLElement) {
+    modelTrigger.removeAttribute("data-testid");
+    modelTrigger.setAttribute("aria-label", "Choose engine");
+    modelTrigger.textContent = "Engine";
+  }
+  removeAttributeFromAll(
+    document,
+    "[data-testid^='model-switcher-']",
+    "data-testid",
+  );
+  removeClassFromAll(document, ".__composer-pill", "__composer-pill");
+}
+
+function applyAmbiguousDrift({ document }) {
+  const modelTrigger = document.querySelector("#model-switcher-trigger");
+  if (modelTrigger instanceof HTMLElement) {
+    modelTrigger.removeAttribute("data-testid");
+    modelTrigger.removeAttribute("aria-label");
+    modelTrigger.removeAttribute("aria-controls");
+    modelTrigger.textContent = "Options";
+  }
+  const modelMenu = document.querySelector("#tablinq-model-menu");
+  if (modelMenu instanceof HTMLElement) {
+    modelMenu.remove();
+  }
+  document
+    .querySelectorAll(
+      "[data-model], #model-option-instant, #model-option-thinking",
+    )
+    .forEach((element) => {
+      element.removeAttribute("data-model");
+      element.removeAttribute("data-testid");
+      element.textContent = "Choice";
+    });
 }

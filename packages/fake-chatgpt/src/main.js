@@ -41,17 +41,40 @@ function hasControl(name) {
   return !scenarioState.missingControls.has(name);
 }
 
-const composer = document.querySelector(
-  "#prompt-textarea, [data-slot='composer'], [role='textbox']",
-);
-const sendButton = document.querySelector(
-  "[data-testid='composer-root'] [data-testid='send-button'], [data-testid='composer-root'] [aria-label='Send prompt'], [data-action='submit'], [aria-label='Submit prompt'], [aria-label='Send prompt']",
-);
+function queryFirst(selectors) {
+  for (const selector of selectors) {
+    const match = document.querySelector(selector);
+    if (match) {
+      return match;
+    }
+  }
+  return null;
+}
+
+const composer = queryFirst([
+  "#prompt-textarea",
+  "[data-slot='composer']",
+  "form [role='textbox']",
+  "[role='textbox']",
+]);
+const sendButton = queryFirst([
+  "[data-testid='composer-root'] [data-testid='send-button']",
+  "[data-testid='composer-root'] [aria-label='Send prompt']",
+  "[data-testid='composer-root'] [aria-label='Send message']",
+  "form [data-testid='send-button']",
+  "form [aria-label='Send prompt']",
+  "form [aria-label='Send message']",
+  "form [data-action='submit']",
+  "[data-action='submit']",
+  "[aria-label='Submit prompt']",
+  "[aria-label='Send message']",
+  "[aria-label='Send prompt']",
+]);
 const staleSendButton = document.querySelector("#stale-send-button");
 const composerPlusButton = document.querySelector("#composer-plus-btn");
 const stopButton = document.querySelector("[data-testid='stop-button']");
 const uploadEntry = document.querySelector(
-  "[data-slot='upload-entry'], [data-testid='upload-button']",
+  "[data-slot='upload-entry'], [data-testid='upload-button'], [aria-label='Add photos and files']",
 );
 const uploadInput = document.querySelector("input[type='file']");
 const uploadList = document.querySelector("[data-slot='upload-list']");
@@ -65,7 +88,7 @@ const message = document.querySelector(
   "[data-slot='assistant-message'] p, [data-message-author-role='assistant'] .markdown p",
 );
 const artifactLink = document.querySelector(
-  "[data-slot='artifact-link'], [data-testid='artifact-download']",
+  "[data-slot='artifact-link'], [data-testid='artifact-download'], [aria-label='Download report']",
 );
 const deepResearchFrame = document.querySelector("#deep-research-sandbox");
 
