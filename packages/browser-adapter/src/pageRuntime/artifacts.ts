@@ -92,6 +92,9 @@ const INLINE_ARTIFACT_CAPTURE_SOURCE = String.raw`
   };
   const extensionForContentType = (contentType) => {
     const normalized = normalizeText(contentType).toLowerCase();
+    if (normalized.includes("text/markdown")) {
+      return ".md";
+    }
     if (normalized.includes("image/svg+xml")) {
       return ".svg";
     }
@@ -118,6 +121,118 @@ const INLINE_ARTIFACT_CAPTURE_SOURCE = String.raw`
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
     return normalized || "artifact-" + (artifactIndex + 1);
+  };
+  const serializeTextDocumentNode = (node, options = {}) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return normalizeText(node.textContent);
+    }
+    if (!(node instanceof HTMLElement)) {
+      return "";
+    }
+    const tag = node.tagName.toLowerCase();
+    if (tag === "button" || tag === "svg") {
+      return "";
+    }
+    if (tag === "br") {
+      return "";
+    }
+    if (/^h[1-6]$/.test(tag)) {
+      const level = Number(tag.slice(1));
+      return "#".repeat(level) + " " + serializeTextDocumentInline(node);
+    }
+    if (tag === "p") {
+      return serializeTextDocumentInline(node);
+    }
+    if (tag === "ul") {
+      return Array.from(node.children)
+        .map((child) => serializeTextDocumentNode(child, { listPrefix: "- " }))
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (tag === "ol") {
+      return Array.from(node.children)
+        .map((child, index) =>
+          serializeTextDocumentNode(child, { listPrefix: index + 1 + ". " }),
+        )
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (tag === "li") {
+      const content = Array.from(node.children)
+        .map((child) => serializeTextDocumentNode(child))
+        .filter(Boolean)
+        .join("\n\n") || serializeTextDocumentInline(node);
+      return content
+        ? String(options.listPrefix || "- ") + content.replace(/\n/g, "\n  ")
+        : "";
+    }
+    if (tag === "pre") {
+      const code = node.innerText || node.textContent || "";
+      const fence = String.fromCharCode(96).repeat(3);
+      return code.trimEnd() ? fence + "\n" + code.trimEnd() + "\n" + fence : "";
+    }
+    return Array.from(node.children)
+      .map((child) => serializeTextDocumentNode(child))
+      .filter(Boolean)
+      .join("\n\n");
+  };
+  const serializeTextDocumentInline = (element) =>
+    normalizeText(
+      Array.from(element.childNodes)
+        .map((node) => {
+          if (node.nodeType === Node.TEXT_NODE) {
+            return node.textContent || "";
+          }
+          if (!(node instanceof HTMLElement)) {
+            return "";
+          }
+          const tag = node.tagName.toLowerCase();
+          if (tag === "br" || tag === "button" || tag === "svg") {
+            return "";
+          }
+          if (tag === "code") {
+            const tick = String.fromCharCode(96);
+            return tick + normalizeText(node.textContent) + tick;
+          }
+          if (tag === "strong") {
+            const content = serializeTextDocumentInline(node);
+            return content ? "**" + content + "**" : "";
+          }
+          if (tag === "em") {
+            const content = serializeTextDocumentInline(node);
+            return content ? "*" + content + "*" : "";
+          }
+          return serializeTextDocumentInline(node);
+        })
+        .join(" "),
+    );
+  const captureTextDocument = (root) => {
+    if (!(root instanceof HTMLElement)) {
+      return null;
+    }
+    const textdoc = root.matches("[id^='textdoc-message-']")
+      ? root
+      : root.closest("[id^='textdoc-message-']");
+    if (!(textdoc instanceof HTMLElement)) {
+      return null;
+    }
+    const markdown = textdoc.querySelector(".markdown.ProseMirror, .ProseMirror.markdown, .markdown");
+    if (!(markdown instanceof HTMLElement)) {
+      return null;
+    }
+    const bodyText = serializeTextDocumentNode(markdown).trim();
+    if (!bodyText) {
+      return null;
+    }
+    const title =
+      textdoc.querySelector(".font-semibold")?.textContent ||
+      markdown.querySelector("h1, h2")?.textContent ||
+      "inline-text-document";
+    return {
+      bodyText,
+      contentType: "text/markdown; charset=utf-8",
+      suggestedFileName: safeStem(title) + "-" + (artifactIndex + 1) + ".md",
+    };
   };
   const collectSvgLabels = (svgText) => {
     if (!svgText || typeof DOMParser !== "function") {
@@ -155,6 +270,11 @@ const INLINE_ARTIFACT_CAPTURE_SOURCE = String.raw`
 
   let current = element;
   for (let depth = 0; current && depth < 8; depth += 1) {
+    const textDocument = captureTextDocument(current);
+    if (textDocument) {
+      return textDocument;
+    }
+
     const image = current.querySelector(
       "img[src^='data:image/'], img[src^='blob:'], img[src^='http']",
     );
@@ -237,6 +357,10 @@ const INLINE_CAPTURE_HINT_EVALUATOR = Function(
       return true;
     }
 
+    if (element.closest("[id^='textdoc-message-']")) {
+      return true;
+    }
+
     if (
       element instanceof HTMLAnchorElement &&
       (element.hasAttribute("download") || Boolean(element.getAttribute("href")))
@@ -247,6 +371,8 @@ const INLINE_CAPTURE_HINT_EVALUATOR = Function(
     let current = element;
     for (let depth = 0; current && depth < 8; depth += 1) {
       if (
+        current.matches("[id^='textdoc-message-']") ||
+        current.querySelector("[id^='textdoc-message-'] .markdown, [id^='textdoc-message-'] .ProseMirror") ||
         current.querySelector("img[src^='data:image/'], img[src^='blob:'], canvas")
       ) {
         return true;
@@ -292,6 +418,16 @@ const ARTIFACT_READY_EVALUATOR = Function(
   };`,
 )() as (element: Element) => boolean;
 
+const TEXT_DOCUMENT_KEY_EVALUATOR = Function(
+  `return (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return null;
+    }
+    const textdoc = element.closest("[id^='textdoc-message-']");
+    return textdoc instanceof HTMLElement ? textdoc.id || null : null;
+  };`,
+)() as (element: Element) => string | null;
+
 export async function collectArtifacts(
   page: Page,
   downloadsDir: string,
@@ -301,6 +437,7 @@ export async function collectArtifacts(
   const artifactRoot = await resolveArtifactRoot(page, messageId);
   const handles = await artifactRoot.locator(ARTIFACT_HANDLE_SELECTOR).all();
   const artifacts: ArtifactMetadataSnapshot[] = [];
+  const capturedTextDocuments = new Set<string>();
 
   for (let index = 0; index < handles.length; index += 1) {
     const handle = handles[index]!;
@@ -311,11 +448,20 @@ export async function collectArtifacts(
 
     const prefersInlineCapture = await handlePrefersInlineCapture(handle);
     if (prefersInlineCapture) {
+      const textDocumentKey = await handle.evaluate(
+        TEXT_DOCUMENT_KEY_EVALUATOR,
+      );
+      if (textDocumentKey && capturedTextDocuments.has(textDocumentKey)) {
+        continue;
+      }
       const inlineArtifact = await extractInlineArtifactCapture(
         handle,
         index,
       ).catch(() => null);
       if (inlineArtifact) {
+        if (textDocumentKey) {
+          capturedTextDocuments.add(textDocumentKey);
+        }
         artifacts.push(
           await persistInlineArtifact(
             inlineArtifact,

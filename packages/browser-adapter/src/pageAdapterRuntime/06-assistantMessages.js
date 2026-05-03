@@ -87,7 +87,9 @@ function createAssistantMessageRuntimeModule({
       ),
     ).filter((element) => isAssistantMessageElement(element));
     if (direct.length > 0) {
-      return direct;
+      return direct.filter(
+        (element) => !isInlineTextDocumentCreatedMarker(element),
+      );
     }
 
     const transcript = queryFirstVisible([
@@ -110,6 +112,23 @@ function createAssistantMessageRuntimeModule({
         ].join(", "),
       ),
     ).filter((element) => isAssistantMessageElement(element));
+  };
+
+  const isInlineTextDocumentCreatedMarker = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (!explicitAssistantRole(element)) {
+      return false;
+    }
+    const text = normalizeText(
+      collectText(element) || element.textContent || "",
+    );
+    if (text && text !== "created.") {
+      return false;
+    }
+    const turn = element.closest("section[data-testid^='conversation-turn']");
+    return Boolean(turn?.querySelector?.("[id^='textdoc-message-']"));
   };
 
   const findLatestAssistantMessage = () => {

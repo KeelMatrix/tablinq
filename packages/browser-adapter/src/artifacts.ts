@@ -28,6 +28,9 @@ export async function chooseUniqueArtifactPath(
 
 export function contentTypeForFile(path: string): string {
   switch (extname(path).toLowerCase()) {
+    case ".md":
+    case ".markdown":
+      return "text/markdown; charset=utf-8";
     case ".txt":
       return "text/plain; charset=utf-8";
     case ".svg":
