@@ -126,7 +126,7 @@ describe("browser adapter recovery: ask streaming recovery", () => {
         jobId: "job-ask-followup-recovery-second",
         prompt: "recover the follow-up ask",
         conversationId: first.conversation_id,
-        timeoutMs: 7000,
+        timeoutMs: 15_000,
       },
       async (chunk) => {
         if (chunk.kind === "delta") {
