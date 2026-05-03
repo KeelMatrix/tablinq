@@ -602,6 +602,66 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
     dom.window.close();
   });
 
+  it("prefers modern assistant sections over nested created markers for inline text documents", () => {
+    const runtimeSource = loadPageAdapterSource();
+    const dom = new JSDOM(
+      "<!doctype html><html><body><main></main></body></html>",
+      {
+        url: "https://chatgpt.com/c/conv-textdoc",
+        runScripts: "outside-only",
+      },
+    );
+    const { window } = dom;
+    const main = window.document.querySelector("main");
+    if (!(main instanceof window.HTMLElement)) {
+      throw new Error("expected main element");
+    }
+
+    main.innerHTML = `
+      <section data-testid="conversation-turn-1" data-turn="user">
+        <h4 class="sr-only">You said:</h4>
+        <div class="user-message-bubble-color">Return the file.</div>
+      </section>
+      <section data-testid="conversation-turn-2" data-turn="assistant">
+        <h4 class="sr-only">ChatGPT said:</h4>
+        <div id="textdoc-message-1" class="popover">
+          <div>
+            <span>Tablinq Smoke Report Template</span>
+            <button aria-label="Copy">Copy</button>
+            <button>Download</button>
+          </div>
+          <section class="popover">
+            <div class="markdown ProseMirror" contenteditable="false">
+              <h1><span>Tablinq Smoke Report</span></h1>
+              <h2><span>Recovery</span></h2>
+              <ul>
+                <li><p><span>Final State:</span></p></li>
+              </ul>
+            </div>
+          </section>
+        </div>
+        <div data-message-author-role="assistant">
+          <p>Created.</p>
+        </div>
+        <div data-message-author-role="assistant"></div>
+      </section>
+    `;
+    window.document.body.dataset.streamState = "done";
+
+    const snapshot = window.eval(
+      `${runtimeSource.replace(
+        /^export\s+/gm,
+        "",
+      )}\ncreateTablinqPageAdapterRuntime().readAskSnapshot();`,
+    );
+
+    expect(snapshot.messageId).toBe("conversation-turn-2");
+    expect(snapshot.text).toBe(
+      "# Tablinq Smoke Report\n## Recovery\n\n- Final State:",
+    );
+    dom.window.close();
+  });
+
   it("tracks provisional ask text without emitting chunks until finalization", async () => {
     const command = {
       jobId: "job-provisional-ask-message-id",

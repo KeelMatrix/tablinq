@@ -84,6 +84,7 @@ async function withDomGlobals<T>(
   const { window } = dom;
   const previous = {
     HTMLElement: globalThis.HTMLElement,
+    Node: globalThis.Node,
     HTMLAnchorElement: globalThis.HTMLAnchorElement,
     HTMLCanvasElement: globalThis.HTMLCanvasElement,
     HTMLImageElement: globalThis.HTMLImageElement,
@@ -96,6 +97,7 @@ async function withDomGlobals<T>(
 
   Object.assign(globalThis, {
     HTMLElement: window.HTMLElement,
+    Node: window.Node,
     HTMLAnchorElement: window.HTMLAnchorElement,
     HTMLCanvasElement: window.HTMLCanvasElement,
     HTMLImageElement: window.HTMLImageElement,
@@ -216,5 +218,61 @@ describe("browser adapter artifacts", () => {
     );
 
     expect(artifacts).toEqual([]);
+  });
+
+  it("captures inline text document cards without clicking their download menu", async () => {
+    const downloadsDir = await createIsolatedTempDir("artifact-inline-textdoc");
+    const dom = new JSDOM(
+      `
+        <!doctype html>
+        <html>
+          <body>
+            <div data-message-id="msg-textdoc">
+              <div id="textdoc-message-1" class="popover">
+                <div>
+                  <span class="font-semibold">Tablinq Smoke Report Template</span>
+                  <button aria-label="Copy">Copy</button>
+                  <button>
+                    <span>Download</span>
+                    <button>Download</button>
+                  </button>
+                </div>
+                <section class="popover">
+                  <div class="markdown ProseMirror" contenteditable="false">
+                    <h1><span>Tablinq Smoke Report</span></h1>
+                    <h2><span>Recovery</span></h2>
+                    <ul>
+                      <li><p><span>Final State:</span></p></li>
+                    </ul>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </body>
+        </html>
+      `,
+      { url: "https://chatgpt.com/c/conv-textdoc" },
+    );
+
+    const page = new FakePage(dom.window.document, async () => {
+      throw new Error("download menu should not be clicked");
+    });
+    const artifacts = await withDomGlobals(dom, () =>
+      collectArtifacts(
+        page as unknown as any,
+        downloadsDir,
+        "conv-textdoc",
+        "msg-textdoc",
+      ),
+    );
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]!.file_name).toMatch(
+      /tablinq-smoke-report-template.*\.md$/,
+    );
+    expect(artifacts[0]!.content_type).toBe("text/markdown; charset=utf-8");
+    const saved = await readFile(artifacts[0]!.storage_path, "utf8");
+    expect(saved).toContain("# Tablinq Smoke Report");
+    expect(saved).toContain("- Final State:");
   });
 });
