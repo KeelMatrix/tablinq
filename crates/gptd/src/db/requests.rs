@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use shared_protocol::{
     JobStatus, RequestHistory, RequestListEntry, RequestListPage, RequestSummary,
@@ -10,6 +10,13 @@ use super::{
 };
 
 pub(crate) fn upsert_summary(conn: &Connection, summary: &RequestSummary) -> Result<()> {
+    let duration_ms = optional_u64_to_i64(summary.duration_ms, "request duration")?;
+    let queue_wait_ms =
+        i64::try_from(summary.queue_wait_ms).context("queue wait exceeds sqlite INTEGER range")?;
+    let prompt_tokens = optional_u64_to_i64(summary.usage.prompt_tokens, "prompt tokens")?;
+    let completion_tokens =
+        optional_u64_to_i64(summary.usage.completion_tokens, "completion tokens")?;
+    let total_tokens = optional_u64_to_i64(summary.usage.total_tokens, "total tokens")?;
     conn.execute(
         r#"
         INSERT INTO request_history (
@@ -60,8 +67,8 @@ pub(crate) fn upsert_summary(conn: &Connection, summary: &RequestSummary) -> Res
             if summary.cancelled { 1 } else { 0 },
             summary.start_time.to_rfc3339(),
             summary.end_time.map(|value| value.to_rfc3339()),
-            summary.duration_ms,
-            summary.queue_wait_ms,
+            duration_ms,
+            queue_wait_ms,
             summary.interrupted_at.map(|value| value.to_rfc3339()),
             summary.interruption_reason,
             summary.recovered_at.map(|value| value.to_rfc3339()),
@@ -79,14 +86,22 @@ pub(crate) fn upsert_summary(conn: &Connection, summary: &RequestSummary) -> Res
                 .map(serde_json::to_string)
                 .transpose()?,
             summary.usage.status,
-            summary.usage.prompt_tokens,
-            summary.usage.completion_tokens,
-            summary.usage.total_tokens,
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
             serde_json::to_string(&summary.warnings)?,
         ],
     )?;
     prune_history(conn, REQUEST_HISTORY_LIMIT)?;
     Ok(())
+}
+
+fn optional_u64_to_i64(value: Option<u64>, label: &str) -> Result<Option<i64>> {
+    value
+        .map(|value| {
+            i64::try_from(value).with_context(|| format!("{label} exceeds sqlite INTEGER range"))
+        })
+        .transpose()
 }
 
 pub(crate) fn find_summary(conn: &Connection, request_id: &str) -> Result<Option<RequestSummary>> {

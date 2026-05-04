@@ -19,9 +19,9 @@ pub(crate) fn insert(conn: &Connection, bundle: &FailureBundle) -> Result<()> {
 
 pub(crate) fn count(conn: &Connection) -> Result<u64> {
     let count = conn.query_row("SELECT COUNT(*) FROM failure_bundles", [], |row| {
-        row.get::<_, u64>(0)
+        row.get::<_, i64>(0)
     })?;
-    Ok(count)
+    Ok(count.max(0) as u64)
 }
 
 pub(crate) fn latest(conn: &Connection) -> Result<Option<FailureBundle>> {

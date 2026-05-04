@@ -531,7 +531,7 @@ fn clear_all_state_removes_persisted_rows_but_keeps_migrations() {
         "job_artifacts",
         "failure_bundles",
     ] {
-        let count: u64 = db
+        let count: i64 = db
             .conn
             .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
                 row.get(0)

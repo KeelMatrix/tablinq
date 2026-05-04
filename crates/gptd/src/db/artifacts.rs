@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use shared_protocol::{ArtifactList, ArtifactMetadata, ArtifactSummary};
@@ -11,6 +11,8 @@ pub(crate) fn insert(
     artifact: &ArtifactMetadata,
     created_at: DateTime<Utc>,
 ) -> Result<()> {
+    let size_bytes =
+        i64::try_from(artifact.size_bytes).context("artifact size exceeds sqlite INTEGER range")?;
     conn.execute(
         r#"
         INSERT OR REPLACE INTO artifacts (
@@ -25,7 +27,7 @@ pub(crate) fn insert(
             artifact.message_id,
             artifact.file_name,
             artifact.content_type,
-            artifact.size_bytes,
+            size_bytes,
             artifact.sha256,
             artifact.storage_path,
             created_at.to_rfc3339(),
