@@ -86,8 +86,11 @@ The resolved state root contains:
 - `chrome-attach-profile/`
 - `downloads/`
 - `crash-bundles/`
+- `recovery-manifests/`
 - `gateway-uploads/`
 - `daemon.lock`
+- `gateway.lock`
+- `gateway-status.json`
 
 `browser-profile/` remains in the layout because managed fallback still exists and compatibility with earlier state roots matters. `chrome-attach-profile/` is the persistent real Chrome attach-first profile used by `gpt browser start-debug` when Chrome requires an explicit user data directory for remote debugging.
 
@@ -204,6 +207,7 @@ This is stronger than the earlier single-turn summary path, but it is still not 
 - artifacts
 - request status and cancellation
 - sessions and provider metadata
+- health, readiness, status, shutdown, and clear operations
 
 It also exposes a local-only read-only conversation inspection and recovery surface over the same persisted daemon state:
 

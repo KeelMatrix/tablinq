@@ -41,7 +41,7 @@ Versioned JSON selector strategy data under `selector-packs/v1` that is kept out
 _Avoid_: hardcoded selectors, adapter logic
 
 **State root**:
-The local directory tree that stores Tablinq config, logs, SQLite state, downloads, crash bundles, gateway uploads, browser profiles, and daemon lock state.
+The local directory tree that stores Tablinq config, logs, SQLite state, downloads, crash bundles, recovery manifests, gateway uploads, browser profiles, and daemon or gateway runtime state.
 _Avoid_: project root, install directory
 
 **Failure bundle**:

@@ -43,6 +43,7 @@ Recommended posture:
 - `GET /health`
 - `GET /ready`
 - `GET /admin/status`
+- `POST /admin/shutdown`
 - `POST /admin/clear`
 - `GET /v1/models`
 - `GET /v1/capabilities`
@@ -67,7 +68,7 @@ Recommended posture:
 - `GET /v1/artifacts/{id}/content`
 - `POST /v1/requests/{request_id}/cancel`
 
-`POST /admin/clear` is destructive and requires an authenticated JSON body of `{"all":true,"force":true}`.
+`POST /admin/shutdown` and `POST /admin/clear` are administrative operations. `POST /admin/clear` is destructive and requires an authenticated JSON body of `{"all":true,"force":true}`.
 
 ## Recommended models
 
@@ -93,6 +94,9 @@ If clients overlap, queueing is normal. Treat the gateway as a browser-backed sc
 - `tablinq_request_role = "branch"`
 - `tablinq_request_role = "subagent"`
 - `tablinq_parent_request_id = "<request-id>"`
+- `tablinq_conversation_id = "<conversation-id>"`
+- `tablinq_new_conversation = true`
+- `tablinq_auto_recover_provider_generation_failure = true`
 
 Default intent:
 
@@ -158,6 +162,8 @@ curl -H "Authorization: Bearer $TABLINQ_API_KEY" \
 2. Pass staged IDs through `tablinq_file_ids` or supported file references in chat content.
 3. Read artifact metadata through `GET /v1/artifacts`.
 4. Download artifact content through `GET /v1/artifacts/{id}/content`.
+
+`POST /v1/chat/completions` also accepts direct local file paths through `tablinq_files`, but uploaded `tablinq_file_ids` are the safer provider-facing contract. Tool calling, structured response formats other than plain text, and `n > 1` are rejected because the upstream execution is one browser conversation, not a parallel stateless API.
 
 ## Interruption and recovery behavior
 

@@ -9,7 +9,8 @@ This note captures the current separation of concerns now that Tablinq has a bro
   - owns request lifecycle transitions and recovery markers
   - owns browser lifecycle calls
   - owns job, session, conversation, artifact, request-summary, and failure-bundle persistence
-  - delegates shared lifecycle helpers to [`crates/gptd/src/core/support.rs`](../crates/gptd/src/core/support.rs) and control-plane operations to [`crates/gptd/src/core/operations.rs`](../crates/gptd/src/core/operations.rs)
+  - delegates shared lifecycle helpers to [`crates/gptd/src/core/support`](../crates/gptd/src/core/support) and control-plane operations to [`crates/gptd/src/core/operations`](../crates/gptd/src/core/operations)
+  - keeps conversation inspection, recovery manifests, provider-generation recovery, ask, research, job operations, and artifact operations in focused core modules
   - calls the Playwright and extension runtime only through [`BrowserManager`](../crates/gptd/src/browser/mod.rs)
 - Admin CLI: [`crates/gpt/src/lib.rs`](../crates/gpt/src/lib.rs)
   - parses flags into stable protocol commands
@@ -37,7 +38,7 @@ This note captures the current separation of concerns now that Tablinq has a bro
 
 ## State layout
 
-State-root helpers live in [`crates/shared-protocol/src/lib.rs`](../crates/shared-protocol/src/lib.rs) via `resolve_state_root` and `build_state_paths`.
+State-root helpers live in [`crates/shared-protocol/src/state_paths.rs`](../crates/shared-protocol/src/state_paths.rs) via `resolve_state_root` and `build_state_paths`.
 
 Persisted directories:
 
@@ -48,9 +49,10 @@ Persisted directories:
 - `chrome-attach-profile/`
 - `downloads/`
 - `crash-bundles/`
+- `recovery-manifests/`
 - `gateway-uploads/`
 
-SQLite entities currently live in [`crates/gptd/src/db.rs`](../crates/gptd/src/db.rs):
+SQLite modules currently live under [`crates/gptd/src/db`](../crates/gptd/src/db):
 
 - `schema_migrations`
 - `sessions`
