@@ -21,20 +21,17 @@ import { safePageUrl } from "../capabilityProbe";
 
 import { callPageAdapter } from "./adapter";
 import { sleep } from "./common";
+import {
+  DEEP_RESEARCH_START_BUTTON_NAME,
+  DEEP_RESEARCH_START_BUTTON_SELECTOR,
+  DEEP_RESEARCH_START_BUTTON_TEXT,
+  DEEP_RESEARCH_START_DOM_OPTIONS,
+  evaluateDeepResearchStartDom,
+  type DeepResearchStartButtonState,
+  type DeepResearchStartDomOptions,
+  type DeepResearchStartDomResult,
+} from "./deepResearchStartDom";
 import { readResearchSubmissionState } from "./researchSubmission";
-
-const DEEP_RESEARCH_START_BUTTON_NAME = /^Start(?:\s+\d+)?$/i;
-const DEEP_RESEARCH_START_BUTTON_TEXT = /^Start\b/i;
-const DEEP_RESEARCH_START_BUTTON_SELECTOR = "button, [role='button']";
-const COMPOSER_CONTROL_SELECTOR = [
-  "[data-testid='composer-root']",
-  "[data-testid='composer-footer-actions']",
-  "[data-testid='composer-action-file-upload']",
-  "[data-testid='send-button']",
-  "#prompt-textarea",
-  "textarea",
-  "[role='textbox']",
-].join(",");
 
 interface NestedDeepResearchReport {
   reportText: string;
@@ -45,10 +42,14 @@ interface NestedDeepResearchReport {
   startEnabled: boolean;
 }
 
-interface DeepResearchStartButtonState {
-  visible: boolean;
-  enabled: boolean;
-}
+const evaluateDeepResearchStartElement = evaluateDeepResearchStartDom as (
+  element: HTMLElement | SVGElement,
+  options: DeepResearchStartDomOptions,
+) => DeepResearchStartDomResult;
+
+const evaluateDeepResearchStartDocument = evaluateDeepResearchStartDom as (
+  options: DeepResearchStartDomOptions,
+) => DeepResearchStartDomResult;
 
 export async function beginDeepResearchRun(
   page: Page,
@@ -394,100 +395,11 @@ async function findDeepResearchStartButton(
 
 async function isDeepResearchStartButton(button: Locator): Promise<boolean> {
   return button
-    .evaluate(
-      (element, selectors) => {
-        if (!(element instanceof HTMLElement) || element.hidden) {
-          return false;
-        }
-        const style = window.getComputedStyle(element);
-        if (
-          style.display === "none" ||
-          style.visibility === "hidden" ||
-          style.opacity === "0" ||
-          element.getClientRects().length === 0 ||
-          element.hasAttribute("disabled") ||
-          element.getAttribute("aria-disabled") === "true"
-        ) {
-          return false;
-        }
-        const composerControlSelector = selectors.composerControlSelector;
-        const normalize = (value: string | null | undefined) =>
-          String(value ?? "")
-            .replace(/\u00a0/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-        const hasPlanText = (value: string) => {
-          const lower = value.toLowerCase();
-          return (
-            (lower.includes("edit") && lower.includes("cancel")) ||
-            lower.includes("research plan") ||
-            lower.includes("proposed research")
-          );
-        };
-        const isComposerControl = (node: HTMLElement) => {
-          if (node.closest(composerControlSelector)) {
-            return true;
-          }
-          const form = node.closest("form");
-          if (!form) {
-            return false;
-          }
-          const formText = normalize(form.innerText || form.textContent);
-          if (hasPlanText(formText)) {
-            return false;
-          }
-          return Boolean(
-            form.querySelector(selectors.composerSurfaceSelector) instanceof
-            HTMLElement,
-          );
-        };
-        const planRootFor = (node: HTMLElement): HTMLElement | null => {
-          let current: HTMLElement | null = node.parentElement;
-          for (let depth = 0; current && depth < 8; depth += 1) {
-            const text = normalize(current.innerText || current.textContent);
-            if (hasPlanText(text)) {
-              return current;
-            }
-            current = current.parentElement;
-          }
-          return null;
-        };
-        if (isComposerControl(element)) {
-          return false;
-        }
-        const label = normalize(element.innerText || element.textContent);
-        const aria = normalize(element.getAttribute("aria-label"));
-        const name = label || aria;
-        if (!/^start\b/i.test(name)) {
-          return false;
-        }
-        if (/dictation|microphone|record|voice/i.test(name + " " + aria)) {
-          return false;
-        }
-
-        const contextRoot =
-          planRootFor(element) ??
-          element.closest("[data-deep-research-root]") ??
-          element.closest("article") ??
-          element.closest("section") ??
-          element.parentElement;
-        const contextText = normalize(
-          contextRoot instanceof HTMLElement
-            ? contextRoot.innerText || contextRoot.textContent
-            : element.parentElement?.innerText,
-        ).toLowerCase();
-        return (
-          (contextText.includes("edit") && contextText.includes("cancel")) ||
-          contextText.includes("research plan") ||
-          contextText.includes("proposed research")
-        );
-      },
-      {
-        composerControlSelector: COMPOSER_CONTROL_SELECTOR,
-        composerSurfaceSelector:
-          "[data-testid='composer-root'], #prompt-textarea, textarea, [role='textbox']",
-      },
-    )
+    .evaluate(evaluateDeepResearchStartElement, {
+      ...DEEP_RESEARCH_START_DOM_OPTIONS,
+      action: "classify",
+    } satisfies DeepResearchStartDomOptions)
+    .then((state) => state.visible && state.enabled)
     .catch(() => false);
 }
 
@@ -495,136 +407,11 @@ async function readDeepResearchStartButtonState(
   frame: Frame,
 ): Promise<DeepResearchStartButtonState> {
   return frame
-    .evaluate(
-      (selectors) => {
-        const normalize = (value: string | null | undefined) =>
-          String(value ?? "")
-            .replace(/\u00a0/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-        const documents = (): Document[] => {
-          const nestedFrame = document.querySelector("iframe#root");
-          const nestedDocument =
-            nestedFrame instanceof HTMLIFrameElement
-              ? nestedFrame.contentDocument
-              : null;
-          return nestedDocument ? [document, nestedDocument] : [document];
-        };
-        const isVisible = (element: Element): element is HTMLElement => {
-          if (!(element instanceof HTMLElement) || element.hidden) {
-            return false;
-          }
-          const style =
-            element.ownerDocument.defaultView?.getComputedStyle(element);
-          if (!style) {
-            return false;
-          }
-          return (
-            style.display !== "none" &&
-            style.visibility !== "hidden" &&
-            style.opacity !== "0" &&
-            element.getClientRects().length > 0
-          );
-        };
-        const composerControlSelector = selectors.composerControlSelector;
-        const hasPlanText = (value: string) => {
-          const lower = value.toLowerCase();
-          return (
-            (lower.includes("edit") && lower.includes("cancel")) ||
-            lower.includes("research plan") ||
-            lower.includes("proposed research")
-          );
-        };
-        const isComposerControl = (element: HTMLElement): boolean => {
-          if (element.closest(composerControlSelector)) {
-            return true;
-          }
-          const form = element.closest("form");
-          if (!form) {
-            return false;
-          }
-          const formText = normalize(form.innerText || form.textContent);
-          if (hasPlanText(formText)) {
-            return false;
-          }
-          return Boolean(
-            form.querySelector(selectors.composerSurfaceSelector) instanceof
-            HTMLElement,
-          );
-        };
-        const planRootFor = (element: HTMLElement): HTMLElement | null => {
-          let current: HTMLElement | null = element.parentElement;
-          for (let depth = 0; current && depth < 8; depth += 1) {
-            const text = normalize(current.innerText || current.textContent);
-            if (hasPlanText(text)) {
-              return current;
-            }
-            current = current.parentElement;
-          }
-          return null;
-        };
-        const isStartButton = (element: Element): element is HTMLElement => {
-          if (!isVisible(element)) {
-            return false;
-          }
-          if (isComposerControl(element)) {
-            return false;
-          }
-          const label = normalize(element.innerText || element.textContent);
-          const aria = normalize(element.getAttribute("aria-label"));
-          const name = label || aria;
-          if (!/^start\b/i.test(name)) {
-            return false;
-          }
-          if (/dictation|microphone|record|voice/i.test(`${name} ${aria}`)) {
-            return false;
-          }
-          const contextRoot =
-            planRootFor(element) ??
-            element.closest("[data-deep-research-root]") ??
-            element.closest("article") ??
-            element.closest("section") ??
-            element.parentElement;
-          const contextText = normalize(
-            contextRoot instanceof HTMLElement
-              ? contextRoot.innerText || contextRoot.textContent
-              : element.parentElement?.innerText,
-          ).toLowerCase();
-          return (
-            (contextText.includes("edit") && contextText.includes("cancel")) ||
-            contextText.includes("research plan") ||
-            contextText.includes("proposed research")
-          );
-        };
-        let button: HTMLElement | undefined;
-        for (const rootDocument of documents()) {
-          button = Array.from(
-            rootDocument.querySelectorAll("button, [role='button']"),
-          ).find(isStartButton);
-          if (button) {
-            break;
-          }
-        }
-        if (!(button instanceof HTMLElement)) {
-          return { visible: false, enabled: false };
-        }
-        const nativeDisabled =
-          "disabled" in button &&
-          Boolean((button as HTMLButtonElement | HTMLInputElement).disabled);
-        return {
-          visible: true,
-          enabled:
-            !nativeDisabled &&
-            !button.hasAttribute("disabled") &&
-            button.getAttribute("aria-disabled") !== "true",
-        };
-      },
-      {
-        composerControlSelector: COMPOSER_CONTROL_SELECTOR,
-        composerSurfaceSelector:
-          "[data-testid='composer-root'], #prompt-textarea, textarea, [role='textbox']",
-      },
-    )
+    .evaluate(evaluateDeepResearchStartDocument, {
+      ...DEEP_RESEARCH_START_DOM_OPTIONS,
+      action: "read",
+    } satisfies DeepResearchStartDomOptions)
+    .then(({ visible, enabled }) => ({ visible, enabled }))
     .catch(() => ({ visible: false, enabled: false }));
 }
 
@@ -632,138 +419,11 @@ async function clickDeepResearchStartButtonInFrame(
   frame: Frame,
 ): Promise<boolean> {
   return frame
-    .evaluate(
-      (selectors) => {
-        const normalize = (value: string | null | undefined) =>
-          String(value ?? "")
-            .replace(/\u00a0/g, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-        const documents = (): Document[] => {
-          const nestedFrame = document.querySelector("iframe#root");
-          const nestedDocument =
-            nestedFrame instanceof HTMLIFrameElement
-              ? nestedFrame.contentDocument
-              : null;
-          return nestedDocument ? [document, nestedDocument] : [document];
-        };
-        const isVisible = (element: Element): element is HTMLElement => {
-          if (!(element instanceof HTMLElement) || element.hidden) {
-            return false;
-          }
-          const style =
-            element.ownerDocument.defaultView?.getComputedStyle(element);
-          if (!style) {
-            return false;
-          }
-          return (
-            style.display !== "none" &&
-            style.visibility !== "hidden" &&
-            style.opacity !== "0" &&
-            element.getClientRects().length > 0
-          );
-        };
-        const composerControlSelector = selectors.composerControlSelector;
-        const hasPlanText = (value: string) => {
-          const lower = value.toLowerCase();
-          return (
-            (lower.includes("edit") && lower.includes("cancel")) ||
-            lower.includes("research plan") ||
-            lower.includes("proposed research")
-          );
-        };
-        const isComposerControl = (element: HTMLElement): boolean => {
-          if (element.closest(composerControlSelector)) {
-            return true;
-          }
-          const form = element.closest("form");
-          if (!form) {
-            return false;
-          }
-          const formText = normalize(form.innerText || form.textContent);
-          if (hasPlanText(formText)) {
-            return false;
-          }
-          return Boolean(
-            form.querySelector(selectors.composerSurfaceSelector) instanceof
-            HTMLElement,
-          );
-        };
-        const planRootFor = (element: HTMLElement): HTMLElement | null => {
-          let current: HTMLElement | null = element.parentElement;
-          for (let depth = 0; current && depth < 8; depth += 1) {
-            const text = normalize(current.innerText || current.textContent);
-            if (hasPlanText(text)) {
-              return current;
-            }
-            current = current.parentElement;
-          }
-          return null;
-        };
-        const isStartButton = (element: Element): element is HTMLElement => {
-          if (
-            !isVisible(element) ||
-            (element instanceof HTMLElement && isComposerControl(element))
-          ) {
-            return false;
-          }
-          const label = normalize(element.innerText || element.textContent);
-          const aria = normalize(element.getAttribute("aria-label"));
-          const name = label || aria;
-          if (!/^start\b/i.test(name)) {
-            return false;
-          }
-          if (/dictation|microphone|record|voice/i.test(`${name} ${aria}`)) {
-            return false;
-          }
-          const contextRoot =
-            planRootFor(element) ??
-            element.closest("[data-deep-research-root]") ??
-            element.closest("article") ??
-            element.closest("section") ??
-            element.parentElement;
-          const contextText = normalize(
-            contextRoot instanceof HTMLElement
-              ? contextRoot.innerText || contextRoot.textContent
-              : element.parentElement?.innerText,
-          ).toLowerCase();
-          return (
-            (contextText.includes("edit") && contextText.includes("cancel")) ||
-            contextText.includes("research plan") ||
-            contextText.includes("proposed research")
-          );
-        };
-        let button: HTMLElement | undefined;
-        for (const rootDocument of documents()) {
-          button = Array.from(
-            rootDocument.querySelectorAll("button, [role='button']"),
-          ).find(isStartButton);
-          if (button) {
-            break;
-          }
-        }
-        if (!(button instanceof HTMLElement)) {
-          return false;
-        }
-        const nativeDisabled =
-          "disabled" in button &&
-          Boolean((button as HTMLButtonElement | HTMLInputElement).disabled);
-        if (
-          nativeDisabled ||
-          button.hasAttribute("disabled") ||
-          button.getAttribute("aria-disabled") === "true"
-        ) {
-          return false;
-        }
-        button.click();
-        return true;
-      },
-      {
-        composerControlSelector: COMPOSER_CONTROL_SELECTOR,
-        composerSurfaceSelector:
-          "[data-testid='composer-root'], #prompt-textarea, textarea, [role='textbox']",
-      },
-    )
+    .evaluate(evaluateDeepResearchStartDocument, {
+      ...DEEP_RESEARCH_START_DOM_OPTIONS,
+      action: "click",
+    } satisfies DeepResearchStartDomOptions)
+    .then((state) => state.clicked)
     .catch(() => false);
 }
 
@@ -801,6 +461,16 @@ export async function readDeepResearchFrameSnapshot(
 async function readNestedDeepResearchFrameSnapshot(
   frame: Frame,
 ): Promise<DeepResearchFrameSnapshot | null> {
+  const startState = await frame
+    .evaluate(evaluateDeepResearchStartDocument, {
+      ...DEEP_RESEARCH_START_DOM_OPTIONS,
+      action: "read",
+      requirePlanContext: false,
+      requireNestedRoot: true,
+      rootSelector: "iframe#root",
+    } satisfies DeepResearchStartDomOptions)
+    .then(({ visible, enabled }) => ({ visible, enabled }))
+    .catch(() => ({ visible: false, enabled: false }));
   const nestedReport = await frame
     .evaluate<NestedDeepResearchReport | null>(
       `(() => {
@@ -834,24 +504,6 @@ async function readNestedDeepResearchFrameSnapshot(
           element.getClientRects().length > 0
         );
       };
-      const isStartButton = (element) => {
-        if (!isVisible(element)) {
-          return false;
-        }
-        const label = normalize(element.innerText || element.textContent);
-        const aria = normalize(element.getAttribute("aria-label"));
-        const name = label || aria;
-        if (!/^start\\b/i.test(name)) {
-          return false;
-        }
-        if (/dictation|microphone|record|voice/i.test(name + " " + aria)) {
-          return false;
-        }
-        return true;
-      };
-      const startButton = Array.from(
-        nestedDocument.querySelectorAll("button, [role='button']")
-      ).find(isStartButton);
       const stopResearchVisible = Array.from(
         nestedDocument.querySelectorAll("button, [role='button']")
       ).some((element) => {
@@ -862,10 +514,6 @@ async function readNestedDeepResearchFrameSnapshot(
         const aria = normalize(element.getAttribute("aria-label"));
         return /^stop( research)?$/i.test(label || aria);
       });
-      const nativeDisabled =
-        startButton &&
-        "disabled" in startButton &&
-        Boolean(startButton.disabled);
       return {
         reportText: normalize(
           "innerText" in (reportRoot ?? {})
@@ -878,19 +526,17 @@ async function readNestedDeepResearchFrameSnapshot(
             : statusRoot?.textContent
         ),
         href: nestedDocument.location.href,
-        phase: startButton ? "planning" : stopResearchVisible ? "running" : null,
-        startVisible: Boolean(startButton),
-        startEnabled: Boolean(
-          startButton &&
-          !nativeDisabled &&
-          !startButton.hasAttribute("disabled") &&
-          startButton.getAttribute("aria-disabled") !== "true"
-        ),
+        phase: stopResearchVisible ? "running" : null,
+        startVisible: false,
+        startEnabled: false,
       };
     })()`,
     )
     .catch(() => null);
-  if (!nestedReport?.reportText && !nestedReport?.startVisible) {
+  if (!nestedReport) {
+    return null;
+  }
+  if (!nestedReport.reportText && !startState.visible) {
     return null;
   }
   const lowerText =
@@ -912,32 +558,33 @@ async function readNestedDeepResearchFrameSnapshot(
     lowerText.includes("reviewing sources") ||
     lowerText.includes("forming a plan");
   const completed = lowerText.includes("research completed");
-  const phase: DeepResearchFrameSnapshot["phase"] =
-    nestedReport.phase ??
-    (completed
-      ? "done"
-      : waitingShell
-        ? "waiting_for_sources"
-        : activeShell ||
-            lowerText.includes("starting") ||
-            lowerText.includes("getting ready") ||
-            lowerText.includes("preparing")
-          ? "running"
-          : nestedReport.reportText
-            ? "done"
-            : "running");
+  const phase: DeepResearchFrameSnapshot["phase"] = startState.visible
+    ? "planning"
+    : (nestedReport.phase ??
+      (completed
+        ? "done"
+        : waitingShell
+          ? "waiting_for_sources"
+          : activeShell ||
+              lowerText.includes("starting") ||
+              lowerText.includes("getting ready") ||
+              lowerText.includes("preparing")
+            ? "running"
+            : nestedReport.reportText
+              ? "done"
+              : "running"));
   return normalizeDeepResearchFrameSnapshot({
     phase,
-    statusMessage: nestedReport.startVisible
+    statusMessage: startState.visible
       ? "awaiting start confirmation"
       : nestedReport.statusText || null,
     reportText:
-      nestedReport.startVisible || activeShell || waitingShell
+      startState.visible || activeShell || waitingShell
         ? ""
         : nestedReport.reportText,
     frameUrl: frame.url() || nestedReport.href,
-    startVisible: nestedReport.startVisible,
-    startEnabled: nestedReport.startEnabled,
+    startVisible: startState.visible,
+    startEnabled: startState.enabled,
   });
 }
 
