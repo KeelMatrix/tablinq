@@ -20,13 +20,12 @@ import {
 import { safePageUrl } from "../capabilityProbe";
 
 import { callPageAdapter } from "./adapter";
-import { pauseForInteraction, sleep } from "./common";
+import { sleep } from "./common";
 import { readResearchSubmissionState } from "./researchSubmission";
 
 const DEEP_RESEARCH_START_BUTTON_NAME = /^Start(?:\s+\d+)?$/i;
 const DEEP_RESEARCH_START_BUTTON_TEXT = /^Start\b/i;
 const DEEP_RESEARCH_START_BUTTON_SELECTOR = "button, [role='button']";
-const DEEP_RESEARCH_START_CLICK_JITTER_MAX_MS = 250;
 const COMPOSER_CONTROL_SELECTOR = [
   "[data-testid='composer-root']",
   "[data-testid='composer-footer-actions']",
@@ -70,9 +69,13 @@ export async function beginDeepResearchRun(
         continue;
       }
       if (!(await clickDeepResearchStart(page))) {
-        throw new Error(
-          "research start failed: Deep Research Start control was present but not actionable",
+        await sleep(
+          Math.min(
+            adaptivePollIntervalMs("edge", Date.now() - startedAt),
+            Math.max(1, deadline - Date.now()),
+          ),
         );
+        continue;
       }
       const started = await waitForDeepResearchStartConfirmation(
         page,
@@ -335,10 +338,6 @@ export async function clickDeepResearchStart(page: Page): Promise<boolean> {
     if (!enabled) {
       continue;
     }
-    await pauseForInteraction(
-      "button_click",
-      DEEP_RESEARCH_START_CLICK_JITTER_MAX_MS,
-    );
     if (
       frame !== page.mainFrame() &&
       (await clickDeepResearchStartButtonInFrame(frame))

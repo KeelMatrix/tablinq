@@ -234,7 +234,7 @@ describe("browser adapter research: recovery and error cases", () => {
       {
         jobId: "job-research-recover-current-url",
         query: "recover research after browser disconnect",
-        timeoutMs: 7_000,
+        timeoutMs: 15_000,
       },
       async (update) => {
         if (
