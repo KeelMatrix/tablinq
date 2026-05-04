@@ -367,15 +367,7 @@
     }
   }
 
-  function probeDocument(options = {}) {
-    const selectorPackId = options.selectorPackId ?? "chatgpt-default";
-    const selectorPackVersion = options.selectorPackVersion ?? "v1";
-    const reportedAt = options.reportedAt ?? new Date().toISOString();
-    const preferredStrategies = options.preferredStrategies ?? {};
-    const selectorPack = options.selectorPack ?? null;
-
-    const documentRoot = document;
-    const body = documentRoot.body;
+  function createProbeContext(documentRoot = document) {
     const normalizeText = normalizeProbeText;
     const isVisible = isVisibleProbeElement;
     const firstVisible = (elements) =>
@@ -514,6 +506,87 @@
         ...options,
         roots: composerContainers(),
       });
+
+    const createNeighborhood = (capability, strategyId, element) =>
+      createProbeNeighborhood(capability, strategyId, element);
+
+    const safeQueryAll = (root, selector) => {
+      try {
+        return Array.from(root.querySelectorAll(selector));
+      } catch {
+        return [];
+      }
+    };
+
+    const genericControlSelector = [
+      controlCandidateSelector,
+      "textarea",
+      "[role='textbox']",
+      "[contenteditable='true']",
+      "input[type='file']",
+      "input[type='submit']",
+      "a[download]",
+    ].join(", ");
+
+    const visibleGenericControls = (roots = [documentRoot]) => {
+      const seen = new Set();
+      const controls = [];
+      for (const root of roots) {
+        for (const element of safeQueryAll(root, genericControlSelector)) {
+          if (!isVisible(element) || seen.has(element)) {
+            continue;
+          }
+          seen.add(element);
+          controls.push(element);
+        }
+      }
+      return controls;
+    };
+
+    return {
+      documentRoot,
+      body: documentRoot.body,
+      normalizeText,
+      isVisible,
+      firstVisible,
+      implicitRole,
+      accessibleName,
+      hasToken,
+      controlCandidateSelector,
+      firstVisibleBySelector,
+      firstVisibleBySelectors,
+      findNamedControl,
+      findTextbox,
+      composerContainers,
+      isComposerAdjacent,
+      composerAdjacencyScore,
+      findComposerAdjacentNamedControl,
+      createNeighborhood,
+      safeQueryAll,
+      visibleGenericControls,
+    };
+  }
+
+  function createCapabilityPredicates(context) {
+    const {
+      documentRoot,
+      normalizeText,
+      isVisible,
+      firstVisible,
+      implicitRole,
+      accessibleName,
+      hasToken,
+      controlCandidateSelector,
+      firstVisibleBySelector,
+      firstVisibleBySelectors,
+      findNamedControl,
+      findTextbox,
+      isComposerAdjacent,
+      composerAdjacencyScore,
+      findComposerAdjacentNamedControl,
+      safeQueryAll,
+      visibleGenericControls,
+    } = context;
 
     const popupRootSelector = "[role='menu'], [role='listbox']";
     const popupOptionSelector =
@@ -770,27 +843,6 @@
         },
       );
 
-    const discoverNamedControls = (tokens, options = {}) => {
-      const { includeHidden = false, include } = options;
-      const names = [];
-      for (const candidate of Array.from(
-        documentRoot.querySelectorAll(controlCandidateSelector),
-      )) {
-        if (!includeHidden && !isVisible(candidate)) {
-          continue;
-        }
-        if (include && !include(candidate)) {
-          continue;
-        }
-        const name = accessibleName(candidate);
-        if (!name || !hasToken(name, tokens) || names.includes(name)) {
-          continue;
-        }
-        names.push(name);
-      }
-      return names;
-    };
-
     const findSubmitNearComposer = () => {
       const exact = firstVisibleBySelectors([
         "[data-action='submit']",
@@ -856,17 +908,6 @@
       return null;
     };
 
-    const createNeighborhood = (capability, strategyId, element) =>
-      createProbeNeighborhood(capability, strategyId, element);
-
-    const safeQueryAll = (root, selector) => {
-      try {
-        return Array.from(root.querySelectorAll(selector));
-      } catch {
-        return [];
-      }
-    };
-
     const normalizedSelectorText = (selector) => normalizeText(selector);
 
     const elementFingerprint = (element) =>
@@ -897,31 +938,6 @@
         fingerprint.includes(expected) ||
         hasToken(fingerprint, [expected])
       );
-    };
-
-    const genericControlSelector = [
-      controlCandidateSelector,
-      "textarea",
-      "[role='textbox']",
-      "[contenteditable='true']",
-      "input[type='file']",
-      "input[type='submit']",
-      "a[download]",
-    ].join(", ");
-
-    const visibleGenericControls = (roots = [documentRoot]) => {
-      const seen = new Set();
-      const controls = [];
-      for (const root of roots) {
-        for (const element of safeQueryAll(root, genericControlSelector)) {
-          if (!isVisible(element) || seen.has(element)) {
-            continue;
-          }
-          seen.add(element);
-          controls.push(element);
-        }
-      }
-      return controls;
     };
 
     const isUploadLikeControl = (element) =>
@@ -1121,6 +1137,57 @@
       return best;
     };
 
+    return {
+      popupOptionSelector,
+      isModelOption,
+      isEffortOption,
+      isModelPickerTrigger,
+      isEffortPickerTrigger,
+      isSearchChip,
+      isSearchMenuItem,
+      isSearchModeControl,
+      isResearchModeControl,
+      visiblePopupRootsFor,
+      composerToolsMenuRootsFor,
+      findModelPickerTrigger,
+      findEffortPickerTrigger,
+      findSubmitNearComposer,
+      findUploadLabel,
+      genericTextMatch,
+      genericAriaRoleMatch,
+      genericDomNeighborhoodMatch,
+      firstGenericMatch,
+    };
+  }
+
+  function createCapabilityDefinitions(context, predicates) {
+    const {
+      documentRoot,
+      firstVisible,
+      firstVisibleBySelector,
+      firstVisibleBySelectors,
+      findNamedControl,
+      findComposerAdjacentNamedControl,
+      safeQueryAll,
+    } = context;
+    const {
+      isModelOption,
+      isEffortOption,
+      isModelPickerTrigger,
+      isSearchModeControl,
+      isResearchModeControl,
+      visiblePopupRootsFor,
+      composerToolsMenuRootsFor,
+      findModelPickerTrigger,
+      findEffortPickerTrigger,
+      findSubmitNearComposer,
+      findUploadLabel,
+      genericTextMatch,
+      genericAriaRoleMatch,
+      genericDomNeighborhoodMatch,
+      firstGenericMatch,
+    } = predicates;
+
     const createGenericStrategyFromPackEntry = (capability, entry) => ({
       id: entry.strategy_id,
       score: entry.score,
@@ -1131,7 +1198,7 @@
         if (entry.kind === "css") {
           return firstGenericMatch(
             capability,
-            safeQueryAll(documentRoot, entry.selector).filter(isVisible),
+            safeQueryAll(documentRoot, entry.selector).filter(context.isVisible),
             entry.selector,
           );
         }
@@ -1174,7 +1241,7 @@
           {
             id: "aria-textbox",
             score: 0.94,
-            find: () => findTextbox(),
+            find: () => context.findTextbox(),
           },
           {
             id: "submit-neighborhood",
@@ -1296,7 +1363,7 @@
               findComposerAdjacentNamedControl(
                 ["standard", "extended", "effort", "reasoning", "thinking"],
                 {
-                  include: isEffortPickerTrigger,
+                  include: predicates.isEffortPickerTrigger,
                 },
               ),
           },
@@ -1310,7 +1377,7 @@
             score: 1,
             find: () =>
               findComposerAdjacentNamedControl(["search"], {
-                include: isSearchChip,
+                include: predicates.isSearchChip,
               }),
           },
           {
@@ -1318,9 +1385,9 @@
             score: 0.98,
             find: () =>
               findNamedControl(["search", "web search"], {
-                include: isSearchMenuItem,
+                include: predicates.isSearchMenuItem,
                 includeHidden: true,
-                roots: composerToolsMenuRootsFor(isSearchMenuItem),
+                roots: composerToolsMenuRootsFor(predicates.isSearchMenuItem),
               }),
           },
           {
@@ -1440,16 +1507,23 @@
       },
     ];
 
-    const orderStrategies = (capability, strategies) =>
-      orderCapabilityStrategies({
-        capability,
-        strategies,
-        selectorPack,
-        preferredStrategies,
-        createGenericStrategy: (entry) =>
-          createGenericStrategyFromPackEntry(capability, entry),
-      });
+    return {
+      definitions,
+      createGenericStrategyFromPackEntry,
+    };
+  }
 
+  function probeDocument(options = {}) {
+    const selectorPackId = options.selectorPackId ?? "chatgpt-default";
+    const selectorPackVersion = options.selectorPackVersion ?? "v1";
+    const reportedAt = options.reportedAt ?? new Date().toISOString();
+    const preferredStrategies = options.preferredStrategies ?? {};
+    const selectorPack = options.selectorPack ?? null;
+
+    const context = createProbeContext(document);
+    const predicates = createCapabilityPredicates(context);
+    const { definitions, createGenericStrategyFromPackEntry } =
+      createCapabilityDefinitions(context, predicates);
     const aliases = createAliasBuckets();
 
     const captureAliases = (capability, element) =>
@@ -1457,16 +1531,16 @@
         aliases,
         capability,
         element,
-        accessibleName,
-        hasToken,
-        visiblePopupRootsFor,
-        isVisible,
-        isModelOption,
-        isEffortOption,
-        isModelPickerTrigger,
-        isSearchModeControl,
-        isResearchModeControl,
-        popupOptionSelector,
+        accessibleName: context.accessibleName,
+        hasToken: context.hasToken,
+        visiblePopupRootsFor: predicates.visiblePopupRootsFor,
+        isVisible: context.isVisible,
+        isModelOption: predicates.isModelOption,
+        isEffortOption: predicates.isEffortOption,
+        isModelPickerTrigger: predicates.isModelPickerTrigger,
+        isSearchModeControl: predicates.isSearchModeControl,
+        isResearchModeControl: predicates.isResearchModeControl,
+        popupOptionSelector: predicates.popupOptionSelector,
       });
 
     const matrix = {
@@ -1482,15 +1556,27 @@
 
     const uiSignature = [
       window.location.hostname || "unknown-host",
-      body?.dataset.uiVariant || "unlabelled",
-      body?.querySelector("#prompt-textarea")
+      context.body?.dataset.uiVariant || "unlabelled",
+      context.body?.querySelector("#prompt-textarea")
         ? "prompt-textarea"
         : "no-prompt-id",
-      body?.querySelector("[data-slot]") ? "slot-ui" : "aria-ui",
-      body?.querySelector("[role='textbox']") ? "role-textbox" : "native-textbox",
+      context.body?.querySelector("[data-slot]") ? "slot-ui" : "aria-ui",
+      context.body?.querySelector("[role='textbox']")
+        ? "role-textbox"
+        : "native-textbox",
     ].join(":");
     const strategyMatches = {};
     const domNeighborhoods = [];
+
+    const orderStrategies = (capability, strategies) =>
+      orderCapabilityStrategies({
+        capability,
+        strategies,
+        selectorPack,
+        preferredStrategies,
+        createGenericStrategy: (entry) =>
+          createGenericStrategyFromPackEntry(capability, entry),
+      });
 
     for (const definition of definitions) {
       const ordered = orderStrategies(definition.key, definition.strategies);
@@ -1513,7 +1599,7 @@
 
       strategyMatches[definition.key] = strategyId;
       domNeighborhoods.push(
-        createNeighborhood(definition.key, strategyId, match),
+        context.createNeighborhood(definition.key, strategyId, match),
       );
       captureAliases(definition.key, match);
     }
