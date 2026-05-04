@@ -145,7 +145,12 @@ function installContentScript(
       clearTimeout(timer);
     }
     timer = setTimeout(() => {
-      publish();
+      try {
+        publish();
+      } catch {
+        // The page probe can disappear while a previously installed content
+        // script is being torn down. Ignore stale scheduled publishes.
+      }
     }, 50);
   };
 
