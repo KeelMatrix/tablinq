@@ -228,6 +228,12 @@ export function createDeepResearchRuntime({
       return;
     }
 
+    if (scenario === "research-timeout-reload-success" && state.index >= 24) {
+      persistResearchState(state);
+      timers.stop();
+      return;
+    }
+
     if (scenario === "research-failure" && state.index >= 24) {
       setResearchState("failed", "temporary upstream issue; retryable");
       setStreamingControls(false);
@@ -306,6 +312,10 @@ export function createDeepResearchRuntime({
       state.phase === "waiting" ? "gathering sources" : "drafting report",
     );
     renderResearchChunk(state);
+    if (scenario === "research-timeout-reload-success") {
+      finishResearch(state);
+      return;
+    }
     setStreamingControls(true);
     timers.set(() => tickResearch(state), 80);
   }

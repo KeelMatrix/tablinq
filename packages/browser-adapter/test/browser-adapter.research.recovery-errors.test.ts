@@ -174,6 +174,38 @@ describe("browser adapter research: recovery and error cases", () => {
     await adapter.shutdown();
   });
 
+  it("reloads once before failing a research timeout and returns a report if it appears", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "research-timeout-reload-success",
+    });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const result = await adapter.research(
+      {
+        jobId: "job-research-timeout-reload-success",
+        query: "finish research after timeout reload",
+        timeoutMs: 1_500,
+      },
+      () => {},
+    );
+
+    expect(result.report_text).toContain(
+      "Research report for: finish research after timeout reload",
+    );
+
+    await adapter.shutdown();
+  });
+
   it("fails classic research jobs with a research-specific error", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");

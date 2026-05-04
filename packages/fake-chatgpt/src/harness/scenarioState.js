@@ -2,6 +2,7 @@ export const scenarioRegistry = {
   success: {},
   reload: {},
   timeout: {},
+  "timeout-reload-success": {},
   "done-early": {},
   "stall-recover": {},
   "stall-recover-transient": {},
@@ -34,6 +35,7 @@ export const scenarioRegistry = {
     keyboardSubmit: false,
   },
   "research-success": { deepResearchFrame: true },
+  "research-timeout-reload-success": { deepResearchFrame: true },
   "research-failure": { deepResearchFrame: true },
   "research-reload": { deepResearchFrame: true },
   "research-starting-shell": {

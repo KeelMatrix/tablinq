@@ -96,6 +96,37 @@ describe("browser adapter ask: error paths", () => {
     await adapter.shutdown();
   });
 
+  it("reloads once before failing an ask timeout and returns a response if it appears", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "timeout-reload-success",
+    });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-timeout-reload-success",
+        prompt: "finish after timeout reload",
+        timeoutMs: 600,
+      },
+      () => {},
+    );
+
+    expect(result.output_text).toContain(
+      "Fake response for: finish after timeout reload",
+    );
+
+    await adapter.shutdown();
+  });
+
   it("classifies provider generation failures without clicking Retry", async () => {
     const server = await harness.startServer();
     const targetUrl = withHarnessUrl(server.url, {
