@@ -45,9 +45,19 @@ jobs:
         run: cargo test --workspace --locked
 
   rust-browser-recovery:
-    name: Rust browser recovery
+    name: Rust browser recovery (${{ matrix.group }})
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: replay
+            tests: core_service_recovers_provider_generation_failure_with_fresh_conversation_replay,core_service_can_disable_provider_generation_failure_auto_recovery
+          - group: conversation
+            tests: conversation_new_leaves_existing_provider_thread_before_next_ask,core_service_stops_after_second_provider_generation_failure
+          - group: manifest
+            tests: core_service_recovers_provider_generation_failure_with_durable_manifest_context
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -86,7 +96,14 @@ jobs:
           }
 
       - name: Run browser-backed recovery tests
-        run: cargo test -p gptd --test core_service_recovery --locked -- --nocapture
+        shell: pwsh
+        run: |
+          foreach ($test in "${{ matrix.tests }}".Split(",")) {
+            cargo test -p gptd --test core_service_recovery $test --locked -- --nocapture
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+          }
 
   typescript-core:
     name: TypeScript core checks
