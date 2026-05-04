@@ -9,6 +9,9 @@ const runtimeModulePaths = [
   resolve(packageRoot, "src", "probeRuntime", "text.js"),
   resolve(packageRoot, "src", "probeRuntime", "strategies.js"),
   resolve(packageRoot, "src", "probeRuntime", "aliases.js"),
+  resolve(packageRoot, "src", "probeRuntime", "probeContext.js"),
+  resolve(packageRoot, "src", "probeRuntime", "capabilityPredicates.js"),
+  resolve(packageRoot, "src", "probeRuntime", "capabilityDefinitions.js"),
   resolve(packageRoot, "src", "probeRuntime", "documentProbe.js"),
 ];
 
