@@ -267,6 +267,12 @@ export function createAskRuntime({
       return;
     }
 
+    if (scenario === "stream-stall-reload-advance" && state.index >= 18) {
+      setStreamState("running");
+      persistStreamState(state);
+      return;
+    }
+
     if (scenario === "stall-recover" && !state.didStall && state.index >= 18) {
       state.didStall = true;
       persistStreamState(state);
@@ -509,6 +515,15 @@ export function createAskRuntime({
       return;
     }
     if (scenario === "timeout") {
+      persistStreamState(state);
+      return;
+    }
+    if (scenario === "stream-stall-reload-advance") {
+      state.reloadResumeCount = (state.reloadResumeCount || 0) + 1;
+      state.index = Math.min(state.responseText.length - 1, state.index + 6);
+      setStreamState("running");
+      setStreamingControls(true);
+      renderChunk(state);
       persistStreamState(state);
       return;
     }

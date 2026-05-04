@@ -41,6 +41,36 @@ import { installBrowserAdapterHarness } from "./helpers/browserAdapterHarness";
 
 const harness = installBrowserAdapterHarness();
 
+async function withShortAskStreamWatchdog<T>(
+  run: () => Promise<T>,
+): Promise<T> {
+  const previousInterval = process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS;
+  const previousMax = process.env.TABLINQ_ASK_STREAM_MAX_MS;
+  const previousSticky = process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+  process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS = "150";
+  process.env.TABLINQ_ASK_STREAM_MAX_MS = "5000";
+  process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = "5000";
+  try {
+    return await run();
+  } finally {
+    if (previousInterval === undefined) {
+      delete process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS;
+    } else {
+      process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS = previousInterval;
+    }
+    if (previousMax === undefined) {
+      delete process.env.TABLINQ_ASK_STREAM_MAX_MS;
+    } else {
+      process.env.TABLINQ_ASK_STREAM_MAX_MS = previousMax;
+    }
+    if (previousSticky === undefined) {
+      delete process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+    } else {
+      process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = previousSticky;
+    }
+  }
+}
+
 describe("browser adapter ask: submit readiness and surface locking", () => {
   it("falls back to keyboard submit when a composer plus button sits next to send", async () => {
     const server = await harness.startServer();
@@ -234,25 +264,27 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     );
     await adapter.open({ targetUrl, headless: true });
 
-    const first = adapter.ask(
-      {
-        jobId: "job-ask-single-flight-first",
-        prompt: "hold the browser surface",
-        timeoutMs: 600,
-      },
-      () => {},
-    );
-    const second = adapter.ask(
-      {
-        jobId: "job-ask-single-flight-second",
-        prompt: "overlap on the same surface",
-        timeoutMs: 600,
-      },
-      () => {},
-    );
+    await withShortAskStreamWatchdog(async () => {
+      const first = adapter.ask(
+        {
+          jobId: "job-ask-single-flight-first",
+          prompt: "hold the browser surface",
+          timeoutMs: 600,
+        },
+        () => {},
+      );
+      const second = adapter.ask(
+        {
+          jobId: "job-ask-single-flight-second",
+          prompt: "overlap on the same surface",
+          timeoutMs: 600,
+        },
+        () => {},
+      );
 
-    await expect(second).rejects.toThrow(/browser surface busy/i);
-    await expect(first).rejects.toThrow(/timed out/i);
+      await expect(second).rejects.toThrow(/browser surface busy/i);
+      await expect(first).rejects.toThrow(/timed out/i);
+    });
 
     await adapter.shutdown();
   });

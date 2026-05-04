@@ -41,6 +41,36 @@ import { installBrowserAdapterHarness } from "./helpers/browserAdapterHarness";
 
 const harness = installBrowserAdapterHarness();
 
+async function withShortAskStreamWatchdog<T>(
+  run: () => Promise<T>,
+): Promise<T> {
+  const previousInterval = process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS;
+  const previousMax = process.env.TABLINQ_ASK_STREAM_MAX_MS;
+  const previousSticky = process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+  process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS = "150";
+  process.env.TABLINQ_ASK_STREAM_MAX_MS = "5000";
+  process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = "5000";
+  try {
+    return await run();
+  } finally {
+    if (previousInterval === undefined) {
+      delete process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS;
+    } else {
+      process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS = previousInterval;
+    }
+    if (previousMax === undefined) {
+      delete process.env.TABLINQ_ASK_STREAM_MAX_MS;
+    } else {
+      process.env.TABLINQ_ASK_STREAM_MAX_MS = previousMax;
+    }
+    if (previousSticky === undefined) {
+      delete process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+    } else {
+      process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = previousSticky;
+    }
+  }
+}
+
 describe("browser adapter ask: attach mode", () => {
   it("streams ask responses to completion in attach mode", async () => {
     const server = await harness.startServer();
@@ -275,16 +305,18 @@ describe("browser adapter ask: attach mode", () => {
     const bundleRoot = await harness.createWorkspace("browser");
     await adapter.open({ targetUrl, headless: true });
 
-    await expect(
-      adapter.ask(
-        {
-          jobId: "job-ask-timeout-attach",
-          prompt: "never finish in attach mode",
-          timeoutMs: 600,
-        },
-        () => {},
-      ),
-    ).rejects.toThrow("timed out");
+    await withShortAskStreamWatchdog(async () => {
+      await expect(
+        adapter.ask(
+          {
+            jobId: "job-ask-timeout-attach",
+            prompt: "never finish in attach mode",
+            timeoutMs: 600,
+          },
+          () => {},
+        ),
+      ).rejects.toThrow("timed out");
+    });
 
     const diagnostics = await adapter.diagnostics(
       path.join(bundleRoot, "bundle"),

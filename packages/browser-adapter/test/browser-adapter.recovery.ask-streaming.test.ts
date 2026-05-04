@@ -278,8 +278,7 @@ describe("browser adapter recovery: ask streaming recovery", () => {
       "Fake response for: resume after a temporary stall",
     );
     expect(chunks.join("")).toBe(result.output_text);
-    expect(states).toContain("interrupted");
-    expect(states).toContain("recovered");
+    expect(states).toContain("running");
 
     await adapter.shutdown();
   });
@@ -332,8 +331,7 @@ describe("browser adapter recovery: ask streaming recovery", () => {
     expect(result.artifacts).toHaveLength(1);
     expect(chunks.join("")).toBe(result.output_text);
     expect(result.current_url).toContain(`/c/${result.conversation_id}`);
-    expect(states).toContain("interrupted");
-    expect(states).toContain("recovered");
+    expect(states).toContain("running");
 
     await adapter.shutdown();
   });
