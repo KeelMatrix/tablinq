@@ -18,6 +18,7 @@ export type HarnessUrlOptions = {
   scenario?:
     | "success"
     | "timeout"
+    | "timeout-reload-success"
     | "reload"
     | "upload-processing-delay"
     | "upload-processing-stuck"
@@ -47,6 +48,7 @@ export type HarnessUrlOptions = {
     | "conversation-load-failure"
     | "conversation-load-failure-delayed"
     | "research-success"
+    | "research-timeout-reload-success"
     | "research-starting-shell"
     | "research-failure"
     | "research-deep-landing"

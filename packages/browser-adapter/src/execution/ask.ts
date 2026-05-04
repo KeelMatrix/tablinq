@@ -11,6 +11,7 @@ import {
   handleStickyStreamingAskIfNeeded,
 } from "./askRecoveryFlow";
 import { openAskExecutionPage, prepareAskSubmission } from "./askSubmission";
+import { finalizeAsk, stabilizeAskCompletion } from "./finalization";
 import {
   createAskRuntimeState,
   emitAskIdentityUpdate,
@@ -19,6 +20,7 @@ import {
   updateAskDoneStreak,
 } from "./askState";
 import { resolveAskTiming, sleepForAskPoll } from "./askTiming";
+import { NAVIGATION_TIMEOUT_MS } from "../timing";
 import type {
   AskExecutionOptions,
   BrowserExecutionHost,
@@ -155,5 +157,81 @@ export async function runAsk(
     await sleepForAskPoll(state, timing.timeoutAt);
   }
 
+  const timeoutReload = await reloadAskOnceAfterTimeout(
+    host,
+    command,
+    page,
+    state,
+    onChunk,
+    onState,
+  );
+  if (timeoutReload.result) {
+    return timeoutReload.result;
+  }
+
   throw new Error("ask timed out waiting for streamed response");
+}
+
+async function reloadAskOnceAfterTimeout(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+  page: Awaited<ReturnType<typeof openAskExecutionPage>>,
+  state: ReturnType<typeof createAskRuntimeState>,
+  onChunk: ChunkSink,
+  onState: StateSink,
+): Promise<{ result?: AskResultSnapshot }> {
+  await onState({
+    state: "interrupted",
+    reason: "ask reached its timeout; reloading once before failing",
+    at: new Date().toISOString(),
+    conversation_id: state.knownConversationId,
+    message_id: state.knownMessageId,
+    current_url: safePageUrl(page),
+    streaming_safe: false,
+  });
+  await page
+    .reload({ waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS })
+    .catch(() => undefined);
+  await scrollToBottomIfNeeded(page).catch(() => undefined);
+  const snapshot = await readAskSnapshot(page, state.askBaseline).catch(
+    () => null,
+  );
+  if (!snapshot) {
+    return {};
+  }
+  throwIfProviderGenerationFailed(snapshot);
+  await recordAskSnapshotProgress(
+    host,
+    command,
+    state,
+    snapshot,
+    onChunk,
+    onState,
+    "observed assistant identity after timeout reload",
+  );
+  updateAskDoneStreak(state, snapshot);
+  if (snapshot.state !== "done") {
+    return {};
+  }
+  const stabilized = await stabilizeAskCompletion(
+    page,
+    state.askBaseline,
+    snapshot,
+    Date.now() + 1_000,
+  );
+  await recordAskSnapshotProgress(
+    host,
+    command,
+    state,
+    stabilized,
+    onChunk,
+    onState,
+    "observed stabilized assistant identity after timeout reload",
+  );
+  if (stabilized.state !== "done") {
+    return {};
+  }
+  return {
+    result: await finalizeAsk(host, command, page, state, stabilized, onChunk),
+  };
 }

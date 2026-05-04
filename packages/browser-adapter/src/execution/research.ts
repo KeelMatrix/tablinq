@@ -201,6 +201,18 @@ export async function runResearch(
     await sleepForResearchPoll(state, timing.timeoutAt);
   }
 
+  const timeoutReload = await reloadResearchOnceAfterTimeout(
+    host,
+    command,
+    page,
+    state,
+    onUpdate,
+    onState,
+  );
+  if (timeoutReload.result) {
+    return timeoutReload.result;
+  }
+
   throw new Error("research job failed: timed out waiting for completion");
 }
 
@@ -513,6 +525,71 @@ async function refreshActiveResearchPageIfNeeded(
   await scrollToBottomIfNeeded(page).catch(() => undefined);
   const refreshed = await readLiveResearchSnapshot(page).catch(() => null);
   return refreshed ? { page, snapshot: refreshed } : { page };
+}
+
+async function reloadResearchOnceAfterTimeout(
+  host: BrowserExecutionHost,
+  command: ResearchExecutionCommand,
+  page: Page,
+  state: ResearchRuntimeState,
+  onUpdate: ResearchUpdateSink,
+  onState: StateSink,
+): Promise<{ result?: ResearchResultSnapshot }> {
+  await onState({
+    state: "interrupted",
+    reason: "research reached its timeout; reloading once before failing",
+    at: new Date().toISOString(),
+    conversation_id: state.knownConversationId,
+    message_id: state.knownMessageId,
+    current_url: page.url(),
+    streaming_safe: false,
+  });
+  await page
+    .reload({ waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS })
+    .catch(() => undefined);
+  await scrollToBottomIfNeeded(page).catch(() => undefined);
+  const snapshot = await readLiveResearchSnapshot(page).catch(() => null);
+  if (!snapshot) {
+    return {};
+  }
+  await recordResearchSnapshotProgress(
+    host,
+    state,
+    snapshot,
+    onUpdate,
+    onState,
+    "observed research identity after timeout reload",
+  );
+  throwIfResearchFailed(snapshot);
+  if (snapshot.status !== "done") {
+    return {};
+  }
+  const stabilized = await stabilizeResearchCompletion(
+    page,
+    snapshot,
+    Date.now() + 1_000,
+  );
+  await recordResearchSnapshotProgress(
+    host,
+    state,
+    stabilized,
+    onUpdate,
+    onState,
+    "observed stabilized research identity after timeout reload",
+  );
+  if (stabilized.status !== "done") {
+    return {};
+  }
+  return {
+    result: await finalizeResearch(
+      host,
+      command,
+      page,
+      state,
+      stabilized,
+      onUpdate,
+    ),
+  };
 }
 
 function isAwaitingResearchStart(snapshot: ResearchSnapshot): boolean {

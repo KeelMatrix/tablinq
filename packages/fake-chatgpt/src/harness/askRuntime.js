@@ -258,7 +258,10 @@ export function createAskRuntime({
       return;
     }
 
-    if (scenario === "timeout" && state.index >= 18) {
+    if (
+      (scenario === "timeout" || scenario === "timeout-reload-success") &&
+      state.index >= 18
+    ) {
       setStreamState("running");
       persistStreamState(state);
       return;
@@ -501,6 +504,10 @@ export function createAskRuntime({
     }
     renderChunk(state);
 
+    if (scenario === "timeout-reload-success") {
+      finishStream(state);
+      return;
+    }
     if (scenario === "timeout") {
       persistStreamState(state);
       return;
