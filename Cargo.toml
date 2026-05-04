@@ -1,10 +1,6 @@
 [workspace]
 members = [
-  "crates/gpt",
-  "crates/gptd",
-  "crates/shared-protocol",
-  "crates/tablinq-gateway",
-  "crates/tablinq-host",
+  "crates/*",
 ]
 resolver = "2"
 
