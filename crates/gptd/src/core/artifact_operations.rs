@@ -108,7 +108,7 @@ impl CoreService {
             file_name: format!("request-evidence-{request_id}.json"),
             content_type: EVIDENCE_ARTIFACT_CONTENT_TYPE.to_owned(),
             size_bytes: payload_bytes.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(&payload_bytes)),
+            sha256: sha256_hex(&payload_bytes),
             storage_path: artifact_path.display().to_string(),
         };
         db.insert_artifact(&artifact, created_at)?;
@@ -160,6 +160,16 @@ impl CoreService {
         db.insert_failure_bundle(&bundle)?;
         Ok(bundle)
     }
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut text = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(&mut text, "{byte:02x}");
+    }
+    text
 }
 
 fn capture_diagnostics_snapshot(

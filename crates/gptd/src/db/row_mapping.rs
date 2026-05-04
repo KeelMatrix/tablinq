@@ -14,6 +14,16 @@ pub(crate) fn parse_timestamp(value: String) -> rusqlite::Result<DateTime<Utc>> 
         })
 }
 
+fn get_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<u64> {
+    Ok(row.get::<_, i64>(index)?.max(0) as u64)
+}
+
+fn get_optional_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<u64>> {
+    Ok(row
+        .get::<_, Option<i64>>(index)?
+        .map(|value| value.max(0) as u64))
+}
+
 pub(crate) fn map_conversation_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<ConversationSummary> {
@@ -35,7 +45,7 @@ pub(crate) fn map_artifact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Arti
         message_id: row.get(2)?,
         file_name: row.get(3)?,
         content_type: row.get(4)?,
-        size_bytes: row.get(5)?,
+        size_bytes: get_u64(row, 5)?,
         sha256: row.get(6)?,
         storage_path: row.get(7)?,
         created_at: parse_timestamp(row.get::<_, String>(8)?)?,
@@ -84,8 +94,8 @@ fn map_request_summary_row_from_offset(
             .get::<_, Option<String>>(offset + 9)?
             .map(parse_timestamp)
             .transpose()?,
-        duration_ms: row.get(offset + 10)?,
-        queue_wait_ms: row.get::<_, i64>(offset + 11)?.max(0) as u64,
+        duration_ms: get_optional_u64(row, offset + 10)?,
+        queue_wait_ms: get_u64(row, offset + 11)?,
         interrupted_at: row
             .get::<_, Option<String>>(offset + 12)?
             .map(parse_timestamp)
@@ -111,9 +121,9 @@ fn map_request_summary_row_from_offset(
         )?,
         usage: RequestUsage {
             status: row.get(offset + 20)?,
-            prompt_tokens: row.get(offset + 21)?,
-            completion_tokens: row.get(offset + 22)?,
-            total_tokens: row.get(offset + 23)?,
+            prompt_tokens: get_optional_u64(row, offset + 21)?,
+            completion_tokens: get_optional_u64(row, offset + 22)?,
+            total_tokens: get_optional_u64(row, offset + 23)?,
         },
         warnings,
     })

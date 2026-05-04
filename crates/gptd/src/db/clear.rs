@@ -50,7 +50,7 @@ fn artifact_storage_paths(tx: &Transaction<'_>) -> Result<Vec<String>> {
 
 fn count_rows(tx: &Transaction<'_>, table: &str) -> Result<u64> {
     let count = tx.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-        row.get(0)
+        row.get::<_, i64>(0)
     })?;
-    Ok(count)
+    Ok(count.max(0) as u64)
 }
