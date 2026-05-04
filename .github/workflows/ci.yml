@@ -140,13 +140,13 @@ jobs:
         run: pnpm run test:ts:fast
 
   typescript-tests:
-    name: TypeScript tests (${{ matrix.shard }}/4)
+    name: TypeScript tests (${{ matrix.shard }}/10)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -166,4 +166,4 @@ jobs:
         run: pnpm install --frozen-lockfile --prefer-offline
 
       - name: Run TypeScript test shard
-        run: pnpm exec vitest run --shard=${{ matrix.shard }}/4 --reporter=dot
+        run: pnpm exec vitest run --shard=${{ matrix.shard }}/10 --reporter=dot
