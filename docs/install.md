@@ -159,7 +159,11 @@ The state root contains:
 - `chrome-attach-profile/`
 - `downloads/`
 - `crash-bundles/`
+- `recovery-manifests/`
 - `gateway-uploads/`
+- `daemon.lock`
+- `gateway.lock`
+- `gateway-status.json`
 
 `browser-profile/` still exists even though attach-first no longer uses a managed profile as the default ownership model. That directory remains useful for managed fallback and compatibility.
 
