@@ -5,6 +5,8 @@ import {
   adaptivePollIntervalMs,
   ASK_STALL_RECOVERY_GRACE_MS,
   ASK_TIMEOUT_MS,
+  askResponseStreamMaxMs,
+  askResponseStreamSnapshotIntervalMs,
   askStickyStreamFinalGraceMs,
   askStickyStreamReloadStallMs,
 } from "../timing";
@@ -12,11 +14,14 @@ import {
 import type { AskRuntimeState } from "./types";
 
 export type AskTiming = {
+  executionTimeoutMs: number;
   timeoutAt: number;
   stallTimeoutMs: number;
   initialStallTimeoutMs: number;
   stickyStreamReloadStallMs: number;
   stickyStreamFinalGraceMs: number;
+  responseStreamSnapshotIntervalMs: number;
+  responseStreamMaxMs: number;
 };
 
 export function resolveAskTiming(command: AskExecutionCommand): AskTiming {
@@ -33,6 +38,7 @@ export function resolveAskTiming(command: AskExecutionCommand): AskTiming {
     ASK_TIMEOUT_MS,
   );
   return {
+    executionTimeoutMs,
     timeoutAt: Date.now() + executionTimeoutMs,
     stallTimeoutMs,
     initialStallTimeoutMs: Math.max(
@@ -41,6 +47,8 @@ export function resolveAskTiming(command: AskExecutionCommand): AskTiming {
     ),
     stickyStreamReloadStallMs,
     stickyStreamFinalGraceMs,
+    responseStreamSnapshotIntervalMs: askResponseStreamSnapshotIntervalMs(),
+    responseStreamMaxMs: askResponseStreamMaxMs(),
   };
 }
 

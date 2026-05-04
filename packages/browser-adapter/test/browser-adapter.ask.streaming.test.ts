@@ -41,7 +41,227 @@ import { installBrowserAdapterHarness } from "./helpers/browserAdapterHarness";
 
 const harness = installBrowserAdapterHarness();
 
+async function withAskStreamWatchdogEnv<T>(
+  values: {
+    intervalMs?: number;
+    maxMs?: number;
+    stickyReloadMs?: number;
+  },
+  run: () => Promise<T>,
+): Promise<T> {
+  const previousInterval = process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS;
+  const previousMax = process.env.TABLINQ_ASK_STREAM_MAX_MS;
+  const previousSticky = process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+  if (values.intervalMs !== undefined) {
+    process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS = String(
+      values.intervalMs,
+    );
+  }
+  if (values.maxMs !== undefined) {
+    process.env.TABLINQ_ASK_STREAM_MAX_MS = String(values.maxMs);
+  }
+  if (values.stickyReloadMs !== undefined) {
+    process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = String(
+      values.stickyReloadMs,
+    );
+  }
+  try {
+    return await run();
+  } finally {
+    if (previousInterval === undefined) {
+      delete process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS;
+    } else {
+      process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS = previousInterval;
+    }
+    if (previousMax === undefined) {
+      delete process.env.TABLINQ_ASK_STREAM_MAX_MS;
+    } else {
+      process.env.TABLINQ_ASK_STREAM_MAX_MS = previousMax;
+    }
+    if (previousSticky === undefined) {
+      delete process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+    } else {
+      process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = previousSticky;
+    }
+  }
+}
+
 describe("browser adapter ask: streaming and finalization", () => {
+  it("continues a real ask stream after the request timeout has elapsed", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openTrackedManagedAdapter(harness, server.url);
+
+    try {
+      await withAskStreamWatchdogEnv(
+        { intervalMs: 150, maxMs: 5000 },
+        async () => {
+          const prompt =
+            "write a long answer that keeps streaming past the original timeout "
+              .repeat(6)
+              .trim();
+          const result = await adapter.ask(
+            {
+              jobId: "job-ask-stream-after-timeout",
+              prompt,
+              timeoutMs: 250,
+            },
+            () => {},
+          );
+
+          expect(result.output_text).toBe(`Fake response for: ${prompt}`);
+        },
+      );
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
+  it("fails when a real ask stream remains unchanged after a watchdog reload", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, { scenario: "timeout" });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
+
+    try {
+      await withAskStreamWatchdogEnv(
+        { intervalMs: 150, maxMs: 5000, stickyReloadMs: 5000 },
+        async () => {
+          await expect(
+            adapter.ask(
+              {
+                jobId: "job-ask-stream-stuck-after-reload",
+                prompt: "stall after a real response starts",
+                timeoutMs: 5000,
+              },
+              () => {},
+            ),
+          ).rejects.toThrow(/timed out while streaming response/i);
+        },
+      );
+      expect((await adapter.health()).reload_count).toBeGreaterThan(0);
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
+  it("returns a final answer when a watchdog reload reveals completion", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "timeout-reload-success",
+    });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
+
+    try {
+      await withAskStreamWatchdogEnv(
+        { intervalMs: 150, maxMs: 5000, stickyReloadMs: 5000 },
+        async () => {
+          const result = await adapter.ask(
+            {
+              jobId: "job-ask-stream-watchdog-reload-final",
+              prompt: "finish after the watchdog reloads",
+              timeoutMs: 5000,
+            },
+            () => {},
+          );
+
+          expect(result.output_text).toBe(
+            "Fake response for: finish after the watchdog reloads",
+          );
+        },
+      );
+      expect((await adapter.health()).reload_count).toBeGreaterThan(0);
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
+  it("aborts a changing real ask stream at the max streaming guard", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openTrackedManagedAdapter(harness, server.url);
+
+    try {
+      await withAskStreamWatchdogEnv(
+        { intervalMs: 150, maxMs: 800, stickyReloadMs: 5000 },
+        async () => {
+          await expect(
+            adapter.ask(
+              {
+                jobId: "job-ask-stream-max-guard",
+                prompt: "keep writing until the stream guard stops you ".repeat(
+                  40,
+                ),
+                timeoutMs: 250,
+              },
+              () => {},
+            ),
+          ).rejects.toThrow(/timed out while streaming response/i);
+        },
+      );
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
+  it("aborts on the fourth watchdog stall after three advancing reloads", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "stream-stall-reload-advance",
+    });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
+
+    try {
+      await withAskStreamWatchdogEnv(
+        { intervalMs: 150, maxMs: 5000, stickyReloadMs: 5000 },
+        async () => {
+          await expect(
+            adapter.ask(
+              {
+                jobId: "job-ask-stream-watchdog-fourth-stall",
+                prompt: "advance a little after each reload ".repeat(20),
+                timeoutMs: 5000,
+              },
+              () => {},
+            ),
+          ).rejects.toThrow(/timed out while streaming response/i);
+        },
+      );
+      expect((await adapter.health()).reload_count).toBeGreaterThanOrEqual(3);
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
+  it("keeps thought artifacts on the existing pre-answer timeout path", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "thinking-artifact-messages",
+    });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
+
+    try {
+      await withAskStreamWatchdogEnv(
+        { intervalMs: 150, maxMs: 5000, stickyReloadMs: 5000 },
+        async () => {
+          const result = await adapter.ask(
+            {
+              jobId: "job-ask-thought-artifacts-before-timeout",
+              prompt: "do not count thinking artifacts as answer text",
+              timeoutMs: 180,
+            },
+            () => {},
+          );
+
+          expect(result.output_text).toBe(
+            "Fake response for: do not count thinking artifacts as answer text",
+          );
+        },
+      );
+      expect((await adapter.health()).reload_count).toBeGreaterThan(0);
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
   it("streams ask responses to completion", async () => {
     const server = await harness.startServer();
     const { adapter } = await openTrackedManagedAdapter(harness, server.url);

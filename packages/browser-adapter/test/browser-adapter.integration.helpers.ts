@@ -34,6 +34,7 @@ export type HarnessUrlOptions = {
     | "stall-recover-transient"
     | "sticky-stop-after-complete"
     | "sticky-stop-after-reload"
+    | "stream-stall-reload-advance"
     | "recover-complete"
     | "recover-message-successor"
     | "recover-done-transient"
