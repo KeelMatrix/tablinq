@@ -514,7 +514,7 @@ describe("browser adapter research: startup and configuration", () => {
         });
       window.setTimeout(() => {
         document.querySelector("#start-research")?.remove();
-      }, 500);
+      }, 1500);
     });
 
     const before = await readDeepResearchFrameSnapshot(page);
