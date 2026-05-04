@@ -20,7 +20,7 @@ That separation matters. Packaging and installation are not the same step, and v
 | Confirm your Windows shell can see Node, pnpm, and cargo    | `bootstrap.ps1`               |
 | Mirror the current GitHub Actions jobs locally on Windows   | `ci-local.ps1`                |
 | Run the broad local test suite                              | `test.ps1` or `test.sh`       |
-| Run the Python validation orchestrator directly             | `test_local.py`               |
+| Run the fast Python developer-test orchestrator directly    | `test_local.py`               |
 | Build a distributable package without installing it         | `package.ps1` or `package.sh` |
 | Install Tablinq locally from the repo/package output        | `install.ps1` or `install.sh` |
 | Repeatedly hit the local gateway to check stability/latency | `soak_gateway.ps1`            |
@@ -96,7 +96,7 @@ It gives Windows contributors a single broad local test command with useful prog
 
 **What it does**
 
-Runs the cross-platform validation orchestrator used by `test.ps1`, `test.sh`, and the root `test:local*` package scripts. It creates per-job logs in a temporary directory, runs independent Rust and gateway jobs with bounded parallelism, keeps browser-heavy gateway chunks serialized, and supports `--profile balanced`, `--profile aggressive`, and `--keep-logs`.
+Runs the cross-platform developer validation orchestrator used by `test.ps1`, `test.sh`, and the root `test:local*` package scripts. It creates per-job logs in a temporary directory, runs independent Rust and gateway jobs with bounded parallelism, keeps browser-heavy gateway chunks serialized, and supports `--profile balanced`, `--profile aggressive`, and `--keep-logs`.
 
 **Why it exists**
 
@@ -144,7 +144,7 @@ Runs the current GitHub job commands locally on Windows, with the same environme
 Composite jobs:
 
 - `quick`: `rust-fmt` plus `typescript`
-- `all`: `rust`, `typescript`, and all browser-adapter shards
+- `all` / `full`: `rust`, `rust-browser-recovery`, `typescript`, `typescript-test`, and `package-smoke`
 - `browser-adapter`: all browser-adapter shards
 
 Focused jobs:
@@ -153,13 +153,14 @@ Focused jobs:
 - `rust-clippy`
 - `rust-test`
 - `typescript-format`
+- `typescript-test-shard-1` through `typescript-test-shard-10`
 - `browser-adapter-foundation`
 - `browser-adapter-ask`
 - `browser-adapter-research`
 - `browser-adapter-recovery`
 - `package-smoke`
 
-Use `-Job all,package-smoke` when you deliberately want both the main CI mirror and the separate package-smoke workflow.
+Use `-Job full` or `pnpm run ci:local:full` when you deliberately want full local parity with both GitHub workflow files. Use `typescript-test-shard-N` when reproducing a specific `typescript-tests` CI shard locally.
 
 **Why it exists**
 
@@ -394,8 +395,8 @@ This is not a developer build or install helper. It is an operational confidence
 1. Run `bootstrap.ps1`.
 2. Run `test.ps1` while iterating on broad code changes.
 3. Run `ci-local.ps1 -Job quick` for the default fast CI mirror.
-4. Run `ci-local.ps1 -Job all` when you need the non-package CI mirror.
-5. Run `ci-local.ps1 -Job package-smoke` when packaging or installed behavior changed.
+4. Run `ci-local.ps1 -Job all` or `ci-local.ps1 -Job full` when you need full CI parity including package smoke.
+5. Run `ci-local.ps1 -Job package-smoke` when packaging or installed behavior changed and you do not need the rest of CI.
 6. Run `package.ps1` when you need an installable layout.
 7. Run `install.ps1` when you need a real local install.
 8. Run `soak_gateway.ps1` only after the local gateway is up and you want runtime confidence.
