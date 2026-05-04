@@ -237,6 +237,8 @@ function Run-PackageSmokeJob {
 Add-CargoBinToPath
 
 $env:CARGO_TERM_COLOR = "always"
+$env:CARGO_PROFILE_DEV_DEBUG = "0"
+$env:CARGO_PROFILE_TEST_DEBUG = "0"
 $env:RUST_BACKTRACE = "1"
 $env:CI = "true"
 
