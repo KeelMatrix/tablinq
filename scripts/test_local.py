@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run all local Tablinq tests with bounded parallelism and useful logs."""
+"""Run broad developer tests with bounded parallelism and useful logs.
+
+This is a fast local convenience runner. Use scripts/ci-local.ps1 when you
+need GitHub Actions parity.
+"""
 
 from __future__ import annotations
 
@@ -64,7 +68,7 @@ GATEWAY_BROWSER_FILTERS = [
 ]
 
 TYPESCRIPT_JOBS = [
-    Job("typescript:vitest", ("pnpm", "exec", "vitest", "run", "--reporter=dot"), 420),
+    Job("typescript:vitest", ("pnpm", "run", "test", "--", "--reporter=dot"), 420),
 ]
 
 

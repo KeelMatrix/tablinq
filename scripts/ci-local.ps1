@@ -147,6 +147,14 @@ function Run-TypeScriptTestJob {
   Invoke-Step pnpm @("test") $RepoRoot
 }
 
+function Run-TypeScriptTestShardJob {
+  param([string]$RepoRoot, [int]$Shard)
+
+  Write-Host "==> TypeScript test shard $Shard/10"
+  Ensure-PnpmInstall $RepoRoot
+  Invoke-Step pnpm @("exec", "vitest", "run", "--shard=$Shard/10", "--reporter=dot") $RepoRoot
+}
+
 function Run-TypeScriptFormatJob {
   param([string]$RepoRoot)
 
@@ -236,6 +244,7 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $validJobs = @(
   "quick",
   "all",
+  "full",
   "rust",
   "rust-fmt",
   "rust-clippy",
@@ -243,6 +252,16 @@ $validJobs = @(
   "rust-browser-recovery",
   "typescript",
   "typescript-test",
+  "typescript-test-shard-1",
+  "typescript-test-shard-2",
+  "typescript-test-shard-3",
+  "typescript-test-shard-4",
+  "typescript-test-shard-5",
+  "typescript-test-shard-6",
+  "typescript-test-shard-7",
+  "typescript-test-shard-8",
+  "typescript-test-shard-9",
+  "typescript-test-shard-10",
   "typescript-format",
   "browser-adapter-foundation",
   "browser-adapter-ask",
@@ -279,6 +298,14 @@ $jobs = foreach ($name in $requestedJobs) {
       "rust-browser-recovery"
       "typescript"
       "typescript-test"
+      "package-smoke"
+    }
+    "full" {
+      "rust"
+      "rust-browser-recovery"
+      "typescript"
+      "typescript-test"
+      "package-smoke"
     }
     "browser-adapter" {
       "browser-adapter-foundation"
@@ -299,6 +326,16 @@ foreach ($name in $jobs) {
     "rust-browser-recovery" { Run-RustBrowserRecoveryJob -RepoRoot $repoRoot }
     "typescript" { Run-TypeScriptJob -RepoRoot $repoRoot }
     "typescript-test" { Run-TypeScriptTestJob -RepoRoot $repoRoot }
+    "typescript-test-shard-1" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 1 }
+    "typescript-test-shard-2" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 2 }
+    "typescript-test-shard-3" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 3 }
+    "typescript-test-shard-4" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 4 }
+    "typescript-test-shard-5" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 5 }
+    "typescript-test-shard-6" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 6 }
+    "typescript-test-shard-7" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 7 }
+    "typescript-test-shard-8" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 8 }
+    "typescript-test-shard-9" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 9 }
+    "typescript-test-shard-10" { Run-TypeScriptTestShardJob -RepoRoot $repoRoot -Shard 10 }
     "typescript-format" { Run-TypeScriptFormatJob -RepoRoot $repoRoot }
     "browser-adapter-foundation" { Run-BrowserAdapterFoundationJob -RepoRoot $repoRoot }
     "browser-adapter-ask" { Run-BrowserAdapterAskJob -RepoRoot $repoRoot }
