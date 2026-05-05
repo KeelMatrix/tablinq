@@ -18,6 +18,15 @@ pub(super) enum ResponseDisplay {
     InteractiveTerminal,
 }
 
+pub(super) struct ResponseReconciliation<'a> {
+    pub(super) printed_text: &'a str,
+    pub(super) pending_text: &'a str,
+    pub(super) final_text: &'a str,
+    pub(super) green_responses: bool,
+    pub(super) display: ResponseDisplay,
+    pub(super) rewrite_in_place_safe: bool,
+}
+
 pub(super) fn write_response_chunk(
     stdout: &mut impl Write,
     text: &str,
@@ -113,28 +122,35 @@ pub(super) fn reconcile_streamed_response_with_pending(
     display: ResponseDisplay,
     response_color_active: &mut bool,
 ) -> Result<()> {
+    let rewrite_in_place_safe = rewrite_response_line_is_safe(printed_text, final_text);
     reconcile_streamed_response_with_rewrite_safety(
         stdout,
-        printed_text,
-        pending_text,
-        final_text,
-        green_responses,
-        display,
+        ResponseReconciliation {
+            printed_text,
+            pending_text,
+            final_text,
+            green_responses,
+            display,
+            rewrite_in_place_safe,
+        },
         response_color_active,
-        rewrite_response_line_is_safe(printed_text, final_text),
     )
 }
 
 pub(super) fn reconcile_streamed_response_with_rewrite_safety(
     stdout: &mut impl Write,
-    printed_text: &str,
-    pending_text: &str,
-    final_text: &str,
-    green_responses: bool,
-    display: ResponseDisplay,
+    reconciliation: ResponseReconciliation<'_>,
     response_color_active: &mut bool,
-    rewrite_in_place_safe: bool,
 ) -> Result<()> {
+    let ResponseReconciliation {
+        printed_text,
+        pending_text,
+        final_text,
+        green_responses,
+        display,
+        rewrite_in_place_safe,
+    } = reconciliation;
+
     let printed_any = !printed_text.is_empty();
     if !printed_any {
         if !final_text.is_empty() {

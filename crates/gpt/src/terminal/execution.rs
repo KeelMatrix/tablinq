@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 
 use super::ansi::ansi_green_enabled_for_stdout;
 use super::response::{
-    ResponseDisplay, ResponseStreamState, buffer_response_chunk, finish_terminal_stream,
-    reconcile_streamed_response_with_pending, reconcile_streamed_response_with_rewrite_safety,
-    write_complete_response,
+    ResponseDisplay, ResponseReconciliation, ResponseStreamState, buffer_response_chunk,
+    finish_terminal_stream, reconcile_streamed_response_with_pending,
+    reconcile_streamed_response_with_rewrite_safety, write_complete_response,
 };
 
 const IPC_TIMEOUT_BUFFER: Duration = Duration::from_secs(30);
@@ -305,13 +305,15 @@ pub(crate) fn execute_research_with_terminal_presentation(
                 }
                 reconcile_streamed_response_with_rewrite_safety(
                     &mut stdout,
-                    &response_stream.printed_text,
-                    &response_stream.pending_text,
-                    &result.report_text,
-                    green_responses,
-                    response_display,
+                    ResponseReconciliation {
+                        printed_text: &response_stream.printed_text,
+                        pending_text: &response_stream.pending_text,
+                        final_text: &result.report_text,
+                        green_responses,
+                        display: response_display,
+                        rewrite_in_place_safe: false,
+                    },
                     &mut response_stream.response_color_active,
-                    false,
                 )?;
             } else if !result.report_text.is_empty() {
                 write_research_result_label(&mut stdout)?;

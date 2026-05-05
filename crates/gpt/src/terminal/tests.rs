@@ -11,7 +11,7 @@ use super::execution::{
     JobStatusLine, ask_progress_status_line, extract_research_plan, research_progress_status_line,
 };
 use super::response::{
-    ResponseDisplay, ResponseStreamState, buffer_response_chunk,
+    ResponseDisplay, ResponseReconciliation, ResponseStreamState, buffer_response_chunk,
     reconcile_streamed_response_with_rewrite_safety, rewrite_response_line_is_safe,
     write_complete_response,
 };
@@ -319,13 +319,15 @@ fn render_reconciled_response_with_display_and_rewrite_safety(
 
     reconcile_streamed_response_with_rewrite_safety(
         &mut stdout,
-        &response_stream.printed_text,
-        &response_stream.pending_text,
-        final_text,
-        green_responses,
-        display,
+        ResponseReconciliation {
+            printed_text: &response_stream.printed_text,
+            pending_text: &response_stream.pending_text,
+            final_text,
+            green_responses,
+            display,
+            rewrite_in_place_safe,
+        },
         &mut response_stream.response_color_active,
-        rewrite_in_place_safe,
     )
     .unwrap();
 
