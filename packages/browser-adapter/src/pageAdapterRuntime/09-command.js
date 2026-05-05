@@ -72,6 +72,9 @@ function createCommandRuntime({
         failureCode: failure.failureCode,
         failureMessage: failure.failureMessage,
         retryVisible: failure.retryVisible,
+        hasTransientWidgets: article
+          ? messageRuntime.hasTransientRenderedWidgets(article)
+          : false,
         conversationId:
           textUtils.datasetValue(document.body.dataset.conversationId) ??
           conversationRuntime.parseConversationIdFromUrl(),

@@ -55,6 +55,12 @@ export async function stabilizeAskCompletion(
       page,
       candidate.messageId,
     );
+    if (candidate.hasTransientWidgets) {
+      stableSnapshot = candidate;
+      stableArtifactSignature = artifactSignature;
+      stableDonePolls = 0;
+      continue;
+    }
     if (
       sameAskCompletionSnapshot(stableSnapshot, candidate) &&
       artifactSignature === stableArtifactSignature
