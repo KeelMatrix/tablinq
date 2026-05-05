@@ -801,6 +801,9 @@ function Invoke-InternalCli {
       throw "Command timed out: $($Arguments -join ' ')"
     }
 
+    $process.WaitForExit()
+    $process.Refresh()
+
     $stdout = Get-Content -Path $stdoutPath -Raw -ErrorAction SilentlyContinue
     $stderr = Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue
     $stdoutText = if ($null -ne $stdout) { ($stdout | Out-String).Trim() } else { "" }
