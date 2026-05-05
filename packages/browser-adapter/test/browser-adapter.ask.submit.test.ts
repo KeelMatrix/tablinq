@@ -221,9 +221,122 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
       </pre>
     `);
 
-    expect(text).toBe("Mermaid diagram preview.");
+    expect(text).toBe("");
     expect(text).not.toContain("```mermaid");
     expect(text).not.toContain("Loading diagram");
+  });
+
+  it("withholds transient Mermaid preview state until stable source appears", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML(
+      "beforeend",
+      `<section data-testid="conversation-turn-markdown">
+        <h4 class="sr-only">ChatGPT said:</h4>
+        <div data-message-author-role="assistant" data-message-id="markdown-msg">
+          <div class="markdown">
+            <pre data-testid="mermaid-widget" data-language="mermaid">
+              <div>Mermaid</div>
+              <button aria-label="Code" type="button">Code</button>
+              <button aria-label="Preview" type="button">Preview</button>
+              <div>Loading diagram...</div>
+              <canvas aria-label="Mermaid preview"></canvas>
+            </pre>
+          </div>
+        </div>
+      </section>`,
+    );
+    dom.window.document.body.dataset.streamState = "done";
+
+    const first = adapter.readAskSnapshot({ baseline });
+    const second = adapter.readAskSnapshot({ baseline });
+    expect(first.text).toBe("");
+    expect(second.text).toBe("");
+    expect(first.hasTransientWidgets).toBe(true);
+
+    const widget = dom.window.document.querySelector(
+      "[data-testid='mermaid-widget']",
+    );
+    if (widget) {
+      widget.innerHTML = `<code data-language="mermaid">graph TD\n  A --> B</code>`;
+    }
+    const third = adapter.readAskSnapshot({ baseline });
+
+    expect(third.text).toBe("```mermaid\ngraph TD\n  A --> B\n```");
+    expect(third.hasTransientWidgets).toBe(false);
+    dom.window.close();
+  });
+
+  it("withholds transient SVG preview state until stable source appears", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML(
+      "beforeend",
+      `<section data-testid="conversation-turn-markdown">
+        <h4 class="sr-only">ChatGPT said:</h4>
+        <div data-message-author-role="assistant" data-message-id="markdown-msg">
+          <div class="markdown">
+            <pre data-testid="svg-widget" data-language="svg">
+              <div>SVG</div>
+              <button aria-label="Code" type="button">Code</button>
+              <button aria-label="Preview" type="button">Preview</button>
+              <div>Rendering...</div>
+              <canvas aria-label="SVG preview"></canvas>
+            </pre>
+          </div>
+        </div>
+      </section>`,
+    );
+    dom.window.document.body.dataset.streamState = "done";
+
+    const first = adapter.readAskSnapshot({ baseline });
+    expect(first.text).toBe("");
+    expect(first.hasTransientWidgets).toBe(true);
+
+    const svgSource = '<svg xmlns="http://www.w3.org/2000/svg"></svg>';
+    const widget = dom.window.document.querySelector(
+      "[data-testid='svg-widget']",
+    );
+    if (widget) {
+      const code = dom.window.document.createElement("code");
+      code.dataset.language = "svg";
+      code.textContent = svgSource;
+      widget.replaceChildren(code);
+    }
+    const stable = adapter.readAskSnapshot({ baseline });
+
+    expect(stable.text).toBe(`\`\`\`svg\n${svgSource}\n\`\`\``);
+    expect(stable.hasTransientWidgets).toBe(false);
+    dom.window.close();
+  });
+
+  it("preserves prose while withholding a transient widget", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML(
+      "beforeend",
+      `<section data-testid="conversation-turn-markdown">
+        <h4 class="sr-only">ChatGPT said:</h4>
+        <div data-message-author-role="assistant" data-message-id="markdown-msg">
+          <div class="markdown">
+            <p>Here is the diagram:</p>
+            <pre data-testid="mermaid-widget" data-language="mermaid">
+              <div>Generating...</div>
+              <button aria-label="Code" type="button">Code</button>
+              <button aria-label="Preview" type="button">Preview</button>
+              <canvas aria-label="Mermaid preview"></canvas>
+            </pre>
+          </div>
+        </div>
+      </section>`,
+    );
+    dom.window.document.body.dataset.streamState = "done";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.text).toBe("Here is the diagram:");
+    expect(snapshot.hasTransientWidgets).toBe(true);
+    dom.window.close();
   });
 
   it("does not serialize SVG preview widgets as Mermaid diagrams", async () => {

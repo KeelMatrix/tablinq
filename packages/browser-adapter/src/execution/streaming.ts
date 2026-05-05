@@ -93,6 +93,7 @@ export function askSnapshotProgressSignature(snapshot: AskSnapshot): string {
     snapshot.failureCode,
     snapshot.failureMessage,
     snapshot.retryVisible,
+    snapshot.hasTransientWidgets ?? false,
     snapshot.conversationId,
     snapshot.messageId,
     snapshot.thoughtDividerBeforeMessage ?? false,

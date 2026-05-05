@@ -8,6 +8,7 @@ export interface AskSnapshot {
   failureCode: string | null;
   failureMessage: string | null;
   retryVisible: boolean;
+  hasTransientWidgets?: boolean;
   conversationId: string | null;
   messageId: string | null;
   thoughtDividerBeforeMessage?: boolean;
@@ -117,6 +118,7 @@ export function sameAskCompletionSnapshot(
     left.failureCode === right.failureCode &&
     left.failureMessage === right.failureMessage &&
     left.retryVisible === right.retryVisible &&
+    Boolean(left.hasTransientWidgets) === Boolean(right.hasTransientWidgets) &&
     left.conversationId === right.conversationId &&
     left.messageId === right.messageId &&
     left.currentUrl === right.currentUrl
@@ -393,6 +395,7 @@ export function mergeResearchSnapshots(
 export function normalizeAskSnapshot(snapshot: AskSnapshot): AskSnapshot {
   return {
     ...snapshot,
+    hasTransientWidgets: Boolean(snapshot.hasTransientWidgets),
     conversationId:
       normalizeOptionalString(snapshot.conversationId) ??
       conversationIdFromUrl(snapshot.currentUrl),

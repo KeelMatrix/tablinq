@@ -464,7 +464,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
 
   const serializeCodePreviewBlock = (element) => {
     if (!isCodePreviewBlock(element)) {
-      return "";
+      return null;
     }
     const language = collectCodePreviewLanguage(element);
     if (!language) {
@@ -477,20 +477,20 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     const labels = collectPreviewSvgLabels(element);
     if (language === "mermaid") {
       if (labels.length === 0) {
-        return "Mermaid diagram preview.";
+        return "";
       }
       const summary = labels.slice(0, 12).join("; ");
       return `Mermaid diagram preview: ${summary}${labels.length > 12 ? "; ..." : "."}`;
     }
     if (language === "svg") {
       if (labels.length === 0) {
-        return "SVG preview.";
+        return "";
       }
       const summary = labels.slice(0, 12).join("; ");
       return `SVG preview: ${summary}${labels.length > 12 ? "; ..." : "."}`;
     }
     if (labels.length === 0) {
-      return "Preview.";
+      return "";
     }
     const summary = labels.slice(0, 12).join("; ");
     return `Preview: ${summary}${labels.length > 12 ? "; ..." : "."}`;
@@ -498,7 +498,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
 
   const serializeMermaidPreviewBlock = (element) => {
     if (!isMermaidPreviewBlock(element)) {
-      return "";
+      return null;
     }
     return serializeCodePreviewBlock(element);
   };
@@ -586,6 +586,33 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       }
     }
     return materialized;
+  };
+
+  const hasTransientWidgetText = (element) => {
+    const text = collapseInlineText(element.textContent);
+    return hasToken(text, ["loading", "rendering", "generating"]);
+  };
+
+  const hasTransientRenderedWidgets = (root) => {
+    if (!(root instanceof HTMLElement)) {
+      return false;
+    }
+    return Array.from(root.querySelectorAll("pre")).some((element) => {
+      if (!(element instanceof HTMLElement) || !isCodePreviewBlock(element)) {
+        return false;
+      }
+      const language = collectCodePreviewLanguage(element);
+      if (language && collectCodePreviewSource(element, language)) {
+        return false;
+      }
+      if (collectPreviewSvgLabels(element).length > 0) {
+        return false;
+      }
+      return (
+        hasTransientWidgetText(element) ||
+        Boolean(element.querySelector("canvas, [role='progressbar'], .spinner"))
+      );
+    });
   };
 
   const isIgnoredMessageChrome = (element) => {
@@ -794,7 +821,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     }
     if (tag === "pre") {
       const codePreview = serializeCodePreviewBlock(element);
-      if (codePreview) {
+      if (codePreview !== null) {
         return codePreview;
       }
       const code = collectCodeBlockText(element);
@@ -861,6 +888,27 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
         return `${output}${joiner}${entry.text}`;
       }, "");
     }
+    if (
+      Array.from(element.children).some(
+        (child) =>
+          child instanceof HTMLElement &&
+          [
+            "blockquote",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "h6",
+            "ol",
+            "pre",
+            "table",
+            "ul",
+          ].includes(child.tagName.toLowerCase()),
+      )
+    ) {
+      return "";
+    }
     return serializeInlineChildren(element);
   };
 
@@ -897,6 +945,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
   return {
     collectText,
     collectMermaidSvgLabels,
+    hasTransientRenderedWidgets,
     isMermaidPreviewBlock,
     materializeCodePreviewSources,
     serializeMermaidPreviewBlock,
