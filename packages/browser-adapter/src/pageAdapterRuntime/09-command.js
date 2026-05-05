@@ -86,6 +86,12 @@ function createCommandRuntime({
         currentUrl: window.location.href,
       };
     },
+    async materializeAskCodePreviewSources({ baseline } = {}) {
+      const article = messageRuntime.resolveAskArticle(baseline ?? null);
+      return article
+        ? await messageRuntime.materializeCodePreviewSources(article)
+        : 0;
+    },
     readResearchSnapshot() {
       const submission = researchRuntime.readResearchSubmissionState();
       return {

@@ -21,7 +21,7 @@ function createAssistantMessageRuntimeModule({
     readMessageIdentity,
     thoughtDividerBeforeMessage,
   } = messageFilters;
-  const { collectText } = markdownRuntime;
+  const { collectText, materializeCodePreviewSources } = markdownRuntime;
   const { stopButtonVisible } = composerRuntime;
   const { parseConversationIdFromUrl } = conversationRuntime;
 
@@ -264,6 +264,7 @@ function createAssistantMessageRuntimeModule({
     inferAskState,
     readMessageIdentity,
     collectText,
+    materializeCodePreviewSources,
     thoughtDividerBeforeMessage,
   };
 }

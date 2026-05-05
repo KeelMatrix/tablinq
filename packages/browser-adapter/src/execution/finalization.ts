@@ -10,6 +10,7 @@ import type {
 } from "../contracts";
 import {
   collectArtifacts,
+  materializeAskCodePreviewSources,
   readArtifactStabilitySignature,
   readAskSnapshot,
   readLiveResearchSnapshot,
@@ -35,10 +36,12 @@ export async function stabilizeAskCompletion(
   snapshot: AskSnapshot,
   timeoutAt: number,
 ): Promise<AskSnapshot> {
-  let stableSnapshot = snapshot;
+  await materializeAskCodePreviewSources(page, baseline).catch(() => 0);
+  let stableSnapshot =
+    (await readAskSnapshot(page, baseline).catch(() => snapshot)) ?? snapshot;
   let stableArtifactSignature = await artifactSignatureForSnapshot(
     page,
-    snapshot.messageId,
+    stableSnapshot.messageId,
   );
   let stableDonePolls = 0;
 

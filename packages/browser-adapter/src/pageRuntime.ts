@@ -64,5 +64,9 @@ export {
   ensureResearchComposerFilled,
   submitResearch,
 } from "./pageRuntime/researchSubmission";
-export { readAskBaseline, readAskSnapshot } from "./pageRuntime/snapshots";
+export {
+  materializeAskCodePreviewSources,
+  readAskBaseline,
+  readAskSnapshot,
+} from "./pageRuntime/snapshots";
 export { uploadAttachments } from "./pageRuntime/uploads";
