@@ -8,6 +8,9 @@ const probeRuntimeModuleParts = [
   "probeRuntime/text.js",
   "probeRuntime/strategies.js",
   "probeRuntime/aliases.js",
+  "probeRuntime/probeContext.js",
+  "probeRuntime/capabilityPredicates.js",
+  "probeRuntime/capabilityDefinitions.js",
   "probeRuntime/documentProbe.js",
 ];
 
