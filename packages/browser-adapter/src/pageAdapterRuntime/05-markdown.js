@@ -283,7 +283,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     }
   };
 
-  const isMermaidPreviewBlock = (element) => {
+  const isCodePreviewBlock = (element) => {
     if (!(element instanceof HTMLElement)) {
       return false;
     }
@@ -295,13 +295,15 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     if (!hasPreviewSurface) {
       return false;
     }
-    const text = collapseInlineText(element.textContent);
     return (
-      hasToken(text, ["mermaid"]) ||
-      (Boolean(element.querySelector("button[aria-label='Code']")) &&
-        Boolean(element.querySelector("button[aria-label='Preview']")))
+      Boolean(element.querySelector("button[aria-label='Code']")) &&
+      Boolean(element.querySelector("button[aria-label='Preview']"))
     );
   };
+
+  const isMermaidPreviewBlock = (element) =>
+    isCodePreviewBlock(element) &&
+    collectCodePreviewLanguage(element) === "mermaid";
 
   const collectSourceText = (element) => {
     if (!(element instanceof HTMLElement)) {
@@ -321,9 +323,9 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     ).trimEnd();
   };
 
-  const isMermaidSourceCandidate = (element) => {
-    if (!(element instanceof HTMLElement) || element.closest("button")) {
-      return false;
+  const collectElementLanguageHint = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
     }
     const language = collapseInlineText(
       element.getAttribute("data-language") ??
@@ -331,7 +333,74 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
         element.dataset.language ??
         element.dataset.codeLanguage,
     ).toLowerCase();
+    if (language) {
+      return language;
+    }
     const classText = Array.from(element.classList).join(" ").toLowerCase();
+    const classLanguage = classText.match(/(?:^|\s)language-([a-z0-9_-]+)/);
+    if (classLanguage?.[1]) {
+      return classLanguage[1];
+    }
+    return "";
+  };
+
+  const collectCodePreviewLanguage = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    const direct = collectElementLanguageHint(element);
+    if (direct) {
+      return direct;
+    }
+
+    const textHints = [
+      element.getAttribute("aria-label"),
+      element.getAttribute("data-testid"),
+      element.getAttribute("data-source"),
+      element.querySelector("img[alt]")?.getAttribute("alt"),
+      ...Array.from(element.children)
+        .filter(
+          (child) =>
+            child instanceof HTMLElement &&
+            child.tagName.toLowerCase() !== "button",
+        )
+        .map((child) => child.textContent),
+    ];
+    const text = collapseInlineText(textHints.filter(Boolean).join(" "));
+    if (hasToken(text, ["mermaid"])) {
+      return "mermaid";
+    }
+    if (hasToken(text, ["svg"])) {
+      return "svg";
+    }
+    return "";
+  };
+
+  const isWidgetChromeText = (text, language) => {
+    const lines = text
+      .split("\n")
+      .map((line) => collapseInlineText(line))
+      .filter(Boolean);
+    if (lines.length === 0) {
+      return true;
+    }
+    const chrome = new Set([
+      "code",
+      "preview",
+      "loading diagram...",
+      "rendering...",
+      language,
+      "mermaid",
+      "svg",
+    ]);
+    return lines.every((line) => chrome.has(line.toLowerCase()));
+  };
+
+  const isCodePreviewSourceCandidate = (element, language) => {
+    if (!(element instanceof HTMLElement) || element.closest("button")) {
+      return false;
+    }
+    const candidateLanguage = collectElementLanguageHint(element);
     const labelText = collapseInlineText(
       [
         element.getAttribute("aria-label"),
@@ -343,14 +412,13 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
         .join(" "),
     ).toLowerCase();
     return (
-      language === "mermaid" ||
-      classText.includes("language-mermaid") ||
+      candidateLanguage === language ||
       hasToken(labelText, ["source"]) ||
       hasToken(labelText, ["code"])
     );
   };
 
-  const collectMermaidPreviewSource = (element) => {
+  const collectCodePreviewSource = (element, language) => {
     if (!(element instanceof HTMLElement)) {
       return "";
     }
@@ -372,25 +440,18 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       ),
     );
     for (const candidate of candidates) {
-      if (!isMermaidSourceCandidate(candidate)) {
+      if (!isCodePreviewSourceCandidate(candidate, language)) {
         continue;
       }
       const source = collectSourceText(candidate);
-      if (source) {
+      if (source && !isWidgetChromeText(source, language)) {
         return source;
       }
     }
     return "";
   };
 
-  const serializeMermaidPreviewBlock = (element) => {
-    if (!isMermaidPreviewBlock(element)) {
-      return "";
-    }
-    const source = collectMermaidPreviewSource(element);
-    if (source) {
-      return `\`\`\`mermaid\n${source}\n\`\`\``;
-    }
+  const collectPreviewSvgLabels = (element) => {
     const previewImage = element.querySelector(
       "img[src^='data:image/svg+xml']",
     );
@@ -398,12 +459,48 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       previewImage instanceof HTMLImageElement
         ? decodeDataUrlText(previewImage.currentSrc || previewImage.src)
         : "";
-    const labels = collectMermaidSvgLabels(svgText);
+    return collectMermaidSvgLabels(svgText);
+  };
+
+  const serializeCodePreviewBlock = (element) => {
+    if (!isCodePreviewBlock(element)) {
+      return "";
+    }
+    const language = collectCodePreviewLanguage(element);
+    if (!language) {
+      return "Preview.";
+    }
+    const source = collectCodePreviewSource(element, language);
+    if (source) {
+      return `\`\`\`${language}\n${source}\n\`\`\``;
+    }
+    const labels = collectPreviewSvgLabels(element);
+    if (language === "mermaid") {
+      if (labels.length === 0) {
+        return "Mermaid diagram preview.";
+      }
+      const summary = labels.slice(0, 12).join("; ");
+      return `Mermaid diagram preview: ${summary}${labels.length > 12 ? "; ..." : "."}`;
+    }
+    if (language === "svg") {
+      if (labels.length === 0) {
+        return "SVG preview.";
+      }
+      const summary = labels.slice(0, 12).join("; ");
+      return `SVG preview: ${summary}${labels.length > 12 ? "; ..." : "."}`;
+    }
     if (labels.length === 0) {
-      return "Mermaid diagram preview.";
+      return "Preview.";
     }
     const summary = labels.slice(0, 12).join("; ");
-    return `Mermaid diagram preview: ${summary}${labels.length > 12 ? "; ..." : "."}`;
+    return `Preview: ${summary}${labels.length > 12 ? "; ..." : "."}`;
+  };
+
+  const serializeMermaidPreviewBlock = (element) => {
+    if (!isMermaidPreviewBlock(element)) {
+      return "";
+    }
+    return serializeCodePreviewBlock(element);
   };
 
   const isIgnoredMessageChrome = (element) => {
@@ -611,9 +708,9 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       return content ? indentLines(content, "> ", ">") : "";
     }
     if (tag === "pre") {
-      const mermaidPreview = serializeMermaidPreviewBlock(element);
-      if (mermaidPreview) {
-        return mermaidPreview;
+      const codePreview = serializeCodePreviewBlock(element);
+      if (codePreview) {
+        return codePreview;
       }
       const code = collectCodeBlockText(element);
       if (!code) {
