@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use super::ansi::ansi_green_enabled_for_stdout;
 use super::response::{
-    ResponseStreamState, buffer_response_chunk, finish_terminal_stream,
+    ResponseDisplay, ResponseStreamState, buffer_response_chunk, finish_terminal_stream,
     reconcile_streamed_response_with_pending, reconcile_streamed_response_with_rewrite_safety,
     write_complete_response,
 };
@@ -50,6 +50,11 @@ pub(crate) fn execute_ask_with_terminal_presentation(
 
     let mut stdout = io::stdout();
     let stream_responses = stdout.is_terminal();
+    let response_display = if stream_responses {
+        ResponseDisplay::InteractiveTerminal
+    } else {
+        ResponseDisplay::Raw
+    };
     let mut stderr = io::stderr();
     let mut response_stream = ResponseStreamState::default();
     let green_responses = ansi_green_enabled_for_stdout();
@@ -106,6 +111,7 @@ pub(crate) fn execute_ask_with_terminal_presentation(
                             &mut stdout,
                             &chunk.text,
                             green_responses,
+                            response_display,
                             &mut response_stream,
                         )?;
                     }
@@ -143,6 +149,7 @@ pub(crate) fn execute_ask_with_terminal_presentation(
                 &response_stream.pending_text,
                 &result.output_text,
                 green_responses,
+                response_display,
                 &mut response_stream.response_color_active,
             )?;
             Ok(())
@@ -175,6 +182,11 @@ pub(crate) fn execute_research_with_terminal_presentation(
 
     let mut stdout = io::stdout();
     let stream_responses = stdout.is_terminal();
+    let response_display = if stream_responses {
+        ResponseDisplay::InteractiveTerminal
+    } else {
+        ResponseDisplay::Raw
+    };
     let mut stderr = io::stderr();
     let mut response_stream = ResponseStreamState::default();
     let green_responses = ansi_green_enabled_for_stdout();
@@ -239,6 +251,7 @@ pub(crate) fn execute_research_with_terminal_presentation(
                                 &mut stdout,
                                 &chunk.text,
                                 green_responses,
+                                response_display,
                                 &mut response_stream,
                             )?;
                         }
@@ -296,12 +309,18 @@ pub(crate) fn execute_research_with_terminal_presentation(
                     &response_stream.pending_text,
                     &result.report_text,
                     green_responses,
+                    response_display,
                     &mut response_stream.response_color_active,
                     false,
                 )?;
             } else if !result.report_text.is_empty() {
                 write_research_result_label(&mut stdout)?;
-                write_complete_response(&mut stdout, &result.report_text, green_responses)?;
+                write_complete_response(
+                    &mut stdout,
+                    &result.report_text,
+                    green_responses,
+                    response_display,
+                )?;
             }
             Ok(())
         }
