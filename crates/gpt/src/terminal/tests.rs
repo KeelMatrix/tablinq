@@ -12,7 +12,7 @@ use super::execution::{
 };
 use super::response::{
     ResponseStreamState, buffer_response_chunk, reconcile_streamed_response_with_rewrite_safety,
-    rewrite_response_line_is_safe,
+    rewrite_response_line_is_safe, write_complete_response,
 };
 
 #[test]
@@ -287,6 +287,65 @@ fn assert_stream_split(chunks: &[&str], expected_output: &str, expected_pending:
     assert_eq!(output, expected_output);
     assert_eq!(response_stream.printed_text, expected_output);
     assert_eq!(response_stream.pending_text, expected_pending);
+}
+
+fn safe_printable_ask_response() -> String {
+    format!(
+        "# Heading\n\n\
+         | path | result |\n\
+         | --- | --- |\n\
+         | C:\\Users\\rdime\\Desktop\\gpt-cli\\crates\\gpt\\src\\main.rs | ok |\n\n\
+         - outer item\n\
+           - nested item with `inline code`\n\n\
+         ````markdown\n\
+         ```rust\n\
+         fn main() {{ println!(\"safe\"); }}\n\
+         ```\n\
+         ````\n\n\
+         ```diff\n\
+         -old line\n\
+         +new line\n\
+         ```\n\n\
+         stderr: error: this is assistant text, not CLI stderr\n\
+         warning: also assistant text\n\n\
+         {}",
+        "A".repeat(240)
+    )
+}
+
+#[test]
+fn complete_response_preserves_safe_printable_markdown_and_text() {
+    let response = safe_printable_ask_response();
+    let mut stdout = Vec::new();
+
+    write_complete_response(&mut stdout, &response, false).unwrap();
+
+    assert_eq!(String::from_utf8(stdout).unwrap(), format!("{response}\n"));
+}
+
+#[test]
+fn streamed_response_preserves_safe_printable_markdown_and_text() {
+    let response = safe_printable_ask_response();
+    let midpoint = response.find("```diff").unwrap();
+    let (first, second) = response.split_at(midpoint);
+
+    assert_eq!(
+        render_reconciled_response(&[first, second], &response, false),
+        format!("{response}\n")
+    );
+}
+
+#[test]
+fn green_response_wrapping_is_balanced_and_preserves_safe_printable_text() {
+    let response = safe_printable_ask_response();
+    let output = render_reconciled_response(&[&response], &response, true);
+
+    assert_eq!(output.matches(ANSI_GREEN).count(), 1);
+    assert_eq!(output.matches(ANSI_RESET).count(), 1);
+    assert_eq!(
+        output.replace(ANSI_GREEN, "").replace(ANSI_RESET, ""),
+        format!("{response}\n")
+    );
 }
 
 #[test]

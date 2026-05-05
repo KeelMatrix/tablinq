@@ -72,6 +72,41 @@ async function withShortAskStreamWatchdog<T>(
 }
 
 describe("browser adapter ask: submit readiness and surface locking", () => {
+  it("keeps the Mermaid preview fallback when no source code is available", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    const svg = encodeURIComponent(`
+      <svg xmlns="http://www.w3.org/2000/svg">
+        <text>Start</text>
+        <text>Process</text>
+        <text>Done</text>
+      </svg>
+    `);
+    main.insertAdjacentHTML(
+      "beforeend",
+      `<section data-testid="conversation-turn-mermaid">
+        <h4 class="sr-only">ChatGPT said:</h4>
+        <div data-message-author-role="assistant" data-message-id="mermaid-preview-msg">
+          <div class="markdown">
+            <pre>
+              <button aria-label="Code" type="button">Code</button>
+              <button aria-label="Preview" type="button">Preview</button>
+              <img alt="Mermaid preview" src="data:image/svg+xml,${svg}">
+            </pre>
+          </div>
+        </div>
+      </section>`,
+    );
+    dom.window.document.body.dataset.streamState = "done";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.text).toBe(
+      "Mermaid diagram preview: Start; Process; Done.",
+    );
+    dom.window.close();
+  });
+
   it("falls back to keyboard submit when a composer plus button sits next to send", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
