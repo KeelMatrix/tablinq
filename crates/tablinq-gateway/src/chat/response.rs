@@ -67,3 +67,38 @@ pub(super) fn recovery_reason_for_trace(trace: &RecoveryTrace) -> Option<String>
         .map(recovery_strategy_name)
         .map(|strategy| format!("provider generation failure recovered via {strategy}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_completion_response_preserves_raw_assistant_text_as_api_data() {
+        let assistant_text = "# Heading\n\n\
+            | key | value |\n\
+            | --- | --- |\n\
+            | path | C:\\Users\\rdime\\Desktop\\gpt-cli |\n\n\
+            stderr: error: assistant text\n\
+            \u{1b}[32mraw data\u{1b}[0m\n\
+            \u{1b}]0;title\u{7}";
+
+        let response = build_chat_completion_response(
+            "req-1",
+            "job-1",
+            "tablinq-instant",
+            RequestRole::Primary,
+            None,
+            Some("conv-1"),
+            Some("browser-primary"),
+            assistant_text,
+            "stop",
+            None,
+        );
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+
+        assert_eq!(
+            body["choices"][0]["message"]["content"].as_str(),
+            Some(assistant_text)
+        );
+    }
+}
