@@ -72,15 +72,30 @@ pub(super) fn recovery_reason_for_trace(trace: &RecoveryTrace) -> Option<String>
 mod tests {
     use super::*;
 
+    fn raw_assistant_text() -> &'static str {
+        "raw \u{1b}[31mred\u{1b}[0m \u{1b}]0;title\u{7} \
+         before\rrewritten\u{8}x\0 bidi \u{202e}spoof\u{202c}"
+    }
+
+    fn assert_no_cli_display_markers(value: &str) {
+        for marker in [
+            "<ESC>", "<BEL>", "<CR>", "<BS>", "<NUL>", "<U+202E>", "<U+202C>",
+        ] {
+            assert!(!value.contains(marker), "unexpected marker {marker}");
+        }
+    }
+
     #[test]
     fn chat_completion_response_preserves_raw_assistant_text_as_api_data() {
-        let assistant_text = "# Heading\n\n\
+        let assistant_text = format!(
+            "# Heading\n\n\
             | key | value |\n\
             | --- | --- |\n\
             | path | C:\\Users\\rdime\\Desktop\\gpt-cli |\n\n\
             stderr: error: assistant text\n\
-            \u{1b}[32mraw data\u{1b}[0m\n\
-            \u{1b}]0;title\u{7}";
+            {}",
+            raw_assistant_text()
+        );
 
         let response = build_chat_completion_response(
             "req-1",
@@ -90,15 +105,17 @@ mod tests {
             None,
             Some("conv-1"),
             Some("browser-primary"),
-            assistant_text,
+            &assistant_text,
             "stop",
             None,
         );
         let body: Value = serde_json::from_slice(&response.body).unwrap();
+        let json_text = String::from_utf8(response.body).unwrap();
 
         assert_eq!(
             body["choices"][0]["message"]["content"].as_str(),
-            Some(assistant_text)
+            Some(assistant_text.as_str())
         );
+        assert_no_cli_display_markers(&json_text);
     }
 }
