@@ -47,6 +47,7 @@ export async function stabilizeAskCompletion(
 
   while (Date.now() < timeoutAt && stableDonePolls < STABLE_DONE_POLLS) {
     await sleep(SNAPSHOT_POLL_INTERVAL_MS);
+    await materializeAskCodePreviewSources(page, baseline).catch(() => 0);
     const candidate = await readAskSnapshot(page, baseline);
     if (candidate.state !== "done") {
       return candidate;

@@ -198,6 +198,25 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     return (element.innerText || element.textContent || "").trimEnd();
   };
 
+  const collectTextWithRenderedLineBreaks = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    const visit = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return node.textContent ?? "";
+      }
+      if (!(node instanceof HTMLElement)) {
+        return "";
+      }
+      if (node.tagName.toLowerCase() === "br") {
+        return "\n";
+      }
+      return Array.from(node.childNodes).map(visit).join("");
+    };
+    return Array.from(element.childNodes).map(visit).join("").trimEnd();
+  };
+
   const collectCodeBlockLanguage = (element) => {
     if (!(element instanceof HTMLElement)) {
       return "";
@@ -287,14 +306,6 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     if (!(element instanceof HTMLElement)) {
       return false;
     }
-    const hasPreviewSurface = Boolean(
-      element.querySelector(
-        "img[src^='data:image/'], img[src^='blob:'], canvas",
-      ),
-    );
-    if (!hasPreviewSurface) {
-      return false;
-    }
     return (
       Boolean(element.querySelector("button[aria-label='Code']")) &&
       Boolean(element.querySelector("button[aria-label='Preview']"))
@@ -314,6 +325,10 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       element instanceof HTMLInputElement
     ) {
       return (element.value || element.textContent || "").trimEnd();
+    }
+    const renderedLines = collectTextWithRenderedLineBreaks(element);
+    if (renderedLines.includes("\n")) {
+      return renderedLines;
     }
     return (
       element.innerText ||
@@ -365,6 +380,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
             child.tagName.toLowerCase() !== "button",
         )
         .map((child) => child.textContent),
+      element.textContent,
     ];
     const text = collapseInlineText(textHints.filter(Boolean).join(" "));
     if (hasToken(text, ["mermaid"])) {
@@ -401,6 +417,12 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       return false;
     }
     const candidateLanguage = collectElementLanguageHint(element);
+    if (
+      element.tagName.toLowerCase() === "code" ||
+      element.classList.contains("cm-content")
+    ) {
+      return true;
+    }
     const labelText = collapseInlineText(
       [
         element.getAttribute("aria-label"),
@@ -526,7 +548,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
         resolve();
         return;
       }
-      window.setTimeout(resolve, 0);
+      window.setTimeout(resolve, 750);
     });
 
   const storeMaterializedWidgetSource = (element, language, source) => {
