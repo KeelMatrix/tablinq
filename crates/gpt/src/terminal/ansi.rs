@@ -76,25 +76,25 @@ pub(super) fn ansi_color_supported(
 }
 
 pub(super) fn shell_background_is_black(env: &[(String, String)]) -> bool {
-    #[cfg(windows)]
-    if let Some(is_black) = windows_console_background_is_black() {
-        return is_black;
-    }
-
     let colorfgbg = env
         .iter()
         .find(|(candidate, _)| candidate == "COLORFGBG")
         .map(|(_, value)| value.as_str());
 
-    let Some(colorfgbg) = colorfgbg else {
-        return false;
-    };
+    if let Some(colorfgbg) = colorfgbg {
+        return colorfgbg
+            .rsplit(';')
+            .next()
+            .and_then(|value| value.trim().parse::<u8>().ok())
+            == Some(0);
+    }
 
-    colorfgbg
-        .rsplit(';')
-        .next()
-        .and_then(|value| value.trim().parse::<u8>().ok())
-        == Some(0)
+    #[cfg(windows)]
+    if let Some(is_black) = windows_console_background_is_black() {
+        return is_black;
+    }
+
+    false
 }
 
 #[cfg(windows)]

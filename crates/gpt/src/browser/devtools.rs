@@ -237,8 +237,7 @@ mod tests {
         };
         thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0_u8; 512];
-            let _ = stream.read(&mut buffer).unwrap();
+            let _ = read_http_request_head(&mut stream);
             let response = "HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\npayload";
             let _ = stream.write_all(response.as_bytes());
         });
@@ -289,9 +288,7 @@ mod tests {
                     thread::sleep(Duration::from_millis(10));
                     continue;
                 };
-                let mut buffer = [0_u8; 2048];
-                let count = stream.read(&mut buffer).unwrap_or(0);
-                let request = String::from_utf8_lossy(&buffer[..count]).to_string();
+                let request = read_http_request_head(&mut stream);
                 let request_line = request.lines().next().unwrap_or("").to_owned();
                 let _ = tx.send(request_line.clone());
                 let body = if request_line.contains("/json/list") {
@@ -313,5 +310,32 @@ mod tests {
             }
         });
         (endpoint, rx)
+    }
+
+    fn read_http_request_head(stream: &mut std::net::TcpStream) -> String {
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 512];
+        loop {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    break;
+                }
+                Err(_) => break,
+            }
+        }
+        String::from_utf8_lossy(&request).to_string()
     }
 }
