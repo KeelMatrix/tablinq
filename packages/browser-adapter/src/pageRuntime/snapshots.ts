@@ -21,3 +21,12 @@ export async function readAskSnapshot(
     }),
   );
 }
+
+export async function materializeAskCodePreviewSources(
+  page: Page,
+  baseline?: AskBaseline | null,
+): Promise<number> {
+  return callPageAdapter<number>(page, "materializeAskCodePreviewSources", {
+    baseline: baseline ?? null,
+  });
+}

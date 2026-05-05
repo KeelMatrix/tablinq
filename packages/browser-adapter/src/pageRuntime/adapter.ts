@@ -15,6 +15,7 @@ export async function callPageAdapter<T>(
     | "readSubmitState"
     | "readAskBaseline"
     | "readAskSnapshot"
+    | "materializeAskCodePreviewSources"
     | "readResearchSubmissionState"
     | "readResearchSnapshot"
     | "submitStarted"

@@ -111,6 +111,46 @@ async function readInsertedAskMarkdown(markdownHtml: string): Promise<string> {
   return snapshot.text;
 }
 
+async function readMaterializedAskMarkdown(
+  markdownHtml: string,
+  configure: (document: Document) => void,
+): Promise<string> {
+  const { adapter, dom, main } = await createAskRuntimeDom();
+  const baseline = adapter.readAskBaseline();
+  main.insertAdjacentHTML(
+    "beforeend",
+    `<section data-testid="conversation-turn-markdown">
+      <h4 class="sr-only">ChatGPT said:</h4>
+      <div data-message-author-role="assistant" data-message-id="markdown-msg">
+        <div class="markdown">${markdownHtml}</div>
+      </div>
+    </section>`,
+  );
+  configure(dom.window.document);
+  dom.window.document.body.dataset.streamState = "done";
+
+  await adapter.materializeAskCodePreviewSources({ baseline });
+  const snapshot = adapter.readAskSnapshot({ baseline });
+  dom.window.close();
+  return snapshot.text;
+}
+
+function installWidgetCodeViewSource(
+  document: Document,
+  testId: string,
+  language: string,
+  source: string,
+) {
+  const widget = document.querySelector(`[data-testid='${testId}']`);
+  const code = widget?.querySelector("button[aria-label='Code']");
+  code?.addEventListener("click", () => {
+    const sourceElement = document.createElement("code");
+    sourceElement.dataset.language = language;
+    sourceElement.textContent = source;
+    widget?.appendChild(sourceElement);
+  });
+}
+
 async function withShortAskStreamWatchdog<T>(
   run: () => Promise<T>,
 ): Promise<T> {
@@ -207,6 +247,102 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     );
     expect(text).not.toContain("SVG preview");
     expect(text).not.toContain("Mermaid diagram preview");
+  });
+
+  it("materializes Mermaid source from the widget Code view before final extraction", async () => {
+    const source = "graph TD\n  A[Start] --> B[Done]";
+    const text = await readMaterializedAskMarkdown(
+      `
+      <pre data-testid="mermaid-widget" data-language="mermaid">
+        <div>Mermaid</div>
+        <button aria-label="Code" type="button">Code</button>
+        <button aria-label="Preview" type="button">Preview</button>
+        <div>Loading diagram...</div>
+        <canvas aria-label="Mermaid preview"></canvas>
+      </pre>
+    `,
+      (document) => {
+        installWidgetCodeViewSource(
+          document,
+          "mermaid-widget",
+          "mermaid",
+          source,
+        );
+      },
+    );
+
+    expect(text).toBe(`\`\`\`mermaid\n${source}\n\`\`\``);
+    expect(text).not.toContain("Mermaid diagram preview");
+    expect(text).not.toContain("Loading diagram");
+  });
+
+  it("materializes SVG source from the widget Code view before final extraction", async () => {
+    const source =
+      '<svg xmlns="http://www.w3.org/2000/svg"><text>Source survives</text></svg>';
+    const text = await readMaterializedAskMarkdown(
+      `
+      <pre data-testid="svg-widget" data-language="svg">
+        <div>SVG</div>
+        <button aria-label="Code" type="button">Code</button>
+        <button aria-label="Preview" type="button">Preview</button>
+        <img alt="SVG preview" src="data:image/svg+xml,${mermaidPreviewSvg(["Preview label"])}">
+      </pre>
+    `,
+      (document) => {
+        installWidgetCodeViewSource(document, "svg-widget", "svg", source);
+      },
+    );
+
+    expect(text).toBe(`\`\`\`svg\n${source}\n\`\`\``);
+    expect(text).not.toContain("Mermaid diagram preview");
+    expect(text).not.toContain("SVG preview");
+  });
+
+  it("materializes mixed code-preview widget sources in answer order", async () => {
+    const mermaidSource = "graph LR\n  A --> B";
+    const svgSource =
+      '<svg xmlns="http://www.w3.org/2000/svg"><text>Diagram</text></svg>';
+    const text = await readMaterializedAskMarkdown(
+      `
+      <pre data-language="json"><code>{"ok": true}</code></pre>
+      <pre data-language="yaml"><code>ok: true</code></pre>
+      <pre data-language="csv"><code>name,value\nalpha,1</code></pre>
+      <pre data-testid="mermaid-widget" data-language="mermaid">
+        <div>Mermaid</div>
+        <button aria-label="Code" type="button">Code</button>
+        <button aria-label="Preview" type="button">Preview</button>
+        <div>Loading diagram...</div>
+        <canvas aria-label="Mermaid preview"></canvas>
+      </pre>
+      <pre data-testid="svg-widget" data-language="svg">
+        <div>SVG</div>
+        <button aria-label="Code" type="button">Code</button>
+        <button aria-label="Preview" type="button">Preview</button>
+        <img alt="SVG preview" src="data:image/svg+xml,${mermaidPreviewSvg(["Preview label"])}">
+      </pre>
+      <pre data-language="html"><code>&lt;main&gt;ok&lt;/main&gt;</code></pre>
+    `,
+      (document) => {
+        installWidgetCodeViewSource(
+          document,
+          "mermaid-widget",
+          "mermaid",
+          mermaidSource,
+        );
+        installWidgetCodeViewSource(document, "svg-widget", "svg", svgSource);
+      },
+    );
+
+    expect(text).toBe(
+      `\`\`\`json\n{"ok": true}\n\`\`\`\n\n` +
+        `\`\`\`yaml\nok: true\n\`\`\`\n\n` +
+        `\`\`\`csv\nname,value\nalpha,1\n\`\`\`\n\n` +
+        `\`\`\`mermaid\n${mermaidSource}\n\`\`\`\n\n` +
+        `\`\`\`svg\n${svgSource}\n\`\`\`\n\n` +
+        "```html\n<main>ok</main>\n```",
+    );
+    expect(text).not.toContain("Mermaid diagram preview");
+    expect(text).not.toContain("Loading diagram");
   });
 
   it("preserves mixed fenced blocks and Mermaid source in order", async () => {

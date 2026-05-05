@@ -6,7 +6,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     collapseInlineText,
     normalizeInlineOutput,
   } = textUtils;
-  const { isVisible } = domUtils;
+  const { accessibleName, clickControl, isVisible } = domUtils;
   const {
     isTransientAskStatusText,
     isTransientAskStatusElement,
@@ -503,6 +503,91 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     return serializeCodePreviewBlock(element);
   };
 
+  const findCodePreviewToggle = (element, label) => {
+    if (!(element instanceof HTMLElement)) {
+      return null;
+    }
+    const normalizedLabel = label.toLowerCase();
+    return (
+      Array.from(
+        element.querySelectorAll("button, [role='button'], [role='tab']"),
+      ).find((candidate) => {
+        if (!(candidate instanceof HTMLElement) || !isVisible(candidate)) {
+          return false;
+        }
+        return accessibleName(candidate).toLowerCase() === normalizedLabel;
+      }) ?? null
+    );
+  };
+
+  const waitForWidgetDomUpdate = () =>
+    new Promise((resolve) => {
+      if (typeof window === "undefined") {
+        resolve();
+        return;
+      }
+      window.setTimeout(resolve, 0);
+    });
+
+  const storeMaterializedWidgetSource = (element, language, source) => {
+    if (
+      !(element instanceof HTMLElement) ||
+      !language ||
+      !source ||
+      element.querySelector("[data-tablinq-materialized-source='true']")
+    ) {
+      return;
+    }
+    const sourceElement = document.createElement("textarea");
+    sourceElement.hidden = true;
+    sourceElement.dataset.language = language;
+    sourceElement.dataset.tablinqMaterializedSource = "true";
+    sourceElement.setAttribute("aria-label", `Tablinq ${language} source`);
+    sourceElement.value = source;
+    sourceElement.textContent = source;
+    element.appendChild(sourceElement);
+  };
+
+  const materializeCodePreviewSources = async (root) => {
+    if (!(root instanceof HTMLElement)) {
+      return 0;
+    }
+    let materialized = 0;
+    const widgets = Array.from(root.querySelectorAll("pre")).filter(
+      (element) =>
+        element instanceof HTMLElement && isCodePreviewBlock(element),
+    );
+    for (const widget of widgets) {
+      const language = collectCodePreviewLanguage(widget);
+      if (!["mermaid", "svg"].includes(language)) {
+        continue;
+      }
+      if (collectCodePreviewSource(widget, language)) {
+        continue;
+      }
+      const codeToggle = findCodePreviewToggle(widget, "Code");
+      const previewToggle = findCodePreviewToggle(widget, "Preview");
+      if (!codeToggle || !previewToggle) {
+        continue;
+      }
+      if (!clickControl(codeToggle)) {
+        continue;
+      }
+      await waitForWidgetDomUpdate();
+      const source = collectCodePreviewSource(widget, language);
+      if (!source) {
+        continue;
+      }
+      storeMaterializedWidgetSource(widget, language, source);
+      materialized += 1;
+      if (isVisible(previewToggle)) {
+        clickControl(previewToggle);
+        await waitForWidgetDomUpdate();
+      }
+    }
+    return materialized;
+  };
+
   const isIgnoredMessageChrome = (element) => {
     if (!(element instanceof HTMLElement)) {
       return false;
@@ -813,6 +898,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     collectText,
     collectMermaidSvgLabels,
     isMermaidPreviewBlock,
+    materializeCodePreviewSources,
     serializeMermaidPreviewBlock,
   };
 }
