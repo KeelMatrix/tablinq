@@ -41,6 +41,55 @@ import { installBrowserAdapterHarness } from "./helpers/browserAdapterHarness";
 
 const harness = installBrowserAdapterHarness();
 
+function mermaidPreviewSvg(labels: string[]): string {
+  return encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg">
+      ${labels.map((label) => `<text>${label}</text>`).join("")}
+    </svg>
+  `);
+}
+
+function mermaidPreviewOnlyMarkup(labels: string[]): string {
+  return `
+    <pre>
+      <button aria-label="Code" type="button">Code</button>
+      <button aria-label="Preview" type="button">Preview</button>
+      <img alt="Mermaid preview" src="data:image/svg+xml,${mermaidPreviewSvg(labels)}">
+    </pre>`;
+}
+
+function mermaidPreviewWithSourceMarkup(source: string): string {
+  return `
+    <pre data-testid="mermaid-widget">
+      <button aria-label="Code" type="button">Code</button>
+      <button aria-label="Preview" type="button">Preview</button>
+      <img alt="Mermaid preview" src="data:image/svg+xml,${mermaidPreviewSvg([
+        "Preview",
+        "Only",
+      ])}">
+      <textarea data-language="mermaid" aria-label="Mermaid source" hidden>${source}</textarea>
+    </pre>`;
+}
+
+async function readInsertedAskMarkdown(markdownHtml: string): Promise<string> {
+  const { adapter, dom, main } = await createAskRuntimeDom();
+  const baseline = adapter.readAskBaseline();
+  main.insertAdjacentHTML(
+    "beforeend",
+    `<section data-testid="conversation-turn-markdown">
+      <h4 class="sr-only">ChatGPT said:</h4>
+      <div data-message-author-role="assistant" data-message-id="markdown-msg">
+        <div class="markdown">${markdownHtml}</div>
+      </div>
+    </section>`,
+  );
+  dom.window.document.body.dataset.streamState = "done";
+
+  const snapshot = adapter.readAskSnapshot({ baseline });
+  dom.window.close();
+  return snapshot.text;
+}
+
 async function withShortAskStreamWatchdog<T>(
   run: () => Promise<T>,
 ): Promise<T> {
@@ -72,39 +121,51 @@ async function withShortAskStreamWatchdog<T>(
 }
 
 describe("browser adapter ask: submit readiness and surface locking", () => {
+  it("prefers hidden Mermaid source over preview SVG labels", async () => {
+    const source = "graph TD\n  A[Start] --> B[Done]";
+    const text = await readInsertedAskMarkdown(
+      mermaidPreviewWithSourceMarkup(source),
+    );
+
+    expect(text).toBe(`\`\`\`mermaid\n${source}\n\`\`\``);
+    expect(text).not.toContain("Mermaid diagram preview");
+    expect(text).not.toContain("Preview; Only");
+  });
+
+  it("keeps rendered Mermaid pre code as a fenced code block", async () => {
+    const source = "sequenceDiagram\n  Alice->>Bob: Hello";
+    const text = await readInsertedAskMarkdown(
+      `<pre data-language="mermaid"><code>${source}</code></pre>`,
+    );
+
+    expect(text).toBe(`\`\`\`mermaid\n${source}\n\`\`\``);
+  });
+
   it("keeps the Mermaid preview fallback when no source code is available", async () => {
-    const { adapter, dom, main } = await createAskRuntimeDom();
-    const baseline = adapter.readAskBaseline();
-    const svg = encodeURIComponent(`
-      <svg xmlns="http://www.w3.org/2000/svg">
-        <text>Start</text>
-        <text>Process</text>
-        <text>Done</text>
-      </svg>
+    const text = await readInsertedAskMarkdown(
+      mermaidPreviewOnlyMarkup(["Start", "Process", "Done"]),
+    );
+
+    expect(text).toBe("Mermaid diagram preview: Start; Process; Done.");
+  });
+
+  it("preserves mixed fenced blocks and Mermaid source in order", async () => {
+    const mermaidSource = "graph LR\n  A --> B";
+    const text = await readInsertedAskMarkdown(`
+      <pre data-language="json"><code>{"ok": true}</code></pre>
+      <pre data-language="yaml"><code>ok: true</code></pre>
+      <pre data-language="csv"><code>name,value\nalpha,1</code></pre>
+      <pre data-language="html"><code>&lt;main&gt;ok&lt;/main&gt;</code></pre>
+      ${mermaidPreviewWithSourceMarkup(mermaidSource)}
     `);
-    main.insertAdjacentHTML(
-      "beforeend",
-      `<section data-testid="conversation-turn-mermaid">
-        <h4 class="sr-only">ChatGPT said:</h4>
-        <div data-message-author-role="assistant" data-message-id="mermaid-preview-msg">
-          <div class="markdown">
-            <pre>
-              <button aria-label="Code" type="button">Code</button>
-              <button aria-label="Preview" type="button">Preview</button>
-              <img alt="Mermaid preview" src="data:image/svg+xml,${svg}">
-            </pre>
-          </div>
-        </div>
-      </section>`,
-    );
-    dom.window.document.body.dataset.streamState = "done";
 
-    const snapshot = adapter.readAskSnapshot({ baseline });
-
-    expect(snapshot.text).toBe(
-      "Mermaid diagram preview: Start; Process; Done.",
+    expect(text).toBe(
+      `\`\`\`json\n{"ok": true}\n\`\`\`\n\n` +
+        `\`\`\`yaml\nok: true\n\`\`\`\n\n` +
+        `\`\`\`csv\nname,value\nalpha,1\n\`\`\`\n\n` +
+        `\`\`\`html\n<main>ok</main>\n\`\`\`\n\n` +
+        `\`\`\`mermaid\n${mermaidSource}\n\`\`\``,
     );
-    dom.window.close();
   });
 
   it("falls back to keyboard submit when a composer plus button sits next to send", async () => {

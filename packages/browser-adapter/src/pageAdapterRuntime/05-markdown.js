@@ -287,12 +287,6 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     if (!(element instanceof HTMLElement)) {
       return false;
     }
-    if (
-      element.querySelector("code") instanceof HTMLElement ||
-      element.querySelector(".cm-content") instanceof HTMLElement
-    ) {
-      return false;
-    }
     const hasPreviewSurface = Boolean(
       element.querySelector(
         "img[src^='data:image/'], img[src^='blob:'], canvas",
@@ -309,9 +303,93 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     );
   };
 
+  const collectSourceText = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    if (
+      element instanceof HTMLTextAreaElement ||
+      element instanceof HTMLInputElement
+    ) {
+      return (element.value || element.textContent || "").trimEnd();
+    }
+    return (
+      element.innerText ||
+      element.textContent ||
+      element.getAttribute("value") ||
+      ""
+    ).trimEnd();
+  };
+
+  const isMermaidSourceCandidate = (element) => {
+    if (!(element instanceof HTMLElement) || element.closest("button")) {
+      return false;
+    }
+    const language = collapseInlineText(
+      element.getAttribute("data-language") ??
+        element.getAttribute("data-code-language") ??
+        element.dataset.language ??
+        element.dataset.codeLanguage,
+    ).toLowerCase();
+    const classText = Array.from(element.classList).join(" ").toLowerCase();
+    const labelText = collapseInlineText(
+      [
+        element.getAttribute("aria-label"),
+        element.getAttribute("data-testid"),
+        element.getAttribute("data-source"),
+        element.getAttribute("name"),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    ).toLowerCase();
+    return (
+      language === "mermaid" ||
+      classText.includes("language-mermaid") ||
+      hasToken(labelText, ["source"]) ||
+      hasToken(labelText, ["code"])
+    );
+  };
+
+  const collectMermaidPreviewSource = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    const candidates = Array.from(
+      element.querySelectorAll(
+        [
+          "code",
+          ".cm-content",
+          "textarea",
+          "input[type='hidden']",
+          "[data-language]",
+          "[data-code-language]",
+          "[data-source]",
+          "[aria-label*='source' i]",
+          "[aria-label*='code' i]",
+          "[data-testid*='source' i]",
+          "[data-testid*='code' i]",
+        ].join(", "),
+      ),
+    );
+    for (const candidate of candidates) {
+      if (!isMermaidSourceCandidate(candidate)) {
+        continue;
+      }
+      const source = collectSourceText(candidate);
+      if (source) {
+        return source;
+      }
+    }
+    return "";
+  };
+
   const serializeMermaidPreviewBlock = (element) => {
     if (!isMermaidPreviewBlock(element)) {
       return "";
+    }
+    const source = collectMermaidPreviewSource(element);
+    if (source) {
+      return `\`\`\`mermaid\n${source}\n\`\`\``;
     }
     const previewImage = element.querySelector(
       "img[src^='data:image/svg+xml']",
