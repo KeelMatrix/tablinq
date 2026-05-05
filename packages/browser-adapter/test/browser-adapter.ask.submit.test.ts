@@ -389,6 +389,54 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     expect(text).not.toContain("Loading diagram");
   });
 
+  it("materializes Mermaid source from a toggle-only live widget", async () => {
+    const source = "graph TD\n  Login --> Session";
+    const text = await readMaterializedAskMarkdown(
+      `
+      <pre data-testid="mermaid-widget">
+        <div>Mermaid</div>
+        <button aria-label="Code" aria-pressed="false" type="button">Code</button>
+        <button aria-label="Preview" aria-pressed="true" type="button">Preview</button>
+      </pre>
+    `,
+      (document) => {
+        installWidgetCodeViewSource(
+          document,
+          "mermaid-widget",
+          "mermaid",
+          source,
+        );
+      },
+    );
+
+    expect(text).toBe(`\`\`\`mermaid\n${source}\n\`\`\``);
+    expect(text).not.toContain("Mermaid diagram preview");
+  });
+
+  it("preserves CodeMirror line breaks when materializing widget source", async () => {
+    const text = await readMaterializedAskMarkdown(
+      `
+      <pre data-testid="mermaid-widget">
+        <div>Mermaid</div>
+        <button aria-label="Code" aria-pressed="false" type="button">Code</button>
+        <button aria-label="Preview" aria-pressed="true" type="button">Preview</button>
+      </pre>
+    `,
+      (document) => {
+        const widget = document.querySelector("[data-testid='mermaid-widget']");
+        const code = widget?.querySelector("button[aria-label='Code']");
+        code?.addEventListener("click", () => {
+          widget?.insertAdjacentHTML(
+            "beforeend",
+            `<pre class="cm-content"><code><span>flowchart TD</span><br><span>  A --> B</span></code></pre>`,
+          );
+        });
+      },
+    );
+
+    expect(text).toBe("```mermaid\nflowchart TD\n  A --> B\n```");
+  });
+
   it("materializes SVG source from the widget Code view before final extraction", async () => {
     const source =
       '<svg xmlns="http://www.w3.org/2000/svg"><text>Source survives</text></svg>';
