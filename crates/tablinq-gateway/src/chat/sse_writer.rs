@@ -102,3 +102,67 @@ pub(super) fn write_stream_error(stream: &mut TcpStream, error: &Value) -> Resul
 pub(super) fn write_stream_done(stream: &mut TcpStream) -> Result<()> {
     write_sse_done(stream)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+    use shared_protocol::StreamChunk;
+    use std::io::Read;
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn raw_assistant_text() -> &'static str {
+        "raw \u{1b}[31mred\u{1b}[0m \u{1b}]0;title\u{7} \
+         before\rrewritten\u{8}x\0 bidi \u{202e}spoof\u{202c}"
+    }
+
+    fn assert_no_cli_display_markers(value: &str) {
+        for marker in [
+            "<ESC>", "<BEL>", "<CR>", "<BS>", "<NUL>", "<U+202E>", "<U+202C>",
+        ] {
+            assert!(!value.contains(marker), "unexpected marker {marker}");
+        }
+    }
+
+    #[test]
+    fn stream_delta_preserves_raw_assistant_text_as_sse_data() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let writer = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            write_stream_delta(
+                &mut stream,
+                "chatcmpl-test",
+                "tablinq-instant",
+                "req-1",
+                EventPayload::StreamChunk(StreamChunk {
+                    job_id: "job-1".to_owned(),
+                    conversation_id: Some("conv-1".to_owned()),
+                    message_id: Some("msg-1".to_owned()),
+                    seq: 1,
+                    kind: StreamChunkKind::Delta,
+                    text: raw_assistant_text().to_owned(),
+                }),
+            )
+            .unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        let mut sse_text = String::new();
+        client.read_to_string(&mut sse_text).unwrap();
+        writer.join().unwrap();
+
+        let data = sse_text
+            .strip_prefix("data: ")
+            .and_then(|value| value.strip_suffix("\n\n"))
+            .expect("SSE data event");
+        let event: Value = serde_json::from_str(data).unwrap();
+
+        assert_eq!(
+            event["choices"][0]["delta"]["content"].as_str(),
+            Some(raw_assistant_text())
+        );
+        assert_no_cli_display_markers(&sse_text);
+    }
+}

@@ -122,6 +122,14 @@ mod tests {
         Effort, ErrorCode, Mode, ModelClass, RecoveryPacket, RecoveryStrategy, RecoveryTrace,
     };
 
+    fn assert_no_cli_display_markers(value: &str) {
+        for marker in [
+            "<ESC>", "<BEL>", "<CR>", "<BS>", "<NUL>", "<U+202E>", "<U+202C>",
+        ] {
+            assert!(!value.contains(marker), "unexpected marker {marker}");
+        }
+    }
+
     #[test]
     fn openai_error_mapping_preserves_refusal_annotations() {
         let err = anyhow!("auth required: managed browser session is not authenticated");
@@ -131,6 +139,10 @@ mod tests {
         let body: Value = serde_json::from_slice(&response.body).expect("decode error body");
         assert_eq!(body["request_id"], "req-1");
         assert_eq!(body["error"]["code"], "auth_required");
+        assert_eq!(
+            body["error"]["message"],
+            "req-1: auth required: managed browser session is not authenticated"
+        );
         assert_eq!(body["tablinq_refusal_reason"], "auth_required");
         assert_eq!(body["tablinq_failure_bundle_id"], "bundle-1");
         assert!(
@@ -138,6 +150,7 @@ mod tests {
                 .as_array()
                 .is_some_and(|items| !items.is_empty())
         );
+        assert_no_cli_display_markers(&String::from_utf8(response.body).unwrap());
     }
 
     #[test]
