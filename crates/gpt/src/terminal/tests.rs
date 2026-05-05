@@ -11,8 +11,9 @@ use super::execution::{
     JobStatusLine, ask_progress_status_line, extract_research_plan, research_progress_status_line,
 };
 use super::response::{
-    ResponseStreamState, buffer_response_chunk, reconcile_streamed_response_with_rewrite_safety,
-    rewrite_response_line_is_safe, write_complete_response,
+    ResponseDisplay, ResponseStreamState, buffer_response_chunk,
+    reconcile_streamed_response_with_rewrite_safety, rewrite_response_line_is_safe,
+    write_complete_response,
 };
 
 #[test]
@@ -240,15 +241,51 @@ fn render_reconciled_response(
     )
 }
 
+fn render_reconciled_interactive_response(
+    streamed_chunks: &[&str],
+    final_text: &str,
+    green_responses: bool,
+) -> String {
+    let rewrite_in_place_safe = render_streamed_chunks_with_display(
+        streamed_chunks,
+        green_responses,
+        ResponseDisplay::InteractiveTerminal,
+    )
+    .1
+    .printed_text;
+    render_reconciled_response_with_display_and_rewrite_safety(
+        streamed_chunks,
+        final_text,
+        green_responses,
+        ResponseDisplay::InteractiveTerminal,
+        rewrite_response_line_is_safe(&rewrite_in_place_safe, final_text),
+    )
+}
+
 fn render_streamed_chunks(
     streamed_chunks: &[&str],
     green_responses: bool,
+) -> (String, ResponseStreamState) {
+    render_streamed_chunks_with_display(streamed_chunks, green_responses, ResponseDisplay::Raw)
+}
+
+fn render_streamed_chunks_with_display(
+    streamed_chunks: &[&str],
+    green_responses: bool,
+    display: ResponseDisplay,
 ) -> (String, ResponseStreamState) {
     let mut stdout = Vec::new();
     let mut response_stream = ResponseStreamState::default();
 
     for chunk in streamed_chunks {
-        buffer_response_chunk(&mut stdout, chunk, green_responses, &mut response_stream).unwrap();
+        buffer_response_chunk(
+            &mut stdout,
+            chunk,
+            green_responses,
+            display,
+            &mut response_stream,
+        )
+        .unwrap();
     }
 
     (String::from_utf8(stdout).unwrap(), response_stream)
@@ -260,8 +297,24 @@ fn render_reconciled_response_with_rewrite_safety(
     green_responses: bool,
     rewrite_in_place_safe: bool,
 ) -> String {
+    render_reconciled_response_with_display_and_rewrite_safety(
+        streamed_chunks,
+        final_text,
+        green_responses,
+        ResponseDisplay::Raw,
+        rewrite_in_place_safe,
+    )
+}
+
+fn render_reconciled_response_with_display_and_rewrite_safety(
+    streamed_chunks: &[&str],
+    final_text: &str,
+    green_responses: bool,
+    display: ResponseDisplay,
+    rewrite_in_place_safe: bool,
+) -> String {
     let (streamed_output, mut response_stream) =
-        render_streamed_chunks(streamed_chunks, green_responses);
+        render_streamed_chunks_with_display(streamed_chunks, green_responses, display);
     let mut stdout = streamed_output.into_bytes();
 
     reconcile_streamed_response_with_rewrite_safety(
@@ -270,6 +323,7 @@ fn render_reconciled_response_with_rewrite_safety(
         &response_stream.pending_text,
         final_text,
         green_responses,
+        display,
         &mut response_stream.response_color_active,
         rewrite_in_place_safe,
     )
@@ -318,7 +372,7 @@ fn complete_response_preserves_safe_printable_markdown_and_text() {
     let response = safe_printable_ask_response();
     let mut stdout = Vec::new();
 
-    write_complete_response(&mut stdout, &response, false).unwrap();
+    write_complete_response(&mut stdout, &response, false, ResponseDisplay::Raw).unwrap();
 
     assert_eq!(String::from_utf8(stdout).unwrap(), format!("{response}\n"));
 }
@@ -344,6 +398,68 @@ fn green_response_wrapping_is_balanced_and_preserves_safe_printable_text() {
     assert_eq!(output.matches(ANSI_RESET).count(), 1);
     assert_eq!(
         output.replace(ANSI_GREEN, "").replace(ANSI_RESET, ""),
+        format!("{response}\n")
+    );
+}
+
+#[test]
+fn interactive_response_renders_sgr_escape_text_visibly() {
+    let output = render_reconciled_interactive_response(
+        &["before \u{1b}[31mred\u{1b}[0m"],
+        "before \u{1b}[31mred\u{1b}[0m",
+        false,
+    );
+
+    assert_eq!(output, "before <ESC>[31mred<ESC>[0m\n");
+    assert!(!output.contains('\u{1b}'));
+}
+
+#[test]
+fn interactive_response_renders_osc_and_bel_visibly() {
+    let output = render_reconciled_interactive_response(
+        &["title \u{1b}]0;owned\u{7} done"],
+        "title \u{1b}]0;owned\u{7} done",
+        false,
+    );
+
+    assert_eq!(output, "title <ESC>]0;owned<BEL> done\n");
+    assert!(!output.contains('\u{1b}'));
+    assert!(!output.contains('\u{7}'));
+}
+
+#[test]
+fn interactive_response_renders_rewrite_controls_visibly() {
+    let output = render_reconciled_interactive_response(
+        &["prefix safe\rrewritten\u{8}x\0"],
+        "prefix safe\rrewritten\u{8}x\0",
+        false,
+    );
+
+    assert_eq!(output, "prefix safe<CR>rewritten<BS>x<NUL>\n");
+    assert!(!output.contains('\r'));
+    assert!(!output.contains('\u{8}'));
+    assert!(!output.contains('\0'));
+}
+
+#[test]
+fn interactive_response_renders_bidi_controls_visibly() {
+    let output = render_reconciled_interactive_response(
+        &["abc\u{202e}spoof\u{202c}def"],
+        "abc\u{202e}spoof\u{202c}def",
+        false,
+    );
+
+    assert_eq!(output, "abc<U+202E>spoof<U+202C>def\n");
+    assert!(!output.contains('\u{202e}'));
+    assert!(!output.contains('\u{202c}'));
+}
+
+#[test]
+fn raw_response_helpers_preserve_control_characters_for_non_terminal_output() {
+    let response = "raw \u{1b}[31mred\u{1b}[0m \u{7} \r \u{8} \0 \u{202e}\u{202c}";
+
+    assert_eq!(
+        render_reconciled_response(&[response], response, false),
         format!("{response}\n")
     );
 }
