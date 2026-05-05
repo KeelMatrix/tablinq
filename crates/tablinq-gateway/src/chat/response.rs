@@ -118,4 +118,40 @@ mod tests {
         );
         assert_no_cli_display_markers(&json_text);
     }
+
+    #[test]
+    fn chat_completion_response_preserves_fenced_html_blocks_as_api_data() {
+        let assistant_text = concat!(
+            "## Mixed blocks\n\n",
+            "```mermaid\nflowchart TD\n  A[SOURCE_SHOULD_SURVIVE] --> B[Done]\n```\n\n",
+            "```svg\n<svg xmlns=\"http://www.w3.org/2000/svg\"><text>SOURCE_SHOULD_SURVIVE</text></svg>\n```\n\n",
+            "```html\n<main><section>SOURCE_SHOULD_SURVIVE</section></main>\n```\n\n",
+            "Final sentence survives."
+        );
+
+        let response = build_chat_completion_response(
+            "req-2",
+            "job-2",
+            "tablinq-instant",
+            RequestRole::Primary,
+            None,
+            Some("conv-2"),
+            Some("browser-primary"),
+            assistant_text,
+            "stop",
+            None,
+        );
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        let json_text = String::from_utf8(response.body).unwrap();
+
+        assert_eq!(
+            body["choices"][0]["message"]["content"].as_str(),
+            Some(assistant_text)
+        );
+        assert!(
+            json_text
+                .contains("```html\\n<main><section>SOURCE_SHOULD_SURVIVE</section></main>\\n```")
+        );
+        assert_no_cli_display_markers(&json_text);
+    }
 }

@@ -359,6 +359,91 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     return "";
   };
 
+  const inferCodePreviewLanguageFromSource = (source) => {
+    const normalized = source.trim();
+    if (!normalized) {
+      return "";
+    }
+    if (/<svg[\s>]/i.test(normalized) || /<\/svg>/i.test(normalized)) {
+      return "svg";
+    }
+    if (
+      /^(?:graph|flowchart|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|mindmap|timeline|gitGraph|requirementDiagram|quadrantChart|xychart-beta|sankey-beta|packet-beta|block-beta)\b/m.test(
+        normalized,
+      )
+    ) {
+      return "mermaid";
+    }
+    if (
+      /<!doctype\s+html/i.test(normalized) ||
+      /<\/?(?:html|head|body|main|section|article|header|footer|nav|aside|div|span|p|a|button|table|thead|tbody|tr|td|th|ul|ol|li|form|label|input|textarea|select|option|script|style|template)\b/i.test(
+        normalized,
+      )
+    ) {
+      return "html";
+    }
+    return "";
+  };
+
+  const codePreviewSourceSelector = [
+    "code",
+    ".cm-content",
+    "textarea",
+    "input[type='hidden']",
+    "[data-language]",
+    "[data-code-language]",
+    "[data-source]",
+    "[aria-label*='source' i]",
+    "[aria-label*='code' i]",
+    "[data-testid*='source' i]",
+    "[data-testid*='code' i]",
+  ].join(", ");
+
+  const collectCodePreviewCandidateLanguage = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return "";
+    }
+    const candidates = Array.from(
+      element.querySelectorAll(codePreviewSourceSelector),
+    );
+    for (const candidate of candidates) {
+      if (!(candidate instanceof HTMLElement) || candidate.closest("button")) {
+        continue;
+      }
+      const hinted = collectElementLanguageHint(candidate);
+      if (hinted) {
+        return hinted;
+      }
+      const labelText = collapseInlineText(
+        [
+          candidate.getAttribute("aria-label"),
+          candidate.getAttribute("data-testid"),
+          candidate.getAttribute("data-source"),
+          candidate.getAttribute("name"),
+          candidate.textContent,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      if (hasToken(labelText, ["mermaid"])) {
+        return "mermaid";
+      }
+      if (hasToken(labelText, ["svg"])) {
+        return "svg";
+      }
+      if (hasToken(labelText, ["html"])) {
+        return "html";
+      }
+      const inferred = inferCodePreviewLanguageFromSource(
+        collectSourceText(candidate),
+      );
+      if (inferred) {
+        return inferred;
+      }
+    }
+    return "";
+  };
+
   const collectCodePreviewLanguage = (element) => {
     if (!(element instanceof HTMLElement)) {
       return "";
@@ -366,6 +451,10 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     const direct = collectElementLanguageHint(element);
     if (direct) {
       return direct;
+    }
+    const candidateLanguage = collectCodePreviewCandidateLanguage(element);
+    if (candidateLanguage) {
+      return candidateLanguage;
     }
 
     const textHints = [
@@ -389,6 +478,9 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     if (hasToken(text, ["svg"])) {
       return "svg";
     }
+    if (hasToken(text, ["html"])) {
+      return "html";
+    }
     return "";
   };
 
@@ -406,6 +498,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       "loading diagram...",
       "rendering...",
       language,
+      "html",
       "mermaid",
       "svg",
     ]);
@@ -445,21 +538,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       return "";
     }
     const candidates = Array.from(
-      element.querySelectorAll(
-        [
-          "code",
-          ".cm-content",
-          "textarea",
-          "input[type='hidden']",
-          "[data-language]",
-          "[data-code-language]",
-          "[data-source]",
-          "[aria-label*='source' i]",
-          "[aria-label*='code' i]",
-          "[data-testid*='source' i]",
-          "[data-testid*='code' i]",
-        ].join(", "),
-      ),
+      element.querySelectorAll(codePreviewSourceSelector),
     );
     for (const candidate of candidates) {
       if (!isCodePreviewSourceCandidate(candidate, language)) {
@@ -484,19 +563,38 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     return collectMermaidSvgLabels(svgText);
   };
 
+  const resolveCodePreviewPayload = (element) => {
+    const hintedLanguage = collectCodePreviewLanguage(element);
+    const hintedSource = collectCodePreviewSource(element, hintedLanguage);
+    if (hintedLanguage && hintedSource) {
+      return { language: hintedLanguage, source: hintedSource };
+    }
+    const source = hintedSource || collectCodePreviewSource(element, "");
+    if (!source) {
+      return { language: hintedLanguage, source: "" };
+    }
+    return {
+      language: hintedLanguage || inferCodePreviewLanguageFromSource(source),
+      source,
+    };
+  };
+
   const serializeCodePreviewBlock = (element) => {
     if (!isCodePreviewBlock(element)) {
       return null;
     }
-    const language = collectCodePreviewLanguage(element);
-    if (!language) {
-      return "Preview.";
-    }
-    const source = collectCodePreviewSource(element, language);
-    if (source) {
+    const { language, source } = resolveCodePreviewPayload(element);
+    if (language && source) {
       return `\`\`\`${language}\n${source}\n\`\`\``;
     }
     const labels = collectPreviewSvgLabels(element);
+    if (!language) {
+      if (labels.length === 0) {
+        return "";
+      }
+      const summary = labels.slice(0, 12).join("; ");
+      return `Preview: ${summary}${labels.length > 12 ? "; ..." : "."}`;
+    }
     if (language === "mermaid") {
       if (labels.length === 0) {
         return "";
@@ -580,11 +678,8 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
         element instanceof HTMLElement && isCodePreviewBlock(element),
     );
     for (const widget of widgets) {
-      const language = collectCodePreviewLanguage(widget);
-      if (!["mermaid", "svg"].includes(language)) {
-        continue;
-      }
-      if (collectCodePreviewSource(widget, language)) {
+      const payload = resolveCodePreviewPayload(widget);
+      if (payload.language && payload.source) {
         continue;
       }
       const codeToggle = findCodePreviewToggle(widget, "Code");
@@ -596,11 +691,15 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
         continue;
       }
       await waitForWidgetDomUpdate();
-      const source = collectCodePreviewSource(widget, language);
-      if (!source) {
+      const recovered = resolveCodePreviewPayload(widget);
+      if (!recovered.language || !recovered.source) {
         continue;
       }
-      storeMaterializedWidgetSource(widget, language, source);
+      storeMaterializedWidgetSource(
+        widget,
+        recovered.language,
+        recovered.source,
+      );
       materialized += 1;
       if (isVisible(previewToggle)) {
         clickControl(previewToggle);
@@ -623,8 +722,8 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       if (!(element instanceof HTMLElement) || !isCodePreviewBlock(element)) {
         return false;
       }
-      const language = collectCodePreviewLanguage(element);
-      if (language && collectCodePreviewSource(element, language)) {
+      const payload = resolveCodePreviewPayload(element);
+      if (payload.language && payload.source) {
         return false;
       }
       if (collectPreviewSvgLabels(element).length > 0) {
