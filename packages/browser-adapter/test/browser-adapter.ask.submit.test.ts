@@ -92,6 +92,17 @@ function svgPreviewWithSourceMarkup(source: string): string {
     </pre>`;
 }
 
+function htmlPreviewWidgetMarkup(): string {
+  return `
+    <pre data-testid="html-widget">
+      <button aria-label="Copy" type="button">Copy</button>
+      <button aria-label="Download" type="button">Download</button>
+      <button aria-label="Code" type="button">Code</button>
+      <button aria-label="Preview" type="button">Preview</button>
+      <iframe title="HTML preview"></iframe>
+    </pre>`;
+}
+
 async function readInsertedAskMarkdown(markdownHtml: string): Promise<string> {
   const { adapter, dom, main } = await createAskRuntimeDom();
   const baseline = adapter.readAskBaseline();
@@ -146,6 +157,20 @@ function installWidgetCodeViewSource(
   code?.addEventListener("click", () => {
     const sourceElement = document.createElement("code");
     sourceElement.dataset.language = language;
+    sourceElement.textContent = source;
+    widget?.appendChild(sourceElement);
+  });
+}
+
+function installWidgetCodeViewSourceWithoutLanguage(
+  document: Document,
+  testId: string,
+  source: string,
+) {
+  const widget = document.querySelector(`[data-testid='${testId}']`);
+  const code = widget?.querySelector("button[aria-label='Code']");
+  code?.addEventListener("click", () => {
+    const sourceElement = document.createElement("code");
     sourceElement.textContent = source;
     widget?.appendChild(sourceElement);
   });
@@ -459,6 +484,27 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     expect(text).not.toContain("SVG preview");
   });
 
+  it("materializes unlabeled HTML source from the widget Code view before final extraction", async () => {
+    const source =
+      "<section><p>SOURCE_SHOULD_SURVIVE</p><table><tr><td>ok</td></tr></table></section>";
+    const text = await readMaterializedAskMarkdown(
+      htmlPreviewWidgetMarkup(),
+      (document) => {
+        installWidgetCodeViewSourceWithoutLanguage(
+          document,
+          "html-widget",
+          source,
+        );
+      },
+    );
+
+    expect(text).toBe(`\`\`\`html\n${source}\n\`\`\``);
+    expect(text).not.toContain("Preview");
+    expect(text).not.toContain("Code");
+    expect(text).not.toContain("Copy");
+    expect(text).not.toContain("Download");
+  });
+
   it("materializes mixed code-preview widget sources in answer order", async () => {
     const mermaidSource = "graph LR\n  A --> B";
     const svgSource =
@@ -506,6 +552,55 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     expect(text).not.toContain("Loading diagram");
   });
 
+  it("preserves mermaid, svg, and html code blocks with prose in a mixed assistant answer", async () => {
+    const mermaidSource =
+      "flowchart TD\n  A[SOURCE_SHOULD_SURVIVE] --> B[Done]";
+    const svgSource =
+      '<svg xmlns="http://www.w3.org/2000/svg"><text>SOURCE_SHOULD_SURVIVE</text></svg>';
+    const htmlSource = "<main><section>SOURCE_SHOULD_SURVIVE</section></main>";
+    const text = await readMaterializedAskMarkdown(
+      `
+      <h1>Heading</h1>
+      <pre data-testid="mermaid-widget" data-language="mermaid">
+        <div>Mermaid</div>
+        <button aria-label="Code" type="button">Code</button>
+        <button aria-label="Preview" type="button">Preview</button>
+        <div>Loading diagram...</div>
+        <canvas aria-label="Mermaid preview"></canvas>
+      </pre>
+      <pre data-testid="svg-widget" data-language="svg">
+        <div>SVG</div>
+        <button aria-label="Code" type="button">Code</button>
+        <button aria-label="Preview" type="button">Preview</button>
+        <img alt="SVG preview" src="data:image/svg+xml,${mermaidPreviewSvg(["Preview label"])}">
+      </pre>
+      ${htmlPreviewWidgetMarkup()}
+      <p>Final sentence survives.</p>
+    `,
+      (document) => {
+        installWidgetCodeViewSource(
+          document,
+          "mermaid-widget",
+          "mermaid",
+          mermaidSource,
+        );
+        installWidgetCodeViewSource(document, "svg-widget", "svg", svgSource);
+        installWidgetCodeViewSourceWithoutLanguage(
+          document,
+          "html-widget",
+          htmlSource,
+        );
+      },
+    );
+
+    expect(text).toContain("# Heading");
+    expect(text).toContain(`\`\`\`mermaid\n${mermaidSource}\n\`\`\``);
+    expect(text).toContain(`\`\`\`svg\n${svgSource}\n\`\`\``);
+    expect(text).toContain(`\`\`\`html\n${htmlSource}\n\`\`\``);
+    expect(text).toContain("Final sentence survives.");
+    expect(text.match(/SOURCE_SHOULD_SURVIVE/g)).toHaveLength(3);
+  });
+
   it("preserves mixed fenced blocks and Mermaid source in order", async () => {
     const mermaidSource = "graph LR\n  A --> B";
     const text = await readInsertedAskMarkdown(`
@@ -523,6 +618,16 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
         `\`\`\`html\n<main>ok</main>\n\`\`\`\n\n` +
         `\`\`\`mermaid\n${mermaidSource}\n\`\`\``,
     );
+  });
+
+  it("does not serialize unlabeled preview widget chrome as assistant text", async () => {
+    const text = await readInsertedAskMarkdown(htmlPreviewWidgetMarkup());
+
+    expect(text).toBe("");
+    expect(text).not.toContain("Preview");
+    expect(text).not.toContain("Code");
+    expect(text).not.toContain("Copy");
+    expect(text).not.toContain("Download");
   });
 
   it("falls back to keyboard submit when a composer plus button sits next to send", async () => {
