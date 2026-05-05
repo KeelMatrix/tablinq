@@ -39,6 +39,9 @@ Use the first matching path unless the task clearly spans multiple paths.
 6. Architecture improvement:
    - Use `/improve-codebase-architecture` when the user asks for refactoring opportunities, better seams, deeper modules, testability improvements, or AI-navigability improvements.
 
+7. Commit preparation, staging, commit-message, or push flow:
+   - Use `tablinq-git-flow`.
+
 ## Composition rules
 
 - Prefer one repo-local layer skill plus one general engineering skill.
