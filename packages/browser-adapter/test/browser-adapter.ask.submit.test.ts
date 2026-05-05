@@ -71,6 +71,27 @@ function mermaidPreviewWithSourceMarkup(source: string): string {
     </pre>`;
 }
 
+function svgPreviewOnlyMarkup(labels: string[]): string {
+  return `
+    <pre data-testid="svg-widget" data-language="svg">
+      <div>SVG</div>
+      <button aria-label="Code" type="button">Code</button>
+      <button aria-label="Preview" type="button">Preview</button>
+      <img alt="SVG preview" src="data:image/svg+xml,${mermaidPreviewSvg(labels)}">
+    </pre>`;
+}
+
+function svgPreviewWithSourceMarkup(source: string): string {
+  return `
+    <pre data-testid="svg-widget" data-language="svg">
+      <div>SVG</div>
+      <button aria-label="Code" type="button">Code</button>
+      <button aria-label="Preview" type="button">Preview</button>
+      <img alt="SVG preview" src="data:image/svg+xml,${mermaidPreviewSvg(["Preview"])}">
+      <code data-language="svg" hidden>${source}</code>
+    </pre>`;
+}
+
 async function readInsertedAskMarkdown(markdownHtml: string): Promise<string> {
   const { adapter, dom, main } = await createAskRuntimeDom();
   const baseline = adapter.readAskBaseline();
@@ -147,6 +168,45 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     );
 
     expect(text).toBe("Mermaid diagram preview: Start; Process; Done.");
+  });
+
+  it("treats Mermaid loading labels as preview chrome, not fenced source", async () => {
+    const text = await readInsertedAskMarkdown(`
+      <pre data-testid="mermaid-widget" data-language="mermaid">
+        <div>Mermaid</div>
+        <button aria-label="Code" type="button">Code</button>
+        <button aria-label="Preview" type="button">Preview</button>
+        <div>Loading diagram...</div>
+        <canvas aria-label="Mermaid preview"></canvas>
+      </pre>
+    `);
+
+    expect(text).toBe("Mermaid diagram preview.");
+    expect(text).not.toContain("```mermaid");
+    expect(text).not.toContain("Loading diagram");
+  });
+
+  it("does not serialize SVG preview widgets as Mermaid diagrams", async () => {
+    const text = await readInsertedAskMarkdown(
+      svgPreviewOnlyMarkup(["SOURCE_SHOULD_SURVIVE"]),
+    );
+
+    expect(text).toBe("SVG preview: SOURCE_SHOULD_SURVIVE.");
+    expect(text).not.toContain("Mermaid diagram preview");
+  });
+
+  it("prefers SVG source over SVG preview labels", async () => {
+    const source =
+      "&lt;svg xmlns=&quot;http://www.w3.org/2000/svg&quot;&gt;&lt;text&gt;SOURCE_SHOULD_SURVIVE&lt;/text&gt;&lt;/svg&gt;";
+    const text = await readInsertedAskMarkdown(
+      svgPreviewWithSourceMarkup(source),
+    );
+
+    expect(text).toBe(
+      '```svg\n<svg xmlns="http://www.w3.org/2000/svg"><text>SOURCE_SHOULD_SURVIVE</text></svg>\n```',
+    );
+    expect(text).not.toContain("SVG preview");
+    expect(text).not.toContain("Mermaid diagram preview");
   });
 
   it("preserves mixed fenced blocks and Mermaid source in order", async () => {
