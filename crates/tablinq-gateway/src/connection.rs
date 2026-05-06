@@ -125,6 +125,22 @@ pub(crate) fn handle_connection(
         Route::Provider => {
             metadata::handle_provider_request(core, capability_cache, snapshot, &context.request_id)
         }
+        Route::Status => health_admin::handle_status_request(
+            core,
+            snapshot,
+            &scheduler_status,
+            &context.request_id,
+        ),
+        Route::Doctor => health_admin::handle_doctor_request(
+            config,
+            core,
+            &scheduler_status,
+            &context.request_id,
+        )?,
+        Route::Config => health_admin::handle_config_request(core, &context.request_id),
+        Route::Jobs => requests::handle_jobs_request(core, &context.request_id)?,
+        Route::JobDetail => requests::handle_job_detail_request(core, &context)?,
+        Route::JobCancel => requests::handle_job_cancel_request(core, &context)?,
         Route::Usage => metadata::handle_usage_request(core, &context.request_id)?,
         Route::BrowserAttach => browser::handle_browser_attach_request(
             core,
