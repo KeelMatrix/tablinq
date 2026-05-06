@@ -1,4 +1,5 @@
 pub(crate) mod artifacts;
+pub(crate) mod browser;
 pub(crate) mod chat;
 pub(crate) mod conversations;
 pub(crate) mod files;

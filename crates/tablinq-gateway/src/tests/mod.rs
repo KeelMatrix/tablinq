@@ -38,6 +38,8 @@ mod scheduler_process_control;
 
 mod artifact_endpoints;
 
+mod browser_lifecycle;
+
 mod files_artifacts_flow;
 
 mod uploads;
