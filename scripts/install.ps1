@@ -123,6 +123,124 @@ function Convert-ToCmdArgument {
   return $escaped
 }
 
+function Format-ArgumentList {
+  param([string[]]$ArgumentList = @())
+
+  if (-not $ArgumentList -or $ArgumentList.Count -eq 0) {
+    return ""
+  }
+
+  return (($ArgumentList | ForEach-Object { Convert-ToCmdArgument -Value $_ }) -join " ")
+}
+
+function Resolve-ExecutablePath {
+  param([string]$FilePath)
+
+  if ([System.IO.Path]::IsPathRooted($FilePath)) {
+    return $FilePath
+  }
+
+  $commandInfo = Get-Command $FilePath -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $commandInfo) {
+    return $FilePath
+  }
+
+  foreach ($property in @("Source", "Path", "Definition")) {
+    $value = $commandInfo.$property
+    if ($value -and $value.Trim()) {
+      return $value
+    }
+  }
+
+  return $FilePath
+}
+
+function Resolve-PnpmInvocationSpec {
+  param(
+    [string]$ResolvedPath,
+    [string[]]$ArgumentList = @()
+  )
+
+  if (-not $ResolvedPath) {
+    return $null
+  }
+
+  $commandName = [System.IO.Path]::GetFileNameWithoutExtension($ResolvedPath)
+  if (-not $commandName.Equals("pnpm", [System.StringComparison]::OrdinalIgnoreCase)) {
+    return $null
+  }
+
+  $commandDir = Split-Path -Path $ResolvedPath -Parent
+  if (-not $commandDir) {
+    return $null
+  }
+
+  $nodeExecutable = Join-Path $commandDir "node.exe"
+  $pnpmCliScript = Join-Path $commandDir "node_modules\pnpm\bin\pnpm.cjs"
+  if (-not ((Test-Path $nodeExecutable) -and (Test-Path $pnpmCliScript))) {
+    return $null
+  }
+
+  $launchArguments = @($pnpmCliScript) + $ArgumentList
+  [pscustomobject]@{
+    ResolvedPath = $ResolvedPath
+    LaunchFilePath = $nodeExecutable
+    LaunchArguments = $launchArguments
+    DisplayCommand = if ($launchArguments.Count -gt 0) {
+      "{0} {1}" -f $nodeExecutable, (Format-ArgumentList -ArgumentList $launchArguments)
+    }
+    else {
+      $nodeExecutable
+    }
+    Strategy = "pnpm-node-direct"
+  }
+}
+
+function Resolve-InvocationSpec {
+  param(
+    [string]$FilePath,
+    [string[]]$ArgumentList = @()
+  )
+
+  $resolvedPath = Resolve-ExecutablePath -FilePath $FilePath
+  $pnpmInvocation = Resolve-PnpmInvocationSpec -ResolvedPath $resolvedPath -ArgumentList $ArgumentList
+  if ($pnpmInvocation) {
+    return $pnpmInvocation
+  }
+
+  $launchFilePath = $resolvedPath
+  $launchArguments = $ArgumentList
+  $strategy = "direct"
+  $extension = [System.IO.Path]::GetExtension($resolvedPath)
+  if ($extension -eq ".ps1") {
+    $launchFilePath = Resolve-PowerShellExecutable
+    $launchArguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $resolvedPath) + $ArgumentList
+    $strategy = "powershell-script"
+  }
+  elseif ($extension -in @(".cmd", ".bat")) {
+    $cmdLine = @((Convert-ToCmdArgument -Value $resolvedPath))
+    foreach ($argument in $ArgumentList) {
+      $cmdLine += (Convert-ToCmdArgument -Value $argument)
+    }
+    $launchFilePath = "cmd.exe"
+    $launchArguments = @("/d", "/c", ($cmdLine -join " "))
+    $strategy = "cmd-wrapper"
+  }
+
+  [pscustomobject]@{
+    ResolvedPath = $resolvedPath
+    LaunchFilePath = $launchFilePath
+    LaunchArguments = $launchArguments
+    DisplayCommand = if ($launchArguments.Count -gt 0) {
+      "{0} {1}" -f $launchFilePath, (Format-ArgumentList -ArgumentList $launchArguments)
+    }
+    else {
+      $launchFilePath
+    }
+    Strategy = $strategy
+  }
+}
+
 function Invoke-Step {
   param(
     [string]$Label,
@@ -136,29 +254,7 @@ function Invoke-Step {
   $stdoutPath = if ($LogPath) { "$LogPath.stdout.log" } else { [System.IO.Path]::GetTempFileName() }
   $stderrPath = if ($LogPath) { "$LogPath.stderr.log" } else { [System.IO.Path]::GetTempFileName() }
   $startedAt = Get-Date
-  $resolvedPath = $FilePath
-  if (-not [System.IO.Path]::IsPathRooted($FilePath)) {
-    $commandInfo = Get-Command $FilePath -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($commandInfo -and $commandInfo.Source) {
-      $resolvedPath = $commandInfo.Source
-    }
-  }
-
-  $launchFilePath = $resolvedPath
-  $launchArguments = $ArgumentList
-  $extension = [System.IO.Path]::GetExtension($resolvedPath)
-  if ($extension -eq ".ps1") {
-    $launchFilePath = Resolve-PowerShellExecutable
-    $launchArguments = @("-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $resolvedPath) + $ArgumentList
-  }
-  elseif ($extension -in @(".cmd", ".bat")) {
-    $cmdLine = @((Convert-ToCmdArgument -Value $resolvedPath))
-    foreach ($argument in $ArgumentList) {
-      $cmdLine += (Convert-ToCmdArgument -Value $argument)
-    }
-    $launchFilePath = "cmd.exe"
-    $launchArguments = @("/d", "/c", ($cmdLine -join " "))
-  }
+  $invocation = Resolve-InvocationSpec -FilePath $FilePath -ArgumentList $ArgumentList
 
   Write-Host ("  -> {0}" -f $displayLabel)
   if ($WorkingDirectory) {
@@ -166,17 +262,36 @@ function Invoke-Step {
   }
 
   try {
-    $process = Start-Process -FilePath $launchFilePath -ArgumentList $launchArguments -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
-    while (-not $process.HasExited) {
-      $elapsed = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
-      Update-InstallProgress -Status ("{0} ({1}s)" -f $displayLabel, $elapsed)
-      Start-Sleep -Milliseconds 250
-      $process.Refresh()
+    try {
+      $process = Start-Process -FilePath $invocation.LaunchFilePath -ArgumentList $invocation.LaunchArguments -PassThru -Wait -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
     }
+    catch {
+      $message = @(
+        "Failed to start command: $displayLabel",
+        "Resolved path: $($invocation.ResolvedPath)",
+        "Launch command: $($invocation.DisplayCommand)",
+        "Working directory: $WorkingDirectory",
+        "Launch strategy: $($invocation.Strategy)",
+        "Error: $($_.Exception.Message)"
+      ) -join [Environment]::NewLine
+      throw $message
+    }
+
+    $process.Refresh()
 
     if ($process.ExitCode -ne 0) {
       Show-CommandFailureLog -StdoutPath $stdoutPath -StderrPath $stderrPath
-      throw "Command failed: $displayLabel"
+      $message = @(
+        "Command failed: $displayLabel",
+        "Exit code: $($process.ExitCode)",
+        "Resolved path: $($invocation.ResolvedPath)",
+        "Launch command: $($invocation.DisplayCommand)",
+        "Working directory: $WorkingDirectory",
+        "Launch strategy: $($invocation.Strategy)",
+        "Stdout log: $stdoutPath",
+        "Stderr log: $stderrPath"
+      ) -join [Environment]::NewLine
+      throw $message
     }
 
     $elapsed = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
@@ -924,6 +1039,218 @@ function Wait-ForGatewayReady {
 
 #region Reporting helpers
 
+function Get-ShortCommit {
+  param([string]$Commit)
+
+  if (-not $Commit) {
+    return "unknown"
+  }
+
+  if ($Commit.Length -le 12) {
+    return $Commit
+  }
+
+  return $Commit.Substring(0, 12)
+}
+
+function Format-BuildMetadataSummary {
+  param([pscustomobject]$Metadata)
+
+  if (-not $Metadata) {
+    return "unavailable"
+  }
+
+  $commit = Get-ShortCommit -Commit $Metadata.git_commit
+  "version={0} commit={1} dirty={2} profile={3}" -f $Metadata.version, $commit, $Metadata.git_dirty, $Metadata.profile
+}
+
+function Resolve-CommandPath {
+  param([string]$CommandName)
+
+  $commandInfo = Get-Command $CommandName -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $commandInfo) {
+    return $null
+  }
+
+  foreach ($property in @("Source", "Path", "Definition")) {
+    $value = $commandInfo.$property
+    if ($value -and $value.Trim()) {
+      return $value
+    }
+  }
+
+  return $null
+}
+
+function Get-PackageMetadataPathForCli {
+  param([string]$ExecutablePath)
+
+  if (-not $ExecutablePath) {
+    return $null
+  }
+
+  $binDirectory = Split-Path -Path $ExecutablePath -Parent
+  if (-not $binDirectory) {
+    return $null
+  }
+
+  $installRoot = Split-Path -Path $binDirectory -Parent
+  if (-not $installRoot) {
+    return $null
+  }
+
+  $candidate = Join-Path $installRoot "package-metadata.json"
+  if (Test-Path $candidate) {
+    return $candidate
+  }
+
+  return $null
+}
+
+function Get-BuildMetadataFromPackage {
+  param([string]$ExecutablePath)
+
+  $packageMetadataPath = Get-PackageMetadataPathForCli -ExecutablePath $ExecutablePath
+  if (-not $packageMetadataPath) {
+    return $null
+  }
+
+  try {
+    $packageMetadata = Get-Content -Path $packageMetadataPath -Raw | ConvertFrom-Json
+    [pscustomobject]@{
+      application = "gpt"
+      version = $packageMetadata.package_version
+      git_commit = $packageMetadata.commit
+      git_dirty = [bool]$packageMetadata.dirty
+      target = $packageMetadata.target
+      profile = $packageMetadata.profile
+      built_at_unix_epoch = [uint64]$packageMetadata.built_at_unix_epoch
+    }
+  }
+  catch {
+    return $null
+  }
+}
+
+function Get-BuildMetadata {
+  param(
+    [string]$ExecutablePath,
+    [string]$WorkingDirectory
+  )
+
+  if (-not $ExecutablePath) {
+    return $null
+  }
+
+  $packageMetadata = Get-BuildMetadataFromPackage -ExecutablePath $ExecutablePath
+  if ($packageMetadata) {
+    return $packageMetadata
+  }
+
+  try {
+    if ($WorkingDirectory) {
+      Push-Location $WorkingDirectory
+    }
+
+    try {
+      $output = & $ExecutablePath version --json 2>&1
+      $exitCode = $LASTEXITCODE
+    }
+    finally {
+      if ($WorkingDirectory) {
+        Pop-Location
+      }
+    }
+
+    $text = ($output | Out-String).Trim()
+    if ($exitCode -ne 0 -or -not $text) {
+      return $null
+    }
+
+    return ($text | ConvertFrom-Json -Depth 10)
+  }
+  catch {
+    return $null
+  }
+}
+
+function Get-WorkspaceHeadCommit {
+  param([string]$RepoRoot)
+
+  try {
+    $output = & git -C $RepoRoot rev-parse HEAD 2>$null
+    $exitCode = $LASTEXITCODE
+    $value = ($output | Out-String).Trim()
+    if ($exitCode -ne 0 -or -not $value) {
+      return $null
+    }
+
+    return $value
+  }
+  catch {
+    return $null
+  }
+}
+
+function Get-InstallVersionDiagnostics {
+  param(
+    [string]$InstalledCli,
+    [string]$RepoRoot
+  )
+
+  $installedMetadata = Get-BuildMetadata -ExecutablePath $InstalledCli -WorkingDirectory $RepoRoot
+  $pathCommand = Resolve-CommandPath -CommandName "gpt"
+  $pathMetadata = Get-BuildMetadata -ExecutablePath $pathCommand -WorkingDirectory $RepoRoot
+  $workspaceHead = Get-WorkspaceHeadCommit -RepoRoot $RepoRoot
+  $warnings = [System.Collections.Generic.List[string]]::new()
+
+  $pathState = "missing"
+  $pathDetail = "gpt is not resolved in this shell"
+  if ($pathCommand) {
+    $sameBinary = $pathCommand.Trim().Equals($InstalledCli, [System.StringComparison]::OrdinalIgnoreCase)
+    $sameCommit = $installedMetadata -and $pathMetadata -and $installedMetadata.git_commit -and $pathMetadata.git_commit -and $installedMetadata.git_commit.Equals($pathMetadata.git_commit, [System.StringComparison]::OrdinalIgnoreCase)
+    if ($sameBinary -or $sameCommit) {
+      $pathState = "current"
+      $pathDetail = "{0} {1}" -f $pathCommand, (Format-BuildMetadataSummary -Metadata $pathMetadata)
+    }
+    else {
+      $pathState = "stale"
+      $pathDetail = "{0} {1}" -f $pathCommand, (Format-BuildMetadataSummary -Metadata $pathMetadata)
+      $warnings.Add(
+        "Current shell resolves gpt to $pathCommand, but the freshly installed CLI is $InstalledCli. Open a new shell or use the installed path for this session."
+      ) | Out-Null
+    }
+  }
+
+  $workspaceState = "unknown"
+  $workspaceDetail = "git HEAD unavailable"
+  if ($workspaceHead) {
+    $workspaceDetail = "HEAD={0}" -f (Get-ShortCommit -Commit $workspaceHead)
+    if ($installedMetadata -and $installedMetadata.git_commit) {
+      if ($installedMetadata.git_commit.Equals($workspaceHead, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $workspaceState = "matching"
+      }
+      else {
+        $workspaceState = "different"
+        $warnings.Add(
+          "Repo checkout HEAD $(Get-ShortCommit -Commit $workspaceHead) differs from installed CLI commit $(Get-ShortCommit -Commit $installedMetadata.git_commit). Use cargo run -p gpt -- ... when validating checkout-only changes."
+        ) | Out-Null
+      }
+    }
+  }
+
+  [pscustomobject]@{
+    InstalledMetadata = $installedMetadata
+    PathCommand = $pathCommand
+    PathMetadata = $pathMetadata
+    PathState = $pathState
+    PathDetail = $pathDetail
+    WorkspaceState = $workspaceState
+    WorkspaceDetail = $workspaceDetail
+    Warnings = $warnings
+  }
+}
+
 function Write-GptWrapper {
   param(
     [string]$WrapperPath,
@@ -1286,7 +1613,8 @@ function Write-InstallSummary {
     [pscustomobject]$GatewayStatus,
     [bool]$EnableAutoStart,
     [bool]$SkipPathUpdate,
-    [bool]$UsePathCommand
+    [bool]$UsePathCommand,
+    [pscustomobject]$VersionDiagnostics
   )
 
   $daemonRunning = [bool]($DaemonStatus -and $DaemonStatus.type -eq "status" -and $DaemonStatus.payload)
@@ -1323,6 +1651,17 @@ function Write-InstallSummary {
   Write-StatusLine -Label "Launch" -State $LaunchMode -Details $(if ($NoLaunchAfterInstall) { "use manual steps below" } else { "daemon and gateway checked" })
   Write-StatusLine -Label "Daemon" -State $(if ($daemonRunning) { "running" } else { "attention" }) -Details $daemonDetail
   Write-StatusLine -Label "Gateway" -State $(if ($gatewayRunning) { "running" } else { "attention" }) -Details $gatewayDetail
+  Write-StatusLine -Label "CLI build" -State $(if ($VersionDiagnostics.InstalledMetadata) { "ok" } else { "attention" }) -Details ("{0} {1}" -f (Join-Path $InstallRoot "bin\gpt.exe"), (Format-BuildMetadataSummary -Metadata $VersionDiagnostics.InstalledMetadata))
+  Write-StatusLine -Label "PATH gpt" -State $VersionDiagnostics.PathState -Details $VersionDiagnostics.PathDetail
+  Write-StatusLine -Label "Workspace" -State $VersionDiagnostics.WorkspaceState -Details $VersionDiagnostics.WorkspaceDetail
+
+  if ($VersionDiagnostics.Warnings.Count -gt 0) {
+    Write-Host ""
+    Write-Host "Developer checks:"
+    foreach ($warning in $VersionDiagnostics.Warnings) {
+      Write-Host ("- {0}" -f $warning)
+    }
+  }
 
   Write-ManualSteps -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserName $BrowserSelection.Name -ConnectionMode $ConnectionMode -TargetUrl $TargetUrl -DaemonRunning $daemonRunning -GatewayRunning $gatewayRunning -UsePathCommand $UsePathCommand
 }
@@ -1345,5 +1684,6 @@ $packageInstall = Install-PackagePayload -PackageRoot $PackageRoot -InstallRoot 
 $autoStartMode = Set-LocalMachineConfiguration -EnableAutoStart:([bool]$EnableAutoStart) -InstallRoot $InstallRoot -StateRoot $StateRoot
 $serviceState = Get-InstallServiceState -InstalledCli $packageInstall.InstalledCli -InstallRoot $InstallRoot -StateRoot $StateRoot -RepoRoot $repoRoot -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall)
 $pathState = if ($SkipPathUpdate) { "unchanged" } else { "updated" }
+$versionDiagnostics = Get-InstallVersionDiagnostics -InstalledCli $packageInstall.InstalledCli -RepoRoot $repoRoot
 
-Write-InstallSummary -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserSelection $preflight.BrowserSelection -ConnectionMode $packageInstall.ConnectionMode -TargetUrl $packageInstall.TargetUrl -PathState $pathState -AutoStartMode $autoStartMode -LaunchMode $serviceState.LaunchMode -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall) -DaemonStatus $serviceState.DaemonStatus -GatewayStatus $serviceState.GatewayStatus -EnableAutoStart:([bool]$EnableAutoStart) -SkipPathUpdate:([bool]$SkipPathUpdate) -UsePathCommand:([bool]$packageInstall.UsePathCommand)
+Write-InstallSummary -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserSelection $preflight.BrowserSelection -ConnectionMode $packageInstall.ConnectionMode -TargetUrl $packageInstall.TargetUrl -PathState $pathState -AutoStartMode $autoStartMode -LaunchMode $serviceState.LaunchMode -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall) -DaemonStatus $serviceState.DaemonStatus -GatewayStatus $serviceState.GatewayStatus -EnableAutoStart:([bool]$EnableAutoStart) -SkipPathUpdate:([bool]$SkipPathUpdate) -UsePathCommand:([bool]$packageInstall.UsePathCommand) -VersionDiagnostics $versionDiagnostics
