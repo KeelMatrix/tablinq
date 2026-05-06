@@ -123,30 +123,6 @@ impl Drop for RunningGateway {
     }
 }
 
-pub(super) fn spawn_daemon(config: AppConfig) -> thread::JoinHandle<Result<()>> {
-    let endpoint = shared_protocol::build_state_paths(&config.paths.state_root).ipc_endpoint;
-    let handle = thread::spawn(move || gptd::run_service(config));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if gptd::daemon_is_responsive(&endpoint) {
-            return handle;
-        }
-        thread::sleep(Duration::from_millis(50));
-    }
-    panic!("daemon did not become ready");
-}
-
-pub(super) fn stop_daemon(state_root: &Path, handle: thread::JoinHandle<Result<()>>) {
-    let endpoint = shared_protocol::build_state_paths(state_root).ipc_endpoint;
-    let response =
-        gptd::send_request(&endpoint, &shared_protocol::DaemonRequest::Shutdown).unwrap();
-    match response {
-        shared_protocol::DaemonResponse::Ack(_) => {}
-        other => panic!("unexpected daemon shutdown response: {other:?}"),
-    }
-    handle.join().unwrap().unwrap();
-}
-
 pub(super) fn test_config() -> (TempDir, AppConfig) {
     let dir = tempdir().unwrap();
     let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
