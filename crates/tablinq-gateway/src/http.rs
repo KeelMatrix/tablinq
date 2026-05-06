@@ -108,6 +108,7 @@ pub(crate) fn reason_phrase_for_status(status_code: u16) -> &'static str {
         201 => "Created",
         400 => "Bad Request",
         401 => "Unauthorized",
+        405 => "Method Not Allowed",
         404 => "Not Found",
         409 => "Conflict",
         413 => "Payload Too Large",

@@ -1,12 +1,14 @@
 use crate::auth::authorize_request;
 use crate::capabilities::CapabilityCatalogCache;
-use crate::handlers::{artifacts, chat, conversations, files, health_admin, metadata, requests};
+use crate::handlers::{
+    artifacts, browser, chat, conversations, files, health_admin, metadata, requests,
+};
 use crate::http::{
     json_response, log_request, log_response, next_request_id, parse_http_request,
     write_http_response,
 };
 use crate::process_control::GatewayStatusSnapshot;
-use crate::routes::{Route, match_route};
+use crate::routes::{Route, match_route, method_not_allowed_for_path};
 use crate::scheduler::GatewayScheduler;
 use crate::uploads::UploadStore;
 use anyhow::{Context, Result};
@@ -124,6 +126,22 @@ pub(crate) fn handle_connection(
             metadata::handle_provider_request(core, capability_cache, snapshot, &context.request_id)
         }
         Route::Usage => metadata::handle_usage_request(core, &context.request_id)?,
+        Route::BrowserAttach => browser::handle_browser_attach_request(
+            core,
+            &context.request.body,
+            &context.request_id,
+        )?,
+        Route::BrowserDetach => browser::handle_browser_detach_request(
+            core,
+            &context.request.body,
+            &context.request_id,
+        )?,
+        Route::BrowserProfileInfo => {
+            browser::handle_browser_profile_info_request(core, &context.request_id)?
+        }
+        Route::BrowserConnectionInfo => {
+            browser::handle_browser_connection_info_request(config, core, &context.request_id)
+        }
         Route::Sessions => metadata::handle_sessions_request(core, &context.request_id)?,
         Route::SessionConversations => {
             conversations::handle_session_conversations_request(core, &context)?
@@ -166,13 +184,29 @@ pub(crate) fn handle_connection(
                 &remote_addr,
             );
         }
-        Route::NotFound => json_response(
-            404,
-            json!({
-                "request_id": context.request_id,
-                "error": "not_found",
-            }),
-        ),
+        Route::NotFound => {
+            if let Some(allowed_method) = method_not_allowed_for_path(&context.request.path) {
+                let mut response = json_response(
+                    405,
+                    json!({
+                        "request_id": context.request_id,
+                        "error": "method_not_allowed",
+                    }),
+                );
+                response
+                    .headers
+                    .push(("allow".to_owned(), allowed_method.to_owned()));
+                response
+            } else {
+                json_response(
+                    404,
+                    json!({
+                        "request_id": context.request_id,
+                        "error": "not_found",
+                    }),
+                )
+            }
+        }
     };
 
     log_response(logger, &context.request_id, response.status_code)?;

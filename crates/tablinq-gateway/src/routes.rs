@@ -19,6 +19,10 @@ pub(crate) const V1_REQUESTS_PATH: &str = "/v1/requests";
 pub(crate) const V1_CONVERSATIONS_PATH: &str = "/v1/conversations";
 pub(crate) const V1_CONVERSATIONS_SELECT_PATH: &str = "/v1/conversations/select";
 pub(crate) const V1_USAGE_PATH: &str = "/v1/usage";
+pub(crate) const V1_BROWSER_ATTACH_PATH: &str = "/v1/browser/attach";
+pub(crate) const V1_BROWSER_DETACH_PATH: &str = "/v1/browser/detach";
+pub(crate) const V1_BROWSER_PROFILE_INFO_PATH: &str = "/v1/browser/profile-info";
+pub(crate) const V1_BROWSER_CONNECTION_INFO_PATH: &str = "/v1/browser/connection-info";
 pub(crate) const V1_SESSIONS_PREFIX: &str = "/v1/sessions/";
 pub(crate) const V1_CONVERSATIONS_PREFIX: &str = "/v1/conversations/";
 pub(crate) const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
@@ -37,6 +41,10 @@ pub(crate) enum Route {
     Capabilities,
     Provider,
     Usage,
+    BrowserAttach,
+    BrowserDetach,
+    BrowserProfileInfo,
+    BrowserConnectionInfo,
     Sessions,
     SessionConversations,
     Requests,
@@ -69,6 +77,10 @@ pub(crate) fn match_route(method: &str, path: &str) -> Route {
         ("GET", V1_CAPABILITIES_PATH) => Route::Capabilities,
         ("GET", V1_PROVIDER_PATH) => Route::Provider,
         ("GET", V1_USAGE_PATH) => Route::Usage,
+        ("POST", V1_BROWSER_ATTACH_PATH) => Route::BrowserAttach,
+        ("POST", V1_BROWSER_DETACH_PATH) => Route::BrowserDetach,
+        ("GET", V1_BROWSER_PROFILE_INFO_PATH) => Route::BrowserProfileInfo,
+        ("GET", V1_BROWSER_CONNECTION_INFO_PATH) => Route::BrowserConnectionInfo,
         ("GET", V1_SESSIONS_PATH) => Route::Sessions,
         ("GET", V1_REQUESTS_PATH) => Route::Requests,
         ("GET", V1_CONVERSATIONS_PATH) => Route::Conversations,
@@ -95,6 +107,16 @@ pub(crate) fn match_route(method: &str, path: &str) -> Route {
         ("GET", _) if path.starts_with(&format!("{V1_ARTIFACTS_PATH}/")) => Route::ArtifactDetail,
         ("POST", _) if request_path.starts_with(V1_REQUESTS_PREFIX) => Route::RequestAction,
         _ => Route::NotFound,
+    }
+}
+
+pub(crate) fn method_not_allowed_for_path(path: &str) -> Option<&'static str> {
+    match normalized_request_path(path) {
+        V1_BROWSER_ATTACH_PATH => Some("POST"),
+        V1_BROWSER_DETACH_PATH => Some("POST"),
+        V1_BROWSER_PROFILE_INFO_PATH => Some("GET"),
+        V1_BROWSER_CONNECTION_INFO_PATH => Some("GET"),
+        _ => None,
     }
 }
 
@@ -336,6 +358,10 @@ mod tests {
         assert_eq!(
             match_route("POST", "/v1/requests/req-1/cancel"),
             Route::RequestAction
+        );
+        assert_eq!(
+            match_route("POST", V1_BROWSER_ATTACH_PATH),
+            Route::BrowserAttach
         );
         assert_eq!(match_route("DELETE", "/v1/files/file-1"), Route::NotFound);
     }

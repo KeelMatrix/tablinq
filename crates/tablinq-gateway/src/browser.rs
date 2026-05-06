@@ -1,5 +1,5 @@
 use anyhow::Result;
-use gptd::CoreService;
+use gptd::{AppConfig, CoreService};
 use shared_protocol::BrowserOpenRequest;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -68,4 +68,16 @@ pub(crate) fn capability_report_is_usable(report: &shared_protocol::CapabilityRe
             || report.matrix.model_picker_visible
             || report.matrix.thinking_effort_visible)
         && report.matrix.upload_control_visible
+}
+
+pub(crate) fn recommended_cli_browser_setup(config: &AppConfig) -> String {
+    if matches!(
+        config.browser_connection_mode(),
+        shared_protocol::BrowserConnectionMode::AttachFirst
+            | shared_protocol::BrowserConnectionMode::ManagedFallback
+    ) {
+        "Use `gpt browser start-debug` from the CLI to launch the local debug browser, then call `/v1/browser/attach` or `gpt browser attach`.".to_owned()
+    } else {
+        "CLI `gpt browser start-debug` remains the operator-owned setup path for local debug launches; managed-only mode can use `gpt browser open` as a fallback.".to_owned()
+    }
 }
