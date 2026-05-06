@@ -43,6 +43,8 @@ Thumbs.db
 .env
 .env.*
 *.local
+.agents/skills/tablinq-telegram-agent-ping/scripts/.env.local
+!.agents/skills/tablinq-telegram-agent-ping/scripts/.env.example
 
 # === SQLite / local state ===
 *.db

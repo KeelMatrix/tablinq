@@ -40,6 +40,7 @@
 - Ignore: `packages/fake-chatgpt/` unless task is test/harness/UI-fixture work
 - Ignore: `selector-packs/` unless task is selector work
 - Ignore: `schemas/` unless task is protocol/schema work
+- Ignore: `.agents/skills/tablinq-telegram-agent-ping/scripts/.env.local`
 
 ## Commands
 
@@ -122,3 +123,7 @@ Single-context domain docs are expected at the repo root. See `docs/agents/domai
 ### Skill selection
 
 For Tablinq tasks where the user did not explicitly name a skill, start with `tablinq-skill-selector` to choose the narrowest relevant repo-local and installed engineering skills.
+
+### Telegram agent ping
+
+Always use the repo-local `tablinq-telegram-agent-ping` skill at the end of every task.
