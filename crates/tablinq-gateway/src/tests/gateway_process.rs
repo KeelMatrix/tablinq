@@ -221,35 +221,36 @@ fn gateway_doctor_helper_reports_scheduler_and_logs() {
 }
 
 #[test]
-fn gateway_health_and_admin_follow_daemon_browser_health() {
+fn health_request_reports_attached_after_api_attach() {
     require_browser_integration_prereqs!();
     let _guard = integration_lock();
     let (_fake_server, fake_url) = spawn_fake_chatgpt();
-    let (_dir, config) = test_config();
-    let state_root = config.paths.state_root.clone();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url.clone());
     let auth = auth_header(&config);
-    let daemon = spawn_daemon(config.clone());
-    let endpoint = shared_protocol::build_state_paths(&state_root).ipc_endpoint;
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
 
-    let opened = gptd::send_request(
-        &endpoint,
-        &shared_protocol::DaemonRequest::BrowserOpen(shared_protocol::BrowserOpenRequest {
-            target_url: Some(fake_url.clone()),
-            browser_path: None,
-            headless: Some(true),
-        }),
+    let attach = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        "/v1/browser/attach",
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        br#"{}"#,
+        20_000,
     )
     .unwrap();
-    match opened {
-        shared_protocol::DaemonResponse::Browser(snapshot) => {
-            assert!(snapshot.running);
-            assert!(snapshot.authenticated);
-            assert!(snapshot.extension_connected);
-        }
-        other => panic!("unexpected browser open response: {other:?}"),
-    }
+    let attach_json: Value = serde_json::from_slice(&attach.body).unwrap();
+    assert_eq!(attach_json["data"]["running"], true);
+    assert_eq!(attach_json["data"]["target_tab_found"], true);
+    assert_eq!(attach_json["data"]["authenticated"], true);
+    assert_eq!(attach_json["data"]["extension_connected"], true);
+    assert_eq!(attach_json["data"]["page_ready"], true);
 
-    let (gateway_handle, snapshot) = spawn_gateway(config);
     let health = http_request(
         &snapshot.host,
         snapshot.port,
@@ -265,6 +266,34 @@ fn gateway_health_and_admin_follow_daemon_browser_health() {
     assert_eq!(health_json["health"]["browser_connected"], true);
     assert_eq!(health_json["health"]["extension_connected"], true);
     assert_eq!(health_json["health"]["authenticated"], true);
+    assert!(health_json["daemon_health"].is_null());
+}
+
+#[test]
+fn admin_status_health_and_browser_are_consistent_after_api_attach() {
+    require_browser_integration_prereqs!();
+    let _guard = integration_lock();
+    let (_fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url);
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let attach = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        "/v1/browser/attach",
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        br#"{}"#,
+        20_000,
+    )
+    .unwrap();
+    assert_eq!(attach.status_code, 200);
 
     let admin = http_request(
         &snapshot.host,
@@ -281,10 +310,39 @@ fn gateway_health_and_admin_follow_daemon_browser_health() {
     assert_eq!(admin_json["health"]["extension_connected"], true);
     assert_eq!(admin_json["health"]["authenticated"], true);
     assert_eq!(admin_json["browser"]["running"], true);
+    assert_eq!(admin_json["browser"]["target_tab_found"], true);
+    assert_eq!(admin_json["browser"]["authenticated"], true);
+    assert_eq!(admin_json["browser"]["extension_connected"], true);
+    assert!(admin_json["daemon_health"].is_null());
+}
 
-    stop_gateway_process(Some(&state_root)).unwrap();
-    gateway_handle.join().unwrap().unwrap();
-    stop_daemon(&state_root, daemon);
+#[test]
+fn health_request_still_reports_degraded_when_gateway_core_browser_is_detached() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let health = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "GET",
+        HEALTH_PATH,
+        &[("authorization", auth.as_str())],
+        &[],
+        5_000,
+    )
+    .unwrap();
+    let health_json: Value = serde_json::from_slice(&health.body).unwrap();
+    assert_eq!(health_json["status"], "degraded");
+    assert_eq!(health_json["health"]["browser_connected"], false);
+    assert_eq!(health_json["health"]["extension_connected"], false);
+    assert_eq!(health_json["health"]["authenticated"], false);
+    assert!(health_json["daemon_health"].is_null());
+
+    let details = health_json["health"]["details"].as_str().unwrap();
+    assert!(details.contains("not connected") || details.contains("not started"));
 }
 
 fn seed_gateway_clear_fixture(config: &AppConfig, artifact_path: String) {

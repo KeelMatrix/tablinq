@@ -1,5 +1,5 @@
 use crate::core_status::{
-    degraded_browser_status_snapshot, effective_doctor_report, effective_health_snapshot,
+    effective_doctor_report, effective_gateway_admin_snapshot, effective_gateway_health_snapshot,
 };
 use crate::http::HttpResponse;
 use crate::json::json_response;
@@ -30,14 +30,15 @@ pub(crate) fn handle_health_request(
     scheduler_status: &SchedulerSnapshot,
     request_id: &str,
 ) -> Result<HttpResponse> {
-    let health = effective_health_snapshot(config, core)?;
+    let health = effective_gateway_health_snapshot(config, core)?;
     Ok(json_response(
         200,
         json!({
             "service": "tablinq-gateway",
             "request_id": request_id,
-            "status": health.status,
-            "health": health,
+            "status": health.health.status,
+            "health": health.health,
+            "daemon_health": health.daemon_health,
             "gateway": snapshot,
             "scheduler": scheduler_status,
         }),
@@ -117,23 +118,17 @@ pub(crate) fn handle_admin_status_request(
     scheduler_status: &SchedulerSnapshot,
     request_id: &str,
 ) -> Result<HttpResponse> {
-    let health = effective_health_snapshot(config, core)?;
-    let (browser, browser_warning) = match effective_doctor_report(config, core) {
-        Ok(doctor) => (doctor.browser, Value::Null),
-        Err(err) => (
-            degraded_browser_status_snapshot(config),
-            Value::String(format!("{err:#}")),
-        ),
-    };
+    let admin = effective_gateway_admin_snapshot(config, core)?;
     Ok(json_response(
         200,
         json!({
             "request_id": request_id,
             "gateway": snapshot,
             "scheduler": scheduler_status,
-            "health": health,
-            "browser": browser,
-            "browser_warning": browser_warning,
+            "health": admin.health,
+            "browser": admin.browser,
+            "browser_warning": admin.browser_warning.map_or(Value::Null, Value::String),
+            "daemon_health": admin.daemon_health,
         }),
     ))
 }
