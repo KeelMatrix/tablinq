@@ -48,8 +48,13 @@ fn start_gateway_process_with_binary(
     binary_override: Option<&Path>,
 ) -> Result<Value> {
     let config = AppConfig::load_or_create(state_root)?;
+    let auth_header = gateway_auth_header(&config)?;
     if let Some(snapshot) = load_status_snapshot(&config)? {
-        if gateway_is_responsive(&snapshot, config.gateway_request_timeout_ms()) {
+        if gateway_is_responsive(
+            &snapshot,
+            auth_header.as_str(),
+            config.gateway_request_timeout_ms(),
+        ) {
             return Ok(json!({
                 "status": "already_running",
                 "host": snapshot.host,
@@ -89,7 +94,7 @@ fn start_gateway_process_with_binary(
         .min(crate::STARTUP_PROBE_TIMEOUT_MS);
     loop {
         if let Some(snapshot) = load_status_snapshot(&config)?
-            && gateway_is_ready(&snapshot, startup_probe_timeout_ms)
+            && gateway_is_ready(&snapshot, auth_header.as_str(), startup_probe_timeout_ms)
         {
             return Ok(json!({
                 "status": "started",
@@ -115,8 +120,17 @@ pub fn gateway_status(state_root: Option<&Path>) -> Result<Value> {
     let config = AppConfig::load_or_create(state_root)?;
     let snapshot = load_status_snapshot(&config)?;
     if let Some(snapshot) = snapshot {
-        let healthy = gateway_is_responsive(&snapshot, config.gateway_request_timeout_ms());
-        let ready = gateway_is_ready(&snapshot, config.gateway_request_timeout_ms());
+        let auth_header = gateway_auth_header(&config)?;
+        let healthy = gateway_is_responsive(
+            &snapshot,
+            auth_header.as_str(),
+            config.gateway_request_timeout_ms(),
+        );
+        let ready = gateway_is_ready(
+            &snapshot,
+            auth_header.as_str(),
+            config.gateway_request_timeout_ms(),
+        );
         Ok(json!({
             "running": healthy,
             "ready": ready,
@@ -159,19 +173,28 @@ pub fn gateway_doctor(state_root: Option<&Path>) -> Result<Value> {
         }));
     };
 
-    let running = gateway_is_responsive(&snapshot, config.gateway_request_timeout_ms());
-    let ready = gateway_is_ready(&snapshot, config.gateway_request_timeout_ms());
+    let auth_header = gateway_auth_header(&config)?;
+    let running = gateway_is_responsive(
+        &snapshot,
+        auth_header.as_str(),
+        config.gateway_request_timeout_ms(),
+    );
+    let ready = gateway_is_ready(
+        &snapshot,
+        auth_header.as_str(),
+        config.gateway_request_timeout_ms(),
+    );
     let health = gateway_json_request(
         &snapshot,
         crate::HEALTH_PATH,
-        None,
+        Some(auth_header.as_str()),
         config.gateway_request_timeout_ms(),
     )
     .ok();
     let admin = gateway_json_request(
         &snapshot,
         crate::ADMIN_STATUS_PATH,
-        config.gateway_api_key(),
+        Some(auth_header.as_str()),
         config.gateway_request_timeout_ms(),
     )
     .ok();
@@ -200,7 +223,13 @@ pub fn stop_gateway_process(state_root: Option<&Path>) -> Result<Value> {
         }
     };
 
-    if !gateway_is_responsive(&snapshot, config.gateway_request_timeout_ms()) {
+    let auth_header = gateway_auth_header(&config)?;
+
+    if !gateway_is_responsive(
+        &snapshot,
+        auth_header.as_str(),
+        config.gateway_request_timeout_ms(),
+    ) {
         remove_status_snapshot(&config)?;
         let _ = fs::remove_file(gateway_lock_path(&config));
         return Ok(json!({
@@ -208,12 +237,6 @@ pub fn stop_gateway_process(state_root: Option<&Path>) -> Result<Value> {
         }));
     }
 
-    let auth_header = format!(
-        "Bearer {}",
-        config
-            .gateway_api_key()
-            .context("gateway API key is required to stop the gateway")?
-    );
     let response = crate::http_request(
         &snapshot.host,
         snapshot.port,
@@ -232,7 +255,11 @@ pub fn stop_gateway_process(state_root: Option<&Path>) -> Result<Value> {
 
     let deadline = Instant::now() + crate::STARTUP_TIMEOUT;
     while Instant::now() < deadline {
-        if !gateway_is_responsive(&snapshot, config.gateway_request_timeout_ms()) {
+        if !gateway_is_responsive(
+            &snapshot,
+            auth_header.as_str(),
+            config.gateway_request_timeout_ms(),
+        ) {
             remove_status_snapshot(&config)?;
             let _ = fs::remove_file(gateway_lock_path(&config));
             return Ok(json!({
@@ -289,8 +316,13 @@ pub(crate) fn gateway_log_path(config: &AppConfig) -> PathBuf {
 pub(crate) fn acquire_gateway_lock(config: &AppConfig) -> Result<LockGuard> {
     let path = gateway_lock_path(config);
     if path.exists() {
+        let auth_header = gateway_auth_header(config)?;
         if let Some(snapshot) = load_status_snapshot(config)?
-            && gateway_is_responsive(&snapshot, config.gateway_request_timeout_ms())
+            && gateway_is_responsive(
+                &snapshot,
+                auth_header.as_str(),
+                config.gateway_request_timeout_ms(),
+            )
         {
             bail!("gateway already running");
         }
@@ -354,13 +386,17 @@ fn resolve_gateway_binary() -> PathBuf {
     }
 }
 
-fn gateway_is_responsive(snapshot: &GatewayStatusSnapshot, timeout_ms: u64) -> bool {
+fn gateway_is_responsive(
+    snapshot: &GatewayStatusSnapshot,
+    auth_header: &str,
+    timeout_ms: u64,
+) -> bool {
     crate::http_request(
         &snapshot.host,
         snapshot.port,
         "GET",
         crate::HEALTH_PATH,
-        &[],
+        &[("authorization", auth_header)],
         &[],
         timeout_ms,
     )
@@ -368,13 +404,13 @@ fn gateway_is_responsive(snapshot: &GatewayStatusSnapshot, timeout_ms: u64) -> b
     .unwrap_or(false)
 }
 
-fn gateway_is_ready(snapshot: &GatewayStatusSnapshot, timeout_ms: u64) -> bool {
+fn gateway_is_ready(snapshot: &GatewayStatusSnapshot, auth_header: &str, timeout_ms: u64) -> bool {
     crate::http_request(
         &snapshot.host,
         snapshot.port,
         "GET",
         crate::READY_PATH,
-        &[],
+        &[("authorization", auth_header)],
         &[],
         timeout_ms,
     )
@@ -385,15 +421,12 @@ fn gateway_is_ready(snapshot: &GatewayStatusSnapshot, timeout_ms: u64) -> bool {
 fn gateway_json_request(
     snapshot: &GatewayStatusSnapshot,
     path: &str,
-    api_key: Option<&str>,
+    auth_header: Option<&str>,
     timeout_ms: u64,
 ) -> Result<Value> {
-    let auth = api_key
-        .map(|value| format!("Bearer {value}"))
-        .unwrap_or_default();
     let mut headers = Vec::new();
-    if !auth.is_empty() {
-        headers.push(("authorization", auth.as_str()));
+    if let Some(value) = auth_header {
+        headers.push(("authorization", value));
     }
     let response = crate::http_request(
         &snapshot.host,
@@ -411,4 +444,8 @@ fn gateway_json_request(
         );
     }
     serde_json::from_slice(&response.body).context("decode gateway JSON response")
+}
+
+fn gateway_auth_header(config: &AppConfig) -> Result<String> {
+    Ok(format!("Bearer {}", config.require_gateway_api_key()?))
 }

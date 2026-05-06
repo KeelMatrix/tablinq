@@ -4,6 +4,39 @@ use super::*;
 fn gateway_health_and_readiness_endpoints_respond() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let health = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "GET",
+        HEALTH_PATH,
+        &[("authorization", auth.as_str())],
+        &[],
+        3_000,
+    )
+    .unwrap();
+    assert_eq!(health.status_code, 200);
+
+    let ready = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "GET",
+        READY_PATH,
+        &[("authorization", auth.as_str())],
+        &[],
+        3_000,
+    )
+    .unwrap();
+    assert_eq!(ready.status_code, 200);
+}
+
+#[test]
+fn gateway_health_and_readiness_endpoints_require_authorization() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
     let gateway = RunningGateway::start(config);
     let snapshot = &gateway.snapshot;
 
@@ -17,7 +50,7 @@ fn gateway_health_and_readiness_endpoints_respond() {
         3_000,
     )
     .unwrap();
-    assert_eq!(health.status_code, 200);
+    assert_eq!(health.status_code, 401);
 
     let ready = http_request(
         &snapshot.host,
@@ -29,7 +62,7 @@ fn gateway_health_and_readiness_endpoints_respond() {
         3_000,
     )
     .unwrap();
-    assert_eq!(ready.status_code, 200);
+    assert_eq!(ready.status_code, 401);
 }
 
 #[test]
@@ -50,6 +83,16 @@ fn gateway_rejects_unauthorized_admin_requests() {
     )
     .unwrap();
     assert_eq!(response.status_code, 401);
+}
+
+#[test]
+fn gateway_startup_fails_when_gateway_api_key_is_blank() {
+    let _guard = integration_lock();
+    let (_dir, mut config) = test_config();
+    config.file.gateway.as_mut().unwrap().api_key = Some("   ".to_owned());
+
+    let err = run_gateway(config).unwrap_err();
+    assert!(format!("{err:#}").contains("gateway.api_key must be configured"));
 }
 
 #[test]
@@ -99,6 +142,7 @@ fn gateway_propagates_request_ids_in_headers_and_logs() {
     let (_dir, config) = test_config();
     let state_root = config.paths.state_root.clone();
     let log_path = gateway_log_path(&config);
+    let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
     let response = http_request(
@@ -106,7 +150,10 @@ fn gateway_propagates_request_ids_in_headers_and_logs() {
         snapshot.port,
         "GET",
         HEALTH_PATH,
-        &[("x-request-id", "req-test-123")],
+        &[
+            ("authorization", auth.as_str()),
+            ("x-request-id", "req-test-123"),
+        ],
         &[],
         3_000,
     )
@@ -196,7 +243,7 @@ fn gateway_health_and_admin_follow_daemon_browser_health() {
         snapshot.port,
         "GET",
         HEALTH_PATH,
-        &[],
+        &[("authorization", auth.as_str())],
         &[],
         10_000,
     )

@@ -214,6 +214,11 @@ impl AppConfig {
             .filter(|value| !value.trim().is_empty())
     }
 
+    pub fn require_gateway_api_key(&self) -> Result<&str> {
+        self.gateway_api_key()
+            .context("gateway.api_key must be configured for the local gateway")
+    }
+
     pub fn gateway_max_concurrent_upstream_jobs(&self) -> u32 {
         self.file
             .gateway
@@ -569,6 +574,16 @@ warm_mode = true
         )
         .unwrap_err();
         assert!(format!("{err:#}").contains("config.toml version 1 is unsupported"));
+    }
+
+    #[test]
+    fn require_gateway_api_key_rejects_blank_value() {
+        let dir = tempdir().unwrap();
+        let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
+        config.file.gateway.as_mut().unwrap().api_key = Some("   ".to_owned());
+
+        let err = config.require_gateway_api_key().unwrap_err();
+        assert!(format!("{err:#}").contains("gateway.api_key must be configured"));
     }
 
     proptest! {

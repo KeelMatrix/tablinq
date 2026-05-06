@@ -41,6 +41,7 @@ pub(crate) fn handle_connection(
             config.gateway_request_timeout_ms(),
         )))
         .context("set gateway write timeout")?;
+    let peer_addr = stream.peer_addr().ok();
 
     let context = match parse_http_request(&mut stream, request_counter) {
         Ok(context) => context,
@@ -74,9 +75,20 @@ pub(crate) fn handle_connection(
     };
 
     log_request(logger, &context.request_id, &context.request, &remote_addr)?;
+    let route = match_route(&context.request.method, &context.request.path);
+
+    if let Err(response) = authorize_request(
+        config,
+        &context.request,
+        peer_addr,
+        route_requires_openai_auth_error_shape(route),
+    ) {
+        log_response(logger, &context.request_id, response.status_code)?;
+        return write_http_response(&mut stream, &context.request_id, response);
+    }
     let scheduler_status = scheduler.snapshot()?;
 
-    let response = match match_route(&context.request.method, &context.request.path) {
+    let response = match route {
         Route::Health => health_admin::handle_health_request(
             config,
             core,
@@ -87,135 +99,72 @@ pub(crate) fn handle_connection(
         Route::Ready => {
             health_admin::handle_ready_request(snapshot, &scheduler_status, &context.request_id)
         }
-        Route::AdminStatus => match authorize_request(config, &context.request, false) {
-            Ok(()) => health_admin::handle_admin_status_request(
-                config,
-                core,
-                snapshot,
-                &scheduler_status,
-                &context.request_id,
-            )?,
-            Err(response) => response,
-        },
-        Route::AdminShutdown => match authorize_request(config, &context.request, false) {
-            Ok(()) => health_admin::handle_admin_shutdown_request(shutdown, &context.request_id),
-            Err(response) => response,
-        },
-        Route::AdminClear => match authorize_request(config, &context.request, false) {
-            Ok(()) => health_admin::handle_admin_clear_request(
-                core,
-                &context.request.body,
-                &context.request_id,
-            )?,
-            Err(response) => response,
-        },
-        Route::Models => match authorize_request(config, &context.request, true) {
-            Ok(()) => metadata::handle_models_request(
-                core,
-                capability_cache,
-                snapshot,
-                &context.request_id,
-            ),
-            Err(response) => response,
-        },
-        Route::Capabilities => match authorize_request(config, &context.request, true) {
-            Ok(()) => {
-                metadata::handle_capabilities_request(core, capability_cache, &context.request_id)?
-            }
-            Err(response) => response,
-        },
-        Route::Provider => match authorize_request(config, &context.request, false) {
-            Ok(()) => metadata::handle_provider_request(
-                core,
-                capability_cache,
-                snapshot,
-                &context.request_id,
-            ),
-            Err(response) => response,
-        },
-        Route::Usage => match authorize_request(config, &context.request, false) {
-            Ok(()) => metadata::handle_usage_request(core, &context.request_id)?,
-            Err(response) => response,
-        },
-        Route::Sessions => match authorize_request(config, &context.request, false) {
-            Ok(()) => metadata::handle_sessions_request(core, &context.request_id)?,
-            Err(response) => response,
-        },
-        Route::SessionConversations => match authorize_request(config, &context.request, false) {
-            Ok(()) => conversations::handle_session_conversations_request(core, &context)?,
-            Err(response) => response,
-        },
-        Route::Requests => match authorize_request(config, &context.request, false) {
-            Ok(()) => requests::handle_requests_request(core, &context)?,
-            Err(response) => response,
-        },
-        Route::Conversations => match authorize_request(config, &context.request, false) {
-            Ok(()) => conversations::handle_conversations_request(core, &context.request_id)?,
-            Err(response) => response,
-        },
-        Route::ConversationMessages => match authorize_request(config, &context.request, false) {
-            Ok(()) => conversations::handle_conversation_messages_request(core, &context)?,
-            Err(response) => response,
-        },
-        Route::ConversationSnapshot => match authorize_request(config, &context.request, false) {
-            Ok(()) => conversations::handle_conversation_snapshot_request(core, &context)?,
-            Err(response) => response,
-        },
-        Route::ConversationDetail => match authorize_request(config, &context.request, false) {
-            Ok(()) => conversations::handle_conversation_detail_request(core, &context)?,
-            Err(response) => response,
-        },
-        Route::RequestEvidence => match authorize_request(config, &context.request, false) {
-            Ok(()) => requests::handle_request_evidence_request(core, &context)?,
-            Err(response) => response,
-        },
-        Route::RequestSummary => match authorize_request(config, &context.request, false) {
-            Ok(()) => requests::handle_request_summary_request(core, &context)?,
-            Err(response) => response,
-        },
-        Route::FilesList => match authorize_request(config, &context.request, false) {
-            Ok(()) => files::handle_files_list_request(upload_store, &context.request_id)?,
-            Err(response) => response,
-        },
-        Route::FileUpload => match authorize_request(config, &context.request, false) {
-            Ok(()) => files::handle_file_upload_request(upload_store, &context)?,
-            Err(response) => response,
-        },
-        Route::FileDetail => match authorize_request(config, &context.request, false) {
-            Ok(()) => files::handle_file_detail_request(upload_store, &context)?,
-            Err(response) => response,
-        },
-        Route::ArtifactsList => match authorize_request(config, &context.request, false) {
-            Ok(()) => artifacts::handle_artifacts_list_request(core, &context.request_id)?,
-            Err(response) => response,
-        },
-        Route::ArtifactDetail => match authorize_request(config, &context.request, false) {
-            Ok(()) => artifacts::handle_artifact_request(core, &context)?,
-            Err(response) => response,
-        },
-        Route::RequestAction => match authorize_request(config, &context.request, false) {
-            Ok(()) => requests::handle_cancel_request(core, scheduler, &context)?,
-            Err(response) => response,
-        },
-        Route::ConversationSelect => match authorize_request(config, &context.request, false) {
-            Ok(()) => conversations::handle_conversation_select_request(core, &context)?,
-            Err(response) => response,
-        },
+        Route::AdminStatus => health_admin::handle_admin_status_request(
+            config,
+            core,
+            snapshot,
+            &scheduler_status,
+            &context.request_id,
+        )?,
+        Route::AdminShutdown => {
+            health_admin::handle_admin_shutdown_request(shutdown, &context.request_id)
+        }
+        Route::AdminClear => health_admin::handle_admin_clear_request(
+            core,
+            &context.request.body,
+            &context.request_id,
+        )?,
+        Route::Models => {
+            metadata::handle_models_request(core, capability_cache, snapshot, &context.request_id)
+        }
+        Route::Capabilities => {
+            metadata::handle_capabilities_request(core, capability_cache, &context.request_id)?
+        }
+        Route::Provider => {
+            metadata::handle_provider_request(core, capability_cache, snapshot, &context.request_id)
+        }
+        Route::Usage => metadata::handle_usage_request(core, &context.request_id)?,
+        Route::Sessions => metadata::handle_sessions_request(core, &context.request_id)?,
+        Route::SessionConversations => {
+            conversations::handle_session_conversations_request(core, &context)?
+        }
+        Route::Requests => requests::handle_requests_request(core, &context)?,
+        Route::Conversations => {
+            conversations::handle_conversations_request(core, &context.request_id)?
+        }
+        Route::ConversationMessages => {
+            conversations::handle_conversation_messages_request(core, &context)?
+        }
+        Route::ConversationSnapshot => {
+            conversations::handle_conversation_snapshot_request(core, &context)?
+        }
+        Route::ConversationDetail => {
+            conversations::handle_conversation_detail_request(core, &context)?
+        }
+        Route::RequestEvidence => requests::handle_request_evidence_request(core, &context)?,
+        Route::RequestSummary => requests::handle_request_summary_request(core, &context)?,
+        Route::FilesList => files::handle_files_list_request(upload_store, &context.request_id)?,
+        Route::FileUpload => files::handle_file_upload_request(upload_store, &context)?,
+        Route::FileDetail => files::handle_file_detail_request(upload_store, &context)?,
+        Route::ArtifactsList => {
+            artifacts::handle_artifacts_list_request(core, &context.request_id)?
+        }
+        Route::ArtifactDetail => artifacts::handle_artifact_request(core, &context)?,
+        Route::RequestAction => requests::handle_cancel_request(core, scheduler, &context)?,
+        Route::ConversationSelect => {
+            conversations::handle_conversation_select_request(core, &context)?
+        }
         Route::ChatCompletions => {
-            if let Err(response) = authorize_request(config, &context.request, true) {
-                response
-            } else {
-                return chat::handle_chat_completions_request(
-                    &mut stream,
-                    core,
-                    upload_store,
-                    scheduler,
-                    scheduler_status,
-                    &context,
-                    logger,
-                    &remote_addr,
-                );
-            }
+            return chat::handle_chat_completions_request(
+                &mut stream,
+                core,
+                upload_store,
+                scheduler,
+                scheduler_status,
+                &context,
+                logger,
+                &remote_addr,
+            );
         }
         Route::NotFound => json_response(
             404,
@@ -228,4 +177,11 @@ pub(crate) fn handle_connection(
 
     log_response(logger, &context.request_id, response.status_code)?;
     write_http_response(&mut stream, &context.request_id, response)
+}
+
+fn route_requires_openai_auth_error_shape(route: Route) -> bool {
+    matches!(
+        route,
+        Route::Models | Route::Capabilities | Route::ChatCompletions
+    )
 }
