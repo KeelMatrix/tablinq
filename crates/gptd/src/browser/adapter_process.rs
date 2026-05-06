@@ -20,9 +20,10 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const ADAPTER_CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
+const ASK_RESULT_GRACE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) struct AdapterProcess {
     child: Child,
@@ -181,6 +182,7 @@ impl AdapterProcess {
                 next_seq: None,
             },
             "ask",
+            timeout_ms,
             on_event,
             on_state,
             should_cancel,
@@ -230,6 +232,7 @@ impl AdapterProcess {
                 baseline_text: latest_update.and_then(|update| update.baseline_text.clone()),
             },
             "ask recovery",
+            timeout_ms,
             on_event,
             on_state,
             should_cancel,
@@ -240,6 +243,7 @@ impl AdapterProcess {
         &mut self,
         request: AdapterRequest,
         context: &str,
+        timeout_ms: u64,
         on_event: &mut F,
         on_state: &mut impl FnMut(RequestLifecycleUpdate) -> Result<()>,
         should_cancel: &mut impl FnMut() -> bool,
@@ -252,9 +256,12 @@ impl AdapterProcess {
             "encode adapter ask request",
             "write adapter ask request",
         )?;
+        let deadline =
+            Instant::now() + Duration::from_millis(timeout_ms) + ASK_RESULT_GRACE_TIMEOUT;
 
         loop {
-            let frame = self.next_frame_interruptible(context, should_cancel)?;
+            let frame =
+                self.next_frame_interruptible_until(context, should_cancel, deadline, timeout_ms)?;
             match frame {
                 AdapterFrame::StreamChunk { chunk } => {
                     on_event(EventPayload::StreamChunk(map_stream_chunk(chunk)))?;
@@ -483,6 +490,34 @@ impl AdapterProcess {
             if should_cancel() {
                 self.terminate();
                 bail!("{context} cancelled");
+            }
+            match self.frames.recv_timeout(Duration::from_millis(50)) {
+                Ok(result) => return result,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => {
+                    bail!("browser adapter closed without a {context} result")
+                }
+            }
+        }
+    }
+
+    fn next_frame_interruptible_until(
+        &mut self,
+        context: &str,
+        should_cancel: &mut impl FnMut() -> bool,
+        deadline: Instant,
+        timeout_ms: u64,
+    ) -> Result<AdapterFrame> {
+        loop {
+            if should_cancel() {
+                self.terminate();
+                bail!("{context} cancelled");
+            }
+            if Instant::now() >= deadline {
+                self.terminate();
+                bail!(
+                    "browser adapter timed out after {timeout_ms} ms while waiting for {context}"
+                );
             }
             match self.frames.recv_timeout(Duration::from_millis(50)) {
                 Ok(result) => return result,

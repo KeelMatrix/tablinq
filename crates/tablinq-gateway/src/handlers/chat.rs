@@ -3,7 +3,7 @@ use crate::chat::{
     outcome_from_error, prepare_chat_completions_request,
 };
 use crate::errors::{
-    capture_gateway_failure_bundle, map_openai_error, maybe_capture_request_evidence,
+    capture_gateway_failure_artifacts, map_openai_error, maybe_capture_request_evidence,
     request_role_policy_response,
 };
 use crate::handlers::requests::{
@@ -140,9 +140,8 @@ pub(crate) fn handle_chat_completions_request(
                 queue_wait_ms,
                 outcome_from_error(&err),
             ));
-            let _ = maybe_capture_request_evidence(core, &context.request_id, Some(&err), false);
             let failure_bundle_id =
-                capture_gateway_failure_bundle(core, context, &prepared, &client_id, &err);
+                capture_gateway_failure_artifacts(core, context, &prepared, &client_id, &err);
             let response =
                 map_openai_error(&context.request_id, &err, failure_bundle_id.as_deref());
             log_response(logger, &context.request_id, response.status_code)?;
