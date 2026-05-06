@@ -9,6 +9,10 @@ This guide is for contributors working from the repo checkout.
 3. Install `pnpm`.
 4. Run `pnpm install` at the repo root.
 
+When validating checkout changes, prefer `cargo run -p gpt -- ...`.
+
+Plain `gpt` resolves to the installed binary on your `PATH`, usually under `%LOCALAPPDATA%\Tablinq\install\bin`, and can lag the repo checkout until `scripts/install.ps1` finishes and you start a new shell.
+
 ## Current product model
 
 Tablinq is attach-first.
@@ -125,7 +129,7 @@ Managed fallback exists only for debugging, CI, harness isolation, and machines 
 - `scripts/package.ps1`
   - builds release Rust binaries, emits browser adapter and extension JavaScript, and assembles `dist/package/tablinq`
 - `scripts/install.ps1`
-  - the Windows all-in-one entry point: installs dependencies, packages the repo, replaces `%LOCALAPPDATA%\Tablinq\install`, registers the native host, removes scheduled-task and Run-key autostart persistence, starts daemon and gateway by default, optionally enables autostart with `-EnableAutoStart`, and prints the remaining manual browser-extension steps
+  - the Windows all-in-one entry point: installs dependencies, packages the repo, replaces `%LOCALAPPDATA%\Tablinq\install`, registers the native host, removes scheduled-task and Run-key autostart persistence, starts daemon and gateway by default, optionally enables autostart with `-EnableAutoStart`, and prints the installed CLI build, current-shell `gpt` resolution, repo HEAD check, and remaining manual browser-extension steps
 
 ## CI expectations
 

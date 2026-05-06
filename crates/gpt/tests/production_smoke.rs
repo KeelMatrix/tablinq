@@ -427,7 +427,13 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
     let state_dir = tempdir().expect("state tempdir");
     let install_script = repo_root.join("scripts").join("install.ps1");
     let package_dir = tempdir().expect("package tempdir");
+    let stale_path_dir = tempdir().expect("stale path tempdir");
     let powershell = powershell();
+    fs::write(
+        stale_path_dir.path().join("gpt.cmd"),
+        "@echo off\r\necho {\"application\":\"gpt\",\"version\":\"0.0.0-test\",\"git_commit\":\"stale-path-build\",\"git_dirty\":false,\"target\":\"x86_64-pc-windows-msvc\",\"profile\":\"release\",\"built_at_unix_epoch\":1}\r\n",
+    )
+    .expect("write stale gpt.cmd");
     let package_root = if let Some(package_root) = package_root_override() {
         package_root
     } else {
@@ -477,6 +483,7 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
     eprintln!("installing package");
     let install_output = run_success({
         let mut command = Command::new(&powershell);
+        let path = std::env::var("PATH").unwrap_or_default();
         command
             .arg("-ExecutionPolicy")
             .arg("Bypass")
@@ -490,12 +497,21 @@ fn windows_packaging_and_install_smoke_cover_packaged_layout() {
             .arg(state_dir.path())
             .arg("-SkipRegistry")
             .arg("-SkipPathUpdate");
+        command.env(
+            "PATH",
+            format!("{};{path}", stale_path_dir.path().display()),
+        );
         command.current_dir(&repo_root);
         command
     });
     assert!(install_output.contains("Install complete."));
     assert!(install_output.contains("Daemon:"));
     assert!(install_output.contains("Gateway:"));
+    assert!(install_output.contains("CLI build:"));
+    assert!(install_output.contains("PATH gpt:"));
+    assert!(install_output.contains("Workspace:"));
+    assert!(install_output.contains("Developer checks:"));
+    assert!(install_output.contains("Current shell resolves gpt to"));
 
     let installed_root = install_dir.path().to_path_buf();
     eprintln!("verifying install layout");

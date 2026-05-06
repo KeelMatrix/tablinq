@@ -55,7 +55,9 @@ What `scripts/install.ps1` does:
 - removes any existing scheduled-task or Run-key logon-time persistence
 - does not create Run-key entries or scheduled tasks by default
 - starts the daemon and gateway by default and reports whether they are healthy
-- prints a compact install summary plus the remaining manual browser steps
+- prints a compact install summary, including the installed CLI build, the current-shell `gpt` target, repo-HEAD mismatch warnings for contributor checkouts, and the remaining manual browser steps
+
+If you are working from a repo checkout, prefer `cargo run -p gpt -- ...` while validating local code changes. Plain `gpt` runs the installed binary on `PATH`, which can remain on an older build until install completes and a new shell picks up the updated path state.
 
 What still requires you:
 
