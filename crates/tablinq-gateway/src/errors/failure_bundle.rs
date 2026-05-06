@@ -84,3 +84,39 @@ pub(crate) fn should_capture_request_evidence(
     core.browser_profile_info()
         .is_ok_and(|snapshot| !snapshot.extension_connected || snapshot.reload_count >= 2)
 }
+
+pub(crate) fn capture_gateway_failure_artifacts(
+    core: &CoreService,
+    context: &RequestContext,
+    prepared: &PreparedChatRequest,
+    client_id: &str,
+    err: &anyhow::Error,
+) -> Option<String> {
+    let include_request_evidence = should_capture_request_evidence(core, Some(err), false);
+    let include_failure_bundle = should_capture_gateway_failure_bundle(err);
+    if !include_request_evidence && !include_failure_bundle {
+        return None;
+    }
+
+    let message = format!("{err:#}");
+    let gateway_request = include_failure_bundle.then(|| GatewayRequestContext {
+        request_id: context.request_id.clone(),
+        request_path: context.request.path.clone(),
+        client_id: Some(client_id.to_owned()),
+        model: Some(prepared.model_id.to_owned()),
+        request_role: Some(request_role_name(prepared.request_role).to_owned()),
+        parent_request_id: prepared.parent_request_id.clone(),
+        job_id: Some(prepared.job_id().to_owned()),
+        streaming: prepared.request.stream,
+    });
+
+    core.capture_gateway_failure_artifacts(
+        &context.request_id,
+        Some(prepared.mode()),
+        &message,
+        gateway_request,
+        include_request_evidence,
+    )
+    .ok()
+    .flatten()
+}
