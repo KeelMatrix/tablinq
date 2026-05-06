@@ -14,6 +14,10 @@ pub(crate) const V1_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 pub(crate) const V1_FILES_PATH: &str = "/v1/files";
 pub(crate) const V1_ARTIFACTS_PATH: &str = "/v1/artifacts";
 pub(crate) const V1_PROVIDER_PATH: &str = "/v1/provider";
+pub(crate) const V1_STATUS_PATH: &str = "/v1/status";
+pub(crate) const V1_DOCTOR_PATH: &str = "/v1/doctor";
+pub(crate) const V1_CONFIG_PATH: &str = "/v1/config";
+pub(crate) const V1_JOBS_PATH: &str = "/v1/jobs";
 pub(crate) const V1_SESSIONS_PATH: &str = "/v1/sessions";
 pub(crate) const V1_REQUESTS_PATH: &str = "/v1/requests";
 pub(crate) const V1_CONVERSATIONS_PATH: &str = "/v1/conversations";
@@ -24,6 +28,7 @@ pub(crate) const V1_BROWSER_DETACH_PATH: &str = "/v1/browser/detach";
 pub(crate) const V1_BROWSER_PROFILE_INFO_PATH: &str = "/v1/browser/profile-info";
 pub(crate) const V1_BROWSER_CONNECTION_INFO_PATH: &str = "/v1/browser/connection-info";
 pub(crate) const V1_SESSIONS_PREFIX: &str = "/v1/sessions/";
+pub(crate) const V1_JOBS_PREFIX: &str = "/v1/jobs/";
 pub(crate) const V1_CONVERSATIONS_PREFIX: &str = "/v1/conversations/";
 pub(crate) const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 pub(crate) const REQUEST_SUMMARY_LIMIT: usize = 50;
@@ -40,6 +45,12 @@ pub(crate) enum Route {
     Models,
     Capabilities,
     Provider,
+    Status,
+    Doctor,
+    Config,
+    Jobs,
+    JobDetail,
+    JobCancel,
     Usage,
     BrowserAttach,
     BrowserDetach,
@@ -76,6 +87,10 @@ pub(crate) fn match_route(method: &str, path: &str) -> Route {
         ("GET", V1_MODELS_PATH) => Route::Models,
         ("GET", V1_CAPABILITIES_PATH) => Route::Capabilities,
         ("GET", V1_PROVIDER_PATH) => Route::Provider,
+        ("GET", V1_STATUS_PATH) => Route::Status,
+        ("GET", V1_DOCTOR_PATH) => Route::Doctor,
+        ("GET", V1_CONFIG_PATH) => Route::Config,
+        ("GET", V1_JOBS_PATH) => Route::Jobs,
         ("GET", V1_USAGE_PATH) => Route::Usage,
         ("POST", V1_BROWSER_ATTACH_PATH) => Route::BrowserAttach,
         ("POST", V1_BROWSER_DETACH_PATH) => Route::BrowserDetach,
@@ -89,6 +104,8 @@ pub(crate) fn match_route(method: &str, path: &str) -> Route {
         ("GET", V1_ARTIFACTS_PATH) => Route::ArtifactsList,
         ("POST", V1_CONVERSATIONS_SELECT_PATH) => Route::ConversationSelect,
         ("POST", V1_CHAT_COMPLETIONS_PATH) => Route::ChatCompletions,
+        ("GET", _) if job_id_from_path(path).is_some() => Route::JobDetail,
+        ("POST", _) if cancel_job_id_from_path(path).is_some() => Route::JobCancel,
         ("GET", _) if session_conversations_id_from_path(path).is_some() => {
             Route::SessionConversations
         }
@@ -112,11 +129,23 @@ pub(crate) fn match_route(method: &str, path: &str) -> Route {
 
 pub(crate) fn method_not_allowed_for_path(path: &str) -> Option<&'static str> {
     match normalized_request_path(path) {
+        V1_STATUS_PATH => Some("GET"),
+        V1_DOCTOR_PATH => Some("GET"),
+        V1_CONFIG_PATH => Some("GET"),
+        V1_JOBS_PATH => Some("GET"),
         V1_BROWSER_ATTACH_PATH => Some("POST"),
         V1_BROWSER_DETACH_PATH => Some("POST"),
         V1_BROWSER_PROFILE_INFO_PATH => Some("GET"),
         V1_BROWSER_CONNECTION_INFO_PATH => Some("GET"),
-        _ => None,
+        _ => {
+            if cancel_job_id_from_path(path).is_some() {
+                Some("POST")
+            } else if job_id_from_path(path).is_some() {
+                Some("GET")
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -295,6 +324,22 @@ pub(crate) fn session_conversations_id_from_path(path: &str) -> Option<&str> {
         .filter(|value| !value.is_empty() && !value.contains('/'))
 }
 
+pub(crate) fn cancel_job_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_JOBS_PREFIX)?;
+    suffix
+        .strip_suffix("/cancel")
+        .filter(|value| !value.is_empty() && !value.contains('/'))
+}
+
+pub(crate) fn job_id_from_path(path: &str) -> Option<&str> {
+    let suffix = normalized_request_path(path).strip_prefix(V1_JOBS_PREFIX)?;
+    if suffix.is_empty() || suffix.contains('/') {
+        None
+    } else {
+        Some(suffix)
+    }
+}
+
 pub(crate) fn conversation_messages_id_from_path(path: &str) -> Option<&str> {
     let suffix = normalized_request_path(path).strip_prefix(V1_CONVERSATIONS_PREFIX)?;
     suffix
@@ -358,6 +403,12 @@ mod tests {
         assert_eq!(
             match_route("POST", "/v1/requests/req-1/cancel"),
             Route::RequestAction
+        );
+        assert_eq!(match_route("GET", V1_STATUS_PATH), Route::Status);
+        assert_eq!(match_route("GET", "/v1/jobs/job-1"), Route::JobDetail);
+        assert_eq!(
+            match_route("POST", "/v1/jobs/job-1/cancel"),
+            Route::JobCancel
         );
         assert_eq!(
             match_route("POST", V1_BROWSER_ATTACH_PATH),

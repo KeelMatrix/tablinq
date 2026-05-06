@@ -44,6 +44,55 @@ pub(crate) fn handle_health_request(
     ))
 }
 
+pub(crate) fn handle_status_request(
+    core: &CoreService,
+    snapshot: &GatewayStatusSnapshot,
+    scheduler_status: &SchedulerSnapshot,
+    request_id: &str,
+) -> HttpResponse {
+    json_response(
+        200,
+        json!({
+            "object": "tablinq.status",
+            "request_id": request_id,
+            "data": {
+                "gateway": snapshot,
+                "daemon": core.status_snapshot(),
+                "scheduler": scheduler_status,
+            },
+        }),
+    )
+}
+
+pub(crate) fn handle_doctor_request(
+    config: &AppConfig,
+    core: &CoreService,
+    scheduler_status: &SchedulerSnapshot,
+    request_id: &str,
+) -> Result<HttpResponse> {
+    let doctor = effective_doctor_report(config, core)?;
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.doctor",
+            "request_id": request_id,
+            "data": doctor,
+            "scheduler": scheduler_status,
+        }),
+    ))
+}
+
+pub(crate) fn handle_config_request(core: &CoreService, request_id: &str) -> HttpResponse {
+    json_response(
+        200,
+        json!({
+            "object": "tablinq.config",
+            "request_id": request_id,
+            "data": core.config_snapshot(),
+        }),
+    )
+}
+
 pub(crate) fn handle_ready_request(
     snapshot: &GatewayStatusSnapshot,
     scheduler_status: &SchedulerSnapshot,

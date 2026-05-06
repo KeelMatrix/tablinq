@@ -42,4 +42,6 @@ mod browser_lifecycle;
 
 mod files_artifacts_flow;
 
+mod safe_core_endpoints;
+
 mod uploads;

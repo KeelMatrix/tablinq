@@ -1,13 +1,14 @@
 use crate::http::{HttpRequest, HttpResponse, RequestContext};
 use crate::json::{artifact_object, json_response, reason_phrase_for_status};
 use crate::routes::{
-    cancel_request_id_from_path, parse_request_list_query, request_evidence_request_id_from_path,
-    request_id_from_path,
+    cancel_job_id_from_path, cancel_request_id_from_path, job_id_from_path,
+    parse_request_list_query, request_evidence_request_id_from_path, request_id_from_path,
 };
 use crate::scheduler::{CancelDisposition, GatewayScheduler, SchedulerSnapshot};
 use anyhow::Result;
 use gptd::CoreService;
 use serde_json::{Value, json};
+use shared_protocol::CancelJobCommand;
 
 pub(crate) fn handle_requests_request(
     core: &CoreService,
@@ -152,6 +153,96 @@ pub(crate) fn handle_cancel_request(
                 CancelDisposition::Queued => "queued",
                 CancelDisposition::Running => "running",
             },
+        }),
+    ))
+}
+
+pub(crate) fn handle_jobs_request(core: &CoreService, request_id: &str) -> Result<HttpResponse> {
+    let jobs = core.list_jobs()?;
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.job_list",
+            "request_id": request_id,
+            "data": jobs.jobs,
+        }),
+    ))
+}
+
+pub(crate) fn handle_job_detail_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(job_id) = job_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+
+    let detail = match core.job_detail(job_id) {
+        Ok(detail) => detail,
+        Err(_) => {
+            return Ok(json_response(
+                404,
+                json!({
+                    "request_id": context.request_id,
+                    "error": "not_found",
+                }),
+            ));
+        }
+    };
+
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.job",
+            "request_id": context.request_id,
+            "data": detail,
+        }),
+    ))
+}
+
+pub(crate) fn handle_job_cancel_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let Some(job_id) = cancel_job_id_from_path(&context.request.path) else {
+        return Ok(json_response(
+            404,
+            json!({
+                "request_id": context.request_id,
+                "error": "not_found",
+            }),
+        ));
+    };
+
+    let ack = match core.cancel_job(CancelJobCommand {
+        job_id: job_id.to_owned(),
+    }) {
+        Ok(ack) => ack,
+        Err(_) => {
+            return Ok(json_response(
+                404,
+                json!({
+                    "request_id": context.request_id,
+                    "error": "not_found",
+                }),
+            ));
+        }
+    };
+
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.ack",
+            "request_id": context.request_id,
+            "job_id": job_id,
+            "accepted": ack.accepted,
+            "message": ack.message,
         }),
     ))
 }
