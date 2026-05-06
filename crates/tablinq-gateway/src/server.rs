@@ -21,6 +21,7 @@ use std::time::Duration;
 pub(crate) fn run_gateway(config: AppConfig) -> Result<()> {
     let log_path = gateway_log_path(&config);
     let logger = Arc::new(JsonLogger::new(&log_path)?);
+    config.require_gateway_api_key()?;
     let core = Arc::new(CoreService::new(config.clone())?);
     let capability_cache = Arc::new(CapabilityCatalogCache::load(&config)?);
     let upload_store = Arc::new(UploadStore::load(&config)?);
