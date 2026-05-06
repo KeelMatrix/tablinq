@@ -63,6 +63,18 @@ fn gateway_health_and_readiness_endpoints_require_authorization() {
     )
     .unwrap();
     assert_eq!(ready.status_code, 401);
+
+    let bad_health = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "GET",
+        HEALTH_PATH,
+        &[("authorization", "Bearer wrong-token")],
+        &[],
+        3_000,
+    )
+    .unwrap();
+    assert_eq!(bad_health.status_code, 401);
 }
 
 #[test]

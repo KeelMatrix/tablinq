@@ -60,6 +60,38 @@ fn browser_attach_accepts_empty_body_and_optional_json_body() {
 }
 
 #[test]
+fn browser_attach_accepts_empty_json_object() {
+    require_browser_integration_prereqs!();
+    let _guard = integration_lock();
+    let (_fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url.clone());
+    let normalized_target = format!("{fake_url}/");
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_BROWSER_ATTACH_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        br#"{}"#,
+        20_000,
+    )
+    .unwrap();
+
+    let body = assert_json_status(&response, 200);
+    assert_eq!(body["object"], "tablinq.browser");
+    assert_eq!(body["data"]["running"], true);
+    assert_eq!(body["data"]["target_url"], normalized_target);
+}
+
+#[test]
 fn browser_attach_rejects_unknown_fields() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();
@@ -77,6 +109,32 @@ fn browser_attach_rejects_unknown_fields() {
             ("content-type", "application/json"),
         ],
         br#"{"unexpected":true}"#,
+        5_000,
+    )
+    .unwrap();
+
+    let body = assert_json_status(&response, 400);
+    assert_eq!(body["error"], "invalid_request_json");
+}
+
+#[test]
+fn browser_attach_invalid_json_returns_specific_error() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_BROWSER_ATTACH_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        br#"{"target_url":"https://chatgpt.com/""#,
         5_000,
     )
     .unwrap();
@@ -213,4 +271,16 @@ fn browser_lifecycle_routes_reject_wrong_methods_and_missing_authorization() {
     )
     .unwrap();
     assert_eq!(missing_auth.status_code, 401);
+
+    let missing_attach_auth = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_BROWSER_ATTACH_PATH,
+        &[("content-type", "application/json")],
+        br#"{"target_url":"https://chatgpt.com/""#,
+        5_000,
+    )
+    .unwrap();
+    assert_eq!(missing_attach_auth.status_code, 401);
 }
