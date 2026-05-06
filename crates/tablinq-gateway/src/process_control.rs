@@ -131,9 +131,17 @@ pub fn gateway_status(state_root: Option<&Path>) -> Result<Value> {
             auth_header.as_str(),
             config.gateway_request_timeout_ms(),
         );
+        let admin = gateway_json_request(
+            &snapshot,
+            crate::ADMIN_STATUS_PATH,
+            Some(auth_header.as_str()),
+            config.gateway_request_timeout_ms(),
+        )
+        .ok();
         Ok(json!({
             "running": healthy,
             "ready": ready,
+            "admin": admin,
             "host": snapshot.host,
             "port": snapshot.port,
             "pid": snapshot.pid,
@@ -448,4 +456,205 @@ fn gateway_json_request(
 
 fn gateway_auth_header(config: &AppConfig) -> Result<String> {
     Ok(format!("Bearer {}", config.require_gateway_api_key()?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct CapturedRequest {
+        method: String,
+        path: String,
+        authorization: Option<String>,
+    }
+
+    #[test]
+    fn gateway_health_and_ready_process_control_probes_include_authorization() {
+        let dir = tempfile::tempdir().expect("create state root");
+        let mut config = AppConfig::load_or_create(Some(dir.path())).expect("load config");
+        let expected_auth = gateway_auth_header(&config).expect("gateway auth header");
+        let (listener, port) = bind_fake_gateway();
+        config.file.gateway.as_mut().expect("gateway config").port = Some(port);
+        let snapshot = test_snapshot(&config, port);
+        let (requests, handle) = run_fake_gateway(listener, 2);
+
+        assert!(gateway_is_responsive(
+            &snapshot,
+            expected_auth.as_str(),
+            3_000
+        ));
+        assert!(gateway_is_ready(&snapshot, expected_auth.as_str(), 3_000));
+
+        let captured: Vec<_> = requests.into_iter().collect();
+        handle.join().expect("fake gateway thread");
+        assert_eq!(
+            captured,
+            vec![
+                CapturedRequest {
+                    method: "GET".to_owned(),
+                    path: crate::HEALTH_PATH.to_owned(),
+                    authorization: Some(expected_auth.clone()),
+                },
+                CapturedRequest {
+                    method: "GET".to_owned(),
+                    path: crate::READY_PATH.to_owned(),
+                    authorization: Some(expected_auth),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn gateway_status_uses_authorization_for_health_ready_and_admin_status() {
+        let dir = tempfile::tempdir().expect("create state root");
+        let mut config = AppConfig::load_or_create(Some(dir.path())).expect("load config");
+        let expected_auth = gateway_auth_header(&config).expect("gateway auth header");
+        let (listener, port) = bind_fake_gateway();
+        config.file.gateway.as_mut().expect("gateway config").port = Some(port);
+        write_status_snapshot(&config, &test_snapshot(&config, port)).expect("write snapshot");
+        let (requests, handle) = run_fake_gateway(listener, 3);
+
+        let status = gateway_status(Some(dir.path())).expect("gateway status");
+        assert_eq!(status["running"], true);
+        assert_eq!(status["ready"], true);
+        assert!(status["admin"].is_object());
+
+        let captured: Vec<_> = requests.into_iter().collect();
+        handle.join().expect("fake gateway thread");
+        assert_eq!(
+            captured,
+            vec![
+                CapturedRequest {
+                    method: "GET".to_owned(),
+                    path: crate::HEALTH_PATH.to_owned(),
+                    authorization: Some(expected_auth.clone()),
+                },
+                CapturedRequest {
+                    method: "GET".to_owned(),
+                    path: crate::READY_PATH.to_owned(),
+                    authorization: Some(expected_auth.clone()),
+                },
+                CapturedRequest {
+                    method: "GET".to_owned(),
+                    path: crate::ADMIN_STATUS_PATH.to_owned(),
+                    authorization: Some(expected_auth),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn gateway_shutdown_process_control_probe_includes_authorization() {
+        let dir = tempfile::tempdir().expect("create state root");
+        let mut config = AppConfig::load_or_create(Some(dir.path())).expect("load config");
+        let expected_auth = gateway_auth_header(&config).expect("gateway auth header");
+        let (listener, port) = bind_fake_gateway();
+        config.file.gateway.as_mut().expect("gateway config").port = Some(port);
+        write_status_snapshot(&config, &test_snapshot(&config, port)).expect("write snapshot");
+        let (requests, handle) = run_fake_gateway(listener, 2);
+
+        let stop = stop_gateway_process(Some(dir.path())).expect("gateway stop");
+        assert_eq!(stop["status"], "stopped");
+
+        let captured: Vec<_> = requests.into_iter().collect();
+        handle.join().expect("fake gateway thread");
+        assert_eq!(
+            captured,
+            vec![
+                CapturedRequest {
+                    method: "GET".to_owned(),
+                    path: crate::HEALTH_PATH.to_owned(),
+                    authorization: Some(expected_auth.clone()),
+                },
+                CapturedRequest {
+                    method: "POST".to_owned(),
+                    path: crate::ADMIN_SHUTDOWN_PATH.to_owned(),
+                    authorization: Some(expected_auth),
+                },
+            ]
+        );
+    }
+
+    fn bind_fake_gateway() -> (TcpListener, u16) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake gateway");
+        let port = listener.local_addr().expect("fake gateway address").port();
+        (listener, port)
+    }
+
+    fn run_fake_gateway(
+        listener: TcpListener,
+        count: usize,
+    ) -> (mpsc::Receiver<CapturedRequest>, thread::JoinHandle<()>) {
+        let (sender, receiver) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            for _ in 0..count {
+                let (mut stream, _) = listener.accept().expect("accept fake gateway request");
+                let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+                let mut request_line = String::new();
+                reader
+                    .read_line(&mut request_line)
+                    .expect("read request line");
+                let mut parts = request_line.split_whitespace();
+                let method = parts.next().expect("method").to_owned();
+                let path = parts.next().expect("path").to_owned();
+                let mut authorization = None;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).expect("read header");
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = trimmed.split_once(':')
+                        && name.eq_ignore_ascii_case("authorization")
+                    {
+                        authorization = Some(value.trim().to_owned());
+                    }
+                }
+                sender
+                    .send(CapturedRequest {
+                        method,
+                        path,
+                        authorization,
+                    })
+                    .expect("send captured request");
+                stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}",
+                    )
+                    .expect("write fake gateway response");
+            }
+        });
+        (receiver, handle)
+    }
+
+    fn test_snapshot(config: &AppConfig, port: u16) -> GatewayStatusSnapshot {
+        GatewayStatusSnapshot {
+            pid: 123,
+            started_at: Utc::now(),
+            state_root: config.paths.state_root.display().to_string(),
+            host: "127.0.0.1".to_owned(),
+            port,
+            api_key_present: true,
+            max_concurrent_upstream_jobs: 1,
+            queue_length: 32,
+            queue_timeout_ms: 15_000,
+            per_client_limit: 8,
+            request_timeout_ms: 15_000,
+            ask_timeout_ms: 15_000,
+            extended_thinking_timeout_ms: 15_000,
+            research_timeout_ms: 15_000,
+            safe_mode_behavior: "reject_execution".to_owned(),
+            log_path: config
+                .paths
+                .logs_dir
+                .join("gateway.log")
+                .display()
+                .to_string(),
+        }
+    }
 }
