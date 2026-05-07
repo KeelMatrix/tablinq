@@ -56,13 +56,10 @@ fn provider_endpoint_exposes_openclaude_preset_metadata() {
     );
     assert_eq!(
         body["provider_capabilities"]["subagent_recommendation"]["policy"],
-        "disabled"
+        "queue"
     );
     assert_eq!(body["presets"]["openclaude"]["max_parallel_requests"], 1);
-    assert_eq!(
-        body["presets"]["openclaude"]["subagents"],
-        "disabled_by_default"
-    );
+    assert_eq!(body["presets"]["openclaude"]["subagents"], "queued");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -95,21 +92,29 @@ fn provider_endpoint_exposes_paperclip_preset_metadata() {
         String::from_utf8_lossy(&response.body)
     );
     let body: Value = serde_json::from_slice(&response.body).unwrap();
+    let body_text = String::from_utf8(response.body.clone()).unwrap();
     assert_eq!(
         body["presets"]["paperclip"]["transport"],
         "openai_compatible_http"
+    );
+    assert_eq!(body["openai_compatibility"]["mode"], "subset");
+    assert_eq!(body["request_annotations"]["policy"]["subagent"], "queue");
+    assert_eq!(
+        body["provider_capabilities"]["subagent_recommendation"]["policy"],
+        "queue"
     );
     assert_eq!(body["presets"]["paperclip"]["max_parallel_requests"], 1);
     assert_eq!(body["presets"]["paperclip"]["files"], true);
     assert_eq!(body["presets"]["paperclip"]["artifacts"], true);
     assert_eq!(
         body["presets"]["paperclip"]["subagent_recommendation"],
-        "disable"
+        "queue"
     );
     assert_eq!(
         body["presets"]["paperclip"]["usage_accounting"],
         "unknown_or_estimated"
     );
+    assert!(!body_text.to_ascii_lowercase().contains("managed"));
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -146,9 +151,30 @@ fn documented_provider_contract_surfaces_are_present() {
         provider_body["request_annotations"]["parent_request_id_field"],
         "tablinq_parent_request_id"
     );
+    assert_eq!(provider_body["openai_compatibility"]["mode"], "subset");
+    assert_eq!(
+        provider_body["openai_compatibility"]["supported_endpoints"],
+        json!([
+            "/v1/chat/completions",
+            "/v1/models",
+            "/v1/provider",
+            "/v1/capabilities",
+            "/v1/files",
+            "/v1/artifacts",
+            "/v1/requests",
+        ])
+    );
+    assert_eq!(
+        provider_body["openai_compatibility"]["chat_completions"]["role_handling"],
+        "only user messages are accepted; browser submission keeps user text unchanged"
+    );
     assert_eq!(
         provider_body["presets"]["openclaude"]["max_parallel_requests"],
         1
+    );
+    assert_eq!(
+        provider_body["presets"]["openclaude"]["subagents"],
+        "queued"
     );
     assert_eq!(
         provider_body["presets"]["paperclip"]["max_parallel_requests"],
@@ -156,7 +182,13 @@ fn documented_provider_contract_surfaces_are_present() {
     );
     assert_eq!(
         provider_body["presets"]["paperclip"]["subagent_recommendation"],
-        "disable"
+        "queue"
+    );
+    assert!(
+        !String::from_utf8(provider.body.clone())
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("managed")
     );
 
     let chat_body = serde_json::to_vec(&json!({
@@ -254,43 +286,6 @@ fn openclaude_primary_streaming_requests_keep_sse_shape() {
     handle.join().unwrap().unwrap();
     let _ = fake_server.kill();
     let _ = fake_server.wait();
-}
-
-#[test]
-fn openclaude_subagent_requests_are_rejected_by_default_policy() {
-    let _guard = integration_lock();
-    let (_dir, config) = test_config();
-    let state_root = config.paths.state_root.clone();
-    let auth = auth_header(&config);
-    let (handle, snapshot) = spawn_gateway(config);
-
-    let body = openclaude_request_body(
-        "tablinq-instant",
-        "parallel helper request",
-        "subagent",
-        false,
-        Some("oc-primary-1"),
-    );
-    let response = http_request(
-        &snapshot.host,
-        snapshot.port,
-        "POST",
-        V1_CHAT_COMPLETIONS_PATH,
-        &[
-            ("authorization", auth.as_str()),
-            ("content-type", "application/json"),
-            ("x-request-id", "oc-subagent-1"),
-        ],
-        &body,
-        20_000,
-    )
-    .unwrap();
-    assert_eq!(response.status_code, 429);
-    let body: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(body["error"]["code"], "subagents_disabled");
-
-    stop_gateway_process(Some(&state_root)).unwrap();
-    handle.join().unwrap().unwrap();
 }
 
 #[test]

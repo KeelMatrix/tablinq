@@ -132,7 +132,8 @@ mod tests {
 
     #[test]
     fn openai_error_mapping_preserves_refusal_annotations() {
-        let err = anyhow!("auth required: managed browser session is not authenticated");
+        let err =
+            anyhow!("auth required: attached browser-backed ChatGPT tab is not authenticated");
         let response = map_openai_error("req-1", &err, Some("bundle-1"));
         assert_eq!(response.status_code, 503);
 
@@ -141,7 +142,7 @@ mod tests {
         assert_eq!(body["error"]["code"], "auth_required");
         assert_eq!(
             body["error"]["message"],
-            "req-1: auth required: managed browser session is not authenticated"
+            "req-1: auth required: attached browser-backed ChatGPT tab is not authenticated"
         );
         assert_eq!(body["tablinq_refusal_reason"], "auth_required");
         assert_eq!(body["tablinq_failure_bundle_id"], "bundle-1");

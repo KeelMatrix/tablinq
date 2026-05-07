@@ -39,6 +39,7 @@ pub(crate) fn handle_models_request(
             "data": models,
             "request_id": request_id,
             "tablinq_capability_source": catalog.source,
+            "tablinq_probe_reported_at": catalog.report.as_ref().map(|report| report.reported_at),
             "tablinq_model_ids": PROVIDER_MODELS.iter().map(|spec| spec.id).collect::<Vec<_>>(),
             "gateway": {
                 "host": snapshot.host,
@@ -109,16 +110,75 @@ pub(crate) fn handle_provider_request(
             "object": "tablinq.provider",
             "request_id": request_id,
             "provider": "tablinq",
-            "openai_compatible": true,
             "base_url": format!("http://{}:{}/v1", snapshot.host, snapshot.port),
+            "reported_at": catalog.report.as_ref().map(|report| report.reported_at),
             "capability_source": catalog.source,
             "model_ids": PROVIDER_MODELS.iter().map(|spec| spec.id).collect::<Vec<_>>(),
+            "openai_compatibility": {
+                "mode": "subset",
+                "supported_endpoints": [
+                    "/v1/chat/completions",
+                    "/v1/models",
+                    "/v1/provider",
+                    "/v1/capabilities",
+                    "/v1/files",
+                    "/v1/artifacts",
+                    "/v1/requests",
+                ],
+                "chat_completions": {
+                    "accepted_message_roles": ["user"],
+                    "role_handling": "only user messages are accepted; browser submission keeps user text unchanged",
+                    "tolerated_fields": [
+                        "temperature",
+                        "top_p",
+                        "max_tokens",
+                        "max_completion_tokens",
+                        "stop",
+                        "presence_penalty",
+                        "frequency_penalty",
+                        "user",
+                        "metadata",
+                        "logprobs",
+                        "stream_options",
+                        "tool_choice",
+                        "parallel_tool_calls",
+                    ],
+                    "rejected_fields": [
+                        "tools",
+                        "messages[].tool_calls",
+                        "messages[].tool_call_id",
+                        "response_format",
+                    ],
+                    "constraints": [
+                        "n must be 1",
+                        "non-user roles are rejected",
+                        "browser-backed execution never injects transcript wrappers or synthetic role text",
+                    ],
+                },
+                "files": {
+                    "endpoint": "/v1/files",
+                    "upload_shape": "raw_request_body",
+                    "notes": [
+                        "upload bytes directly to stage a file id",
+                        "re-use staged ids via tablinq_file_ids or input_file content parts",
+                    ],
+                },
+            },
             "provider_capabilities": provider_capability_catalog(catalog.report.as_ref(), catalog.source),
+            "execution": {
+                "connection_model": "attach_first_browser_backed",
+                "readiness_endpoints": ["/ready", "/v1/browser/connection-info"],
+                "operator_commands": ["gpt browser start-debug", "gpt browser attach"],
+                "requirements": [
+                    "a connected browser extension",
+                    "a signed-in ChatGPT tab",
+                ],
+            },
             "refusal_conditions": [
                 {
                     "code": "auth_required",
                     "behavior": "refuse",
-                    "when": "the managed browser session is signed out or has expired",
+                    "when": "the attached browser-backed ChatGPT tab is signed out, detached, or no longer authenticated",
                 },
                 {
                     "code": "capability_missing",
@@ -133,7 +193,7 @@ pub(crate) fn handle_provider_request(
                 {
                     "code": "upstream_timeout",
                     "behavior": "refuse",
-                    "when": "the managed page stalls instead of producing a stable streamed response",
+                    "when": "the attached ChatGPT tab stalls instead of producing a stable streamed response",
                 }
             ],
             "request_annotations": {
@@ -142,10 +202,14 @@ pub(crate) fn handle_provider_request(
                 "allowed_values": ["primary", "subagent", "branch"],
                 "default": "primary",
                 "policy": {
-                    "primary": "execute",
-                    "branch": "serialize",
-                    "subagent": "reject",
-                }
+                    "primary": "execute_or_queue",
+                    "branch": "queue",
+                    "subagent": "queue",
+                },
+                "notes": [
+                    "valid API requests are accepted into the durable queue",
+                    "single-flight browser-backed execution keeps effective concurrency at 1",
+                ],
             },
             "presets": {
                 "openclaude": {
@@ -156,8 +220,8 @@ pub(crate) fn handle_provider_request(
                     ],
                     "streaming": true,
                     "max_parallel_requests": 1,
-                    "subagents": "disabled_by_default",
-                    "subagent_recommendation": "disable",
+                    "subagents": "queued",
+                    "subagent_recommendation": "queue",
                 },
                 "paperclip": {
                     "transport": "openai_compatible_http",
@@ -171,7 +235,7 @@ pub(crate) fn handle_provider_request(
                     "artifacts": true,
                     "files": true,
                     "usage_accounting": "unknown_or_estimated",
-                    "subagent_recommendation": "disable",
+                    "subagent_recommendation": "queue",
                     "budget_guidance": {
                         "rate_limit_hint": "keep provider concurrency at 1",
                         "retry_backoff_hint": "respect queue_timeout and retry_after_ms on 429 responses",
