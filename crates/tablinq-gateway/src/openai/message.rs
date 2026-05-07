@@ -1,6 +1,6 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 
-use super::request::{ChatCompletionsRequest, MessageContent};
+use super::request::{ChatCompletionsRequest, MessageContent, invalid_request_error};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlattenedMessages {
@@ -42,19 +42,37 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<FlattenedMes
                         "input_file" => {
                             if let Some(file_id) = part.file_id.as_ref() {
                                 if file_id.trim().is_empty() {
-                                    bail!("input_file file_id must not be empty");
+                                    return Err(invalid_request_error(
+                                        "invalid_file_reference",
+                                        "input_file file_id must not be empty",
+                                    )
+                                    .into());
                                 }
                                 file_ids.push(file_id.trim().to_owned());
                             } else if let Some(file_path) = part.file_path.as_ref() {
                                 if file_path.trim().is_empty() {
-                                    bail!("input_file file_path must not be empty");
+                                    return Err(invalid_request_error(
+                                        "invalid_file_reference",
+                                        "input_file file_path must not be empty",
+                                    )
+                                    .into());
                                 }
                                 file_paths.push(file_path.trim().to_owned());
                             } else {
-                                bail!("input_file parts must include file_id or file_path");
+                                return Err(invalid_request_error(
+                                    "invalid_file_reference",
+                                    "input_file parts must include file_id or file_path",
+                                )
+                                .into());
                             }
                         }
-                        other => bail!("message content part type {other} is not supported"),
+                        other => {
+                            return Err(invalid_request_error(
+                                "unsupported_content_part",
+                                format!("message content part type {other} is not supported"),
+                            )
+                            .into());
+                        }
                     }
                 }
             }
@@ -66,7 +84,11 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<FlattenedMes
     }
 
     if sections.is_empty() {
-        bail!("messages do not contain any supported text content");
+        return Err(invalid_request_error(
+            "invalid_message_content",
+            "messages do not contain any supported text content",
+        )
+        .into());
     }
 
     Ok(FlattenedMessages {
