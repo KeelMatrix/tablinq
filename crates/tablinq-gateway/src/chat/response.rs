@@ -46,7 +46,14 @@ pub(super) fn build_chat_completion_response(
                 },
                 "finish_reason": finish_reason,
             }],
-            "usage": Value::Null,
+            "usage": {
+                "prompt_tokens": Value::Null,
+                "completion_tokens": Value::Null,
+                "total_tokens": Value::Null,
+            },
+            "tablinq_usage": {
+                "status": "unknown",
+            },
             "warnings": ["usage is unavailable for the browser-backed provider"],
         }),
     )
@@ -116,6 +123,10 @@ mod tests {
             body["choices"][0]["message"]["content"].as_str(),
             Some(assistant_text.as_str())
         );
+        assert_eq!(body["usage"]["prompt_tokens"], Value::Null);
+        assert_eq!(body["usage"]["completion_tokens"], Value::Null);
+        assert_eq!(body["usage"]["total_tokens"], Value::Null);
+        assert_eq!(body["tablinq_usage"]["status"], "unknown");
         assert_no_cli_display_markers(&json_text);
     }
 

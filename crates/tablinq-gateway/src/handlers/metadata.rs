@@ -234,7 +234,7 @@ pub(crate) fn handle_provider_request(
                     "max_parallel_requests": 1,
                     "artifacts": true,
                     "files": true,
-                    "usage_accounting": "unknown_or_estimated",
+                    "usage_accounting": "unknown",
                     "subagent_recommendation": "queue",
                     "budget_guidance": {
                         "rate_limit_hint": "keep provider concurrency at 1",
