@@ -40,6 +40,8 @@ mod artifact_endpoints;
 
 mod browser_lifecycle;
 
+mod chat_request_validation;
+
 mod files_artifacts_flow;
 
 mod safe_core_endpoints;

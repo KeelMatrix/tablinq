@@ -2,9 +2,18 @@ use gptd::browser::execution_error_metadata;
 use gptd::core::error_code_for_message;
 use shared_protocol::ErrorCode;
 
+use crate::openai::OpenAiRequestError;
+
 pub(crate) fn map_openai_error_parts(
     err: &anyhow::Error,
 ) -> (u16, &'static str, &'static str, String) {
+    if let Some(client_error) = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<OpenAiRequestError>())
+    {
+        return client_error.parts();
+    }
+
     if let Some(metadata) = execution_error_metadata(err)
         && matches!(
             metadata.error_code,

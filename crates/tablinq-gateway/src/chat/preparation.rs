@@ -1,7 +1,10 @@
 use crate::http::RequestContext;
-use crate::openai::{self, ChatCompletionsRequest, RequestRole, resolve_model};
+use crate::openai::{
+    self, ChatCompletionsRequest, RequestRole, invalid_request_error, invalid_request_json_error,
+    resolve_model,
+};
 use crate::uploads::UploadStore;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gptd::CoreService;
 use gptd::core::{PreparedAskJob, PreparedResearchJob};
 
@@ -47,10 +50,15 @@ pub(crate) fn prepare_chat_completions_request(
     upload_store: &UploadStore,
     context: &RequestContext,
 ) -> Result<PreparedChatRequest> {
-    let request: ChatCompletionsRequest =
-        serde_json::from_slice(&context.request.body).context("decode chat completions request")?;
+    let request: ChatCompletionsRequest = serde_json::from_slice(&context.request.body)
+        .map_err(|err| invalid_request_json_error(format!("invalid JSON body: {err}")))?;
     openai::validate_chat_request(&request)?;
-    let model = resolve_model(&request.model).context("resolve provider model")?;
+    let model = resolve_model(&request.model).ok_or_else(|| {
+        invalid_request_error(
+            "unsupported_model",
+            format!("model {} is not supported", request.model),
+        )
+    })?;
     let request_role = request.request_role();
     let parent_request_id = request.tablinq_parent_request_id.clone();
     let flattened = openai::flatten_messages(&request)?;
