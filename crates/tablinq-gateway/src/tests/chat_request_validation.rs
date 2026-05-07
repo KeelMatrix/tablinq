@@ -90,6 +90,95 @@ fn common_ignored_openai_fields_do_not_fail_chat_requests() {
 }
 
 #[test]
+fn non_user_roles_return_invalid_request_errors() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    for (request_id, role) in [
+        ("req-role-system", "system"),
+        ("req-role-developer", "developer"),
+        ("req-role-assistant", "assistant"),
+        ("req-role-tool", "tool"),
+        ("req-role-custom", "custom_role"),
+    ] {
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", request_id),
+            ],
+            &serde_json::to_vec(&json!({
+                "model": "tablinq-instant",
+                "messages": [{ "role": role, "content": "hello" }]
+            }))
+            .unwrap(),
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(
+            response.status_code,
+            400,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["request_id"], request_id);
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "unsupported_role");
+    }
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn message_tool_calls_return_invalid_request_errors() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+            ("x-request-id", "req-tool-calls"),
+        ],
+        &serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [{
+                "role": "user",
+                "content": "hello",
+                "tool_calls": [{ "id": "call-1", "type": "function" }]
+            }]
+        }))
+        .unwrap(),
+        5_000,
+    )
+    .unwrap();
+    assert_eq!(response.status_code, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["request_id"], "req-tool-calls");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "unsupported_tool_calls");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
 fn unsupported_tools_response_format_and_n_return_400() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();

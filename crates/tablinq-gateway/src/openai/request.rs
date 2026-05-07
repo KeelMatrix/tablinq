@@ -111,8 +111,15 @@ pub enum RequestRole {
 #[serde(deny_unknown_fields)]
 pub struct ChatMessage {
     #[serde(rename = "role")]
-    pub _role: String,
-    pub content: MessageContent,
+    pub role: String,
+    #[serde(default)]
+    pub content: Option<MessageContent>,
+    #[serde(rename = "tool_calls", default)]
+    pub tool_calls: Option<Value>,
+    #[serde(rename = "tool_call_id", default)]
+    pub tool_call_id: Option<String>,
+    #[serde(rename = "name", default)]
+    pub _name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -240,6 +247,37 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
         )
         .into());
     }
+    for message in &request.messages {
+        if message.tool_calls.is_some()
+            || message
+                .tool_call_id
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(invalid_request_error(
+                "unsupported_tool_calls",
+                "message tool_calls and tool_call_id fields are not supported by the browser-backed provider",
+            )
+            .into());
+        }
+        if message.role.trim() != "user" {
+            return Err(invalid_request_error(
+                "unsupported_role",
+                format!(
+                    "message role {} is not supported; only user messages are accepted for browser-backed submission",
+                    message.role
+                ),
+            )
+            .into());
+        }
+        if message.content.is_none() {
+            return Err(invalid_request_error(
+                "invalid_message_content",
+                "user messages must include text content",
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -321,5 +359,35 @@ mod tests {
 
         let err = validate_chat_request(&request).expect_err("n>1 should fail");
         assert!(err.to_string().contains("n>1"));
+    }
+
+    #[test]
+    fn non_user_message_roles_are_rejected() {
+        for role in ["system", "developer", "assistant", "tool", "custom_role"] {
+            let request: ChatCompletionsRequest = serde_json::from_value(json!({
+                "model": "tablinq-instant",
+                "messages": [{ "role": role, "content": "hello" }]
+            }))
+            .expect("request decodes");
+
+            let err = validate_chat_request(&request).expect_err("non-user role should fail");
+            assert!(err.to_string().contains("only user messages"));
+        }
+    }
+
+    #[test]
+    fn message_tool_calls_are_rejected() {
+        let request: ChatCompletionsRequest = serde_json::from_value(json!({
+            "model": "tablinq-instant",
+            "messages": [{
+                "role": "user",
+                "content": "hello",
+                "tool_calls": [{ "id": "call-1" }]
+            }]
+        }))
+        .expect("request decodes");
+
+        let err = validate_chat_request(&request).expect_err("tool calls should fail");
+        assert!(err.to_string().contains("tool_calls"));
     }
 }
