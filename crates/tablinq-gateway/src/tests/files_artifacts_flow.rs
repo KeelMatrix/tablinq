@@ -311,7 +311,10 @@ fn artifact_detail_and_content_missing_targets_return_nested_not_found_errors() 
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
-    for path in ["/v1/artifacts/artifact-missing", "/v1/artifacts/artifact-missing/content"] {
+    for path in [
+        "/v1/artifacts/artifact-missing",
+        "/v1/artifacts/artifact-missing/content",
+    ] {
         let response = http_request(
             &snapshot.host,
             snapshot.port,

@@ -18,7 +18,10 @@ fn assert_no_provider_role_artifacts(body: &Value) {
         "assistant",
         "tool",
     ] {
-        assert!(!body_text.contains(marker), "unexpected marker {marker} in {body_text}");
+        assert!(
+            !body_text.contains(marker),
+            "unexpected marker {marker} in {body_text}"
+        );
     }
 }
 
@@ -125,10 +128,7 @@ fn provider_endpoint_exposes_paperclip_preset_metadata() {
         "openai_compatible_http"
     );
     assert_eq!(body["openai_compatibility"]["mode"], "subset");
-    assert_eq!(
-        body["request_queueing"]["parallel_work"],
-        "queue"
-    );
+    assert_eq!(body["request_queueing"]["parallel_work"], "queue");
     assert_eq!(
         body["provider_capabilities"]["subagent_recommendation"]["policy"],
         "queue"
@@ -188,10 +188,7 @@ fn documented_provider_contract_surfaces_are_present() {
         provider_body["openai_compatibility"]["chat_completions"]["input_handling"][1],
         "browser submission preserves message text exactly and does not add transcript wrappers"
     );
-    assert_eq!(
-        provider_body["request_queueing"]["dependent_work"],
-        "queue"
-    );
+    assert_eq!(provider_body["request_queueing"]["dependent_work"], "queue");
     assert_eq!(
         provider_body["presets"]["openclaude"]["max_parallel_requests"],
         1
