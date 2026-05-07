@@ -4,7 +4,6 @@ use crate::chat::{
 };
 use crate::errors::{
     capture_gateway_failure_artifacts, map_openai_error, maybe_capture_request_evidence,
-    request_role_policy_response,
 };
 use crate::handlers::requests::{
     cancellation_response, client_id_for_request, queue_error_response,
@@ -38,11 +37,6 @@ pub(crate) fn handle_chat_completions_request(
             return write_http_response(stream, &context.request_id, response);
         }
     };
-    if let Some(response) = request_role_policy_response(&context.request_id, prepared.request_role)
-    {
-        log_response(logger, &context.request_id, response.status_code)?;
-        return write_http_response(stream, &context.request_id, response);
-    }
     let _ = upload_store.mark_linked_usage(
         &prepared.file_ids,
         &context.request_id,
@@ -62,6 +56,9 @@ pub(crate) fn handle_chat_completions_request(
             }
             let response = queue_error_response(
                 &context.request_id,
+                prepared.job_id(),
+                Some(crate::openai::request_role_name(prepared.request_role)),
+                prepared.parent_request_id.as_deref(),
                 &scheduler.snapshot().unwrap_or(scheduler_status),
                 &err,
             );

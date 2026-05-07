@@ -1,31 +1,3 @@
-use crate::http::HttpResponse;
-use crate::json::json_response;
-use crate::openai::{RequestRole, openai_error};
-use serde_json::{Value, json};
-
-pub(crate) fn request_role_policy_response(
-    request_id: &str,
-    role: RequestRole,
-) -> Option<HttpResponse> {
-    match role {
-        RequestRole::Primary | RequestRole::Branch => None,
-        RequestRole::Subagent => {
-            let mut body = openai_error(
-                429,
-                "overloaded_error",
-                "subagents_disabled",
-                &format!(
-                    "{request_id}: subagent requests are disabled by default for the single-browser OpenClaude preset"
-                ),
-            );
-            body["request_id"] = Value::String(request_id.to_owned());
-            body["tablinq_refusal_reason"] = Value::String("subagents_disabled".to_owned());
-            body["tablinq_guidance"] = json!(provider_guidance_for_code("subagents_disabled"));
-            Some(json_response(429, body))
-        }
-    }
-}
-
 pub(crate) fn provider_guidance_for_code(code: &str) -> Vec<&'static str> {
     match code {
         "auth_required" => vec![
