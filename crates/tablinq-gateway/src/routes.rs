@@ -129,18 +129,40 @@ pub(crate) fn match_route(method: &str, path: &str) -> Route {
 
 pub(crate) fn method_not_allowed_for_path(path: &str) -> Option<&'static str> {
     match normalized_request_path(path) {
+        V1_MODELS_PATH => Some("GET"),
+        V1_CAPABILITIES_PATH => Some("GET"),
+        V1_PROVIDER_PATH => Some("GET"),
         V1_STATUS_PATH => Some("GET"),
         V1_DOCTOR_PATH => Some("GET"),
         V1_CONFIG_PATH => Some("GET"),
         V1_JOBS_PATH => Some("GET"),
+        V1_SESSIONS_PATH => Some("GET"),
+        V1_REQUESTS_PATH => Some("GET"),
+        V1_CONVERSATIONS_PATH => Some("GET"),
+        V1_USAGE_PATH => Some("GET"),
+        V1_CHAT_COMPLETIONS_PATH => Some("POST"),
+        V1_FILES_PATH => Some("GET, POST"),
+        V1_ARTIFACTS_PATH => Some("GET"),
+        V1_CONVERSATIONS_SELECT_PATH => Some("POST"),
         V1_BROWSER_ATTACH_PATH => Some("POST"),
         V1_BROWSER_DETACH_PATH => Some("POST"),
         V1_BROWSER_PROFILE_INFO_PATH => Some("GET"),
         V1_BROWSER_CONNECTION_INFO_PATH => Some("GET"),
         _ => {
-            if cancel_job_id_from_path(path).is_some() {
+            if cancel_job_id_from_path(path).is_some()
+                || cancel_request_id_from_path(path).is_some()
+            {
                 Some("POST")
-            } else if job_id_from_path(path).is_some() {
+            } else if job_id_from_path(path).is_some()
+                || request_id_from_path(path).is_some()
+                || request_evidence_request_id_from_path(path).is_some()
+                || session_conversations_id_from_path(path).is_some()
+                || conversation_messages_id_from_path(path).is_some()
+                || conversation_snapshot_id_from_path(path).is_some()
+                || conversation_id_from_path(path).is_some()
+                || file_id_from_path(path).is_some()
+                || artifact_id_from_path(path).is_some()
+            {
                 Some("GET")
             } else {
                 None
@@ -415,6 +437,27 @@ mod tests {
             Route::BrowserAttach
         );
         assert_eq!(match_route("DELETE", "/v1/files/file-1"), Route::NotFound);
+    }
+
+    #[test]
+    fn method_not_allowed_catalog_covers_known_gateway_paths() {
+        assert_eq!(method_not_allowed_for_path(V1_MODELS_PATH), Some("GET"));
+        assert_eq!(
+            method_not_allowed_for_path(V1_CHAT_COMPLETIONS_PATH),
+            Some("POST")
+        );
+        assert_eq!(
+            method_not_allowed_for_path(V1_FILES_PATH),
+            Some("GET, POST")
+        );
+        assert_eq!(
+            method_not_allowed_for_path("/v1/requests/req-1/cancel"),
+            Some("POST")
+        );
+        assert_eq!(
+            method_not_allowed_for_path("/v1/conversations/conv-1/messages"),
+            Some("GET")
+        );
     }
 
     #[test]

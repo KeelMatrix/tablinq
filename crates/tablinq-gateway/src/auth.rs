@@ -1,5 +1,5 @@
 use crate::http::{HttpRequest, HttpResponse};
-use crate::json::json_response;
+use crate::json::{api_error_response, json_response};
 use crate::openai::openai_error;
 use gptd::AppConfig;
 use serde_json::json;
@@ -9,45 +9,47 @@ pub(crate) fn authorize_request(
     config: &AppConfig,
     request: &HttpRequest,
     peer_addr: Option<SocketAddr>,
+    request_id: &str,
     openai_shape: bool,
 ) -> std::result::Result<(), HttpResponse> {
     if !peer_addr.is_some_and(|addr| addr.ip().is_loopback()) {
         return Err(json_response(
             403,
             json!({
+                "request_id": request_id,
                 "error": "forbidden",
             }),
         ));
     }
 
     let Some(expected_api_key) = config.gateway_api_key() else {
-        return Err(unauthorized_response(openai_shape));
+        return Err(unauthorized_response(request_id, openai_shape));
     };
     let provided = request.headers.get("authorization").map(String::as_str);
     if bearer_token_matches(provided, expected_api_key) {
         Ok(())
     } else {
-        Err(unauthorized_response(openai_shape))
+        Err(unauthorized_response(request_id, openai_shape))
     }
 }
 
-fn unauthorized_response(openai_shape: bool) -> HttpResponse {
+fn unauthorized_response(request_id: &str, openai_shape: bool) -> HttpResponse {
     if openai_shape {
-        json_response(
+        let mut body = openai_error(
             401,
-            openai_error(
-                401,
-                "invalid_request_error",
-                "invalid_api_key",
-                "missing or invalid gateway bearer token",
-            ),
-        )
+            "invalid_request_error",
+            "invalid_api_key",
+            "missing or invalid gateway bearer token",
+        );
+        body["request_id"] = json!(request_id);
+        json_response(401, body)
     } else {
-        json_response(
+        api_error_response(
             401,
-            json!({
-                "error": "unauthorized",
-            }),
+            request_id,
+            "authentication_error",
+            "invalid_api_key",
+            "missing or invalid gateway bearer token",
         )
     }
 }
@@ -102,12 +104,14 @@ mod tests {
             &config,
             &request_with_auth(Some("Bearer wrong")),
             Some(loopback_peer()),
+            "req-auth-openai",
             true,
         )
         .expect_err("invalid token");
         assert_eq!(response.status_code, 401);
         let body: serde_json::Value =
             serde_json::from_slice(&response.body).expect("decode auth response");
+        assert_eq!(body["request_id"], "req-auth-openai");
         assert_eq!(body["error"]["code"], "invalid_api_key");
     }
 
@@ -126,6 +130,7 @@ mod tests {
             &config,
             &request_with_auth(Some("Bearer secret")),
             Some(loopback_peer()),
+            "req-missing-api-key",
             false,
         )
         .expect_err("missing configured api key should fail closed");
@@ -139,6 +144,7 @@ mod tests {
             &config,
             &request_with_auth(None),
             Some(loopback_peer()),
+            "req-missing-auth",
             false,
         )
         .expect_err("missing authorization");
@@ -152,6 +158,7 @@ mod tests {
             &config,
             &request_with_auth(Some("Bearer wrong")),
             Some(loopback_peer()),
+            "req-wrong-auth",
             false,
         )
         .expect_err("wrong authorization");
@@ -165,6 +172,7 @@ mod tests {
             &config,
             &request_with_auth(Some("Bearer secret")),
             Some(loopback_peer()),
+            "req-correct-auth",
             false,
         )
         .expect("loopback request with matching bearer token");
@@ -177,10 +185,13 @@ mod tests {
             &config,
             &request_with_auth(Some("Bearer secret")),
             Some(SocketAddr::from((Ipv4Addr::new(192, 168, 1, 25), 9000))),
+            "req-forbidden",
             false,
         )
         .expect_err("non-loopback peer");
         assert_eq!(response.status_code, 403);
+        let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["request_id"], "req-forbidden");
     }
 
     fn config_with_gateway_api_key(api_key: &str) -> AppConfig {

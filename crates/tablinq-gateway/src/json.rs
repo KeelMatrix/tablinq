@@ -13,6 +13,26 @@ pub(crate) fn json_response(status_code: u16, body: Value) -> HttpResponse {
     http_json_response(status_code, body)
 }
 
+pub(crate) fn api_error_response(
+    status_code: u16,
+    request_id: &str,
+    error_type: &str,
+    code: &str,
+    message: impl Into<String>,
+) -> HttpResponse {
+    json_response(
+        status_code,
+        json!({
+            "request_id": request_id,
+            "error": {
+                "message": message.into(),
+                "type": error_type,
+                "code": code,
+            },
+        }),
+    )
+}
+
 pub(crate) fn reason_phrase_for_status(status_code: u16) -> &'static str {
     crate::http::reason_phrase_for_status(status_code)
 }

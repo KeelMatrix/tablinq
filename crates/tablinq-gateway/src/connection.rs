@@ -7,8 +7,9 @@ use crate::http::{
     json_response, log_request, log_response, next_request_id, parse_http_request,
     write_http_response,
 };
+use crate::json::api_error_response;
 use crate::process_control::GatewayStatusSnapshot;
-use crate::routes::{Route, match_route, method_not_allowed_for_path};
+use crate::routes::{Route, match_route, method_not_allowed_for_path, normalized_request_path};
 use crate::scheduler::GatewayScheduler;
 use crate::uploads::UploadStore;
 use anyhow::{Context, Result};
@@ -50,19 +51,20 @@ pub(crate) fn handle_connection(
         Err(err) => {
             let request_id = next_request_id(request_counter);
             let response = if err.status_code == 413 {
-                json_response(
+                api_error_response(
                     413,
-                    json!({
-                        "request_id": request_id,
-                        "error": err.client_error,
-                    }),
+                    &request_id,
+                    "invalid_request_error",
+                    err.code,
+                    format!("{err:#}"),
                 )
             } else {
-                json_response(
+                api_error_response(
                     400,
-                    json!({
-                        "error": "bad_request",
-                    }),
+                    &request_id,
+                    "invalid_request_error",
+                    err.code,
+                    format!("{err:#}"),
                 )
             };
             logger.warn(
@@ -83,7 +85,8 @@ pub(crate) fn handle_connection(
         config,
         &context.request,
         peer_addr,
-        route_requires_openai_auth_error_shape(route),
+        &context.request_id,
+        route_requires_openai_auth_error_shape(&context.request.path),
     ) {
         log_response(logger, &context.request_id, response.status_code)?;
         return write_http_response(&mut stream, &context.request_id, response);
@@ -202,25 +205,54 @@ pub(crate) fn handle_connection(
         }
         Route::NotFound => {
             if let Some(allowed_method) = method_not_allowed_for_path(&context.request.path) {
-                let mut response = json_response(
-                    405,
-                    json!({
-                        "request_id": context.request_id,
-                        "error": "method_not_allowed",
-                    }),
-                );
+                let mut response =
+                    if normalized_request_path(&context.request.path).starts_with("/v1/") {
+                        api_error_response(
+                            405,
+                            &context.request_id,
+                            "invalid_request_error",
+                            "method_not_allowed",
+                            format!(
+                                "{} is not allowed for {}; use {}",
+                                context.request.method,
+                                normalized_request_path(&context.request.path),
+                                allowed_method
+                            ),
+                        )
+                    } else {
+                        json_response(
+                            405,
+                            json!({
+                                "request_id": context.request_id,
+                                "error": "method_not_allowed",
+                            }),
+                        )
+                    };
                 response
                     .headers
                     .push(("allow".to_owned(), allowed_method.to_owned()));
                 response
             } else {
-                json_response(
-                    404,
-                    json!({
-                        "request_id": context.request_id,
-                        "error": "not_found",
-                    }),
-                )
+                if normalized_request_path(&context.request.path).starts_with("/v1/") {
+                    api_error_response(
+                        404,
+                        &context.request_id,
+                        "invalid_request_error",
+                        "not_found",
+                        format!(
+                            "{} was not found",
+                            normalized_request_path(&context.request.path)
+                        ),
+                    )
+                } else {
+                    json_response(
+                        404,
+                        json!({
+                            "request_id": context.request_id,
+                            "error": "not_found",
+                        }),
+                    )
+                }
             }
         }
     };
@@ -229,9 +261,6 @@ pub(crate) fn handle_connection(
     write_http_response(&mut stream, &context.request_id, response)
 }
 
-fn route_requires_openai_auth_error_shape(route: Route) -> bool {
-    matches!(
-        route,
-        Route::Models | Route::Capabilities | Route::ChatCompletions
-    )
+fn route_requires_openai_auth_error_shape(path: &str) -> bool {
+    normalized_request_path(path).starts_with("/v1/")
 }

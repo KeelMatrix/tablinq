@@ -49,7 +49,7 @@ pub(crate) struct SimpleHttpResponse {
 #[derive(Debug)]
 pub(crate) struct HttpParseError {
     pub(crate) status_code: u16,
-    pub(crate) client_error: &'static str,
+    pub(crate) code: &'static str,
     message: String,
 }
 
@@ -108,6 +108,7 @@ pub(crate) fn reason_phrase_for_status(status_code: u16) -> &'static str {
         201 => "Created",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         405 => "Method Not Allowed",
         404 => "Not Found",
         409 => "Conflict",
@@ -183,14 +184,14 @@ pub(crate) fn parse_http_request(
     if method == "POST" && request_path == V1_FILES_PATH {
         if content_length > crate::uploads::MAX_STAGED_UPLOAD_BYTES {
             return Err(payload_too_large(
+                "payload_too_large",
                 "file exceeds 20 MiB limit",
-                "upload exceeds 20 MiB limit",
             ));
         }
     } else if content_length > MAX_NON_UPLOAD_REQUEST_BODY_BYTES {
         return Err(payload_too_large(
+            "payload_too_large",
             "request body exceeds gateway limit",
-            "non-upload body exceeds gateway limit",
         ));
     }
     let mut body = vec![0u8; content_length];
@@ -248,18 +249,15 @@ pub(crate) fn read_limited_http_line<R: Read>(
 pub(crate) fn bad_http_request(message: impl Into<String>) -> HttpParseError {
     HttpParseError {
         status_code: 400,
-        client_error: "bad_request",
+        code: "bad_request",
         message: message.into(),
     }
 }
 
-pub(crate) fn payload_too_large(
-    client_error: &'static str,
-    message: impl Into<String>,
-) -> HttpParseError {
+pub(crate) fn payload_too_large(code: &'static str, message: impl Into<String>) -> HttpParseError {
     HttpParseError {
         status_code: 413,
-        client_error,
+        code,
         message: message.into(),
     }
 }
@@ -482,4 +480,14 @@ pub(crate) fn http_request_with_declared_content_length(
         headers: response_headers,
         body: response_body,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forbidden_status_uses_standard_reason_phrase() {
+        assert_eq!(reason_phrase_for_status(403), "Forbidden");
+    }
 }
