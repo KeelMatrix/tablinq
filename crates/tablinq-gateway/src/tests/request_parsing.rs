@@ -1,4 +1,9 @@
 use super::*;
+use crate::routes::{
+    V1_BROWSER_ATTACH_PATH, V1_BROWSER_CONNECTION_INFO_PATH, V1_BROWSER_DETACH_PATH,
+    V1_BROWSER_PROFILE_INFO_PATH, V1_CONFIG_PATH, V1_DOCTOR_PATH, V1_JOBS_PATH, V1_REQUESTS_PATH,
+    V1_STATUS_PATH,
+};
 use crate::uploads::MAX_STAGED_UPLOAD_BYTES;
 
 #[test]
@@ -120,7 +125,8 @@ fn bearer_token_auth_accepts_valid_token_and_rejects_invalid_token() {
     .unwrap();
     assert_eq!(invalid.status_code, 401);
     let json: Value = serde_json::from_slice(&invalid.body).unwrap();
-    assert_eq!(json["error"], "unauthorized");
+    assert!(json["request_id"].as_str().is_some());
+    assert_eq!(json["error"]["code"], "invalid_api_key");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -144,7 +150,112 @@ fn declared_upload_over_limit_preserves_twenty_mib_cap_response() {
     assert_eq!(response.status_code, 413);
     assert_eq!(response.reason_phrase, "Payload Too Large");
     let json: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(json["error"], "file exceeds 20 MiB limit");
+    assert!(json["request_id"].as_str().is_some());
+    assert_eq!(json["error"]["code"], "payload_too_large");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn parse_and_payload_failures_include_request_ids() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let chunked = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+            ("transfer-encoding", "chunked"),
+        ],
+        &[],
+        5_000,
+    )
+    .unwrap();
+    assert_eq!(chunked.status_code, 400);
+    let chunked_json: Value = serde_json::from_slice(&chunked.body).unwrap();
+    assert!(chunked_json["request_id"].as_str().is_some());
+    assert_eq!(chunked_json["error"]["code"], "bad_request");
+
+    let oversized = super::super::http_request_with_declared_content_length(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        MAX_NON_UPLOAD_REQUEST_BODY_BYTES + 1,
+        5_000,
+    )
+    .unwrap();
+    assert_eq!(oversized.status_code, 413);
+    let oversized_json: Value = serde_json::from_slice(&oversized.body).unwrap();
+    assert!(oversized_json["request_id"].as_str().is_some());
+    assert_eq!(oversized_json["error"]["code"], "payload_too_large");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn known_v1_paths_return_405_with_allow_headers_and_request_ids() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    for (method, path, allow) in [
+        ("POST", V1_MODELS_PATH, "GET"),
+        ("POST", V1_CAPABILITIES_PATH, "GET"),
+        ("POST", V1_PROVIDER_PATH, "GET"),
+        ("GET", V1_CHAT_COMPLETIONS_PATH, "POST"),
+        ("PUT", V1_FILES_PATH, "GET, POST"),
+        ("POST", V1_ARTIFACTS_PATH, "GET"),
+        ("POST", V1_STATUS_PATH, "GET"),
+        ("POST", V1_DOCTOR_PATH, "GET"),
+        ("POST", V1_CONFIG_PATH, "GET"),
+        ("POST", V1_JOBS_PATH, "GET"),
+        ("POST", V1_REQUESTS_PATH, "GET"),
+        ("POST", V1_CONVERSATIONS_PATH, "GET"),
+        ("GET", V1_BROWSER_ATTACH_PATH, "POST"),
+        ("GET", V1_BROWSER_DETACH_PATH, "POST"),
+        ("POST", V1_BROWSER_PROFILE_INFO_PATH, "GET"),
+        ("POST", V1_BROWSER_CONNECTION_INFO_PATH, "GET"),
+    ] {
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            method,
+            path,
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 405, "{method} {path}");
+        assert_eq!(response.reason_phrase, "Method Not Allowed");
+        assert_eq!(
+            response.headers.get("allow").map(String::as_str),
+            Some(allow),
+            "{method} {path}"
+        );
+        let json: Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(json["request_id"].as_str().is_some(), "{method} {path}");
+        assert_eq!(
+            json["error"]["code"], "method_not_allowed",
+            "{method} {path}"
+        );
+    }
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
