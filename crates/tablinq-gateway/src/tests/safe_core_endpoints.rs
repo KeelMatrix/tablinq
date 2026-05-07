@@ -252,7 +252,8 @@ fn v1_safe_core_endpoints_return_consistent_method_errors() {
     )
     .unwrap();
     let status_body = assert_json_status(&status_wrong_method, 405);
-    assert_eq!(status_body["error"], "method_not_allowed");
+    assert!(status_body["request_id"].as_str().is_some());
+    assert_eq!(status_body["error"]["code"], "method_not_allowed");
 
     let cancel_wrong_method = http_request(
         &snapshot.host,
@@ -265,5 +266,6 @@ fn v1_safe_core_endpoints_return_consistent_method_errors() {
     )
     .unwrap();
     let cancel_body = assert_json_status(&cancel_wrong_method, 405);
-    assert_eq!(cancel_body["error"], "method_not_allowed");
+    assert!(cancel_body["request_id"].as_str().is_some());
+    assert_eq!(cancel_body["error"]["code"], "method_not_allowed");
 }
