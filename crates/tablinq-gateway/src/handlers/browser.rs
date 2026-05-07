@@ -1,6 +1,6 @@
 use crate::browser::recommended_cli_browser_setup;
 use crate::http::HttpResponse;
-use crate::json::json_response;
+use crate::json::{api_error_response, json_response};
 use anyhow::Result;
 use gptd::{AppConfig, CoreService};
 use serde::Deserialize;
@@ -37,13 +37,12 @@ pub(crate) fn handle_browser_attach_request(
         let request = match serde_json::from_slice::<BrowserAttachRequest>(body) {
             Ok(request) => request,
             Err(err) => {
-                return Ok(json_response(
+                return Ok(api_error_response(
                     400,
-                    json!({
-                        "request_id": request_id,
-                        "error": "invalid_request_json",
-                        "message": format!("{err:#}"),
-                    }),
+                    request_id,
+                    "invalid_request_error",
+                    "invalid_request_json",
+                    format!("{err:#}"),
                 ));
             }
         };
@@ -66,13 +65,12 @@ pub(crate) fn handle_browser_detach_request(
         match serde_json::from_slice::<BrowserDetachRequest>(body) {
             Ok(_) => {}
             Err(err) => {
-                return Ok(json_response(
+                return Ok(api_error_response(
                     400,
-                    json!({
-                        "request_id": request_id,
-                        "error": "invalid_request_json",
-                        "message": format!("{err:#}"),
-                    }),
+                    request_id,
+                    "invalid_request_error",
+                    "invalid_request_json",
+                    format!("{err:#}"),
                 ));
             }
         }

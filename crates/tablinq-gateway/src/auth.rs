@@ -1,8 +1,6 @@
 use crate::http::{HttpRequest, HttpResponse};
-use crate::json::{api_error_response, json_response};
-use crate::openai::openai_error;
+use crate::json::api_error_response;
 use gptd::AppConfig;
-use serde_json::json;
 use std::net::SocketAddr;
 
 pub(crate) fn authorize_request(
@@ -10,48 +8,37 @@ pub(crate) fn authorize_request(
     request: &HttpRequest,
     peer_addr: Option<SocketAddr>,
     request_id: &str,
-    openai_shape: bool,
+    _openai_shape: bool,
 ) -> std::result::Result<(), HttpResponse> {
     if !peer_addr.is_some_and(|addr| addr.ip().is_loopback()) {
-        return Err(json_response(
+        return Err(api_error_response(
             403,
-            json!({
-                "request_id": request_id,
-                "error": "forbidden",
-            }),
+            request_id,
+            "permission_error",
+            "forbidden",
+            "gateway API accepts loopback requests only",
         ));
     }
 
     let Some(expected_api_key) = config.gateway_api_key() else {
-        return Err(unauthorized_response(request_id, openai_shape));
+        return Err(unauthorized_response(request_id));
     };
     let provided = request.headers.get("authorization").map(String::as_str);
     if bearer_token_matches(provided, expected_api_key) {
         Ok(())
     } else {
-        Err(unauthorized_response(request_id, openai_shape))
+        Err(unauthorized_response(request_id))
     }
 }
 
-fn unauthorized_response(request_id: &str, openai_shape: bool) -> HttpResponse {
-    if openai_shape {
-        let mut body = openai_error(
-            401,
-            "invalid_request_error",
-            "invalid_api_key",
-            "missing or invalid gateway bearer token",
-        );
-        body["request_id"] = json!(request_id);
-        json_response(401, body)
-    } else {
-        api_error_response(
-            401,
-            request_id,
-            "authentication_error",
-            "invalid_api_key",
-            "missing or invalid gateway bearer token",
-        )
-    }
+fn unauthorized_response(request_id: &str) -> HttpResponse {
+    api_error_response(
+        401,
+        request_id,
+        "authentication_error",
+        "invalid_api_key",
+        "missing or invalid gateway bearer token",
+    )
 }
 
 pub(crate) fn bearer_token_matches(provided: Option<&str>, expected_api_key: &str) -> bool {

@@ -237,7 +237,7 @@ pub(crate) fn handle_connection(
                     api_error_response(
                         404,
                         &context.request_id,
-                        "invalid_request_error",
+                        "not_found_error",
                         "not_found",
                         format!(
                             "{} was not found",

@@ -27,6 +27,7 @@ pub(crate) fn api_error_response(
             "error": {
                 "message": message.into(),
                 "type": error_type,
+                "param": Value::Null,
                 "code": code,
             },
         }),
@@ -132,13 +133,12 @@ pub(crate) fn conversation_not_found_response(
     request_id: &str,
     conversation_id: &str,
 ) -> HttpResponse {
-    json_response(
+    api_error_response(
         404,
-        json!({
-            "request_id": request_id,
-            "error": "conversation_not_found",
-            "message": format!("conversation {conversation_id} was not found"),
-        }),
+        request_id,
+        "not_found_error",
+        "conversation_not_found",
+        format!("conversation {conversation_id} was not found"),
     )
 }
 

@@ -5,6 +5,7 @@ pub fn openai_error(status: u16, error_type: &str, code: &str, message: &str) ->
         "error": {
             "message": message,
             "type": error_type,
+            "param": Value::Null,
             "code": code,
         },
         "status": status,
