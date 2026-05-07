@@ -237,7 +237,10 @@ fn representative_v1_errors_use_nested_error_objects() {
             V1_FILES_PATH,
             vec![
                 ("authorization".to_owned(), auth.clone()),
-                ("content-type".to_owned(), "application/octet-stream".to_owned()),
+                (
+                    "content-type".to_owned(),
+                    "application/octet-stream".to_owned(),
+                ),
             ],
             b"missing header".to_vec(),
         ),
