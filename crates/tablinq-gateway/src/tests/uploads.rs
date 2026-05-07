@@ -184,7 +184,9 @@ fn files_upload_endpoint_rejects_files_larger_than_twenty_mib() {
     );
     assert_eq!(response.status_code, 413);
     let json: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(json["error"], "file exceeds 20 MiB limit");
+    assert!(json["request_id"].as_str().is_some());
+    assert_eq!(json["error"]["code"], "payload_too_large");
+    assert_eq!(json["error"]["message"], "file exceeds 20 MiB limit");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

@@ -587,7 +587,7 @@ fn queued_subagent_requests_surface_queue_timeout_metadata_instead_of_policy_ref
     );
     let queued_body = expect_retry_error(&queued, 429, "queue_timeout");
     assert_eq!(queued_body["request_id"], "req-subagent-timeout");
-    assert_eq!(queued_body["job_id"].as_str().is_some(), true);
+    assert!(queued_body["job_id"].as_str().is_some());
     assert_eq!(queued_body["retry_after_ms"], 250);
     assert_ne!(queued_body["error"]["code"], "subagents_disabled");
     assert!(

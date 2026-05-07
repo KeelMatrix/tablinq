@@ -30,7 +30,12 @@ fn non_upload_body_over_limit_returns_413_before_body_read() {
     assert_eq!(response.status_code, 413);
     assert_eq!(response.reason_phrase, "Payload Too Large");
     let json: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(json["error"], "request body exceeds gateway limit");
+    assert!(json["request_id"].as_str().is_some());
+    assert_eq!(json["error"]["code"], "payload_too_large");
+    assert_eq!(
+        json["error"]["message"],
+        "request body exceeds gateway limit"
+    );
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -60,7 +65,9 @@ fn chunked_transfer_encoding_is_rejected_before_body_parsing() {
     .unwrap();
     assert_eq!(response.status_code, 400);
     let json: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(json["error"], "bad_request");
+    assert!(json["request_id"].as_str().is_some());
+    assert_eq!(json["error"]["code"], "bad_request");
+    assert_eq!(json["error"]["message"], "unsupported Transfer-Encoding");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -78,7 +85,11 @@ fn oversized_request_line_and_header_are_rejected_deterministically() {
     let response = raw_http_request(&snapshot, long_request_line.as_bytes());
     assert_eq!(response.status_code, 400);
     let json: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(json["error"], "bad_request");
+    assert_eq!(json["error"]["code"], "bad_request");
+    assert_eq!(
+        json["error"]["message"],
+        "request line exceeds gateway limit"
+    );
 
     let long_header = format!(
         "GET /health HTTP/1.1\r\nX-Long: {}\r\n\r\n",
@@ -87,7 +98,11 @@ fn oversized_request_line_and_header_are_rejected_deterministically() {
     let response = raw_http_request(&snapshot, long_header.as_bytes());
     assert_eq!(response.status_code, 400);
     let json: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(json["error"], "bad_request");
+    assert_eq!(json["error"]["code"], "bad_request");
+    assert_eq!(
+        json["error"]["message"],
+        "HTTP header line exceeds gateway limit"
+    );
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

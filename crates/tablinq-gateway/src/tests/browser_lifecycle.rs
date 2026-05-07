@@ -258,7 +258,8 @@ fn browser_lifecycle_routes_reject_wrong_methods_and_missing_authorization() {
     )
     .unwrap();
     let wrong_method_body = assert_json_status(&wrong_method, 405);
-    assert_eq!(wrong_method_body["error"], "method_not_allowed");
+    assert!(wrong_method_body["request_id"].as_str().is_some());
+    assert_eq!(wrong_method_body["error"]["code"], "method_not_allowed");
 
     let missing_auth = http_request(
         &snapshot.host,
