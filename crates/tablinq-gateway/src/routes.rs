@@ -1,6 +1,5 @@
 use crate::http::HttpResponse;
-use crate::json::json_response;
-use serde_json::json;
+use crate::json::api_error_response;
 use shared_protocol::JobStatus;
 
 pub(crate) const HEALTH_PATH: &str = "/health";
@@ -197,48 +196,44 @@ pub(crate) fn parse_request_list_query(
         match key {
             "limit" => {
                 let parsed = value.parse::<usize>().map_err(|_| {
-                    json_response(
+                    api_error_response(
                         400,
-                        json!({
-                            "request_id": request_id,
-                            "error": "invalid_request",
-                            "message": "limit must be a positive integer",
-                        }),
+                        request_id,
+                        "invalid_request_error",
+                        "invalid_request",
+                        "limit must be a positive integer",
                     )
                 })?;
                 if parsed == 0 || parsed > REQUEST_LIST_MAX_LIMIT {
-                    return Err(json_response(
+                    return Err(api_error_response(
                         400,
-                        json!({
-                            "request_id": request_id,
-                            "error": "invalid_request",
-                            "message": format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
-                        }),
+                        request_id,
+                        "invalid_request_error",
+                        "invalid_request",
+                        format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
                     ));
                 }
                 query.limit = parsed;
             }
             "offset" => {
                 query.offset = value.parse::<usize>().map_err(|_| {
-                    json_response(
+                    api_error_response(
                         400,
-                        json!({
-                            "request_id": request_id,
-                            "error": "invalid_request",
-                            "message": "offset must be a non-negative integer",
-                        }),
+                        request_id,
+                        "invalid_request_error",
+                        "invalid_request",
+                        "offset must be a non-negative integer",
                     )
                 })?;
             }
             "status" => {
                 query.status = Some(value.parse::<JobStatus>().map_err(|_| {
-                    json_response(
+                    api_error_response(
                         400,
-                        json!({
-                            "request_id": request_id,
-                            "error": "invalid_request",
-                            "message": format!("unsupported status filter: {value}"),
-                        }),
+                        request_id,
+                        "invalid_request_error",
+                        "invalid_request",
+                        format!("unsupported status filter: {value}"),
                     )
                 })?);
             }
@@ -260,36 +255,33 @@ pub(crate) fn parse_conversation_message_query(
         match key {
             "limit" => {
                 let parsed = value.parse::<usize>().map_err(|_| {
-                    json_response(
+                    api_error_response(
                         400,
-                        json!({
-                            "request_id": request_id,
-                            "error": "invalid_request",
-                            "message": "limit must be a positive integer",
-                        }),
+                        request_id,
+                        "invalid_request_error",
+                        "invalid_request",
+                        "limit must be a positive integer",
                     )
                 })?;
                 if parsed == 0 || parsed > REQUEST_LIST_MAX_LIMIT {
-                    return Err(json_response(
+                    return Err(api_error_response(
                         400,
-                        json!({
-                            "request_id": request_id,
-                            "error": "invalid_request",
-                            "message": format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
-                        }),
+                        request_id,
+                        "invalid_request_error",
+                        "invalid_request",
+                        format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
                     ));
                 }
                 query.limit = parsed;
             }
             "offset" => {
                 query.offset = value.parse::<usize>().map_err(|_| {
-                    json_response(
+                    api_error_response(
                         400,
-                        json!({
-                            "request_id": request_id,
-                            "error": "invalid_request",
-                            "message": "offset must be a non-negative integer",
-                        }),
+                        request_id,
+                        "invalid_request_error",
+                        "invalid_request",
+                        "offset must be a non-negative integer",
                     )
                 })?;
             }

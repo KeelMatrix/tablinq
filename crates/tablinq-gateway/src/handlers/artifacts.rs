@@ -1,5 +1,5 @@
 use crate::http::{HttpResponse, RequestContext};
-use crate::json::{artifact_object, json_response, reason_phrase_for_status};
+use crate::json::{api_error_response, artifact_object, json_response, reason_phrase_for_status};
 use crate::routes::artifact_id_from_path;
 use anyhow::{Context, Result};
 use gptd::CoreService;
@@ -31,12 +31,12 @@ pub(crate) fn handle_artifact_request(
     context: &RequestContext,
 ) -> Result<HttpResponse> {
     let Some((artifact_id, wants_content)) = artifact_id_from_path(&context.request.path) else {
-        return Ok(json_response(
+        return Ok(api_error_response(
             404,
-            json!({
-                "request_id": context.request_id,
-                "error": "not_found",
-            }),
+            &context.request_id,
+            "not_found_error",
+            "not_found",
+            "artifact was not found",
         ));
     };
     let artifact = core
@@ -45,12 +45,12 @@ pub(crate) fn handle_artifact_request(
         .into_iter()
         .find(|item| item.artifact_id == artifact_id);
     let Some(artifact) = artifact else {
-        return Ok(json_response(
+        return Ok(api_error_response(
             404,
-            json!({
-                "request_id": context.request_id,
-                "error": "not_found",
-            }),
+            &context.request_id,
+            "not_found_error",
+            "not_found",
+            format!("artifact {artifact_id} was not found"),
         ));
     };
 

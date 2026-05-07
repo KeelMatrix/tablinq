@@ -1,5 +1,5 @@
 use crate::http::{HttpRequest, HttpResponse, RequestContext};
-use crate::json::{artifact_object, json_response, reason_phrase_for_status};
+use crate::json::{api_error_response, artifact_object, json_response, reason_phrase_for_status};
 use crate::routes::{
     cancel_job_id_from_path, cancel_request_id_from_path, job_id_from_path,
     parse_request_list_query, request_evidence_request_id_from_path, request_id_from_path,
@@ -43,24 +43,24 @@ pub(crate) fn handle_request_summary_request(
     context: &RequestContext,
 ) -> Result<HttpResponse> {
     let Some(target_request_id) = request_id_from_path(&context.request.path) else {
-        return Ok(json_response(
+        return Ok(api_error_response(
             404,
-            json!({
-                "request_id": context.request_id,
-                "error": "not_found",
-            }),
+            &context.request_id,
+            "not_found_error",
+            "not_found",
+            "request was not found",
         ));
     };
 
     let summary = match core.request_summary(target_request_id) {
         Ok(summary) => summary,
         Err(_) => {
-            return Ok(json_response(
+            return Ok(api_error_response(
                 404,
-                json!({
-                    "request_id": context.request_id,
-                    "error": "not_found",
-                }),
+                &context.request_id,
+                "not_found_error",
+                "not_found",
+                format!("request {target_request_id} was not found"),
             ));
         }
     };
@@ -81,24 +81,24 @@ pub(crate) fn handle_request_evidence_request(
 ) -> Result<HttpResponse> {
     let Some(target_request_id) = request_evidence_request_id_from_path(&context.request.path)
     else {
-        return Ok(json_response(
+        return Ok(api_error_response(
             404,
-            json!({
-                "request_id": context.request_id,
-                "error": "not_found",
-            }),
+            &context.request_id,
+            "not_found_error",
+            "not_found",
+            "request evidence was not found",
         ));
     };
 
     let artifact = match core.latest_request_evidence(target_request_id) {
         Ok(artifact) => artifact,
         Err(_) => {
-            return Ok(json_response(
+            return Ok(api_error_response(
                 404,
-                json!({
-                    "request_id": context.request_id,
-                    "error": "not_found",
-                }),
+                &context.request_id,
+                "not_found_error",
+                "not_found",
+                format!("request evidence for {target_request_id} was not found"),
             ));
         }
     };
@@ -119,22 +119,22 @@ pub(crate) fn handle_cancel_request(
     context: &RequestContext,
 ) -> Result<HttpResponse> {
     let Some(request_id) = cancel_request_id_from_path(&context.request.path) else {
-        return Ok(json_response(
+        return Ok(api_error_response(
             404,
-            json!({
-                "request_id": context.request_id,
-                "error": "not_found",
-            }),
+            &context.request_id,
+            "not_found_error",
+            "not_found",
+            "request was not found",
         ));
     };
 
     let Some((job_id, disposition)) = scheduler.cancel(request_id)? else {
-        return Ok(json_response(
+        return Ok(api_error_response(
             404,
-            json!({
-                "request_id": context.request_id,
-                "error": "not_found",
-            }),
+            &context.request_id,
+            "not_found_error",
+            "not_found",
+            format!("request {request_id} was not found"),
         ));
     };
 
@@ -174,24 +174,24 @@ pub(crate) fn handle_job_detail_request(
     context: &RequestContext,
 ) -> Result<HttpResponse> {
     let Some(job_id) = job_id_from_path(&context.request.path) else {
-        return Ok(json_response(
+        return Ok(api_error_response(
             404,
-            json!({
-                "request_id": context.request_id,
-                "error": "not_found",
-            }),
+            &context.request_id,
+            "not_found_error",
+            "not_found",
+            "job was not found",
         ));
     };
 
     let detail = match core.job_detail(job_id) {
         Ok(detail) => detail,
         Err(_) => {
-            return Ok(json_response(
+            return Ok(api_error_response(
                 404,
-                json!({
-                    "request_id": context.request_id,
-                    "error": "not_found",
-                }),
+                &context.request_id,
+                "not_found_error",
+                "not_found",
+                format!("job {job_id} was not found"),
             ));
         }
     };
@@ -211,12 +211,12 @@ pub(crate) fn handle_job_cancel_request(
     context: &RequestContext,
 ) -> Result<HttpResponse> {
     let Some(job_id) = cancel_job_id_from_path(&context.request.path) else {
-        return Ok(json_response(
+        return Ok(api_error_response(
             404,
-            json!({
-                "request_id": context.request_id,
-                "error": "not_found",
-            }),
+            &context.request_id,
+            "not_found_error",
+            "not_found",
+            "job was not found",
         ));
     };
 
@@ -225,12 +225,12 @@ pub(crate) fn handle_job_cancel_request(
     }) {
         Ok(ack) => ack,
         Err(_) => {
-            return Ok(json_response(
+            return Ok(api_error_response(
                 404,
-                json!({
-                    "request_id": context.request_id,
-                    "error": "not_found",
-                }),
+                &context.request_id,
+                "not_found_error",
+                "not_found",
+                format!("job {job_id} was not found"),
             ));
         }
     };
