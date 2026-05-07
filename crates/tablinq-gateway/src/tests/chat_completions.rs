@@ -60,6 +60,83 @@ fn chat_completions_non_streaming_returns_openai_shape() {
 }
 
 #[test]
+fn chat_completions_single_user_message_reaches_browser_without_role_labels() {
+    let _guard = integration_lock();
+    require_browser_integration_prereqs!();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url);
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let prompt = "raw gateway prompt";
+    let body = serde_json::to_vec(&json!({
+        "model": "tablinq-instant",
+        "messages": [{ "role": "user", "content": prompt }]
+    }))
+    .unwrap();
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        &body,
+        20_000,
+    )
+    .unwrap();
+    assert_eq!(
+        response.status_code,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(
+        body["choices"][0]["message"]["content"].as_str(),
+        Some("Fake response for: raw gateway prompt")
+    );
+    let conversation_id = body["tablinq_conversation_id"].as_str().unwrap();
+
+    let messages = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "GET",
+        &format!("/v1/conversations/{conversation_id}/messages"),
+        &[("authorization", auth.as_str())],
+        &[],
+        20_000,
+    )
+    .unwrap();
+    assert_eq!(messages.status_code, 200);
+    let messages_body: Value = serde_json::from_slice(&messages.body).unwrap();
+    let items = messages_body["data"].as_array().unwrap();
+    let user_message = items
+        .iter()
+        .find(|item| {
+            item["source_kind"] == "request_detail"
+                && item["role"] == "user"
+                && item["content"] == prompt
+        })
+        .expect("raw user message in normalized conversation history");
+    assert_eq!(user_message["content"], prompt);
+    assert!(!items.iter().any(|item| {
+        item["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("USER:") || content.contains("SYSTEM:"))
+    }));
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
 fn chat_completions_support_fresh_and_existing_conversations() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();

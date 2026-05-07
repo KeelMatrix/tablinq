@@ -19,7 +19,7 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<FlattenedMes
         match &message.content {
             MessageContent::Text(text) => {
                 if !text.trim().is_empty() {
-                    text_parts.push(text.trim().to_owned());
+                    text_parts.push(text.to_owned());
                 }
             }
             MessageContent::Parts(parts) => {
@@ -29,14 +29,14 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<FlattenedMes
                             if let Some(text) = part.text.as_ref()
                                 && !text.trim().is_empty()
                             {
-                                text_parts.push(text.trim().to_owned());
+                                text_parts.push(text.to_owned());
                             }
                         }
                         "input_text" => {
                             if let Some(text) = part.input_text.as_ref()
                                 && !text.trim().is_empty()
                             {
-                                text_parts.push(text.trim().to_owned());
+                                text_parts.push(text.to_owned());
                             }
                         }
                         "input_file" => {
@@ -61,11 +61,7 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<FlattenedMes
         }
 
         if !text_parts.is_empty() {
-            sections.push(format!(
-                "{}:\n{}",
-                message.role.to_uppercase(),
-                text_parts.join("\n")
-            ));
+            sections.push(text_parts.join("\n"));
         }
     }
 
@@ -85,7 +81,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flattens_text_input_text_and_input_file_parts() {
+    fn flattens_messages_without_role_prefixes() {
         let request: ChatCompletionsRequest = serde_json::from_value(serde_json::json!({
             "model": "tablinq-instant",
             "tablinq_files": ["seed.txt"],
@@ -93,16 +89,32 @@ mod tests {
             "messages": [
                 {
                     "role": "system",
-                    "content": "  follow instructions  "
+                    "content": "follow instructions"
                 },
                 {
                     "role": "user",
                     "content": [
-                        { "type": "text", "text": "  first line  " },
+                        { "type": "text", "text": "first line" },
                         { "type": "input_text", "input_text": "second line" },
                         { "type": "input_file", "file_path": "  local.txt  " },
                         { "type": "input_file", "file_id": " file-123 " }
                     ]
+                },
+                {
+                    "role": "assistant",
+                    "content": "prior answer"
+                },
+                {
+                    "role": "tool",
+                    "content": "tool output"
+                },
+                {
+                    "role": "developer",
+                    "content": "developer guidance"
+                },
+                {
+                    "role": "arbitrary_role",
+                    "content": "custom role note"
                 }
             ]
         }))
@@ -112,9 +124,40 @@ mod tests {
 
         assert_eq!(
             flattened.prompt,
-            "SYSTEM:\nfollow instructions\n\nUSER:\nfirst line\nsecond line"
+            "follow instructions\n\nfirst line\nsecond line\n\nprior answer\n\ntool output\n\ndeveloper guidance\n\ncustom role note"
         );
+        for label in [
+            "USER:",
+            "SYSTEM:",
+            "ASSISTANT:",
+            "TOOL:",
+            "DEVELOPER:",
+            "ARBITRARY_ROLE:",
+        ] {
+            assert!(
+                !flattened.prompt.contains(label),
+                "prompt contained {label}"
+            );
+        }
         assert_eq!(flattened.file_paths, vec!["seed.txt", "local.txt"]);
         assert_eq!(flattened.file_ids, vec!["file-seed", "file-123"]);
+    }
+
+    #[test]
+    fn single_user_message_prompt_is_unchanged() {
+        let request: ChatCompletionsRequest = serde_json::from_value(serde_json::json!({
+            "model": "tablinq-instant",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "raw user query unchanged"
+                }
+            ]
+        }))
+        .expect("request decodes");
+
+        let flattened = flatten_messages(&request).expect("flattened messages");
+
+        assert_eq!(flattened.prompt, "raw user query unchanged");
     }
 }

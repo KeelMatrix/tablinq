@@ -44,7 +44,8 @@ pub enum RequestRole {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ChatMessage {
-    pub role: String,
+    #[serde(rename = "role")]
+    pub _role: String,
     pub content: MessageContent,
 }
 
