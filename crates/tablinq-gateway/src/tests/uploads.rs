@@ -185,8 +185,75 @@ fn files_upload_endpoint_rejects_files_larger_than_twenty_mib() {
     assert_eq!(response.status_code, 413);
     let json: Value = serde_json::from_slice(&response.body).unwrap();
     assert!(json["request_id"].as_str().is_some());
+    assert!(json["error"].is_object());
+    assert_eq!(json["error"]["type"], "invalid_request_error");
     assert_eq!(json["error"]["code"], "payload_too_large");
+    assert_eq!(json["error"]["param"], Value::Null);
     assert_eq!(json["error"]["message"], "file exceeds 20 MiB limit");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn files_upload_endpoint_requires_x_file_name_header_with_nested_error() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_FILES_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/octet-stream"),
+        ],
+        b"hello",
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
+    )
+    .unwrap();
+    assert_eq!(response.status_code, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert!(body["request_id"].as_str().is_some());
+    assert!(body["error"].is_object());
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "missing_file_name_header");
+    assert_eq!(body["error"]["param"], Value::Null);
+    assert_eq!(body["error"]["message"], "x-file-name header is required");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn file_detail_missing_target_returns_nested_not_found_error() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "GET",
+        "/v1/files/file-missing",
+        &[("authorization", auth.as_str())],
+        &[],
+        UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
+    )
+    .unwrap();
+    assert_eq!(response.status_code, 404);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert!(body["request_id"].as_str().is_some());
+    assert!(body["error"].is_object());
+    assert_eq!(body["error"]["type"], "not_found_error");
+    assert_eq!(body["error"]["code"], "not_found");
+    assert_eq!(body["error"]["param"], Value::Null);
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

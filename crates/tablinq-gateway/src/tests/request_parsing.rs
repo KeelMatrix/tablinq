@@ -197,6 +197,7 @@ fn parse_and_payload_failures_include_request_ids() {
     assert_eq!(chunked.status_code, 400);
     let chunked_json: Value = serde_json::from_slice(&chunked.body).unwrap();
     assert!(chunked_json["request_id"].as_str().is_some());
+    assert_eq!(chunked_json["error"]["param"], Value::Null);
     assert_eq!(chunked_json["error"]["code"], "bad_request");
 
     let oversized = super::super::http_request_with_declared_content_length(
@@ -215,7 +216,76 @@ fn parse_and_payload_failures_include_request_ids() {
     assert_eq!(oversized.status_code, 413);
     let oversized_json: Value = serde_json::from_slice(&oversized.body).unwrap();
     assert!(oversized_json["request_id"].as_str().is_some());
+    assert_eq!(oversized_json["error"]["param"], Value::Null);
     assert_eq!(oversized_json["error"]["code"], "payload_too_large");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn representative_v1_errors_use_nested_error_objects() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let cases = [
+        (
+            "POST",
+            V1_FILES_PATH,
+            vec![
+                ("authorization".to_owned(), auth.clone()),
+                ("content-type".to_owned(), "application/octet-stream".to_owned()),
+            ],
+            b"missing header".to_vec(),
+        ),
+        (
+            "GET",
+            "/v1/requests/req-missing",
+            vec![("authorization".to_owned(), auth.clone())],
+            Vec::new(),
+        ),
+        (
+            "POST",
+            V1_BROWSER_ATTACH_PATH,
+            vec![
+                ("authorization".to_owned(), auth.clone()),
+                ("content-type".to_owned(), "application/json".to_owned()),
+            ],
+            br#"{"target_url":"https://chatgpt.com/""#.to_vec(),
+        ),
+        (
+            "GET",
+            "/v1/requests?limit=0",
+            vec![("authorization".to_owned(), auth.clone())],
+            Vec::new(),
+        ),
+    ];
+
+    for (method, path, headers, body_bytes) in cases {
+        let header_refs = headers
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            method,
+            path,
+            &header_refs,
+            &body_bytes,
+            5_000,
+        )
+        .unwrap();
+        assert!(response.status_code >= 400, "{method} {path}");
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body["request_id"].as_str().is_some(), "{method} {path}");
+        assert!(body["error"].is_object(), "{method} {path}");
+        assert!(!body["error"].is_string(), "{method} {path}");
+        assert_eq!(body["error"]["param"], Value::Null, "{method} {path}");
+    }
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

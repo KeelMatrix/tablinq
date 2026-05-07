@@ -302,3 +302,35 @@ fn paperclip_like_requests_report_missing_staged_file_errors_cleanly() {
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
 }
+
+#[test]
+fn artifact_detail_and_content_missing_targets_return_nested_not_found_errors() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    for path in ["/v1/artifacts/artifact-missing", "/v1/artifacts/artifact-missing/content"] {
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            path,
+            &[("authorization", auth.as_str())],
+            &[],
+            UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 404, "{path}");
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body["request_id"].as_str().is_some(), "{path}");
+        assert!(body["error"].is_object(), "{path}");
+        assert_eq!(body["error"]["type"], "not_found_error", "{path}");
+        assert_eq!(body["error"]["code"], "not_found", "{path}");
+        assert_eq!(body["error"]["param"], Value::Null, "{path}");
+    }
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}

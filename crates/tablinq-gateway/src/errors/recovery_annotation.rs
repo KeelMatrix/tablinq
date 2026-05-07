@@ -140,6 +140,7 @@ mod tests {
         let body: Value = serde_json::from_slice(&response.body).expect("decode error body");
         assert_eq!(body["request_id"], "req-1");
         assert_eq!(body["error"]["code"], "auth_required");
+        assert_eq!(body["error"]["param"], Value::Null);
         assert_eq!(
             body["error"]["message"],
             "req-1: auth required: attached browser-backed ChatGPT tab is not authenticated"
@@ -198,6 +199,7 @@ mod tests {
             body["error"]["code"],
             "provider_generation_failed_nonretryable"
         );
+        assert_eq!(body["error"]["param"], Value::Null);
         assert_eq!(body["status"], 502);
         assert_eq!(body["request_id"], "req-provider");
         assert_eq!(body["tablinq_failure_bundle_id"], "bundle-provider-1");
