@@ -15,7 +15,7 @@ pub(crate) fn ensure_browser_session(core: &CoreService) -> Result<()> {
         snapshot = core.browser_profile_info()?;
     }
     if !snapshot.authenticated {
-        anyhow::bail!("auth required: managed browser session is not authenticated");
+        anyhow::bail!("auth required: attached browser-backed ChatGPT tab is not authenticated");
     }
     Ok(())
 }

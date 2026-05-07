@@ -66,6 +66,21 @@ pub fn model_object(
     capability_source: &str,
 ) -> Value {
     let availability = model_availability(spec, report);
+    let streaming = capability_status(
+        report,
+        composer_submission_ready,
+        "streaming submission is unavailable until the attached browser-backed ChatGPT tab is ready",
+    );
+    let files = capability_status(
+        report,
+        |value| composer_submission_ready(value) && value.matrix.upload_control_visible,
+        "file upload controls are unavailable in the attached browser-backed ChatGPT tab",
+    );
+    let artifacts = capability_status(
+        report,
+        |value| value.matrix.downloadable_artifacts_observable,
+        "downloadable artifacts are unavailable in the attached browser-backed ChatGPT tab",
+    );
     json!({
         "id": spec.id,
         "object": "model",
@@ -75,9 +90,12 @@ pub fn model_object(
         "tablinq_model_class": spec.model_class.map(model_class_name),
         "tablinq_effort": spec.effort.map(effort_name),
         "tablinq_execution_kind": if spec.uses_research { "research" } else { "ask" },
-        "tablinq_streaming": true,
-        "tablinq_files": true,
-        "tablinq_artifacts": true,
+        "tablinq_streaming": streaming.availability == "available",
+        "tablinq_streaming_status": streaming.availability,
+        "tablinq_files": files.availability == "available",
+        "tablinq_files_status": files.availability,
+        "tablinq_artifacts": artifacts.availability == "available",
+        "tablinq_artifacts_status": artifacts.availability,
         "tablinq_availability": availability.availability,
         "tablinq_warning": availability.warnings,
         "tablinq_capability_source": capability_source,
@@ -92,10 +110,7 @@ pub fn model_availability(
     let Some(report) = report else {
         return CapabilityAvailability {
             availability: "unknown",
-            warnings: vec![
-                "live capability availability is unknown until the managed browser reports probes"
-                    .to_owned(),
-            ],
+            warnings: vec![unknown_capability_warning()],
         };
     };
 
@@ -115,12 +130,30 @@ pub fn model_availability(
             warnings: Vec::new(),
         }
     } else {
+        let warning = match spec.id {
+            "tablinq-instant" => {
+                "the attached browser-backed ChatGPT tab is not ready to submit prompts"
+            }
+            "tablinq-thinking-standard" | "tablinq-thinking-extended" => {
+                if !composer_submission_ready(report) {
+                    "the attached browser-backed ChatGPT tab is not ready to submit prompts"
+                } else {
+                    "the attached browser-backed ChatGPT tab does not expose the required thinking effort controls"
+                }
+            }
+            "tablinq-search" => {
+                "search mode is unavailable in the attached browser-backed ChatGPT tab"
+            }
+            "tablinq-research" => {
+                "research mode is unavailable or the page is not ready to submit in the attached browser-backed ChatGPT tab"
+            }
+            _ => {
+                "the attached browser-backed ChatGPT tab does not currently expose the required capability"
+            }
+        };
         CapabilityAvailability {
             availability: "unavailable",
-            warnings: vec![
-                "the current managed session does not expose the required live capability"
-                    .to_owned(),
-            ],
+            warnings: vec![warning.to_owned()],
         }
     }
 }
@@ -135,7 +168,8 @@ pub(super) fn search_capability_available(report: &CapabilityReport) -> bool {
 }
 
 pub(super) fn research_capability_available(report: &CapabilityReport) -> bool {
-    report.matrix.research_mode_visible || has_mode_alias(report, "research")
+    composer_submission_ready(report)
+        && (report.matrix.research_mode_visible || has_mode_alias(report, "research"))
 }
 
 fn thinking_effort_available(report: &CapabilityReport, effort: Effort) -> bool {
@@ -155,6 +189,32 @@ fn has_alias_values(aliases: &BTreeMap<String, Vec<String>>, key: &str) -> bool 
         .get(key)
         .map(|values| values.iter().any(|value| !value.trim().is_empty()))
         .unwrap_or(false)
+}
+
+fn capability_status(
+    report: Option<&CapabilityReport>,
+    predicate: impl FnOnce(&CapabilityReport) -> bool,
+    unavailable_warning: &str,
+) -> CapabilityAvailability {
+    match report {
+        Some(report) if predicate(report) => CapabilityAvailability {
+            availability: "available",
+            warnings: Vec::new(),
+        },
+        Some(_) => CapabilityAvailability {
+            availability: "unavailable",
+            warnings: vec![unavailable_warning.to_owned()],
+        },
+        None => CapabilityAvailability {
+            availability: "unknown",
+            warnings: vec![unknown_capability_warning()],
+        },
+    }
+}
+
+fn unknown_capability_warning() -> String {
+    "live capability availability is unknown until the attached browser-backed ChatGPT tab reports probes"
+        .to_owned()
 }
 
 fn observed_aliases(spec: &ProviderModelSpec, report: Option<&CapabilityReport>) -> Value {
@@ -287,5 +347,49 @@ mod tests {
             model_availability(&PROVIDER_MODELS[2], Some(&report)).availability,
             "unavailable"
         );
+    }
+
+    #[test]
+    fn research_model_requires_submit_ready_page_state() {
+        let report = report_with_aliases(
+            CapabilityMatrix {
+                composer_ready: false,
+                submit_available: false,
+                research_mode_visible: true,
+                ..CapabilityMatrix::default()
+            },
+            RuntimeAliases {
+                modes: BTreeMap::from([("research".to_owned(), vec!["deep research".to_owned()])]),
+                ..RuntimeAliases::default()
+            },
+        );
+
+        assert_eq!(
+            model_availability(&PROVIDER_MODELS[4], Some(&report)).availability,
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn model_object_reflects_live_optional_capability_support() {
+        let report = report_with_aliases(
+            CapabilityMatrix {
+                composer_ready: true,
+                submit_available: true,
+                upload_control_visible: false,
+                downloadable_artifacts_observable: false,
+                ..CapabilityMatrix::default()
+            },
+            RuntimeAliases::default(),
+        );
+
+        let model = model_object(&PROVIDER_MODELS[0], Some(&report), "live");
+
+        assert_eq!(model["tablinq_streaming"], true);
+        assert_eq!(model["tablinq_streaming_status"], "available");
+        assert_eq!(model["tablinq_files"], false);
+        assert_eq!(model["tablinq_files_status"], "unavailable");
+        assert_eq!(model["tablinq_artifacts"], false);
+        assert_eq!(model["tablinq_artifacts_status"], "unavailable");
     }
 }

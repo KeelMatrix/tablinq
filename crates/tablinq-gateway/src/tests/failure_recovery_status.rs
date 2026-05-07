@@ -421,7 +421,8 @@ fn chat_completions_maps_capability_errors_to_openai_shape() {
 
 #[test]
 fn openai_auth_errors_include_refusal_guidance() {
-    let err = anyhow::anyhow!("auth required: managed browser session is not authenticated");
+    let err =
+        anyhow::anyhow!("auth required: attached browser-backed ChatGPT tab is not authenticated");
     let response = map_openai_error("req-auth-expired", &err, Some("bundle-auth-1"));
     let body: Value = serde_json::from_slice(&response.body).unwrap();
     assert_eq!(response.status_code, 503);
@@ -433,7 +434,10 @@ fn openai_auth_errors_include_refusal_guidance() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|value| value.as_str().is_some_and(|text| text.contains("sign in")))
+            .any(|value| value
+                .as_str()
+                .is_some_and(|text| text.contains("/v1/browser/connection-info")
+                    || text.contains("signed-in ChatGPT tab")))
     );
 }
 
@@ -488,7 +492,7 @@ fn gateway_rejects_missing_and_wrong_bearer_tokens_for_openai_routes() {
 fn chat_completions_return_auth_required_when_browser_session_is_signed_out() {
     let response = map_openai_error(
         "req-auth-expired",
-        &anyhow::anyhow!("auth required: managed browser session is not authenticated"),
+        &anyhow::anyhow!("auth required: attached browser-backed ChatGPT tab is not authenticated"),
         Some("bundle-auth-1"),
     );
     assert_eq!(response.status_code, 503);

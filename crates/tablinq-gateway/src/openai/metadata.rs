@@ -30,30 +30,30 @@ pub fn provider_capability_catalog(
                 report,
                 "tablinq-search",
                 search_capability_available,
-                "search mode is unavailable in the current managed session",
+                "search mode is unavailable in the attached browser-backed ChatGPT tab",
             ),
             "research": capability_status(
                 report,
                 "tablinq-research",
                 research_capability_available,
-                "research mode is unavailable in the current managed session",
+                "research mode is unavailable in the attached browser-backed ChatGPT tab",
             ),
             "uploads": capability_status(
                 report,
                 "all_models",
                 |value| value.matrix.upload_control_visible,
-                "file upload controls are unavailable in the current managed session",
+                "file upload controls are unavailable in the attached browser-backed ChatGPT tab",
             ),
             "artifacts": capability_status(
                 report,
                 "all_models",
                 |value| value.matrix.downloadable_artifacts_observable,
-                "downloadable artifacts are unavailable in the current managed session",
+                "downloadable artifacts are unavailable in the attached browser-backed ChatGPT tab",
             ),
             "streaming": json!({
                 "availability": "available",
                 "stable_model_ids": model_ids,
-                "warning": Value::Null,
+                "warning": "streaming responses are supported by the gateway, but live execution still depends on an attached browser-backed ChatGPT tab",
             }),
         },
         "max_safe_parallelism": {
@@ -62,8 +62,8 @@ pub fn provider_capability_catalog(
             "subagents": 0,
         },
         "subagent_recommendation": {
-            "policy": "disabled",
-            "reason": "single-browser upstream execution is serialized through one managed session",
+            "policy": "queue",
+            "reason": "single-flight execution against one attached browser-backed ChatGPT tab keeps effective concurrency at 1",
         },
     })
 }
@@ -96,7 +96,7 @@ fn capability_status(
         None => json!({
             "availability": "unknown",
             "stable_model_ids": stable_model_ids,
-            "warning": "live capability availability is unknown until the managed browser reports probes",
+            "warning": "live capability availability is unknown until the attached browser-backed ChatGPT tab reports probes",
         }),
     }
 }
@@ -141,5 +141,19 @@ mod tests {
             provider["capabilities"]["research"]["availability"],
             "unavailable"
         );
+    }
+
+    #[test]
+    fn provider_catalog_uses_attach_first_queue_wording() {
+        let provider = provider_capability_catalog(None, "unknown");
+        let text = provider.to_string();
+
+        assert_eq!(provider["subagent_recommendation"]["policy"], "queue");
+        assert!(
+            provider["capabilities"]["search"]["warning"]
+                .as_str()
+                .is_some_and(|value| value.contains("browser-backed"))
+        );
+        assert!(!text.contains("managed"));
     }
 }
