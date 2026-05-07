@@ -126,33 +126,25 @@ pub(crate) fn handle_provider_request(
                     "/v1/requests",
                 ],
                 "chat_completions": {
-                    "accepted_message_roles": ["user"],
-                    "role_handling": "only user messages are accepted; browser submission keeps user text unchanged",
-                    "tolerated_fields": [
-                        "temperature",
-                        "top_p",
-                        "max_tokens",
-                        "max_completion_tokens",
-                        "stop",
-                        "presence_penalty",
-                        "frequency_penalty",
-                        "user",
-                        "metadata",
-                        "logprobs",
-                        "stream_options",
-                        "tool_choice",
-                        "parallel_tool_calls",
+                    "input_handling": [
+                        "chat_completions input is reduced to user-authored text content before browser submission",
+                        "browser submission preserves message text exactly and does not add transcript wrappers",
+                        "extra conversation context is not supported in browser submission",
+                        "unsupported message context is rejected before queueing",
                     ],
-                    "rejected_fields": [
-                        "tools",
-                        "messages[].tool_calls",
-                        "messages[].tool_call_id",
-                        "response_format",
+                    "tolerated_parameters": [
+                        "common generation tuning parameters",
+                        "client metadata parameters",
+                        "stream shaping parameters",
+                    ],
+                    "unsupported_parameters": [
+                        "function-call payloads",
+                        "structured output formats",
+                        "multiple-choice fanout",
                     ],
                     "constraints": [
                         "n must be 1",
-                        "non-user roles are rejected",
-                        "browser-backed execution never injects transcript wrappers or synthetic role text",
+                        "only user-authored text content is forwarded to the browser",
                     ],
                 },
                 "files": {
@@ -196,16 +188,10 @@ pub(crate) fn handle_provider_request(
                     "when": "the attached ChatGPT tab stalls instead of producing a stable streamed response",
                 }
             ],
-            "request_annotations": {
-                "field": "tablinq_request_role",
-                "parent_request_id_field": "tablinq_parent_request_id",
-                "allowed_values": ["primary", "subagent", "branch"],
-                "default": "primary",
-                "policy": {
-                    "primary": "execute_or_queue",
-                    "branch": "queue",
-                    "subagent": "queue",
-                },
+            "request_queueing": {
+                "default_behavior": "execute_or_queue",
+                "parallel_work": "queue",
+                "dependent_work": "queue",
                 "notes": [
                     "valid API requests are accepted into the durable queue",
                     "single-flight browser-backed execution keeps effective concurrency at 1",
