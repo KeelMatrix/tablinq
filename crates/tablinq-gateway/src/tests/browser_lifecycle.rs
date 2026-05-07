@@ -114,7 +114,10 @@ fn browser_attach_rejects_unknown_fields() {
     .unwrap();
 
     let body = assert_json_status(&response, 400);
-    assert_eq!(body["error"], "invalid_request_json");
+    assert!(body["error"].is_object());
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "invalid_request_json");
+    assert_eq!(body["error"]["param"], Value::Null);
 }
 
 #[test]
@@ -140,7 +143,39 @@ fn browser_attach_invalid_json_returns_specific_error() {
     .unwrap();
 
     let body = assert_json_status(&response, 400);
-    assert_eq!(body["error"], "invalid_request_json");
+    assert!(body["error"].is_object());
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "invalid_request_json");
+    assert_eq!(body["error"]["param"], Value::Null);
+}
+
+#[test]
+fn browser_detach_invalid_json_returns_nested_error() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_BROWSER_DETACH_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        br#"{"unexpected":true}"#,
+        5_000,
+    )
+    .unwrap();
+
+    let body = assert_json_status(&response, 400);
+    assert!(body["error"].is_object());
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], "invalid_request_json");
+    assert_eq!(body["error"]["param"], Value::Null);
 }
 
 #[test]

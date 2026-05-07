@@ -573,3 +573,39 @@ fn request_role_fields_flow_into_failure_bundles_and_request_summaries() {
     let _ = fake_server.kill();
     let _ = fake_server.wait();
 }
+
+#[test]
+fn missing_request_endpoints_return_nested_not_found_errors() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    for (method, path) in [
+        ("GET", "/v1/requests/req-missing"),
+        ("GET", "/v1/requests/req-missing/evidence"),
+        ("POST", "/v1/requests/req-missing/cancel"),
+    ] {
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            method,
+            path,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 404, "{method} {path}");
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body["request_id"].as_str().is_some(), "{method} {path}");
+        assert!(body["error"].is_object(), "{method} {path}");
+        assert_eq!(body["error"]["type"], "not_found_error", "{method} {path}");
+        assert_eq!(body["error"]["code"], "not_found", "{method} {path}");
+        assert_eq!(body["error"]["param"], Value::Null, "{method} {path}");
+    }
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}

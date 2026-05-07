@@ -190,8 +190,13 @@ mod tests {
         )
         .expect_err("non-loopback peer");
         assert_eq!(response.status_code, 403);
+        assert_eq!(response.reason_phrase, "Forbidden");
         let body: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(body["request_id"], "req-forbidden");
+        assert!(body["error"].is_object());
+        assert_eq!(body["error"]["type"], "permission_error");
+        assert_eq!(body["error"]["code"], "forbidden");
+        assert_eq!(body["error"]["param"], serde_json::Value::Null);
     }
 
     fn config_with_gateway_api_key(api_key: &str) -> AppConfig {

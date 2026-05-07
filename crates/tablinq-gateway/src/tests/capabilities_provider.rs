@@ -1,5 +1,27 @@
 use super::*;
 
+fn assert_no_provider_role_artifacts(body: &Value) {
+    let body_text = body.to_string().to_ascii_lowercase();
+    for marker in [
+        "accepted_message_roles",
+        "role_handling",
+        "request_annotations",
+        "tablinq_request_role",
+        "tablinq_parent_request_id",
+        "only user messages are accepted",
+        "non-user roles",
+        "user role",
+        "\"role\"",
+        "\"roles\"",
+        "system",
+        "developer",
+        "assistant",
+        "tool",
+    ] {
+        assert!(!body_text.contains(marker), "unexpected marker {marker} in {body_text}");
+    }
+}
+
 #[test]
 fn provider_endpoint_exposes_openclaude_preset_metadata() {
     let _guard = integration_lock();
@@ -31,9 +53,13 @@ fn provider_endpoint_exposes_openclaude_preset_metadata() {
         String::from_utf8_lossy(&response.body)
     );
     let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_no_provider_role_artifacts(&body);
     assert_eq!(body["object"], "tablinq.provider");
     assert_eq!(body["capability_source"], "live");
-    assert_eq!(body["request_annotations"]["field"], "tablinq_request_role");
+    assert_eq!(
+        body["openai_compatibility"]["chat_completions"]["input_handling"][0],
+        "chat_completions input is reduced to user-authored text content before browser submission"
+    );
     assert_eq!(
         body["provider_capabilities"]["capabilities"]["search"]["availability"],
         "available"
@@ -93,12 +119,16 @@ fn provider_endpoint_exposes_paperclip_preset_metadata() {
     );
     let body: Value = serde_json::from_slice(&response.body).unwrap();
     let body_text = String::from_utf8(response.body.clone()).unwrap();
+    assert_no_provider_role_artifacts(&body);
     assert_eq!(
         body["presets"]["paperclip"]["transport"],
         "openai_compatible_http"
     );
     assert_eq!(body["openai_compatibility"]["mode"], "subset");
-    assert_eq!(body["request_annotations"]["policy"]["subagent"], "queue");
+    assert_eq!(
+        body["request_queueing"]["parallel_work"],
+        "queue"
+    );
     assert_eq!(
         body["provider_capabilities"]["subagent_recommendation"]["policy"],
         "queue"
@@ -140,14 +170,7 @@ fn documented_provider_contract_surfaces_are_present() {
     .unwrap();
     assert_eq!(provider.status_code, 200);
     let provider_body: Value = serde_json::from_slice(&provider.body).unwrap();
-    assert_eq!(
-        provider_body["request_annotations"]["field"],
-        "tablinq_request_role"
-    );
-    assert_eq!(
-        provider_body["request_annotations"]["parent_request_id_field"],
-        "tablinq_parent_request_id"
-    );
+    assert_no_provider_role_artifacts(&provider_body);
     assert_eq!(provider_body["openai_compatibility"]["mode"], "subset");
     assert_eq!(
         provider_body["openai_compatibility"]["supported_endpoints"],
@@ -162,8 +185,12 @@ fn documented_provider_contract_surfaces_are_present() {
         ])
     );
     assert_eq!(
-        provider_body["openai_compatibility"]["chat_completions"]["role_handling"],
-        "only user messages are accepted; browser submission keeps user text unchanged"
+        provider_body["openai_compatibility"]["chat_completions"]["input_handling"][1],
+        "browser submission preserves message text exactly and does not add transcript wrappers"
+    );
+    assert_eq!(
+        provider_body["request_queueing"]["dependent_work"],
+        "queue"
     );
     assert_eq!(
         provider_body["presets"]["openclaude"]["max_parallel_requests"],
@@ -406,6 +433,7 @@ fn models_endpoint_returns_openai_model_catalog() {
     .unwrap();
     assert_eq!(response.status_code, 200);
     let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_no_provider_role_artifacts(&body);
     assert_eq!(body["object"], "list");
     assert_eq!(body["tablinq_capability_source"], "live");
     assert_eq!(
@@ -462,6 +490,7 @@ fn capabilities_endpoint_reports_alias_remaps_for_stable_models() {
     .unwrap();
     assert_eq!(response.status_code, 200);
     let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_no_provider_role_artifacts(&body);
     assert_eq!(body["object"], "tablinq.capability_catalog");
     assert_eq!(body["source"], "live");
     assert_eq!(

@@ -433,19 +433,29 @@ fn conversation_endpoints_return_conversation_not_found() {
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
-    let response = http_request(
-        &snapshot.host,
-        snapshot.port,
-        "GET",
+    for path in [
+        "/v1/conversations/missing",
         "/v1/conversations/missing/messages",
-        &[("authorization", auth.as_str())],
-        &[],
-        10_000,
-    )
-    .unwrap();
-    assert_eq!(response.status_code, 404);
-    let body: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(body["error"], "conversation_not_found");
+        "/v1/conversations/missing/snapshot",
+    ] {
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            path,
+            &[("authorization", auth.as_str())],
+            &[],
+            10_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 404, "{path}");
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(body["request_id"].as_str().is_some(), "{path}");
+        assert!(body["error"].is_object(), "{path}");
+        assert_eq!(body["error"]["type"], "not_found_error", "{path}");
+        assert_eq!(body["error"]["code"], "conversation_not_found", "{path}");
+        assert_eq!(body["error"]["param"], Value::Null, "{path}");
+    }
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

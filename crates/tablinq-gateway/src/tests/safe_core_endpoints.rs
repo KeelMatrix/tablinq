@@ -188,7 +188,10 @@ fn v1_jobs_endpoints_list_detail_cancel_and_not_found() {
     )
     .unwrap();
     let missing_body = assert_json_status(&missing, 404);
-    assert_eq!(missing_body["error"], "not_found");
+    assert!(missing_body["error"].is_object());
+    assert_eq!(missing_body["error"]["type"], "not_found_error");
+    assert_eq!(missing_body["error"]["code"], "not_found");
+    assert_eq!(missing_body["error"]["param"], Value::Null);
 
     let cancel = http_request(
         &snapshot.host,
@@ -208,6 +211,22 @@ fn v1_jobs_endpoints_list_detail_cancel_and_not_found() {
     let db = Database::open(&config.paths.db_path).unwrap();
     let job = db.job_detail("job-running").unwrap().unwrap();
     assert!(job.cancel_requested);
+
+    let missing_cancel = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        "/v1/jobs/job-missing/cancel",
+        &[("authorization", auth.as_str())],
+        &[],
+        5_000,
+    )
+    .unwrap();
+    let missing_cancel_body = assert_json_status(&missing_cancel, 404);
+    assert!(missing_cancel_body["error"].is_object());
+    assert_eq!(missing_cancel_body["error"]["type"], "not_found_error");
+    assert_eq!(missing_cancel_body["error"]["code"], "not_found");
+    assert_eq!(missing_cancel_body["error"]["param"], Value::Null);
 }
 
 #[test]
