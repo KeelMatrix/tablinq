@@ -110,10 +110,7 @@ fn provider_endpoint_exposes_paperclip_preset_metadata() {
         body["presets"]["paperclip"]["subagent_recommendation"],
         "queue"
     );
-    assert_eq!(
-        body["presets"]["paperclip"]["usage_accounting"],
-        "unknown_or_estimated"
-    );
+    assert_eq!(body["presets"]["paperclip"]["usage_accounting"], "unknown");
     assert!(!body_text.to_ascii_lowercase().contains("managed"));
 
     stop_gateway_process(Some(&state_root)).unwrap();

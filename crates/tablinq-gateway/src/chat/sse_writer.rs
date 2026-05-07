@@ -96,7 +96,11 @@ pub(super) fn write_stream_finish_chunk(
 }
 
 pub(super) fn write_stream_error(stream: &mut TcpStream, error: &Value) -> Result<()> {
-    write_sse_event(stream, error)
+    let mut event = error.clone();
+    if event.get("object").is_none() {
+        event["object"] = Value::String("error".to_owned());
+    }
+    write_sse_event(stream, &event)
 }
 
 pub(super) fn write_stream_done(stream: &mut TcpStream) -> Result<()> {
@@ -164,5 +168,41 @@ mod tests {
             Some(raw_assistant_text())
         );
         assert_no_cli_display_markers(&sse_text);
+    }
+
+    #[test]
+    fn stream_error_is_tagged_as_an_error_object() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let writer = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            write_stream_error(
+                &mut stream,
+                &json!({
+                    "request_id": "req-1",
+                    "error": {
+                        "message": "capability missing",
+                        "type": "invalid_request_error",
+                        "code": "capability_missing",
+                    },
+                }),
+            )
+            .unwrap();
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        let mut sse_text = String::new();
+        client.read_to_string(&mut sse_text).unwrap();
+        writer.join().unwrap();
+
+        let data = sse_text
+            .strip_prefix("data: ")
+            .and_then(|value| value.strip_suffix("\n\n"))
+            .expect("SSE data event");
+        let event: Value = serde_json::from_str(data).unwrap();
+
+        assert_eq!(event["object"], "error");
+        assert_eq!(event["request_id"], "req-1");
+        assert_eq!(event["error"]["code"], "capability_missing");
     }
 }
