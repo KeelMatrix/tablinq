@@ -263,6 +263,9 @@ pub(crate) fn client_id_for_request(request: &HttpRequest, remote_addr: &str) ->
 
 pub(crate) fn queue_error_response(
     request_id: &str,
+    job_id: &str,
+    request_role: Option<&str>,
+    parent_request_id: Option<&str>,
     scheduler: &SchedulerSnapshot,
     err: &anyhow::Error,
 ) -> HttpResponse {
@@ -284,6 +287,10 @@ pub(crate) fn queue_error_response(
             "code": code,
         },
         "request_id": request_id,
+        "job_id": job_id,
+        "tablinq_request_role": request_role,
+        "tablinq_parent_request_id": parent_request_id,
+        "tablinq_queue_state": "queued",
         "retry_after_ms": scheduler.queue_timeout_ms,
         "scheduler": scheduler,
     });

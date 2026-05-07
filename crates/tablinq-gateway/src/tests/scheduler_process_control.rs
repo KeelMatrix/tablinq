@@ -474,3 +474,142 @@ fn queue_rejects_requests_when_the_queue_is_full() {
 
     gateway.shutdown();
 }
+
+#[test]
+fn subagent_requests_queue_behind_primary_work_and_preserve_request_metadata() {
+    let _guard = integration_lock();
+    require_browser_integration_prereqs!();
+    let gateway = SchedulerGateway::start(|config, fake_url| {
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.research_timeout_ms = Some(15_000);
+            gateway.queue_timeout_ms = Some(15_000);
+        }
+    });
+
+    let primary = gateway.spawn_chat_body(
+        openclaude_request_body(
+            "tablinq-research",
+            "hold the browser session",
+            "primary",
+            false,
+            None,
+        ),
+        Some("req-subagent-primary"),
+        Some("openclaude"),
+        20_000,
+    );
+
+    thread::sleep(Duration::from_millis(250));
+
+    let queued = gateway.spawn_chat_body(
+        openclaude_request_body(
+            "tablinq-instant",
+            "wait as a queued subagent request",
+            "subagent",
+            false,
+            Some("req-subagent-primary"),
+        ),
+        Some("req-subagent-queued"),
+        Some("openclaude"),
+        20_000,
+    );
+
+    gateway.wait_for_scheduler(
+        |scheduler| scheduler["running"] == 1 && scheduler["queued"] == 1,
+        "expected the subagent request to queue behind the primary request",
+    );
+
+    let cancel = gateway.cancel("req-subagent-primary", 5_000);
+    assert_eq!(cancel.status_code, 200);
+
+    let primary = primary.join().unwrap();
+    assert_eq!(primary.status_code, 409);
+    let queued = queued.join().unwrap();
+    assert_eq!(queued.status_code, 200);
+    let queued_body: Value = serde_json::from_slice(&queued.body).unwrap();
+    assert_eq!(queued_body["tablinq_request_role"], "subagent");
+    assert_eq!(
+        queued_body["tablinq_parent_request_id"],
+        "req-subagent-primary"
+    );
+
+    let summary = gateway.request_summary("req-subagent-queued", 10_000);
+    assert_eq!(summary.status_code, 200);
+    let summary_body: Value = serde_json::from_slice(&summary.body).unwrap();
+    assert_eq!(summary_body["data"]["request_role"], "subagent");
+    assert_eq!(
+        summary_body["data"]["parent_request_id"],
+        "req-subagent-primary"
+    );
+
+    gateway.shutdown();
+}
+
+#[test]
+fn queued_subagent_requests_surface_queue_timeout_metadata_instead_of_policy_refusal() {
+    let _guard = integration_lock();
+    require_browser_integration_prereqs!();
+    let gateway = SchedulerGateway::start(|config, fake_url| {
+        config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
+        if let Some(gateway) = config.file.gateway.as_mut() {
+            gateway.research_timeout_ms = Some(5_000);
+            gateway.queue_timeout_ms = Some(250);
+        }
+    });
+
+    let primary = gateway.spawn_chat_body(
+        openclaude_request_body(
+            "tablinq-research",
+            "hold the browser session",
+            "primary",
+            false,
+            None,
+        ),
+        Some("req-subagent-timeout-primary"),
+        Some("openclaude"),
+        20_000,
+    );
+
+    thread::sleep(Duration::from_millis(150));
+
+    let queued = gateway.post_chat_body(
+        &openclaude_request_body(
+            "tablinq-instant",
+            "time out as a queued subagent request",
+            "subagent",
+            false,
+            Some("req-subagent-timeout-primary"),
+        ),
+        Some("req-subagent-timeout"),
+        Some("openclaude"),
+        20_000,
+    );
+    let queued_body = expect_retry_error(&queued, 429, "queue_timeout");
+    assert_eq!(queued_body["request_id"], "req-subagent-timeout");
+    assert_eq!(queued_body["job_id"].as_str().is_some(), true);
+    assert_eq!(queued_body["retry_after_ms"], 250);
+    assert_ne!(queued_body["error"]["code"], "subagents_disabled");
+    assert!(
+        queued_body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("queue timeout")
+    );
+
+    let summary = gateway.request_summary("req-subagent-timeout", 10_000);
+    assert_eq!(summary.status_code, 200);
+    let summary_body: Value = serde_json::from_slice(&summary.body).unwrap();
+    assert_eq!(summary_body["data"]["request_role"], "subagent");
+    assert_eq!(
+        summary_body["data"]["parent_request_id"],
+        "req-subagent-timeout-primary"
+    );
+
+    let cancel = gateway.cancel("req-subagent-timeout-primary", 5_000);
+    assert_eq!(cancel.status_code, 200);
+    let primary = primary.join().unwrap();
+    assert_eq!(primary.status_code, 409);
+
+    gateway.shutdown();
+}
