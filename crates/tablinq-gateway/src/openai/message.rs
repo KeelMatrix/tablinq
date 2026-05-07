@@ -15,14 +15,24 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<FlattenedMes
     let mut file_ids = request.tablinq_file_ids.clone();
 
     for message in &request.messages {
+        if message.role.trim() != "user" {
+            return Err(invalid_request_error(
+                "unsupported_role",
+                format!(
+                    "message role {} is not supported; only user messages are accepted for browser-backed submission",
+                    message.role
+                ),
+            )
+            .into());
+        }
         let mut text_parts = Vec::new();
-        match &message.content {
-            MessageContent::Text(text) => {
+        match message.content.as_ref() {
+            Some(MessageContent::Text(text)) => {
                 if !text.trim().is_empty() {
                     text_parts.push(text.to_owned());
                 }
             }
-            MessageContent::Parts(parts) => {
+            Some(MessageContent::Parts(parts)) => {
                 for part in parts {
                     match part.kind.as_str() {
                         "text" => {
@@ -76,6 +86,13 @@ pub fn flatten_messages(request: &ChatCompletionsRequest) -> Result<FlattenedMes
                     }
                 }
             }
+            None => {
+                return Err(invalid_request_error(
+                    "invalid_message_content",
+                    "user messages must include text content",
+                )
+                .into());
+            }
         }
 
         if !text_parts.is_empty() {
@@ -103,16 +120,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flattens_messages_without_role_prefixes() {
+    fn flattens_user_text_input_text_and_input_file_parts_without_role_prefixes() {
         let request: ChatCompletionsRequest = serde_json::from_value(serde_json::json!({
             "model": "tablinq-instant",
             "tablinq_files": ["seed.txt"],
             "tablinq_file_ids": ["file-seed"],
             "messages": [
-                {
-                    "role": "system",
-                    "content": "follow instructions"
-                },
                 {
                     "role": "user",
                     "content": [
@@ -121,22 +134,6 @@ mod tests {
                         { "type": "input_file", "file_path": "  local.txt  " },
                         { "type": "input_file", "file_id": " file-123 " }
                     ]
-                },
-                {
-                    "role": "assistant",
-                    "content": "prior answer"
-                },
-                {
-                    "role": "tool",
-                    "content": "tool output"
-                },
-                {
-                    "role": "developer",
-                    "content": "developer guidance"
-                },
-                {
-                    "role": "arbitrary_role",
-                    "content": "custom role note"
                 }
             ]
         }))
@@ -144,18 +141,8 @@ mod tests {
 
         let flattened = flatten_messages(&request).expect("flattened messages");
 
-        assert_eq!(
-            flattened.prompt,
-            "follow instructions\n\nfirst line\nsecond line\n\nprior answer\n\ntool output\n\ndeveloper guidance\n\ncustom role note"
-        );
-        for label in [
-            "USER:",
-            "SYSTEM:",
-            "ASSISTANT:",
-            "TOOL:",
-            "DEVELOPER:",
-            "ARBITRARY_ROLE:",
-        ] {
+        assert_eq!(flattened.prompt, "first line\nsecond line");
+        for label in ["USER:", "SYSTEM:", "ASSISTANT:", "TOOL:", "DEVELOPER:"] {
             assert!(
                 !flattened.prompt.contains(label),
                 "prompt contained {label}"
@@ -181,5 +168,22 @@ mod tests {
         let flattened = flatten_messages(&request).expect("flattened messages");
 
         assert_eq!(flattened.prompt, "raw user query unchanged");
+    }
+
+    #[test]
+    fn non_user_roles_are_rejected_before_flattening() {
+        let request: ChatCompletionsRequest = serde_json::from_value(serde_json::json!({
+            "model": "tablinq-instant",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "follow instructions"
+                }
+            ]
+        }))
+        .expect("request decodes");
+
+        let err = flatten_messages(&request).expect_err("non-user role should fail");
+        assert!(err.to_string().contains("only user messages"));
     }
 }

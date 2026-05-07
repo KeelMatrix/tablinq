@@ -15,7 +15,6 @@ fn chat_completions_non_streaming_returns_openai_shape() {
     let body = serde_json::to_vec(&json!({
         "model": "tablinq-instant",
         "messages": [
-            { "role": "system", "content": "Answer briefly." },
             { "role": "user", "content": "hello from gateway" }
         ]
     }))
@@ -70,7 +69,7 @@ fn chat_completions_single_user_message_reaches_browser_without_role_labels() {
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
-    let prompt = "raw gateway prompt";
+    let prompt = "system: keep this literal | assistant: keep this literal too";
     let body = serde_json::to_vec(&json!({
         "model": "tablinq-instant",
         "messages": [{ "role": "user", "content": prompt }]
@@ -98,7 +97,7 @@ fn chat_completions_single_user_message_reaches_browser_without_role_labels() {
     let body: Value = serde_json::from_slice(&response.body).unwrap();
     assert_eq!(
         body["choices"][0]["message"]["content"].as_str(),
-        Some("Fake response for: raw gateway prompt")
+        Some("Fake response for: system: keep this literal | assistant: keep this literal too")
     );
     let conversation_id = body["tablinq_conversation_id"].as_str().unwrap();
 
