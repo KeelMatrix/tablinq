@@ -34,7 +34,7 @@ Recommended posture:
 - keep `max_parallel_requests = 1`
 - keep `max_parallel_branches = 1`
 - keep subagents disabled by default
-- prefer `stream = true` for interactive work and fast cancellation
+- omit `stream` or set `stream = false`; `stream = true` is rejected because browser-backed ChatGPT drafts may be rewritten before finalization
 - set client timeouts above Tablinq's own upstream timeouts
 - expect small built-in browser interaction jitters and a longer pre-submit jitter; they exist to keep browser-driven actions closer to human pacing and reduce provider countermeasures
 
@@ -116,7 +116,7 @@ Recommended starting points:
 
 Also:
 
-- keep streaming enabled when the client wants fast cancellation
+- keep `stream` omitted or explicitly `false`; use `POST /v1/requests/{request_id}/cancel` for cancellation instead of SSE
 - on `429`, wait for `retry_after_ms` before retrying
 - use `GET /v1/requests?status=<status>&limit=<n>&offset=<n>` for paginated request polling
 - inspect `GET /v1/requests/{request_id}` or `GET /v1/usage` to separate queue delay from upstream execution time
@@ -163,7 +163,7 @@ curl -H "Authorization: Bearer $TABLINQ_API_KEY" \
 3. Read artifact metadata through `GET /v1/artifacts`.
 4. Download artifact content through `GET /v1/artifacts/{id}/content`.
 
-`POST /v1/chat/completions` also accepts direct local file paths through `tablinq_files`, but uploaded `tablinq_file_ids` are the safer provider-facing contract. Tool calling, structured response formats other than plain text, and `n > 1` are rejected because the upstream execution is one browser conversation, not a parallel stateless API.
+`POST /v1/chat/completions` also accepts direct local file paths through `tablinq_files`, but uploaded `tablinq_file_ids` are the safer provider-facing contract. Tool calling, `stream = true`, structured response formats other than plain text, and `n > 1` are rejected because the upstream execution is one browser conversation, not a parallel stateless API.
 
 ## Interruption and recovery behavior
 
@@ -171,7 +171,7 @@ Provider clients should expect a browser-backed lifecycle:
 
 - local client disconnects do not necessarily stop upstream browser work
 - interrupted requests may later reconcile as `recovered`
-- streaming resumes only when Tablinq can safely match the live browser state to the interrupted request
+- live streaming is disabled for correctness because browser-backed ChatGPT drafts are not append-only stable
 - prompts are not blindly resubmitted by default
 
 For the provider page failure `Something went wrong while generating the response...`, Tablinq uses a separate recovery path:

@@ -52,9 +52,9 @@ pub fn provider_capability_catalog(
                 "downloadable artifacts were not observed in the current attached browser-backed ChatGPT snapshot",
             ),
             "streaming": json!({
-                "gateway_support": "supported",
-                "stable_preset_ids": preset_ids,
-                "note": "streaming responses are supported by the gateway, but live execution still depends on an attached browser-backed ChatGPT tab",
+                "gateway_support": "unsupported",
+                "stable_preset_ids": Vec::<String>::new(),
+                "note": "live streaming is disabled for correctness because browser-backed ChatGPT responses are not append-only stable and may be rewritten before finalization; use stream:false or omit the option",
             }),
         },
         "max_safe_parallelism": {

@@ -239,35 +239,25 @@ fn chat_completions_cancel_running_research_request() {
 }
 
 #[test]
-fn chat_completions_cancel_running_streaming_ask_request() {
+fn chat_completions_reject_stream_true_before_queueing_or_execution() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();
     let gateway = SchedulerGateway::start(|config, fake_url| {
         config.file.browser_target_url = Some(fake_url.to_owned());
     });
 
-    let body = streaming_chat_completion_body("tablinq-instant", "cancel a running ask stream");
-    let running = gateway.spawn_chat_body(body, Some("req-stream-cancel"), None, 20_000);
+    let body = streaming_chat_completion_body("tablinq-instant", "reject before queue");
+    let response = gateway.post_chat_body(&body, Some("req-stream-cancel"), None, 20_000);
+    assert_eq!(response.status_code, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["error"]["code"], "streaming_unsupported");
 
-    thread::sleep(Duration::from_millis(250));
+    let scheduler = gateway.scheduler_status();
+    assert_eq!(scheduler["scheduler"]["running"], 0);
+    assert_eq!(scheduler["scheduler"]["queued"], 0);
 
-    let cancel = gateway.cancel("req-stream-cancel", 5_000);
-    assert_eq!(cancel.status_code, 200);
-    let cancel_body: Value = serde_json::from_slice(&cancel.body).unwrap();
-    assert_eq!(cancel_body["accepted"], true);
-    assert_eq!(cancel_body["state"], "running");
-    assert!(
-        cancel_body["message"]
-            .as_str()
-            .unwrap()
-            .contains("cancellation requested")
-    );
-
-    let running = running.join().unwrap();
-    assert_eq!(running.status_code, 200);
-    let body = String::from_utf8(running.body).unwrap();
-    assert!(body.contains("\"code\":\"cancelled\""));
-    assert!(body.contains("[DONE]"));
+    let summary = gateway.request_summary("req-stream-cancel", 5_000);
+    assert_eq!(summary.status_code, 404);
 
     gateway.shutdown();
 }
