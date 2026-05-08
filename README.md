@@ -205,10 +205,12 @@ flowchart LR
     IPC --> Daemon["gptd daemon"]
     Daemon --> DB["SQLite + state root"]
     Daemon --> Adapter["browser adapter (TS + Playwright attach runtime)"]
+    Gateway["OpenAI-compatible HTTP gateway"] --> GatewayCore["in-process shared core service"]
+    GatewayCore --> DB
+    GatewayCore --> Adapter
     Adapter --> Browser["attachable Chrome / Edge profile"]
     Browser --> Extension["MV3 extension"]
     Extension --> Page["ChatGPT tab"]
-    Gateway["OpenAI-compatible HTTP gateway"] --> Daemon
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full model.

@@ -53,7 +53,7 @@
 - TS build: `pnpm build`
 - Format check: `cargo fmt --all --check` and `pnpm format`
 - Local CI mirror: `pnpm run ci:local`
-- Full non-package CI mirror: `pnpm run ci:local:all`
+- Full CI parity mirror: `pnpm run ci:local:all` or `pnpm run ci:local:full`
 - Package smoke mirror: `pnpm run ci:local:package-smoke`
 - Start daemon: `cargo run -p gpt -- daemon start`
 - Check daemon: `cargo run -p gpt -- daemon status`
