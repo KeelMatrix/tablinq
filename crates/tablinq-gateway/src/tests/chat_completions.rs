@@ -2,7 +2,7 @@
 use super::*;
 
 #[test]
-fn chat_completions_non_streaming_returns_openai_shape() {
+fn chat_completions_without_stream_option_falls_back_to_non_streaming_path() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
@@ -55,6 +55,58 @@ fn chat_completions_non_streaming_returns_openai_shape() {
     assert_eq!(body["usage"]["completion_tokens"], Value::Null);
     assert_eq!(body["usage"]["total_tokens"], Value::Null);
     assert_eq!(body["tablinq_usage"]["status"], "unknown");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn chat_completions_with_explicit_stream_false_reaches_the_normal_path() {
+    let _guard = integration_lock();
+    require_browser_integration_prereqs!();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url);
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let body = serde_json::to_vec(&json!({
+        "model": "tablinq-instant",
+        "stream": false,
+        "messages": [
+            { "role": "user", "content": "hello from explicit stream false" }
+        ]
+    }))
+    .unwrap();
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+            ("x-request-id", "req-stream-false"),
+        ],
+        &body,
+        20_000,
+    )
+    .unwrap();
+    assert_eq!(
+        response.status_code,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["request_id"], "req-stream-false");
+    assert_eq!(body["model"], "tablinq-instant");
+    assert_eq!(body["choices"][0]["message"]["role"], "assistant");
+    assert_eq!(body["choices"][0]["finish_reason"], "stop");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -292,7 +344,7 @@ fn chat_completions_reject_unknown_conversation_ids() {
 }
 
 #[test]
-fn chat_completions_streaming_emits_sse_chunks_and_done() {
+fn chat_completions_stream_true_returns_a_clear_openai_error() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
@@ -323,14 +375,15 @@ fn chat_completions_streaming_emits_sse_chunks_and_done() {
         20_000,
     )
     .unwrap();
-    assert_eq!(response.status_code, 200);
-    assert_eq!(
-        response.headers.get("content-type").map(String::as_str),
-        Some("text/event-stream")
+    assert_eq!(response.status_code, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["error"]["code"], "streaming_unsupported");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("rewritten before finalization")
+                && message.contains("stream:false"))
     );
-    let text = String::from_utf8(response.body).unwrap();
-    assert!(text.contains("chat.completion.chunk"));
-    assert!(text.contains("[DONE]"));
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -339,20 +392,20 @@ fn chat_completions_streaming_emits_sse_chunks_and_done() {
 }
 
 #[test]
-fn chat_completions_streaming_errors_include_request_ids_and_openai_error_objects() {
+fn chat_completions_stream_true_errors_preserve_request_ids_and_openai_shape() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let (_dir, mut config) = test_config();
-    config.file.browser_target_url = Some(format!("{fake_url}/?missing=search"));
+    config.file.browser_target_url = Some(fake_url);
     let state_root = config.paths.state_root.clone();
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
     let body = serde_json::to_vec(&json!({
-        "model": "tablinq-search",
+        "model": "tablinq-instant",
         "stream": true,
-        "messages": [{ "role": "user", "content": "force a streaming capability error" }]
+        "messages": [{ "role": "user", "content": "reject this streaming request" }]
     }))
     .unwrap();
     let response = http_request(
@@ -369,19 +422,11 @@ fn chat_completions_streaming_errors_include_request_ids_and_openai_error_object
         20_000,
     )
     .unwrap();
-    assert_eq!(response.status_code, 200);
-    assert_eq!(
-        response.headers.get("content-type").map(String::as_str),
-        Some("text/event-stream")
-    );
-    let text = String::from_utf8(response.body).unwrap();
-    assert!(text.contains("\"object\":\"error\""), "{text}");
-    assert!(
-        text.contains("\"request_id\":\"req-stream-capability\""),
-        "{text}"
-    );
-    assert!(text.contains("\"code\":\"capability_missing\""), "{text}");
-    assert!(text.contains("[DONE]"), "{text}");
+    assert_eq!(response.status_code, 400);
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["request_id"], "req-stream-capability");
+    assert_eq!(body["error"]["code"], "streaming_unsupported");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

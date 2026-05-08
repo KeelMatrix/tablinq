@@ -132,19 +132,22 @@ pub(crate) fn handle_provider_request(
                         "browser submission preserves message text exactly and does not add transcript wrappers",
                         "extra conversation context is not supported in browser submission",
                         "unsupported message context is rejected before queueing",
+                        "stream=true is rejected before queueing because browser-backed ChatGPT drafts may be rewritten before finalization",
                     ],
                     "tolerated_parameters": [
                         "common generation tuning parameters",
                         "client metadata parameters",
-                        "stream shaping parameters",
+                        "stream shaping parameters when stream remains false",
                     ],
                     "unsupported_parameters": [
+                        "live streaming responses",
                         "function-call payloads",
                         "structured output formats",
                         "multiple-choice fanout",
                     ],
                     "constraints": [
                         "n must be 1",
+                        "stream must be false or omitted",
                         "only user-authored text content is forwarded to the browser",
                     ],
                 },
@@ -186,7 +189,7 @@ pub(crate) fn handle_provider_request(
                 {
                     "code": "upstream_timeout",
                     "behavior": "refuse",
-                    "when": "the attached ChatGPT tab stalls instead of producing a stable streamed response",
+                    "when": "the attached ChatGPT tab stalls instead of producing a finalized response",
                 }
             ],
             "request_queueing": {
@@ -205,7 +208,8 @@ pub(crate) fn handle_provider_request(
                         "tablinq-thinking-standard",
                         "tablinq-search",
                     ],
-                    "streaming": true,
+                    "streaming": false,
+                    "streaming_note": "set stream to false or omit it; browser-backed ChatGPT drafts may be rewritten before finalization",
                     "max_parallel_requests": 1,
                     "subagents": "queued",
                     "subagent_recommendation": "queue",
@@ -217,7 +221,8 @@ pub(crate) fn handle_provider_request(
                         "tablinq-search",
                         "tablinq-research",
                     ],
-                    "streaming": true,
+                    "streaming": false,
+                    "streaming_note": "set stream to false or omit it; browser-backed ChatGPT drafts may be rewritten before finalization",
                     "max_parallel_requests": 1,
                     "artifacts": true,
                     "files": true,

@@ -71,11 +71,6 @@ pub fn model_object(
     capability_source: &str,
 ) -> Value {
     let snapshot = model_snapshot_status(spec, report);
-    let streaming = capability_status(
-        report,
-        composer_submission_ready,
-        "streaming submission is unavailable until the attached browser-backed ChatGPT tab is ready",
-    );
     let files = capability_status(
         report,
         |value| composer_submission_ready(value) && value.matrix.upload_control_visible,
@@ -97,8 +92,8 @@ pub fn model_object(
         "tablinq_model_class": spec.model_class.map(model_class_name),
         "tablinq_effort": spec.effort.map(effort_name),
         "tablinq_execution_kind": if spec.uses_research { "research" } else { "ask" },
-        "tablinq_streaming": streaming.availability == "available",
-        "tablinq_streaming_status": streaming.availability,
+        "tablinq_streaming": false,
+        "tablinq_streaming_status": "unsupported",
         "tablinq_files": files.availability == "available",
         "tablinq_files_status": files.availability,
         "tablinq_artifacts": artifacts.availability == "available",
@@ -410,8 +405,8 @@ mod tests {
 
         let model = model_object(&PROVIDER_MODELS[0], Some(&report), "live");
 
-        assert_eq!(model["tablinq_streaming"], true);
-        assert_eq!(model["tablinq_streaming_status"], "available");
+        assert_eq!(model["tablinq_streaming"], false);
+        assert_eq!(model["tablinq_streaming_status"], "unsupported");
         assert_eq!(model["tablinq_files"], false);
         assert_eq!(model["tablinq_files_status"], "unavailable");
         assert_eq!(model["tablinq_artifacts"], false);

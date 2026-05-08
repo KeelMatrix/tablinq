@@ -7,7 +7,7 @@ Use Tablinq's local gateway as an OpenAI-compatible provider for Paperclip.
 - bring up Tablinq through the normal attach-first flow
 - base URL: `http://127.0.0.1:3847/v1`
 - API key: `gateway.api_key` from `config.toml`
-- streaming: `true`
+- streaming: omit the option or set `false`
 - max parallel requests: `1`
 - ask or search timeout: start around `180s`
 - research timeout: start around `900s`
@@ -29,7 +29,7 @@ Paperclip is a good fit when you want file-backed browser automation, research-s
   "baseURL": "http://127.0.0.1:3847/v1",
   "apiKey": "<gateway.api_key>",
   "model": "tablinq-research",
-  "stream": true,
+  "stream": false,
   "max_parallel_requests": 1,
   "subagents": false,
   "request_timeout_ms": 900000
@@ -76,7 +76,7 @@ For request-scoped evidence capture and how to consume `GET /v1/requests/{reques
 ```json
 {
   "model": "tablinq-research",
-  "stream": true,
+  "stream": false,
   "tablinq_new_conversation": true,
   "tablinq_file_ids": ["file-123"],
   "messages": [

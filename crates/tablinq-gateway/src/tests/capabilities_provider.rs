@@ -97,6 +97,12 @@ fn provider_endpoint_exposes_openclaude_preset_metadata() {
             "tablinq-search",
         ])
     );
+    assert_eq!(body["presets"]["openclaude"]["streaming"], false);
+    assert!(
+        body["presets"]["openclaude"]["streaming_note"]
+            .as_str()
+            .is_some_and(|note| note.contains("stream to false or omit it"))
+    );
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -142,6 +148,7 @@ fn provider_endpoint_exposes_paperclip_preset_metadata() {
         "queue"
     );
     assert_eq!(body["presets"]["paperclip"]["max_parallel_requests"], 1);
+    assert_eq!(body["presets"]["paperclip"]["streaming"], false);
     assert_eq!(body["presets"]["paperclip"]["files"], true);
     assert_eq!(body["presets"]["paperclip"]["artifacts"], true);
     assert_eq!(
@@ -200,7 +207,25 @@ fn documented_provider_contract_surfaces_are_present() {
         provider_body["openai_compatibility"]["chat_completions"]["input_handling"][1],
         "browser submission preserves message text exactly and does not add transcript wrappers"
     );
+    assert!(
+        provider_body["openai_compatibility"]["chat_completions"]["unsupported_parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "live streaming responses")
+    );
+    assert!(
+        provider_body["openai_compatibility"]["chat_completions"]["constraints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "stream must be false or omitted")
+    );
     assert_eq!(provider_body["request_queueing"]["dependent_work"], "queue");
+    assert_eq!(
+        provider_body["provider_capabilities"]["capabilities"]["streaming"]["gateway_support"],
+        "unsupported"
+    );
     assert_eq!(
         provider_body["presets"]["openclaude"]["max_parallel_requests"],
         1
@@ -289,7 +314,7 @@ fn documented_provider_contract_surfaces_are_present() {
 }
 
 #[test]
-fn openclaude_primary_streaming_requests_keep_sse_shape() {
+fn openclaude_primary_streaming_requests_are_rejected() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
@@ -316,14 +341,14 @@ fn openclaude_primary_streaming_requests_keep_sse_shape() {
     .unwrap();
     assert_eq!(
         response.status_code,
-        200,
+        400,
         "{}",
         String::from_utf8_lossy(&response.body)
     );
-    let text = String::from_utf8(response.body).unwrap();
-    assert!(text.contains("chat.completion.chunk"));
-    assert!(text.contains("\"tablinq_request_role\":\"primary\""));
-    assert!(text.contains("[DONE]"));
+    let body: Value = serde_json::from_slice(&response.body).unwrap();
+    assert_eq!(body["request_id"], "oc-primary-1");
+    assert_eq!(body["error"]["code"], "streaming_unsupported");
+    assert_eq!(body["error"]["type"], "invalid_request_error");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -470,6 +495,8 @@ fn models_endpoint_returns_openai_model_catalog() {
     assert_eq!(models[0]["id"], "tablinq-instant");
     assert_eq!(models[0]["tablinq_model_class"], "instant");
     assert_eq!(models[0]["tablinq_effort"], "none");
+    assert_eq!(models[0]["tablinq_streaming"], false);
+    assert_eq!(models[0]["tablinq_streaming_status"], "unsupported");
     assert_eq!(models[1]["id"], "tablinq-thinking-standard");
     assert_eq!(models[1]["tablinq_model_class"], "thinking");
     assert_eq!(models[1]["tablinq_effort"], "standard");

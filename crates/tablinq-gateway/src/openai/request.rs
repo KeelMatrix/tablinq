@@ -158,6 +158,13 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
         )
         .into());
     }
+    if request.stream {
+        return Err(invalid_request_error(
+            "streaming_unsupported",
+            "browser-backed ChatGPT responses are not append-only stable and may be rewritten before finalization, so live streaming is disabled for correctness; use stream:false or omit the option",
+        )
+        .into());
+    }
     if let Some(tools) = request.tools.as_ref() {
         let unsupported = match tools {
             Value::Array(items) => !items.is_empty(),
@@ -320,6 +327,31 @@ mod tests {
 
         let err = validate_chat_request(&request).expect_err("unknown model should fail");
         assert!(err.to_string().contains("is not supported"));
+    }
+
+    #[test]
+    fn stream_true_is_rejected_for_correctness() {
+        let request: ChatCompletionsRequest = serde_json::from_value(json!({
+            "model": "tablinq-instant",
+            "stream": true,
+            "messages": [{ "role": "user", "content": "hello" }]
+        }))
+        .expect("request decodes");
+
+        let err = validate_chat_request(&request).expect_err("streaming should fail");
+        assert!(err.to_string().contains("append-only stable"));
+    }
+
+    #[test]
+    fn omitted_stream_defaults_to_false() {
+        let request: ChatCompletionsRequest = serde_json::from_value(json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "hello" }]
+        }))
+        .expect("request decodes");
+
+        assert!(!request.stream);
+        validate_chat_request(&request).expect("request validates");
     }
 
     #[test]

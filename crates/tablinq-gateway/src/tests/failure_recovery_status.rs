@@ -236,14 +236,13 @@ fn request_summary_records_recovered_status_when_the_gateway_client_disconnects(
     require_browser_integration_prereqs!();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
     let (_dir, mut config) = test_config();
-    config.file.browser_target_url = Some(fake_url);
+    config.file.browser_target_url = Some(format!("{fake_url}/?scenario=research-success"));
     let state_root = config.paths.state_root.clone();
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
     let body = serde_json::to_vec(&json!({
-        "model": "tablinq-instant",
-        "stream": true,
+        "model": "tablinq-research",
         "messages": [{ "role": "user", "content": "recover after the gateway client disconnects" }]
     }))
     .unwrap();
@@ -263,8 +262,7 @@ fn request_summary_records_recovered_status_when_the_gateway_client_disconnects(
     .unwrap();
     stream.write_all(&body).unwrap();
     stream.flush().unwrap();
-    let mut buffer = [0u8; 512];
-    let _ = stream.read(&mut buffer).unwrap_or(0);
+    thread::sleep(Duration::from_millis(250));
     let _ = stream.shutdown(std::net::Shutdown::Both);
     drop(stream);
 
