@@ -48,19 +48,17 @@ export function createMenuRuntime({
 
   function syncSelectedState() {
     const selectedMode = document.body.dataset.selectedMode;
+    const selectedModel = document.body.dataset.selectedModel;
+    const selectedEffort = document.body.dataset.selectedEffort;
     applyPressedState("[data-mode]", selectedMode);
 
     document.querySelectorAll("[data-model]").forEach((element) => {
-      const selected =
-        element.getAttribute("data-model") ===
-        document.body.dataset.selectedModel;
+      const selected = element.getAttribute("data-model") === selectedModel;
       element.setAttribute("aria-pressed", selected ? "true" : "false");
       element.dataset.selected = selected ? "true" : "false";
     });
     document.querySelectorAll("[data-effort]").forEach((element) => {
-      const selected =
-        element.getAttribute("data-effort") ===
-        document.body.dataset.selectedEffort;
+      const selected = element.getAttribute("data-effort") === selectedEffort;
       element.setAttribute("aria-pressed", selected ? "true" : "false");
       element.dataset.selected = selected ? "true" : "false";
     });
@@ -75,45 +73,34 @@ export function createMenuRuntime({
       }
     }
 
-    syncModernMenuOption(
-      "#model-option-instant",
-      document.body.dataset.selectedModel === "instant",
-    );
+    syncModernMenuOption("#model-option-instant", selectedModel === "instant");
     syncModernMenuOption(
       "#model-option-thinking",
-      document.body.dataset.selectedModel === "thinking",
+      selectedModel === "thinking",
     );
-    syncModernMenuOption("#model-option-pro", false);
+    syncModernMenuOption("#model-option-pro", selectedModel === "pro");
     syncModernMenuOption(
       "#effort-option-standard",
-      document.body.dataset.selectedEffort === "standard",
+      selectedEffort === "standard",
     );
     syncModernMenuOption(
       "#effort-option-extended",
-      document.body.dataset.selectedEffort === "extended",
+      selectedEffort === "extended",
     );
     syncModernMenuOption(
       "#modal-effort-standard",
-      document.body.dataset.selectedEffort === "standard",
+      selectedEffort === "standard",
     );
     syncModernMenuOption(
       "#modal-effort-extended",
-      document.body.dataset.selectedEffort === "extended",
+      selectedEffort === "extended",
     );
-    syncModernMenuOption(
-      "#modal-model-instant",
-      document.body.dataset.selectedModel === "instant",
-    );
-    syncModernMenuOption(
-      "#modal-model-thinking",
-      document.body.dataset.selectedModel === "thinking",
-    );
-    syncModernMenuOption("#modal-model-pro", false);
+    syncModernMenuOption("#modal-model-instant", selectedModel === "instant");
+    syncModernMenuOption("#modal-model-thinking", selectedModel === "thinking");
+    syncModernMenuOption("#modal-model-pro", selectedModel === "pro");
     if (modalEffortCombobox instanceof HTMLElement) {
       modalEffortCombobox.textContent =
-        document.body.dataset.selectedEffort === "extended"
-          ? "Extended"
-          : "Standard";
+        selectedEffort === "extended" ? "Extended" : "Standard";
     }
 
     const modelMenu = document.querySelector("#tablinq-model-menu");
@@ -124,9 +111,15 @@ export function createMenuRuntime({
       modelPickerTrigger instanceof HTMLElement
     ) {
       modelPickerTrigger.textContent =
-        document.body.dataset.selectedModel === "thinking"
-          ? `5.4 ${document.body.dataset.selectedEffort === "extended" ? "Extended" : "Standard"}`
-          : "Instant";
+        selectedModel === "thinking"
+          ? `5.4 ${selectedEffort === "extended" ? "Extended" : "Standard"}`
+          : selectedModel === "pro"
+            ? selectedEffort === "extended"
+              ? "Pro Extended"
+              : "Pro Thinking"
+            : selectedModel === "latest-5-5"
+              ? "Latest 5.5"
+              : "Instant";
     }
     modelMenu?.toggleAttribute("hidden", !modelMenuOpen);
     modelMenu?.querySelectorAll(menuChoiceSelector).forEach((element) => {
@@ -136,7 +129,10 @@ export function createMenuRuntime({
     const currentUiVariant = variant === "live" || variant === "menu";
     const effortVisible =
       hasControl("effort") &&
-      (!currentUiVariant || document.body.dataset.selectedModel === "thinking");
+      (!currentUiVariant ||
+        selectedModel === "thinking" ||
+        selectedModel === "pro" ||
+        selectedModel === "latest-5-5");
     const effortToggle = document.querySelector("#thinking-effort-trigger");
     const effortToggleIsMenuTrigger =
       effortToggle instanceof HTMLElement &&
@@ -144,9 +140,15 @@ export function createMenuRuntime({
     if (effortToggleIsMenuTrigger) {
       effortToggle.toggleAttribute("hidden", !effortVisible);
       effortToggle.textContent =
-        document.body.dataset.selectedEffort === "extended"
-          ? "Extended thinking"
-          : "Thinking";
+        selectedModel === "pro"
+          ? selectedEffort === "extended"
+            ? "Pro Extended"
+            : "Pro Thinking"
+          : selectedModel === "latest-5-5"
+            ? "Latest 5.5"
+            : selectedEffort === "extended"
+              ? "Extended thinking"
+              : "Thinking";
       if (!effortVisible) {
         effortToggle.setAttribute("aria-expanded", "false");
       }

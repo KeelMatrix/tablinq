@@ -19,12 +19,16 @@ export async function findVisiblePopupChoicePoint(
   page: Page,
   token: string,
   timeoutMs = INTERACTION_TIMEOUT_MS,
+  excludeTokens: readonly string[] = [],
 ): Promise<{ locator: Locator; checked: string | null } | null> {
   const popupChoices = page.locator(
     "[role='menuitemradio']:visible, [role='menuitem']:visible, [role='option']:visible",
   );
   const deadline = Date.now() + timeoutMs;
   const expectedToken = token.toLowerCase();
+  const disallowedTokens = excludeTokens
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
   while (Date.now() < deadline) {
     const count = await popupChoices.count();
     for (let index = 0; index < count; index += 1) {
@@ -33,7 +37,10 @@ export async function findVisiblePopupChoicePoint(
         .replace(/\s+/g, " ")
         .trim()
         .toLowerCase();
-      if (!text.includes(expectedToken)) {
+      if (
+        !text.includes(expectedToken) ||
+        disallowedTokens.some((tokenToExclude) => text.includes(tokenToExclude))
+      ) {
         continue;
       }
       return {
@@ -61,8 +68,12 @@ export async function readToggleState(locator: Locator): Promise<boolean> {
 export async function selectedChoiceMatches(
   page: Page,
   tokens: readonly string[],
+  excludeTokens: readonly string[] = [],
 ): Promise<boolean> {
   const expectedTokens = tokens
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const disallowedTokens = excludeTokens
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
   if (expectedTokens.length === 0) {
@@ -95,7 +106,11 @@ export async function selectedChoiceMatches(
           .replace(/\\s+/g, " ")
           .trim()
           .toLowerCase();
-        if (tokensToMatch.some((token) => text.includes(token))) {
+        const excluded = ${JSON.stringify(disallowedTokens)};
+        if (
+          !excluded.some((token) => text.includes(token)) &&
+          tokensToMatch.some((token) => text.includes(token))
+        ) {
           return true;
         }
       }
@@ -110,10 +125,14 @@ export async function findVisibleInlineChoicePoint(
   selectors: string,
   tokens: readonly string[],
   timeoutMs = INTERACTION_TIMEOUT_MS,
+  excludeTokens: readonly string[] = [],
 ): Promise<{ locator: Locator; selected: boolean } | null> {
   const inlineChoices = page.locator(selectors);
   const deadline = Date.now() + timeoutMs;
   const expectedTokens = tokens
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+  const disallowedTokens = excludeTokens
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
   while (Date.now() < deadline) {
@@ -131,7 +150,10 @@ export async function findVisibleInlineChoicePoint(
         .replace(/\s+/g, " ")
         .trim()
         .toLowerCase();
-      if (!expectedTokens.some((token) => text.includes(token))) {
+      if (
+        !expectedTokens.some((token) => text.includes(token)) ||
+        disallowedTokens.some((token) => text.includes(token))
+      ) {
         continue;
       }
       return {

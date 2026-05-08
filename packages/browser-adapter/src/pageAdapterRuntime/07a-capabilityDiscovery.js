@@ -39,6 +39,7 @@ function createCapabilityDiscoveryRuntime({
       "legacy",
       "gpt",
       "pro",
+      "latest",
       "standard",
       "extended",
     ]) ||
@@ -115,7 +116,16 @@ function createCapabilityDiscoveryRuntime({
         "button.__composer-pill, button[aria-haspopup], [role='button']",
       ) &&
       !hasToken(name, ["search", "research", "canvas"]) &&
-      hasToken(name, ["thinking", "reasoning", "standard", "extended"])
+      (hasToken(name, [
+        "instant",
+        "thinking",
+        "reasoning",
+        "standard",
+        "extended",
+        "latest",
+        "pro",
+      ]) ||
+        /\b5(?:\.\d+)?\b/.test(name))
     );
   };
 
@@ -138,8 +148,26 @@ function createCapabilityDiscoveryRuntime({
         "button[aria-label*='remove' i][aria-label*='reason' i]",
         "button[aria-label*='remove' i][aria-label*='standard' i]",
         "button[aria-label*='remove' i][aria-label*='extended' i]",
+        "button[aria-label*='remove' i][aria-label*='instant' i]",
+        "button[aria-label*='remove' i][aria-label*='latest' i]",
+        "button[aria-label*='remove' i][aria-label*='pro' i]",
+        "button[aria-label*='remove' i][aria-label*='5.3' i]",
+        "button[aria-label*='remove' i][aria-label*='5.4' i]",
+        "button[aria-label*='remove' i][aria-label*='5.5' i]",
       ],
-      tokens: ["remove", "thinking", "reasoning", "standard", "extended"],
+      tokens: [
+        "remove",
+        "instant",
+        "thinking",
+        "reasoning",
+        "standard",
+        "extended",
+        "latest",
+        "pro",
+        "5.3",
+        "5.4",
+        "5.5",
+      ],
       include: (element) =>
         isComposerModelChip(element) &&
         accessibleName(element).includes("remove"),
@@ -311,7 +339,7 @@ function createCapabilityDiscoveryRuntime({
     );
   };
 
-  const discoverVisibleAliases = ({ keys, exclude }) => {
+  const discoverVisibleAliases = ({ keys, exclude, filter }) => {
     const discovered = {};
     for (const element of actionableElements()) {
       if (exclude?.(element)) {
@@ -322,7 +350,7 @@ function createCapabilityDiscoveryRuntime({
         continue;
       }
       for (const [key, tokens] of Object.entries(keys)) {
-        if (hasToken(name, tokens)) {
+        if (hasToken(name, tokens) && (!filter || filter(key, name))) {
           const current = discovered[key] ?? [];
           discovered[key] = unique([...current, name]);
         }
@@ -330,6 +358,11 @@ function createCapabilityDiscoveryRuntime({
     }
     return discovered;
   };
+
+  const isSupportedModelAlias = (key, name) =>
+    key === "instant"
+      ? hasToken(name, ["instant"]) && !hasToken(name, ["pro"])
+      : hasToken(name, ["thinking"]) && !hasToken(name, ["pro"]);
 
   const discoverVisibleModelAliases = () =>
     discoverVisibleAliases({
@@ -339,6 +372,7 @@ function createCapabilityDiscoveryRuntime({
       },
       exclude: (element) =>
         isModelPickerTrigger(element) || !isModelOption(element),
+      filter: (key, name) => isSupportedModelAlias(key, name),
     });
 
   const discoverVisibleEffortAliases = () =>
@@ -585,7 +619,10 @@ function createCapabilityDiscoveryRuntime({
           ),
           fallbackTokens: modelFallbackTokens(modelClass),
           include: isModelOption,
-          exclude: isModelPickerTrigger,
+          exclude: (element) =>
+            isModelPickerTrigger(element) ||
+            (modelClass === "thinking" &&
+              hasToken(accessibleName(element), ["pro"])),
         })
       : findByAliases({
           aliases: expandAliases(
@@ -596,7 +633,10 @@ function createCapabilityDiscoveryRuntime({
           ),
           fallbackTokens: modelFallbackTokens(modelClass),
           include: isModelOption,
-          exclude: isModelPickerTrigger,
+          exclude: (element) =>
+            isModelPickerTrigger(element) ||
+            (modelClass === "thinking" &&
+              hasToken(accessibleName(element), ["pro"])),
         });
 
   const findOpenModelMenuControl = (report, modelClass) =>
@@ -610,7 +650,10 @@ function createCapabilityDiscoveryRuntime({
       ),
       fallbackTokens: modelFallbackTokens(modelClass),
       include: isModelOption,
-      exclude: isModelPickerTrigger,
+      exclude: (element) =>
+        isModelPickerTrigger(element) ||
+        (modelClass === "thinking" &&
+          hasToken(accessibleName(element), ["pro"])),
     });
 
   const findConcreteEffortControl = (report, effort, roots = []) =>

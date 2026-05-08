@@ -57,7 +57,7 @@ export type HarnessUrlOptions = {
     | "research-reload";
   missing?: string[];
   conversationStyle?: "query" | "path";
-  initialModel?: "instant" | "thinking";
+  initialModel?: "instant" | "thinking" | "pro" | "latest-5-5";
   initialEffort?: "standard" | "extended";
   driftProfile?: "semantic" | "selectorless" | "ambiguous";
   searchClicksBeforeActivate?: number;

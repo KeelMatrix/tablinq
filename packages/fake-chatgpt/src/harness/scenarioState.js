@@ -76,7 +76,10 @@ export function createScenarioState(window) {
   const definition = scenarioRegistry[scenario] ?? {};
   const requestedInitialModel = params.get("initial_model");
   const initialModel =
-    requestedInitialModel === "instant" || requestedInitialModel === "thinking"
+    requestedInitialModel === "instant" ||
+    requestedInitialModel === "thinking" ||
+    requestedInitialModel === "pro" ||
+    requestedInitialModel === "latest-5-5"
       ? requestedInitialModel
       : "instant";
   const requestedInitialEffort = params.get("initial_effort");
@@ -154,6 +157,8 @@ export function initializeScenarioDataset(document, window, config) {
   document.body.dataset.lastMessageId = "";
   document.body.dataset.uploadPopoverOpen = "false";
   document.body.dataset.lastSubmissionMethod = "";
+  document.body.dataset.lastSubmittedModel = "";
+  document.body.dataset.lastSubmittedEffort = "";
   document.body.dataset.staleSubmitClicks = "0";
   document.body.dataset.retryClicks = "0";
   document.body.dataset.intelligenceModalOpen = "false";

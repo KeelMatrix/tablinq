@@ -6,6 +6,7 @@ import { INTERACTION_TIMEOUT_MS } from "../../timing";
 import { clickWithInteractionJitter } from "../common";
 
 import { findVisibleEffortTrigger } from "./effortSelection";
+import { readVisibleComposerSelectionState } from "./selectionState";
 import {
   closeOpenComposerMenus,
   findVisibleInlineChoicePoint,
@@ -102,10 +103,22 @@ export async function findVisibleComposerModelChipRemoveButton(
         "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='reason' i]",
         "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='standard' i]",
         "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='extended' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='instant' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='latest' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='pro' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='5.3' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='5.4' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='5.5' i]",
         "form button[aria-label*='remove' i][aria-label*='think' i]",
         "form button[aria-label*='remove' i][aria-label*='reason' i]",
         "form button[aria-label*='remove' i][aria-label*='standard' i]",
         "form button[aria-label*='remove' i][aria-label*='extended' i]",
+        "form button[aria-label*='remove' i][aria-label*='instant' i]",
+        "form button[aria-label*='remove' i][aria-label*='latest' i]",
+        "form button[aria-label*='remove' i][aria-label*='pro' i]",
+        "form button[aria-label*='remove' i][aria-label*='5.3' i]",
+        "form button[aria-label*='remove' i][aria-label*='5.4' i]",
+        "form button[aria-label*='remove' i][aria-label*='5.5' i]",
       ].join(", "),
     ),
     timeoutMs,
@@ -113,104 +126,19 @@ export async function findVisibleComposerModelChipRemoveButton(
 }
 
 async function visibleComposerModelChipPresent(page: Page): Promise<boolean> {
-  return page
-    .evaluate<boolean>(
-      `(() => {
-      const isVisible = (element) => {
-        if (!(element instanceof HTMLElement)) {
-          return false;
-        }
-        if (element.hidden || element.getAttribute("aria-hidden") === "true") {
-          return false;
-        }
-        const style = window.getComputedStyle(element);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          style.opacity !== "0"
-        );
-      };
-      const textFor = (element) =>
-        [element.textContent ?? "", element.getAttribute("aria-label") ?? ""]
-          .join(" ")
-          .replace(/\\s+/g, " ")
-          .trim()
-          .toLowerCase();
-      const composerRoots = Array.from(
-        document.querySelectorAll("[data-testid='composer-root'], form"),
-      );
-      return composerRoots.some((root) =>
-        Array.from(
-          root.querySelectorAll(
-            "button.__composer-pill, button[aria-haspopup], [role='button']",
-          ),
-        ).some((element) => {
-          if (!isVisible(element)) {
-            return false;
-          }
-          const text = textFor(element);
-          if (
-            text.includes("search") ||
-            text.includes("research") ||
-            text.includes("canvas")
-          ) {
-            return false;
-          }
-          return (
-            text.includes("think") ||
-            text.includes("reason") ||
-            text.includes("standard") ||
-            text.includes("extended")
-          );
-        }),
-      );
-    })()`,
-    )
-    .catch(() => false);
+  const state = await readVisibleComposerSelectionState(page);
+  return state.hasVisibleModelState;
 }
 
 async function visibleComposerModelMatches(
   page: Page,
   modelClass: "instant" | "thinking",
 ): Promise<boolean> {
-  return page
-    .evaluate((requestedModelClass: "instant" | "thinking") => {
-      const textFor = (element: Element) =>
-        (element.textContent ?? "").replace(/\\s+/g, " ").trim().toLowerCase();
-      const isVisible = (element: Element) => {
-        if (!(element instanceof HTMLElement)) {
-          return false;
-        }
-        const style = window.getComputedStyle(element);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          style.opacity !== "0" &&
-          element.getClientRects().length > 0
-        );
-      };
-      return Array.from(
-        document.querySelectorAll(
-          "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
-        ),
-      ).some((element) => {
-        if (!isVisible(element)) {
-          return false;
-        }
-        const text = textFor(element);
-        if (requestedModelClass === "instant") {
-          return text.includes("instant") || text.includes("5.3");
-        }
-        return (
-          text.includes("thinking") ||
-          text.includes("standard") ||
-          text.includes("extended") ||
-          text.includes("5.4") ||
-          text.includes("5.5")
-        );
-      });
-    }, modelClass)
-    .catch(() => false);
+  const state = await readVisibleComposerSelectionState(page);
+  if (state.hasUnsupportedPro) {
+    return false;
+  }
+  return state.model === modelClass;
 }
 
 async function clearVisibleComposerModelChip(page: Page): Promise<boolean> {
@@ -243,7 +171,8 @@ export async function ensureConfiguredModelClass(
     return;
   }
 
-  if (await selectedChoiceMatches(page, aliasTokens)) {
+  const excludeTokens = modelClass === "thinking" ? ["pro"] : [];
+  if (await selectedChoiceMatches(page, aliasTokens, excludeTokens)) {
     return;
   }
   const inlineOption = await findVisibleInlineChoicePoint(
@@ -255,6 +184,7 @@ export async function ensureConfiguredModelClass(
     ].join(", "),
     aliasTokens,
     750,
+    excludeTokens,
   );
   if (inlineOption) {
     if (!inlineOption.selected) {
@@ -297,7 +227,7 @@ export async function ensureConfiguredModelClass(
           locator: preferredOption,
           checked: await preferredOption.getAttribute("aria-checked"),
         }
-      : await findVisiblePopupChoicePoint(page, modelClass, 750);
+      : await findVisiblePopupChoicePoint(page, modelClass, 750, excludeTokens);
   if (option) {
     if (option.checked !== "true") {
       await clickWithInteractionJitter(
@@ -346,7 +276,12 @@ export async function ensureConfiguredModelClass(
           locator: reopenedPreferredOption,
           checked: await reopenedPreferredOption.getAttribute("aria-checked"),
         }
-      : await findVisiblePopupChoicePoint(page, modelClass);
+      : await findVisiblePopupChoicePoint(
+          page,
+          modelClass,
+          INTERACTION_TIMEOUT_MS,
+          excludeTokens,
+        );
   if (!reopenedOption) {
     throw new Error(
       `ui drift: could not find a concrete control for model=${modelClass} after alias discovery`,

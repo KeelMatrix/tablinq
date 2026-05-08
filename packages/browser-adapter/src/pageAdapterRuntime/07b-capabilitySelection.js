@@ -212,7 +212,7 @@ function createCapabilitySelectionRuntime({
 function visibleComposerPillTexts() {
   return Array.from(
     document.querySelectorAll(
-      "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
+      "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
     ),
   )
     .filter((element) => {
@@ -227,26 +227,81 @@ function visibleComposerPillTexts() {
         element.getClientRects().length > 0
       );
     })
-    .map((element) =>
-      (element.textContent ?? "").replace(/\s+/g, " ").trim().toLowerCase(),
-    );
+    .flatMap((element) =>
+      [element.textContent ?? "", element.getAttribute("aria-label") ?? ""]
+        .map((value) => value.replace(/\s+/g, " ").trim().toLowerCase())
+        .filter(Boolean),
+    )
+    .filter((value, index, values) => values.indexOf(value) === index);
+}
+
+function visibleComposerSelectionState() {
+  const texts = visibleComposerPillTexts();
+  const hasUnsupportedPro = texts.some((text) => text.includes("pro"));
+  const hasInstant = texts.some(
+    (text) => text.includes("instant") || text.includes("5.3"),
+  );
+  const hasSupportedThinking = texts.some(
+    (text) =>
+      !text.includes("pro") &&
+      (text.includes("thinking") ||
+        text.includes("standard") ||
+        text.includes("extended") ||
+        text.includes("5.4")),
+  );
+  const hasAmbiguousFiveFive = texts.some(
+    (text) =>
+      text.includes("5.5") &&
+      !text.includes("pro") &&
+      !text.includes("instant") &&
+      !text.includes("thinking") &&
+      !text.includes("standard") &&
+      !text.includes("extended") &&
+      !text.includes("5.3") &&
+      !text.includes("5.4"),
+  );
+  let model = "none";
+  if (
+    hasUnsupportedPro ||
+    hasAmbiguousFiveFive ||
+    (hasInstant && hasSupportedThinking)
+  ) {
+    model = "ambiguous";
+  } else if (hasInstant) {
+    model = "instant";
+  } else if (hasSupportedThinking) {
+    model = "thinking";
+  }
+  let effort = "none";
+  if (hasUnsupportedPro || hasAmbiguousFiveFive) {
+    effort = "ambiguous";
+  } else if (model === "thinking") {
+    effort = texts.some((text) => text.includes("extended"))
+      ? "extended"
+      : "standard";
+  }
+  return {
+    texts,
+    hasVisibleModelState: texts.length > 0,
+    hasUnsupportedPro,
+    model,
+    effort,
+  };
 }
 
 function visibleComposerModelMatches(modelClass) {
-  return visibleComposerPillTexts().some((text) => {
-    if (modelClass === "instant") {
-      return text.includes("instant") || text.includes("5.3");
-    }
-    return (
-      text.includes("thinking") ||
-      text.includes("standard") ||
-      text.includes("extended") ||
-      text.includes("5.4") ||
-      text.includes("5.5")
-    );
-  });
+  const state = visibleComposerSelectionState();
+  if (state.hasUnsupportedPro) {
+    return false;
+  }
+  return state.model === modelClass;
 }
 
 function visibleComposerEffortMatches(effort) {
-  return visibleComposerPillTexts().some((text) => text.includes(effort));
+  const state = visibleComposerSelectionState();
+  return (
+    !state.hasUnsupportedPro &&
+    state.model === "thinking" &&
+    state.effort === effort
+  );
 }

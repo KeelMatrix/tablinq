@@ -46,6 +46,11 @@ export {
   ensureConfiguredMode,
   navigateDirectlyToDeepResearch,
   activateModeControl,
+  assertVisibleComposerSelection,
+  describeVisibleComposerSelection,
+  readVisibleComposerSelectionState,
+  visibleSelectionMatchesEffort,
+  visibleSelectionMatchesModelClass,
 } from "./pageRuntime/configuration";
 export {
   beginDeepResearchRun,
