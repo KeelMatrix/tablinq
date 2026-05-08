@@ -33,7 +33,9 @@
         "ui_drift",
         "download_failed",
         "upload_failed",
-        "research_job_failed"
+        "research_job_failed",
+        "provider_generation_failed_nonretryable",
+        "provider_conversation_load_failed"
       ]
     },
     "message": { "type": "string", "minLength": 1 },
@@ -51,7 +53,11 @@
       "type": "array",
       "items": { "$ref": "#/$defs/strategy_attempt" }
     },
-    "capability_matrix": { "$ref": "#/$defs/capability_matrix" }
+    "capability_matrix": { "$ref": "#/$defs/capability_matrix" },
+    "gateway_request": {
+      "type": ["object", "null"],
+      "allOf": [{ "$ref": "#/$defs/gateway_request_context" }]
+    }
   },
   "$defs": {
     "strategy_attempt": {
@@ -88,6 +94,30 @@
         "research_mode_visible": { "type": "boolean" },
         "upload_control_visible": { "type": "boolean" },
         "downloadable_artifacts_observable": { "type": "boolean" }
+      }
+    },
+    "gateway_request_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "request_path",
+        "client_id",
+        "model",
+        "request_role",
+        "parent_request_id",
+        "job_id",
+        "streaming"
+      ],
+      "properties": {
+        "request_id": { "type": "string", "minLength": 1 },
+        "request_path": { "type": "string", "minLength": 1 },
+        "client_id": { "type": ["string", "null"], "minLength": 1 },
+        "model": { "type": ["string", "null"], "minLength": 1 },
+        "request_role": { "type": ["string", "null"], "minLength": 1 },
+        "parent_request_id": { "type": ["string", "null"], "minLength": 1 },
+        "job_id": { "type": ["string", "null"], "minLength": 1 },
+        "streaming": { "type": "boolean" }
       }
     }
   }
