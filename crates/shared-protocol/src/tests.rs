@@ -48,6 +48,47 @@ fn capability_report_fixture() -> CapabilityReport {
             )]),
             efforts: BTreeMap::from([("standard".to_owned(), vec!["Standard".to_owned()])]),
         },
+        observed_ui: CapabilityObservedUi {
+            composer_readiness: BinaryCapabilityObservation {
+                status: CapabilityObservationStatus::Observed,
+                observed: true,
+            },
+            submit_availability: BinaryCapabilityObservation {
+                status: CapabilityObservationStatus::Observed,
+                observed: true,
+            },
+            selected_model: ModelSelectionObservation {
+                status: CapabilityObservationStatus::Observed,
+                picker_visible: true,
+                selected_model_class: Some("thinking".to_owned()),
+                selected_label: Some("GPT-5.4 Thinking".to_owned()),
+                labels: vec!["GPT-5.4 Thinking".to_owned()],
+                unsupported_pro_selected: false,
+                ambiguous_selection: false,
+            },
+            thinking_effort: ThinkingEffortObservation {
+                status: CapabilityObservationStatus::Observed,
+                controls_visible: true,
+                selected_effort: Some("standard".to_owned()),
+                labels: vec!["Standard".to_owned()],
+            },
+            search_mode: SearchModeObservation {
+                status: CapabilityObservationStatus::Observed,
+                visible: true,
+                selected: true,
+                labels: vec!["Search".to_owned()],
+            },
+            research_flow: ResearchFlowObservation {
+                status: CapabilityObservationStatus::NotObserved,
+                entrypoint_visible: false,
+                on_research_url: false,
+                labels: Vec::new(),
+            },
+            upload_availability: BinaryCapabilityObservation {
+                status: CapabilityObservationStatus::Observed,
+                observed: true,
+            },
+        },
     }
 }
 

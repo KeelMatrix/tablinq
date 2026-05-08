@@ -74,6 +74,38 @@ describe("protocol schemas", () => {
               extended: ["Extended thinking"],
             },
           },
+          observed_ui: {
+            composer_readiness: { status: "observed", observed: true },
+            submit_availability: { status: "observed", observed: true },
+            selected_model: {
+              status: "observed",
+              picker_visible: true,
+              selected_model_class: "thinking",
+              selected_label: "Thinking",
+              labels: ["Thinking"],
+              unsupported_pro_selected: false,
+              ambiguous_selection: false,
+            },
+            thinking_effort: {
+              status: "observed",
+              controls_visible: true,
+              selected_effort: "standard",
+              labels: ["Standard"],
+            },
+            search_mode: {
+              status: "observed",
+              visible: true,
+              selected: true,
+              labels: ["Search"],
+            },
+            research_flow: {
+              status: "not_observed",
+              entrypoint_visible: false,
+              on_research_url: false,
+              labels: [],
+            },
+            upload_availability: { status: "observed", observed: true },
+          },
         },
       },
     });
@@ -115,6 +147,38 @@ describe("protocol schemas", () => {
         efforts: {
           none: ["None"],
         },
+      },
+      observed_ui: {
+        composer_readiness: { status: "observed", observed: true },
+        submit_availability: { status: "observed", observed: true },
+        selected_model: {
+          status: "observed",
+          picker_visible: true,
+          selected_model_class: "instant",
+          selected_label: "Instant",
+          labels: ["Instant"],
+          unsupported_pro_selected: false,
+          ambiguous_selection: false,
+        },
+        thinking_effort: {
+          status: "not_observed",
+          controls_visible: false,
+          selected_effort: null,
+          labels: [],
+        },
+        search_mode: {
+          status: "not_observed",
+          visible: false,
+          selected: false,
+          labels: [],
+        },
+        research_flow: {
+          status: "not_observed",
+          entrypoint_visible: false,
+          on_research_url: false,
+          labels: [],
+        },
+        upload_availability: { status: "observed", observed: true },
       },
     });
   });

@@ -64,20 +64,20 @@ fn provider_endpoint_exposes_openclaude_preset_metadata() {
         "chat_completions input is reduced to user-authored text content before browser submission"
     );
     assert_eq!(
-        body["provider_capabilities"]["capabilities"]["search"]["availability"],
-        "available"
+        body["provider_capabilities"]["capabilities"]["search"]["snapshot_status"],
+        "observed"
     );
     assert_eq!(
-        body["provider_capabilities"]["capabilities"]["research"]["availability"],
-        "available"
+        body["provider_capabilities"]["capabilities"]["research"]["snapshot_status"],
+        "observed"
     );
     assert_eq!(
-        body["provider_capabilities"]["capabilities"]["uploads"]["availability"],
-        "available"
+        body["provider_capabilities"]["capabilities"]["uploads"]["snapshot_status"],
+        "observed"
     );
     assert_eq!(
-        body["provider_capabilities"]["capabilities"]["artifacts"]["availability"],
-        "available"
+        body["provider_capabilities"]["capabilities"]["artifacts"]["snapshot_status"],
+        "observed"
     );
     assert_eq!(
         body["provider_capabilities"]["max_safe_parallelism"]["requests"],
@@ -89,6 +89,14 @@ fn provider_endpoint_exposes_openclaude_preset_metadata() {
     );
     assert_eq!(body["presets"]["openclaude"]["max_parallel_requests"], 1);
     assert_eq!(body["presets"]["openclaude"]["subagents"], "queued");
+    assert_eq!(
+        body["presets"]["openclaude"]["recommended_presets"],
+        json!([
+            "tablinq-instant",
+            "tablinq-thinking-standard",
+            "tablinq-search",
+        ])
+    );
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -141,6 +149,10 @@ fn provider_endpoint_exposes_paperclip_preset_metadata() {
         "queue"
     );
     assert_eq!(body["presets"]["paperclip"]["usage_accounting"], "unknown");
+    assert_eq!(
+        body["presets"]["paperclip"]["recommended_presets"],
+        json!(["tablinq-instant", "tablinq-search", "tablinq-research"])
+    );
     assert!(!body_text.to_ascii_lowercase().contains("managed"));
 
     stop_gateway_process(Some(&state_root)).unwrap();
@@ -204,6 +216,16 @@ fn documented_provider_contract_surfaces_are_present() {
     assert_eq!(
         provider_body["presets"]["paperclip"]["subagent_recommendation"],
         "queue"
+    );
+    assert_eq!(
+        provider_body["preset_ids"],
+        json!([
+            "tablinq-instant",
+            "tablinq-thinking-standard",
+            "tablinq-thinking-extended",
+            "tablinq-search",
+            "tablinq-research",
+        ])
     );
     assert!(
         !String::from_utf8(provider.body.clone())
@@ -434,7 +456,7 @@ fn models_endpoint_returns_openai_model_catalog() {
     assert_eq!(body["object"], "list");
     assert_eq!(body["tablinq_capability_source"], "live");
     assert_eq!(
-        body["tablinq_model_ids"],
+        body["tablinq_preset_ids"],
         json!([
             "tablinq-instant",
             "tablinq-thinking-standard",
@@ -454,8 +476,10 @@ fn models_endpoint_returns_openai_model_catalog() {
     assert_eq!(models[2]["id"], "tablinq-thinking-extended");
     assert_eq!(models[2]["tablinq_effort"], "extended");
     assert_eq!(models[3]["id"], "tablinq-search");
+    assert_eq!(models[3]["tablinq_preset_kind"], "composer_mode");
     assert_eq!(models[3]["tablinq_mode"], "search");
     assert_eq!(models[4]["id"], "tablinq-research");
+    assert_eq!(models[4]["tablinq_preset_kind"], "research_flow");
     assert_eq!(models[4]["tablinq_execution_kind"], "research");
 
     stop_gateway_process(Some(&state_root)).unwrap();
@@ -491,7 +515,7 @@ fn capabilities_endpoint_reports_alias_remaps_for_stable_models() {
     assert_eq!(body["object"], "tablinq.capability_catalog");
     assert_eq!(body["source"], "live");
     assert_eq!(
-        body["provider"]["available_model_ids"],
+        body["provider"]["observed_preset_ids"],
         json!([
             "tablinq-instant",
             "tablinq-thinking-standard",
@@ -500,7 +524,8 @@ fn capabilities_endpoint_reports_alias_remaps_for_stable_models() {
             "tablinq-research",
         ])
     );
-    assert!(body["models"].as_array().unwrap().iter().any(|item| {
+    assert_eq!(body["observed_ui"]["search_mode"]["status"], "observed");
+    assert!(body["presets"].as_array().unwrap().iter().any(|item| {
         item["id"] == "tablinq-thinking-standard"
             && item["tablinq_aliases"]["model_classes"]
                 .as_array()
@@ -538,39 +563,45 @@ fn capabilities_endpoint_marks_missing_features_unavailable() {
     .unwrap();
     assert_eq!(response.status_code, 200);
     let body: Value = serde_json::from_slice(&response.body).unwrap();
-    let search = body["models"]
+    let search = body["presets"]
         .as_array()
         .unwrap()
         .iter()
         .find(|item| item["id"] == "tablinq-search")
         .unwrap();
-    let thinking = body["models"]
+    let thinking = body["presets"]
         .as_array()
         .unwrap()
         .iter()
         .find(|item| item["id"] == "tablinq-thinking-standard")
         .unwrap();
-    let research = body["models"]
+    let research = body["presets"]
         .as_array()
         .unwrap()
         .iter()
         .find(|item| item["id"] == "tablinq-research")
         .unwrap();
-    assert_eq!(thinking["tablinq_availability"], "unavailable");
-    assert_eq!(search["tablinq_availability"], "unavailable");
-    assert_eq!(research["tablinq_availability"], "unavailable");
-    assert!(!search["tablinq_warning"].as_array().unwrap().is_empty());
-    assert_eq!(
-        body["provider"]["capabilities"]["search"]["availability"],
-        "unavailable"
+    assert_eq!(thinking["tablinq_snapshot_status"], "not_observed");
+    assert_eq!(search["tablinq_snapshot_status"], "not_observed");
+    assert_eq!(research["tablinq_snapshot_status"], "not_observed");
+    assert!(
+        !search["tablinq_snapshot_note"]
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
     assert_eq!(
-        body["provider"]["capabilities"]["research"]["availability"],
-        "unavailable"
+        body["provider"]["capabilities"]["search"]["snapshot_status"],
+        "not_observed"
     );
-    let available_ids = body["provider"]["available_model_ids"].as_array().unwrap();
-    assert_eq!(available_ids.len(), 1);
-    assert_eq!(available_ids[0], "tablinq-instant");
+    assert_eq!(
+        body["provider"]["capabilities"]["research"]["snapshot_status"],
+        "not_observed"
+    );
+    let observed_ids = body["provider"]["observed_preset_ids"].as_array().unwrap();
+    assert_eq!(body["provider"]["preset_ids"].as_array().unwrap().len(), 5);
+    assert_eq!(observed_ids.len(), 1);
+    assert_eq!(observed_ids[0], "tablinq-instant");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -613,6 +644,7 @@ fn capability_cache_returns_cached_catalog_for_profile_workspace_key() {
                 ("extended".to_owned(), vec!["Extended reasoning".to_owned()]),
             ]),
         },
+        observed_ui: shared_protocol::CapabilityObservedUi::default(),
     };
 
     cache

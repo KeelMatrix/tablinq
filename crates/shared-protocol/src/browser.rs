@@ -55,6 +55,102 @@ pub struct CapabilityMatrix {
     pub downloadable_artifacts_observable: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilityObservationStatus {
+    Observed,
+    NotObserved,
+    #[default]
+    Unknown,
+    Blocked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct BinaryCapabilityObservation {
+    #[serde(default)]
+    pub status: CapabilityObservationStatus,
+    #[serde(default)]
+    pub observed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSelectionObservation {
+    #[serde(default)]
+    pub status: CapabilityObservationStatus,
+    #[serde(default)]
+    pub picker_visible: bool,
+    #[serde(default)]
+    pub selected_model_class: Option<String>,
+    #[serde(default)]
+    pub selected_label: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    #[serde(default)]
+    pub unsupported_pro_selected: bool,
+    #[serde(default)]
+    pub ambiguous_selection: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ThinkingEffortObservation {
+    #[serde(default)]
+    pub status: CapabilityObservationStatus,
+    #[serde(default)]
+    pub controls_visible: bool,
+    #[serde(default)]
+    pub selected_effort: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SearchModeObservation {
+    #[serde(default)]
+    pub status: CapabilityObservationStatus,
+    #[serde(default)]
+    pub visible: bool,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct ResearchFlowObservation {
+    #[serde(default)]
+    pub status: CapabilityObservationStatus,
+    #[serde(default)]
+    pub entrypoint_visible: bool,
+    #[serde(default)]
+    pub on_research_url: bool,
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityObservedUi {
+    #[serde(default)]
+    pub composer_readiness: BinaryCapabilityObservation,
+    #[serde(default)]
+    pub submit_availability: BinaryCapabilityObservation,
+    #[serde(default)]
+    pub selected_model: ModelSelectionObservation,
+    #[serde(default)]
+    pub thinking_effort: ThinkingEffortObservation,
+    #[serde(default)]
+    pub search_mode: SearchModeObservation,
+    #[serde(default)]
+    pub research_flow: ResearchFlowObservation,
+    #[serde(default)]
+    pub upload_availability: BinaryCapabilityObservation,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CapabilityReport {
@@ -63,13 +159,16 @@ pub struct CapabilityReport {
     pub selector_pack_version: String,
     pub matrix: CapabilityMatrix,
     pub aliases: RuntimeAliases,
+    #[serde(default)]
+    pub observed_ui: CapabilityObservedUi,
 }
 
 impl CapabilityReport {
     pub fn validate(&self) -> Result<(), ValidationError> {
         validate_required("selector_pack_id", &self.selector_pack_id)?;
         validate_required("selector_pack_version", &self.selector_pack_version)?;
-        self.aliases.validate()
+        self.aliases.validate()?;
+        self.observed_ui.validate()
     }
 }
 
@@ -97,6 +196,53 @@ impl RuntimeAliases {
         }
         Ok(())
     }
+}
+
+impl CapabilityObservedUi {
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        validate_optional_observation_text(
+            "observed_ui.selected_model.selected_model_class",
+            self.selected_model.selected_model_class.as_deref(),
+        )?;
+        validate_optional_observation_text(
+            "observed_ui.selected_model.selected_label",
+            self.selected_model.selected_label.as_deref(),
+        )?;
+        validate_optional_observation_text(
+            "observed_ui.thinking_effort.selected_effort",
+            self.thinking_effort.selected_effort.as_deref(),
+        )?;
+        validate_labels(
+            "observed_ui.selected_model.labels",
+            &self.selected_model.labels,
+        )?;
+        validate_labels(
+            "observed_ui.thinking_effort.labels",
+            &self.thinking_effort.labels,
+        )?;
+        validate_labels("observed_ui.search_mode.labels", &self.search_mode.labels)?;
+        validate_labels(
+            "observed_ui.research_flow.labels",
+            &self.research_flow.labels,
+        )
+    }
+}
+
+fn validate_optional_observation_text(
+    field: &'static str,
+    value: Option<&str>,
+) -> Result<(), ValidationError> {
+    if let Some(value) = value {
+        validate_required(field, value)?;
+    }
+    Ok(())
+}
+
+fn validate_labels(field: &'static str, labels: &[String]) -> Result<(), ValidationError> {
+    for label in labels {
+        validate_required(field, label)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

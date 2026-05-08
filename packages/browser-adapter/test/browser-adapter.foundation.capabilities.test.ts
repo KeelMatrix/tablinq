@@ -151,6 +151,46 @@ describe("browser adapter foundation: capability probing", () => {
     expect(researchAliases).not.toContain("codex");
     expect(researchAliases).not.toContain("gpts");
     expect(researchAliases).not.toContain("projects");
+    expect(snapshot.capability_report?.observed_ui.search_mode).toMatchObject({
+      status: "observed",
+      visible: true,
+    });
+    expect(snapshot.capability_report?.observed_ui.research_flow).toMatchObject(
+      {
+        status: "observed",
+        entrypoint_visible: true,
+        on_research_url: false,
+      },
+    );
+
+    await adapter.shutdown();
+  });
+
+  it("reports unsupported Pro selection as blocked without turning it into a supported preset", async () => {
+    const server = await harness.startServer();
+    const { adapter, snapshot } = await openManagedHarnessAdapter(
+      harness,
+      server.url,
+      {
+        variant: "composer-right",
+        initialModel: "pro",
+        initialEffort: "extended",
+      },
+    );
+
+    expect(
+      snapshot.capability_report?.observed_ui.selected_model,
+    ).toMatchObject({
+      status: "blocked",
+      unsupported_pro_selected: true,
+      selected_model_class: null,
+    });
+    expect(
+      snapshot.capability_report?.observed_ui.selected_model.labels,
+    ).toContain("pro extended");
+    expect(snapshot.capability_report?.observed_ui.thinking_effort.status).toBe(
+      "blocked",
+    );
 
     await adapter.shutdown();
   });

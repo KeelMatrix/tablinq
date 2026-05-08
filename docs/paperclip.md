@@ -15,11 +15,11 @@ Use Tablinq's local gateway as an OpenAI-compatible provider for Paperclip.
 
 Paperclip is a good fit when you want file-backed browser automation, research-style runs, and artifact retrieval through a familiar provider contract.
 
-## Recommended models
+## Recommended API presets
 
 - `tablinq-instant`
-- `tablinq-search`
-- `tablinq-research`
+- `tablinq-search` for the Search composer mode
+- `tablinq-research` for the Deep Research flow
 
 ## Example config
 

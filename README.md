@@ -179,7 +179,7 @@ Tablinq can expose the same browser-backed session through a local OpenAI-compat
 - recommended branch concurrency: `1`
 - subagents disabled by default
 
-Recommended model families:
+Supported API presets:
 
 - `tablinq-instant`
 - `tablinq-thinking-standard`

@@ -144,6 +144,25 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.efforts.extended).toContain("extended");
     expect(message.report.aliases.modes.research).toContain("deep research");
     expect(message.report.aliases.modes.search).toBeUndefined();
+    expect(message.report.observed_ui.selected_model).toMatchObject({
+      status: "observed",
+      picker_visible: true,
+      selected_model_class: "thinking",
+    });
+    expect(message.report.observed_ui.thinking_effort).toMatchObject({
+      status: "observed",
+      controls_visible: true,
+      selected_effort: "standard",
+    });
+    expect(message.report.observed_ui.search_mode).toMatchObject({
+      status: "not_observed",
+      selected: false,
+    });
+    expect(message.report.observed_ui.research_flow).toMatchObject({
+      status: "observed",
+      entrypoint_visible: true,
+      on_research_url: false,
+    });
     expect(message.runtime.dom_neighborhoods.length).toBeGreaterThan(3);
     expect(validateCapabilityReport(message.report)).toBe(true);
     expect(validateCapabilityReport.errors).toBeNull();
@@ -212,6 +231,9 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.model_classes.instant).toContain("instant");
     expect(message.report.aliases.model_classes.thinking).toContain("thinking");
     expect(message.report.aliases.efforts.extended).toContain("extended");
+    expect(message.report.observed_ui.search_mode.status).toBe("not_observed");
+    expect(message.report.observed_ui.search_mode.selected).toBe(false);
+    expect(message.report.observed_ui.research_flow.status).toBe("observed");
     expect(message.runtime.ui_signature).toContain("aria");
     expect(validateCapabilityReport(message.report)).toBe(true);
   });
@@ -304,6 +326,16 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.modes.research).toContain("deep research");
     expect(message.report.aliases.modes.search).toContain("web search");
     expect(message.report.aliases.efforts.extended).toContain("extended");
+    expect(message.report.observed_ui.search_mode).toMatchObject({
+      status: "observed",
+      visible: true,
+      selected: false,
+    });
+    expect(message.report.observed_ui.research_flow).toMatchObject({
+      status: "observed",
+      entrypoint_visible: true,
+      on_research_url: false,
+    });
   });
 
   it("detects the composer-right model picker before the menu opens", () => {
@@ -354,6 +386,11 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.modes.search).toContain(
       "search, click to remove",
     );
+    expect(message.report.observed_ui.search_mode).toMatchObject({
+      status: "observed",
+      visible: true,
+      selected: true,
+    });
   });
 
   it("ignores sidebar and conversation search controls", () => {
@@ -616,6 +653,58 @@ describe("extension capability probe", () => {
     expect(message.report.aliases.model_classes.instant).toContain("instant");
     expect(message.report.aliases.model_classes.thinking).toContain("thinking");
     expect(message.runtime.strategy_matches.model_picker_visible).toBeTruthy();
+    expect(message.report.observed_ui.selected_model.status).toBe(
+      "not_observed",
+    );
+  });
+
+  it("reports unsupported Pro and ambiguous Latest 5.5 selections without turning them into supported model classes", () => {
+    document.body.dataset.uiVariant = "live";
+    document.body.innerHTML = `
+      <main aria-label="chatgpt workspace">
+        <form data-testid="composer-root">
+          <textarea id="prompt-textarea" aria-label="Message ChatGPT"></textarea>
+          <button type="button" class="__composer-pill" aria-haspopup="menu" aria-expanded="false">
+            ChatGPT Pro
+          </button>
+          <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+        </form>
+      </main>
+    `;
+
+    const proMessage = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(proMessage.report.observed_ui.selected_model).toMatchObject({
+      status: "blocked",
+      selected_model_class: null,
+      unsupported_pro_selected: true,
+      ambiguous_selection: false,
+    });
+
+    document.body.innerHTML = `
+      <main aria-label="chatgpt workspace">
+        <form data-testid="composer-root">
+          <textarea id="prompt-textarea" aria-label="Message ChatGPT"></textarea>
+          <button type="button" class="__composer-pill" aria-haspopup="menu" aria-expanded="false">
+            Latest 5.5
+          </button>
+          <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+        </form>
+      </main>
+    `;
+
+    const ambiguousMessage = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(ambiguousMessage.report.observed_ui.selected_model).toMatchObject({
+      status: "unknown",
+      selected_model_class: null,
+      unsupported_pro_selected: false,
+      ambiguous_selection: true,
+    });
   });
 
   it("accepts selector-pack driven strategy ordering metadata", () => {
