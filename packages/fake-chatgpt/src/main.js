@@ -265,6 +265,10 @@ function submitPrompt(method) {
   providerRecoveryRuntime.clearAskFailureState();
   setUploadPopoverOpen(false);
   document.body.dataset.lastSubmissionMethod = method;
+  document.body.dataset.lastSubmittedModel =
+    document.body.dataset.selectedModel || "";
+  document.body.dataset.lastSubmittedEffort =
+    document.body.dataset.selectedEffort || "";
   const promptText =
     "value" in composer ? composer.value.trim() : composer.textContent.trim();
   if (

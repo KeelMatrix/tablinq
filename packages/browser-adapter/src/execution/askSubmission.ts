@@ -4,13 +4,14 @@ import type { AskExecutionCommand } from "../contracts";
 import { safePageUrl } from "../capabilityProbe";
 import {
   applyAskConfiguration,
+  assertVisibleComposerSelection,
   clearConfiguredSearchMode,
   clearIrrelevantComposerChips,
   clickSubmit,
-  ensureConfiguredEffort,
-  ensureConfiguredModelClass,
   ensureConfiguredThinkingEffort,
   fillComposer,
+  ensureConfiguredEffort,
+  ensureConfiguredModelClass,
   ensureConfiguredSearchMode,
   readAskBaseline,
   sleep,
@@ -130,6 +131,10 @@ export async function prepareAskSubmission(
     }
   }
   await maybeApplySubmitJitter(command.submitJitterMs, timing.timeoutAt);
+  await assertVisibleComposerSelection(page, {
+    modelClass: command.modelClass ?? null,
+    effort: command.effort ?? null,
+  });
   await clickSubmit(page);
   return { page, askBaseline };
 }
@@ -141,72 +146,7 @@ async function visibleComposerConfigMatchesRequest(
   if (command.mode && command.mode !== "normal") {
     return false;
   }
-  if (!command.modelClass && !command.effort) {
-    return false;
-  }
-  return page
-    .evaluate(
-      ({
-        modelClass,
-        effort,
-      }: {
-        modelClass?: "instant" | "thinking" | null;
-        effort?: "none" | "standard" | "extended" | null;
-      }) => {
-        const texts = Array.from(
-          document.querySelectorAll(
-            "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
-          ),
-        )
-          .filter((element) => {
-            if (!(element instanceof HTMLElement)) {
-              return false;
-            }
-            const style = window.getComputedStyle(element);
-            return (
-              style.display !== "none" &&
-              style.visibility !== "hidden" &&
-              style.opacity !== "0" &&
-              element.getClientRects().length > 0
-            );
-          })
-          .map((element) =>
-            (element.textContent ?? "")
-              .replace(/\s+/g, " ")
-              .trim()
-              .toLowerCase(),
-          );
-        if (texts.length === 0) {
-          return false;
-        }
-        const modelMatches =
-          !modelClass ||
-          texts.some((text) =>
-            modelClass === "instant"
-              ? text.includes("instant") || text.includes("5.3")
-              : text.includes("thinking") ||
-                text.includes("standard") ||
-                text.includes("extended") ||
-                text.includes("5.4") ||
-                text.includes("5.5"),
-          );
-        const effortMatches =
-          !effort ||
-          effort === "none" ||
-          texts.some((text) =>
-            effort === "standard"
-              ? text.includes("standard") ||
-                (text.includes("thinking") && !text.includes("extended"))
-              : text.includes(effort),
-          );
-        return modelMatches && effortMatches;
-      },
-      {
-        modelClass: command.modelClass,
-        effort: command.effort,
-      },
-    )
-    .catch(() => false);
+  return false;
 }
 
 async function maybeApplySubmitJitter(

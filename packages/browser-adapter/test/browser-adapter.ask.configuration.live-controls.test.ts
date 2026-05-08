@@ -535,4 +535,72 @@ describe("browser adapter ask: live controls configuration", () => {
 
     await adapter.shutdown();
   });
+
+  it("fails before submit when a visible composer-right state stays ambiguously 5.5-only", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-ambiguous-5-5";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "latest-5-5",
+        initialEffort: "extended",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const trigger = document.querySelector(
+        "[data-harness-model-trigger='composer-right']",
+      );
+      const resetVisibleLabel = () => {
+        if (trigger instanceof HTMLElement) {
+          trigger.textContent = "5.5";
+        }
+      };
+      if (!(trigger instanceof HTMLElement)) {
+        throw new Error("composer-right trigger missing");
+      }
+      resetVisibleLabel();
+      document
+        .querySelectorAll("#effort-option-standard, #effort-option-extended")
+        .forEach((element) => {
+          element.addEventListener("click", resetVisibleLabel);
+        });
+    });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-composer-right-ambiguous-5-5",
+          prompt: "do not submit when the visible state is ambiguous 5.5",
+          conversationId,
+          modelClass: "thinking",
+          effort: "extended",
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/capability missing|ui drift/i);
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      lastSubmittedModel: document.body.dataset.lastSubmittedModel,
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+      visibleTriggerText:
+        document
+          .querySelector("[data-harness-model-trigger='composer-right']")
+          ?.textContent?.trim() ?? "",
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "extended",
+      lastSubmittedModel: "",
+      lastSubmissionMethod: "",
+      visibleTriggerText: "5.5",
+    });
+
+    await adapter.shutdown();
+  });
 });

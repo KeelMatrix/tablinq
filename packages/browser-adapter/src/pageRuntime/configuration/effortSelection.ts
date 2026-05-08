@@ -6,6 +6,11 @@ import { INTERACTION_TIMEOUT_MS } from "../../timing";
 import { clickWithInteractionJitter } from "../common";
 
 import {
+  readVisibleComposerSelectionState,
+  visibleSelectionMatchesEffort,
+  visibleSelectionMatchesModelClass,
+} from "./selectionState";
+import {
   closeOpenComposerMenus,
   findVisibleInlineChoicePoint,
   selectedChoiceMatches,
@@ -26,7 +31,7 @@ export async function ensureConfiguredEffort(
     return;
   }
 
-  if (await selectedChoiceMatches(page, aliasTokens)) {
+  if (await selectedChoiceMatches(page, aliasTokens, ["pro"])) {
     return;
   }
   const inlineOption = await findVisibleInlineChoicePoint(
@@ -38,6 +43,7 @@ export async function ensureConfiguredEffort(
     ].join(", "),
     aliasTokens,
     750,
+    ["pro"],
   );
   if (inlineOption) {
     if (!inlineOption.selected) {
@@ -147,7 +153,10 @@ export async function ensureConfiguredThinkingEffort(
     750,
   );
   if (directThinkingOption) {
-    if (directThinkingOption.checked !== "true") {
+    if (
+      directThinkingOption.checked !== "true" ||
+      !(await visibleComposerModelMatchesThinking(page))
+    ) {
       await clickWithInteractionJitter(
         directThinkingOption.locator,
         "choice_select",
@@ -175,7 +184,10 @@ export async function ensureConfiguredThinkingEffort(
     1_000,
   );
   if (openedThinkingOption) {
-    if (openedThinkingOption.checked !== "true") {
+    if (
+      openedThinkingOption.checked !== "true" ||
+      !(await visibleComposerModelMatchesThinking(page))
+    ) {
       await clickWithInteractionJitter(
         openedThinkingOption.locator,
         "choice_select",
@@ -200,7 +212,10 @@ export async function ensureConfiguredThinkingEffort(
     );
     const option = await findVisibleEffortChoicePoint(page, effort, 1_000);
     if (option) {
-      if (option.checked !== "true") {
+      if (
+        option.checked !== "true" ||
+        !(await visibleComposerModelMatchesThinking(page))
+      ) {
         await clickWithInteractionJitter(
           option.locator,
           "choice_select",
@@ -499,83 +514,15 @@ async function visibleComposerEffortMatches(
   page: Page,
   effort: "standard" | "extended",
 ): Promise<boolean> {
-  return page
-    .evaluate((requestedEffort: "standard" | "extended") => {
-      const isVisible = (element: Element) => {
-        if (!(element instanceof HTMLElement)) {
-          return false;
-        }
-        const style = window.getComputedStyle(element);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          style.opacity !== "0" &&
-          element.getClientRects().length > 0
-        );
-      };
-      return Array.from(
-        document.querySelectorAll(
-          "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
-        ),
-      ).some((element) => {
-        if (!isVisible(element)) {
-          return false;
-        }
-        const text = (element.textContent ?? "")
-          .replace(/\\s+/g, " ")
-          .trim()
-          .toLowerCase();
-        if (requestedEffort === "standard") {
-          return (
-            text.includes("standard") ||
-            (text.includes("thinking") && !text.includes("extended"))
-          );
-        }
-        return text.includes("extended");
-      });
-    }, effort)
-    .catch(() => false);
+  const state = await readVisibleComposerSelectionState(page);
+  return visibleSelectionMatchesEffort(state, effort);
 }
 
 async function visibleComposerModelMatchesThinking(
   page: Page,
 ): Promise<boolean> {
-  return page
-    .evaluate(() => {
-      const isVisible = (element: Element) => {
-        if (!(element instanceof HTMLElement)) {
-          return false;
-        }
-        const style = window.getComputedStyle(element);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          style.opacity !== "0" &&
-          element.getClientRects().length > 0
-        );
-      };
-      return Array.from(
-        document.querySelectorAll(
-          "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
-        ),
-      ).some((element) => {
-        if (!isVisible(element)) {
-          return false;
-        }
-        const text = (element.textContent ?? "")
-          .replace(/\\s+/g, " ")
-          .trim()
-          .toLowerCase();
-        return (
-          text.includes("thinking") ||
-          text.includes("standard") ||
-          text.includes("extended") ||
-          text.includes("5.4") ||
-          text.includes("5.5")
-        );
-      });
-    })
-    .catch(() => false);
+  const state = await readVisibleComposerSelectionState(page);
+  return visibleSelectionMatchesModelClass(state, "thinking");
 }
 
 async function findVisibleThinkingChoicePoint(
@@ -600,7 +547,7 @@ async function findVisibleThinkingChoicePoint(
         .toLowerCase();
       const isThinking =
         testId.includes("thinking") || text.includes("thinking");
-      if (!isThinking) {
+      if (!isThinking || testId.includes("pro") || text.includes("pro")) {
         continue;
       }
       const hasNestedEffort =

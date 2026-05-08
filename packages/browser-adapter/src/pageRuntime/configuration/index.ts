@@ -6,6 +6,13 @@ import { callPageAdapter } from "../adapter";
 import { waitForInteractionSurface } from "../composer";
 
 import {
+  assertVisibleComposerSelection,
+  describeVisibleComposerSelection,
+  readVisibleComposerSelectionState,
+  visibleSelectionMatchesEffort,
+  visibleSelectionMatchesModelClass,
+} from "./selectionState";
+import {
   ensureConfiguredEffort,
   ensureConfiguredThinkingEffort,
   trySelectNestedThinkingEffort,
@@ -138,3 +145,10 @@ export {
 } from "./modelSelection";
 
 export { findVisiblePopupChoicePoint, waitForVisibleLocator } from "./shared";
+export {
+  assertVisibleComposerSelection,
+  describeVisibleComposerSelection,
+  readVisibleComposerSelectionState,
+  visibleSelectionMatchesEffort,
+  visibleSelectionMatchesModelClass,
+};

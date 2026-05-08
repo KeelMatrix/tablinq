@@ -501,4 +501,141 @@ describe("browser adapter ask: model menu configuration", () => {
 
     await adapter.shutdown();
   });
+
+  it("clears a preselected Pro chip before submitting an Instant ask", async () => {
+    const server = await harness.startServer();
+    const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
+      variant: "menu",
+      initialModel: "pro",
+      initialEffort: "standard",
+    });
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const chip = document.querySelector("#thinking-effort-trigger");
+      if (!(chip instanceof HTMLElement)) {
+        throw new Error("pro chip missing");
+      }
+      chip.setAttribute("aria-label", "Pro, click to remove");
+      chip.addEventListener(
+        "click",
+        (event) => {
+          event.stopImmediatePropagation();
+          document.body.dataset.selectedModel = "instant";
+          (
+            window as unknown as { syncSelectedState?: () => void }
+          ).syncSelectedState?.();
+        },
+        { capture: true },
+      );
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-menu-clear-pro-chip",
+        prompt: "clear pro chip for instant",
+        modelClass: "instant",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      lastSubmittedModel: document.body.dataset.lastSubmittedModel,
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      model: "instant",
+      lastSubmittedModel: "instant",
+      lastSubmissionMethod: "button",
+      modelMenuClicks: "0",
+      modelOptionClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("replaces a preselected Pro Thinking state before submitting a thinking-standard ask", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-pro-thinking-standard";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "pro",
+        initialEffort: "standard",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-pro-thinking-standard",
+        prompt: "replace preselected pro thinking with supported thinking",
+        conversationId,
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      lastSubmittedModel: document.body.dataset.lastSubmittedModel,
+      lastSubmittedEffort: document.body.dataset.lastSubmittedEffort,
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "standard",
+      lastSubmittedModel: "thinking",
+      lastSubmittedEffort: "standard",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("replaces a preselected Latest 5.5 state before submitting a thinking-extended ask", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-latest-5-5-thinking-extended";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "latest-5-5",
+        initialEffort: "extended",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-latest-5-5-thinking-extended",
+        prompt: "replace latest 5.5 with supported extended thinking",
+        conversationId,
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      lastSubmittedModel: document.body.dataset.lastSubmittedModel,
+      lastSubmittedEffort: document.body.dataset.lastSubmittedEffort,
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "extended",
+      lastSubmittedModel: "thinking",
+      lastSubmittedEffort: "extended",
+    });
+
+    await adapter.shutdown();
+  });
 });
