@@ -51,9 +51,14 @@ pub const PROVIDER_MODELS: &[ProviderModelSpec] = &[
 ];
 
 #[derive(Debug, Clone)]
-pub struct CapabilityAvailability {
-    pub availability: &'static str,
-    pub warnings: Vec<String>,
+pub struct CapabilitySnapshotStatus {
+    pub snapshot_status: &'static str,
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CapabilityAvailability {
+    availability: &'static str,
 }
 
 pub fn resolve_model(model_id: &str) -> Option<&'static ProviderModelSpec> {
@@ -65,7 +70,7 @@ pub fn model_object(
     report: Option<&CapabilityReport>,
     capability_source: &str,
 ) -> Value {
-    let availability = model_availability(spec, report);
+    let snapshot = model_snapshot_status(spec, report);
     let streaming = capability_status(
         report,
         composer_submission_ready,
@@ -86,6 +91,8 @@ pub fn model_object(
         "object": "model",
         "created": 0,
         "owned_by": "tablinq",
+        "tablinq_preset_kind": preset_kind(spec),
+        "tablinq_ui_target": ui_target(spec),
         "tablinq_mode": mode_name(spec.mode),
         "tablinq_model_class": spec.model_class.map(model_class_name),
         "tablinq_effort": spec.effort.map(effort_name),
@@ -96,21 +103,21 @@ pub fn model_object(
         "tablinq_files_status": files.availability,
         "tablinq_artifacts": artifacts.availability == "available",
         "tablinq_artifacts_status": artifacts.availability,
-        "tablinq_availability": availability.availability,
-        "tablinq_warning": availability.warnings,
+        "tablinq_snapshot_status": snapshot.snapshot_status,
+        "tablinq_snapshot_note": snapshot.notes,
         "tablinq_capability_source": capability_source,
         "tablinq_aliases": observed_aliases(spec, report),
     })
 }
 
-pub fn model_availability(
+pub fn model_snapshot_status(
     spec: &ProviderModelSpec,
     report: Option<&CapabilityReport>,
-) -> CapabilityAvailability {
+) -> CapabilitySnapshotStatus {
     let Some(report) = report else {
-        return CapabilityAvailability {
-            availability: "unknown",
-            warnings: vec![unknown_capability_warning()],
+        return CapabilitySnapshotStatus {
+            snapshot_status: "unknown",
+            notes: vec![unknown_capability_note()],
         };
     };
 
@@ -125,35 +132,35 @@ pub fn model_availability(
         _ => false,
     };
     if available {
-        CapabilityAvailability {
-            availability: "available",
-            warnings: Vec::new(),
+        CapabilitySnapshotStatus {
+            snapshot_status: "observed",
+            notes: Vec::new(),
         }
     } else {
-        let warning = match spec.id {
+        let note = match spec.id {
             "tablinq-instant" => {
-                "the attached browser-backed ChatGPT tab is not ready to submit prompts"
+                "the required instant submission state was not observed in the current attached browser-backed ChatGPT snapshot"
             }
             "tablinq-thinking-standard" | "tablinq-thinking-extended" => {
                 if !composer_submission_ready(report) {
-                    "the attached browser-backed ChatGPT tab is not ready to submit prompts"
+                    "the required thinking submission state was not observed in the current attached browser-backed ChatGPT snapshot"
                 } else {
-                    "the attached browser-backed ChatGPT tab does not expose the required thinking effort controls"
+                    "the required thinking effort control was not observed in the current attached browser-backed ChatGPT snapshot"
                 }
             }
             "tablinq-search" => {
-                "search mode is unavailable in the attached browser-backed ChatGPT tab"
+                "the Search composer mode was not observed in the current attached browser-backed ChatGPT snapshot"
             }
             "tablinq-research" => {
-                "research mode is unavailable or the page is not ready to submit in the attached browser-backed ChatGPT tab"
+                "the Deep Research entrypoint or ready research page state was not observed in the current attached browser-backed ChatGPT snapshot"
             }
             _ => {
-                "the attached browser-backed ChatGPT tab does not currently expose the required capability"
+                "the required preset state was not observed in the current attached browser-backed ChatGPT snapshot"
             }
         };
-        CapabilityAvailability {
-            availability: "unavailable",
-            warnings: vec![warning.to_owned()],
+        CapabilitySnapshotStatus {
+            snapshot_status: "not_observed",
+            notes: vec![note.to_owned()],
         }
     }
 }
@@ -194,27 +201,44 @@ fn has_alias_values(aliases: &BTreeMap<String, Vec<String>>, key: &str) -> bool 
 fn capability_status(
     report: Option<&CapabilityReport>,
     predicate: impl FnOnce(&CapabilityReport) -> bool,
-    unavailable_warning: &str,
+    _unavailable_warning: &str,
 ) -> CapabilityAvailability {
     match report {
         Some(report) if predicate(report) => CapabilityAvailability {
             availability: "available",
-            warnings: Vec::new(),
         },
         Some(_) => CapabilityAvailability {
             availability: "unavailable",
-            warnings: vec![unavailable_warning.to_owned()],
         },
         None => CapabilityAvailability {
             availability: "unknown",
-            warnings: vec![unknown_capability_warning()],
         },
     }
 }
 
-fn unknown_capability_warning() -> String {
-    "live capability availability is unknown until the attached browser-backed ChatGPT tab reports probes"
+fn unknown_capability_note() -> String {
+    "the current browser-backed ChatGPT UI snapshot is unknown until the attached tab reports probes"
         .to_owned()
+}
+
+fn preset_kind(spec: &ProviderModelSpec) -> &'static str {
+    if spec.uses_research {
+        "research_flow"
+    } else if spec.mode == Mode::Search {
+        "composer_mode"
+    } else {
+        "model_selection"
+    }
+}
+
+fn ui_target(spec: &ProviderModelSpec) -> Value {
+    json!({
+        "mode": mode_name(spec.mode),
+        "model_class": spec.model_class.map(model_class_name),
+        "effort": spec.effort.map(effort_name),
+        "requires_search_chip": spec.mode == Mode::Search,
+        "requires_research_entrypoint": spec.uses_research,
+    })
 }
 
 fn observed_aliases(spec: &ProviderModelSpec, report: Option<&CapabilityReport>) -> Value {
@@ -281,7 +305,7 @@ pub(super) fn effort_name(value: Effort) -> &'static str {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use shared_protocol::{CapabilityMatrix, RuntimeAliases};
+    use shared_protocol::{CapabilityMatrix, CapabilityObservedUi, RuntimeAliases};
 
     fn report_with_aliases(matrix: CapabilityMatrix, aliases: RuntimeAliases) -> CapabilityReport {
         CapabilityReport {
@@ -290,6 +314,7 @@ mod tests {
             selector_pack_version: "v1".to_owned(),
             matrix,
             aliases,
+            observed_ui: CapabilityObservedUi::default(),
         }
     }
 
@@ -319,12 +344,12 @@ mod tests {
         );
 
         assert_eq!(
-            model_availability(&PROVIDER_MODELS[3], Some(&report)).availability,
-            "available"
+            model_snapshot_status(&PROVIDER_MODELS[3], Some(&report)).snapshot_status,
+            "observed"
         );
         assert_eq!(
-            model_availability(&PROVIDER_MODELS[4], Some(&report)).availability,
-            "available"
+            model_snapshot_status(&PROVIDER_MODELS[4], Some(&report)).snapshot_status,
+            "observed"
         );
     }
 
@@ -340,12 +365,12 @@ mod tests {
         );
 
         assert_eq!(
-            model_availability(&PROVIDER_MODELS[1], Some(&report)).availability,
-            "available"
+            model_snapshot_status(&PROVIDER_MODELS[1], Some(&report)).snapshot_status,
+            "observed"
         );
         assert_eq!(
-            model_availability(&PROVIDER_MODELS[2], Some(&report)).availability,
-            "unavailable"
+            model_snapshot_status(&PROVIDER_MODELS[2], Some(&report)).snapshot_status,
+            "not_observed"
         );
     }
 
@@ -365,8 +390,8 @@ mod tests {
         );
 
         assert_eq!(
-            model_availability(&PROVIDER_MODELS[4], Some(&report)).availability,
-            "unavailable"
+            model_snapshot_status(&PROVIDER_MODELS[4], Some(&report)).snapshot_status,
+            "not_observed"
         );
     }
 

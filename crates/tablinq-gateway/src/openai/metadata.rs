@@ -3,7 +3,8 @@ use serde_json::{Value, json};
 use shared_protocol::CapabilityReport;
 
 use super::models::{
-    PROVIDER_MODELS, model_availability, research_capability_available, search_capability_available,
+    PROVIDER_MODELS, model_snapshot_status, research_capability_available,
+    search_capability_available,
 };
 use super::request::RequestRole;
 
@@ -11,49 +12,49 @@ pub fn provider_capability_catalog(
     report: Option<&CapabilityReport>,
     capability_source: &str,
 ) -> Value {
-    let model_ids = PROVIDER_MODELS
+    let preset_ids = PROVIDER_MODELS
         .iter()
         .map(|spec| spec.id)
         .collect::<Vec<_>>();
-    let available_model_ids = PROVIDER_MODELS
+    let observed_preset_ids = PROVIDER_MODELS
         .iter()
-        .filter(|spec| model_availability(spec, report).availability == "available")
+        .filter(|spec| model_snapshot_status(spec, report).snapshot_status == "observed")
         .map(|spec| spec.id)
         .collect::<Vec<_>>();
 
     json!({
         "capability_source": capability_source,
-        "model_ids": model_ids.clone(),
-        "available_model_ids": available_model_ids,
+        "preset_ids": preset_ids.clone(),
+        "observed_preset_ids": observed_preset_ids,
         "capabilities": {
             "search": capability_status(
                 report,
                 "tablinq-search",
                 search_capability_available,
-                "search mode is unavailable in the attached browser-backed ChatGPT tab",
+                "the Search composer mode was not observed in the current attached browser-backed ChatGPT snapshot",
             ),
             "research": capability_status(
                 report,
                 "tablinq-research",
                 research_capability_available,
-                "research mode is unavailable in the attached browser-backed ChatGPT tab",
+                "the Deep Research entrypoint or ready research page state was not observed in the current attached browser-backed ChatGPT snapshot",
             ),
             "uploads": capability_status(
                 report,
                 "all_models",
                 |value| value.matrix.upload_control_visible,
-                "file upload controls are unavailable in the attached browser-backed ChatGPT tab",
+                "file upload controls were not observed in the current attached browser-backed ChatGPT snapshot",
             ),
             "artifacts": capability_status(
                 report,
                 "all_models",
                 |value| value.matrix.downloadable_artifacts_observable,
-                "downloadable artifacts are unavailable in the attached browser-backed ChatGPT tab",
+                "downloadable artifacts were not observed in the current attached browser-backed ChatGPT snapshot",
             ),
             "streaming": json!({
-                "availability": "available",
-                "stable_model_ids": model_ids,
-                "warning": "streaming responses are supported by the gateway, but live execution still depends on an attached browser-backed ChatGPT tab",
+                "gateway_support": "supported",
+                "stable_preset_ids": preset_ids,
+                "note": "streaming responses are supported by the gateway, but live execution still depends on an attached browser-backed ChatGPT tab",
             }),
         },
         "max_safe_parallelism": {
@@ -78,25 +79,25 @@ pub fn request_role_name(role: RequestRole) -> &'static str {
 
 fn capability_status(
     report: Option<&CapabilityReport>,
-    stable_model_ids: impl Serialize,
+    stable_preset_ids: impl Serialize,
     predicate: impl FnOnce(&CapabilityReport) -> bool,
-    unavailable_warning: &str,
+    not_observed_note: &str,
 ) -> Value {
     match report {
         Some(report) if predicate(report) => json!({
-            "availability": "available",
-            "stable_model_ids": stable_model_ids,
-            "warning": Value::Null,
+            "snapshot_status": "observed",
+            "stable_preset_ids": stable_preset_ids,
+            "note": Value::Null,
         }),
         Some(_) => json!({
-            "availability": "unavailable",
-            "stable_model_ids": stable_model_ids,
-            "warning": unavailable_warning,
+            "snapshot_status": "not_observed",
+            "stable_preset_ids": stable_preset_ids,
+            "note": not_observed_note,
         }),
         None => json!({
-            "availability": "unknown",
-            "stable_model_ids": stable_model_ids,
-            "warning": "live capability availability is unknown until the attached browser-backed ChatGPT tab reports probes",
+            "snapshot_status": "unknown",
+            "stable_preset_ids": stable_preset_ids,
+            "note": "the current browser-backed ChatGPT UI snapshot is unknown until the attached tab reports probes",
         }),
     }
 }
@@ -105,7 +106,7 @@ fn capability_status(
 mod tests {
     use super::*;
     use chrono::Utc;
-    use shared_protocol::{CapabilityMatrix, RuntimeAliases};
+    use shared_protocol::{CapabilityMatrix, CapabilityObservedUi, RuntimeAliases};
     use std::collections::BTreeMap;
 
     fn report_with_aliases(matrix: CapabilityMatrix, aliases: RuntimeAliases) -> CapabilityReport {
@@ -115,11 +116,12 @@ mod tests {
             selector_pack_version: "v1".to_owned(),
             matrix,
             aliases,
+            observed_ui: CapabilityObservedUi::default(),
         }
     }
 
     #[test]
-    fn provider_catalog_keeps_missing_modes_unavailable_without_aliases() {
+    fn provider_catalog_keeps_missing_modes_not_observed_without_aliases() {
         let report = report_with_aliases(
             CapabilityMatrix {
                 composer_ready: true,
@@ -134,12 +136,12 @@ mod tests {
 
         let provider = provider_capability_catalog(Some(&report), "live");
         assert_eq!(
-            provider["capabilities"]["search"]["availability"],
-            "unavailable"
+            provider["capabilities"]["search"]["snapshot_status"],
+            "not_observed"
         );
         assert_eq!(
-            provider["capabilities"]["research"]["availability"],
-            "unavailable"
+            provider["capabilities"]["research"]["snapshot_status"],
+            "not_observed"
         );
     }
 
@@ -150,7 +152,7 @@ mod tests {
 
         assert_eq!(provider["subagent_recommendation"]["policy"], "queue");
         assert!(
-            provider["capabilities"]["search"]["warning"]
+            provider["capabilities"]["search"]["note"]
                 .as_str()
                 .is_some_and(|value| value.contains("browser-backed"))
         );

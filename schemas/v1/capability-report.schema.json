@@ -9,7 +9,8 @@
     "selector_pack_id",
     "selector_pack_version",
     "matrix",
-    "aliases"
+    "aliases",
+    "observed_ui"
   ],
   "properties": {
     "reported_at": { "type": "string", "format": "date-time" },
@@ -25,9 +26,14 @@
         "model_classes": { "$ref": "#/$defs/alias_map" },
         "efforts": { "$ref": "#/$defs/alias_map" }
       }
-    }
+    },
+    "observed_ui": { "$ref": "#/$defs/observed_ui" }
   },
   "$defs": {
+    "observation_status": {
+      "type": "string",
+      "enum": ["observed", "not_observed", "unknown", "blocked"]
+    },
     "alias_map": {
       "type": "object",
       "additionalProperties": {
@@ -57,6 +63,110 @@
         "research_mode_visible": { "type": "boolean" },
         "upload_control_visible": { "type": "boolean" },
         "downloadable_artifacts_observable": { "type": "boolean" }
+      }
+    },
+    "binary_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "observed"],
+      "properties": {
+        "status": { "$ref": "#/$defs/observation_status" },
+        "observed": { "type": "boolean" }
+      }
+    },
+    "model_selection_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "picker_visible",
+        "selected_model_class",
+        "selected_label",
+        "labels",
+        "unsupported_pro_selected",
+        "ambiguous_selection"
+      ],
+      "properties": {
+        "status": { "$ref": "#/$defs/observation_status" },
+        "picker_visible": { "type": "boolean" },
+        "selected_model_class": {
+          "type": ["string", "null"],
+          "enum": ["instant", "thinking", null]
+        },
+        "selected_label": { "type": ["string", "null"] },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "unsupported_pro_selected": { "type": "boolean" },
+        "ambiguous_selection": { "type": "boolean" }
+      }
+    },
+    "thinking_effort_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "controls_visible", "selected_effort", "labels"],
+      "properties": {
+        "status": { "$ref": "#/$defs/observation_status" },
+        "controls_visible": { "type": "boolean" },
+        "selected_effort": {
+          "type": ["string", "null"],
+          "enum": ["none", "standard", "extended", null]
+        },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "search_mode_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "visible", "selected", "labels"],
+      "properties": {
+        "status": { "$ref": "#/$defs/observation_status" },
+        "visible": { "type": "boolean" },
+        "selected": { "type": "boolean" },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "research_flow_observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "entrypoint_visible", "on_research_url", "labels"],
+      "properties": {
+        "status": { "$ref": "#/$defs/observation_status" },
+        "entrypoint_visible": { "type": "boolean" },
+        "on_research_url": { "type": "boolean" },
+        "labels": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "observed_ui": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "composer_readiness",
+        "submit_availability",
+        "selected_model",
+        "thinking_effort",
+        "search_mode",
+        "research_flow",
+        "upload_availability"
+      ],
+      "properties": {
+        "composer_readiness": { "$ref": "#/$defs/binary_observation" },
+        "submit_availability": { "$ref": "#/$defs/binary_observation" },
+        "selected_model": { "$ref": "#/$defs/model_selection_observation" },
+        "thinking_effort": { "$ref": "#/$defs/thinking_effort_observation" },
+        "search_mode": { "$ref": "#/$defs/search_mode_observation" },
+        "research_flow": { "$ref": "#/$defs/research_flow_observation" },
+        "upload_availability": { "$ref": "#/$defs/binary_observation" }
       }
     }
   }

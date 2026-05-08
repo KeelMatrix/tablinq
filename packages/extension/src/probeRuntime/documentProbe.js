@@ -95,12 +95,19 @@ export function probeDocument(options = {}) {
     captureAliases(definition.key, match);
   }
 
+  const observedUi = createObservedUiState({
+    context,
+    predicates,
+    matrix,
+  });
+
   return buildCapabilityProbeReport({
     reportedAt,
     selectorPackId,
     selectorPackVersion,
     matrix,
     aliases,
+    observedUi,
     uiSignature,
     strategyMatches,
     domNeighborhoods,
@@ -113,6 +120,7 @@ function buildCapabilityProbeReport({
   selectorPackVersion,
   matrix,
   aliases,
+  observedUi,
   uiSignature,
   strategyMatches,
   domNeighborhoods,
@@ -125,6 +133,7 @@ function buildCapabilityProbeReport({
       selector_pack_version: selectorPackVersion,
       matrix,
       aliases,
+      observed_ui: observedUi,
     },
     runtime: {
       ui_signature: uiSignature,
@@ -132,4 +141,255 @@ function buildCapabilityProbeReport({
       dom_neighborhoods: domNeighborhoods,
     },
   };
+}
+
+function createObservedUiState({ context, predicates, matrix }) {
+  const model = observeSelectedModel({ context, predicates, matrix });
+  return {
+    composer_readiness: observeBinary(matrix.composer_ready),
+    submit_availability: observeBinary(matrix.submit_available),
+    selected_model: model,
+    thinking_effort: observeThinkingEffort({
+      context,
+      predicates,
+      matrix,
+      model,
+    }),
+    search_mode: observeSearchMode({ context, predicates, matrix }),
+    research_flow: observeResearchFlow({ context, predicates, matrix }),
+    upload_availability: observeBinary(matrix.upload_control_visible),
+  };
+}
+
+function observeBinary(observed) {
+  return {
+    status: observed ? "observed" : "not_observed",
+    observed,
+  };
+}
+
+function observeSelectedModel({ context, predicates, matrix }) {
+  const labels = collectSelectedModelLabels(context, predicates);
+  const hasUnsupportedPro = labels.some((label) => label.includes("pro"));
+  const hasInstant = labels.some(
+    (label) => label.includes("instant") || label.includes("5.3"),
+  );
+  const hasThinking = labels.some(
+    (label) =>
+      !label.includes("pro") &&
+      (label.includes("thinking") ||
+        label.includes("standard") ||
+        label.includes("extended") ||
+        label.includes("5.4")),
+  );
+  const hasAmbiguousFiveFive = labels.some(
+    (label) =>
+      label.includes("5.5") &&
+      !label.includes("pro") &&
+      !label.includes("instant") &&
+      !label.includes("thinking") &&
+      !label.includes("standard") &&
+      !label.includes("extended") &&
+      !label.includes("5.3") &&
+      !label.includes("5.4"),
+  );
+  const ambiguous =
+    hasAmbiguousFiveFive ||
+    (hasInstant && hasThinking) ||
+    (!hasUnsupportedPro && labels.length > 0 && !hasInstant && !hasThinking);
+
+  let selectedModelClass = null;
+  if (!hasUnsupportedPro && !ambiguous) {
+    if (hasInstant) {
+      selectedModelClass = "instant";
+    } else if (hasThinking) {
+      selectedModelClass = "thinking";
+    }
+  }
+
+  return {
+    status: hasUnsupportedPro
+      ? "blocked"
+      : ambiguous
+        ? "unknown"
+        : selectedModelClass
+          ? "observed"
+          : matrix.model_picker_visible
+            ? "not_observed"
+            : "not_observed",
+    picker_visible: matrix.model_picker_visible,
+    selected_model_class: selectedModelClass,
+    selected_label: selectedModelClass
+      ? (labels.find((label) =>
+          selectedModelClass === "instant"
+            ? label.includes("instant") || label.includes("5.3")
+            : label.includes("thinking") ||
+              label.includes("standard") ||
+              label.includes("extended") ||
+              label.includes("5.4"),
+        ) ?? null)
+      : null,
+    labels,
+    unsupported_pro_selected: hasUnsupportedPro,
+    ambiguous_selection: ambiguous,
+  };
+}
+
+function observeThinkingEffort({ context, predicates, matrix, model }) {
+  const labels = collectSelectedEffortLabels(context, predicates);
+  const selectedEffort = labels.some((label) => label.includes("extended"))
+    ? "extended"
+    : labels.some((label) => label.includes("standard"))
+      ? "standard"
+      : null;
+  const status =
+    model.status === "blocked"
+      ? "blocked"
+      : selectedEffort
+        ? "observed"
+        : matrix.thinking_effort_visible || labels.length > 0
+          ? "unknown"
+          : "not_observed";
+  return {
+    status,
+    controls_visible: matrix.thinking_effort_visible,
+    selected_effort: selectedEffort,
+    labels,
+  };
+}
+
+function observeSearchMode({ context, predicates, matrix }) {
+  const labels = collectVisibleLabels(
+    context,
+    Array.from(
+      context.documentRoot.querySelectorAll("button, [role='button']"),
+    ).filter((element) => predicates.isSearchModeControl(element)),
+  );
+  const selected =
+    Array.from(
+      context.documentRoot.querySelectorAll("button, [role='button']"),
+    ).some(
+      (element) =>
+        predicates.isSearchChip(element) || isSelectedControl(element),
+    ) &&
+    Array.from(
+      context.documentRoot.querySelectorAll("button, [role='button']"),
+    ).some((element) => predicates.isSearchChip(element));
+  return {
+    status: matrix.search_mode_visible ? "observed" : "not_observed",
+    visible: matrix.search_mode_visible,
+    selected,
+    labels,
+  };
+}
+
+function observeResearchFlow({ context, predicates, matrix }) {
+  const labels = collectVisibleLabels(
+    context,
+    Array.from(
+      context.documentRoot.querySelectorAll("a, button, [role='button']"),
+    ).filter((element) => predicates.isResearchModeControl(element)),
+  );
+  const onResearchUrl = window.location.pathname
+    .toLowerCase()
+    .split("/")
+    .filter(Boolean)
+    .includes("deep-research");
+  return {
+    status:
+      matrix.research_mode_visible || onResearchUrl
+        ? "observed"
+        : "not_observed",
+    entrypoint_visible: matrix.research_mode_visible,
+    on_research_url: onResearchUrl,
+    labels,
+  };
+}
+
+function collectSelectedModelLabels(context, predicates) {
+  const explicitSelections = Array.from(
+    context.documentRoot.querySelectorAll(
+      "[data-model], [role='menuitemradio'], [role='option']",
+    ),
+  ).filter(
+    (element) =>
+      predicates.isModelOption(element) && isSelectedControl(element),
+  );
+  const trigger = predicates.findModelPickerTrigger();
+  const composerPills = Array.from(
+    context.documentRoot.querySelectorAll(
+      "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']",
+    ),
+  ).filter(
+    (element) =>
+      context.isVisible(element) && context.isComposerAdjacent(element),
+  );
+  return collectVisibleLabels(context, [
+    ...explicitSelections,
+    ...(trigger ? [trigger] : []),
+    ...composerPills,
+  ]).filter((label) =>
+    context.hasToken(label, [
+      "instant",
+      "thinking",
+      "pro",
+      "standard",
+      "extended",
+      "5.3",
+      "5.4",
+      "5.5",
+      "latest",
+    ]),
+  );
+}
+
+function collectSelectedEffortLabels(context, predicates) {
+  const explicitSelections = Array.from(
+    context.documentRoot.querySelectorAll(
+      "[data-effort], [role='menuitemradio'], [role='option']",
+    ),
+  ).filter(
+    (element) =>
+      predicates.isEffortOption(element) && isSelectedControl(element),
+  );
+  const trigger = predicates.findEffortPickerTrigger();
+  const composerPills = Array.from(
+    context.documentRoot.querySelectorAll(
+      "#thinking-effort-trigger, button.__composer-pill[aria-haspopup='menu']",
+    ),
+  ).filter(
+    (element) =>
+      context.isVisible(element) && context.isComposerAdjacent(element),
+  );
+  return collectVisibleLabels(context, [
+    ...explicitSelections,
+    ...(trigger ? [trigger] : []),
+    ...composerPills,
+  ]).filter((label) =>
+    context.hasToken(label, ["standard", "extended", "thinking"]),
+  );
+}
+
+function collectVisibleLabels(context, elements) {
+  const labels = [];
+  for (const element of elements) {
+    if (!(element instanceof HTMLElement) || !context.isVisible(element)) {
+      continue;
+    }
+    const label = context.normalizeText(context.accessibleName(element));
+    if (label && !labels.includes(label)) {
+      labels.push(label);
+    }
+  }
+  return labels;
+}
+
+function isSelectedControl(element) {
+  return (
+    element instanceof HTMLElement &&
+    (element.getAttribute("aria-pressed") === "true" ||
+      element.getAttribute("aria-selected") === "true" ||
+      element.getAttribute("data-selected") === "true" ||
+      element.dataset.selected === "true")
+  );
 }

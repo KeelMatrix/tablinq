@@ -40,7 +40,7 @@ pub(crate) fn handle_models_request(
             "request_id": request_id,
             "tablinq_capability_source": catalog.source,
             "tablinq_probe_reported_at": catalog.report.as_ref().map(|report| report.reported_at),
-            "tablinq_model_ids": PROVIDER_MODELS.iter().map(|spec| spec.id).collect::<Vec<_>>(),
+            "tablinq_preset_ids": PROVIDER_MODELS.iter().map(|spec| spec.id).collect::<Vec<_>>(),
             "gateway": {
                 "host": snapshot.host,
                 "port": snapshot.port,
@@ -77,8 +77,9 @@ pub(crate) fn handle_capabilities_request(
             "reported_at": catalog.report.as_ref().map(|report| report.reported_at),
             "selector_pack_id": catalog.report.as_ref().map(|report| report.selector_pack_id.clone()),
             "selector_pack_version": catalog.report.as_ref().map(|report| report.selector_pack_version.clone()),
+            "observed_ui": catalog.report.as_ref().map(|report| report.observed_ui.clone()),
             "aliases": aliases,
-            "models": models,
+            "presets": models,
             "provider": provider_capability_catalog(catalog.report.as_ref(), catalog.source),
         }),
     ))
@@ -113,7 +114,7 @@ pub(crate) fn handle_provider_request(
             "base_url": format!("http://{}:{}/v1", snapshot.host, snapshot.port),
             "reported_at": catalog.report.as_ref().map(|report| report.reported_at),
             "capability_source": catalog.source,
-            "model_ids": PROVIDER_MODELS.iter().map(|spec| spec.id).collect::<Vec<_>>(),
+            "preset_ids": PROVIDER_MODELS.iter().map(|spec| spec.id).collect::<Vec<_>>(),
             "openai_compatibility": {
                 "mode": "subset",
                 "supported_endpoints": [
@@ -199,7 +200,7 @@ pub(crate) fn handle_provider_request(
             },
             "presets": {
                 "openclaude": {
-                    "recommended_models": [
+                    "recommended_presets": [
                         "tablinq-instant",
                         "tablinq-thinking-standard",
                         "tablinq-search",
@@ -211,7 +212,7 @@ pub(crate) fn handle_provider_request(
                 },
                 "paperclip": {
                     "transport": "openai_compatible_http",
-                    "recommended_models": [
+                    "recommended_presets": [
                         "tablinq-instant",
                         "tablinq-search",
                         "tablinq-research",

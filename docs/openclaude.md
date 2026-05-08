@@ -16,12 +16,12 @@ Use Tablinq's local gateway as an OpenAI-compatible provider for OpenClaude.
 
 OpenClaude works best when you treat Tablinq as a high-context, browser-backed provider with one real upstream slot.
 
-## Recommended models
+## Recommended API presets
 
 - `tablinq-instant`
 - `tablinq-thinking-standard`
 - `tablinq-thinking-extended`
-- `tablinq-search`
+- `tablinq-search` for the Search composer mode
 
 Use `tablinq-research` only when you explicitly want the longer-running research path.
 

@@ -25,12 +25,65 @@ export interface RuntimeAliasesSnapshot {
   efforts: Record<string, string[]>;
 }
 
+export type CapabilityObservationStatus =
+  | "observed"
+  | "not_observed"
+  | "unknown"
+  | "blocked";
+
+export interface BinaryCapabilityObservationSnapshot {
+  status: CapabilityObservationStatus;
+  observed: boolean;
+}
+
+export interface ModelSelectionObservationSnapshot {
+  status: CapabilityObservationStatus;
+  picker_visible: boolean;
+  selected_model_class: string | null;
+  selected_label: string | null;
+  labels: string[];
+  unsupported_pro_selected: boolean;
+  ambiguous_selection: boolean;
+}
+
+export interface ThinkingEffortObservationSnapshot {
+  status: CapabilityObservationStatus;
+  controls_visible: boolean;
+  selected_effort: string | null;
+  labels: string[];
+}
+
+export interface SearchModeObservationSnapshot {
+  status: CapabilityObservationStatus;
+  visible: boolean;
+  selected: boolean;
+  labels: string[];
+}
+
+export interface ResearchFlowObservationSnapshot {
+  status: CapabilityObservationStatus;
+  entrypoint_visible: boolean;
+  on_research_url: boolean;
+  labels: string[];
+}
+
+export interface CapabilityObservedUiSnapshot {
+  composer_readiness: BinaryCapabilityObservationSnapshot;
+  submit_availability: BinaryCapabilityObservationSnapshot;
+  selected_model: ModelSelectionObservationSnapshot;
+  thinking_effort: ThinkingEffortObservationSnapshot;
+  search_mode: SearchModeObservationSnapshot;
+  research_flow: ResearchFlowObservationSnapshot;
+  upload_availability: BinaryCapabilityObservationSnapshot;
+}
+
 export interface CapabilityReportPayload {
   reported_at: string;
   selector_pack_id: string;
   selector_pack_version: string;
   matrix: CapabilityMatrixSnapshot;
   aliases: RuntimeAliasesSnapshot;
+  observed_ui: CapabilityObservedUiSnapshot;
 }
 
 export interface DomNeighborhoodSnapshot {

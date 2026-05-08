@@ -70,13 +70,13 @@ Recommended posture:
 
 `POST /admin/shutdown` and `POST /admin/clear` are administrative operations. `POST /admin/clear` is destructive and requires an authenticated JSON body of `{"all":true,"force":true}`.
 
-## Recommended models
+## Supported API presets
 
 - `tablinq-instant`
 - `tablinq-thinking-standard`
 - `tablinq-thinking-extended`
-- `tablinq-search`
-- `tablinq-research`
+- `tablinq-search` for Search chip / composer mode
+- `tablinq-research` for the Deep Research flow
 
 ## Safe parallelism
 
