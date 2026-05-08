@@ -49,39 +49,11 @@ pub(crate) fn effective_gateway_admin_snapshot(
     core: &CoreService,
 ) -> Result<EffectiveGatewayAdminSnapshot> {
     let daemon_health = daemon_diagnostic_health_snapshot(config);
-    match core.doctor_report() {
-        Ok(report) => {
-            let health = report.health.clone();
-            Ok(EffectiveGatewayAdminSnapshot {
-                daemon_health: diagnostic_daemon_health(daemon_health, &health),
-                health,
-                browser: report.browser,
-                browser_warning: None,
-            })
-        }
-        Err(err) => {
-            let health = gateway_live_health_snapshot(core)?;
-            let browser = match core.browser_profile_info() {
-                Ok(browser) => browser,
-                Err(profile_err) => {
-                    return Ok(EffectiveGatewayAdminSnapshot {
-                        daemon_health: diagnostic_daemon_health(daemon_health, &health),
-                        health,
-                        browser: degraded_browser_status_snapshot(config),
-                        browser_warning: Some(format!(
-                            "{err:#}; browser_profile_info: {profile_err:#}"
-                        )),
-                    });
-                }
-            };
-            Ok(EffectiveGatewayAdminSnapshot {
-                daemon_health: diagnostic_daemon_health(daemon_health, &health),
-                health,
-                browser,
-                browser_warning: Some(format!("{err:#}")),
-            })
-        }
+    if let Some(report) = daemon_doctor_report(config) {
+        return Ok(admin_snapshot_from_doctor_report(report, daemon_health));
     }
+
+    core_admin_snapshot(config, core, daemon_health)
 }
 
 pub(crate) fn effective_doctor_report(
@@ -142,6 +114,59 @@ fn daemon_doctor_report(config: &AppConfig) -> Option<DoctorReport> {
     match gptd::send_request(&config.paths.ipc_endpoint, &DaemonRequest::Doctor).ok()? {
         DaemonResponse::Doctor(report) => Some(report),
         _ => None,
+    }
+}
+
+fn admin_snapshot_from_doctor_report(
+    report: DoctorReport,
+    daemon_health: Option<HealthCheck>,
+) -> EffectiveGatewayAdminSnapshot {
+    admin_snapshot_from_health_and_browser(report.health, report.browser, daemon_health)
+}
+
+fn admin_snapshot_from_health_and_browser(
+    health: HealthCheck,
+    browser: BrowserStatusSnapshot,
+    daemon_health: Option<HealthCheck>,
+) -> EffectiveGatewayAdminSnapshot {
+    let diagnostic_daemon_health = diagnostic_daemon_health(daemon_health, &health);
+    EffectiveGatewayAdminSnapshot {
+        daemon_health: diagnostic_daemon_health,
+        health,
+        browser,
+        browser_warning: None,
+    }
+}
+
+fn core_admin_snapshot(
+    config: &AppConfig,
+    core: &CoreService,
+    daemon_health: Option<HealthCheck>,
+) -> Result<EffectiveGatewayAdminSnapshot> {
+    match core.doctor_report() {
+        Ok(report) => Ok(admin_snapshot_from_doctor_report(report, daemon_health)),
+        Err(err) => {
+            let health = gateway_live_health_snapshot(core)?;
+            let browser = match core.browser_profile_info() {
+                Ok(browser) => browser,
+                Err(profile_err) => {
+                    return Ok(EffectiveGatewayAdminSnapshot {
+                        daemon_health: diagnostic_daemon_health(daemon_health, &health),
+                        health,
+                        browser: degraded_browser_status_snapshot(config),
+                        browser_warning: Some(format!(
+                            "{err:#}; browser_profile_info: {profile_err:#}"
+                        )),
+                    });
+                }
+            };
+            Ok(EffectiveGatewayAdminSnapshot {
+                daemon_health: diagnostic_daemon_health(daemon_health, &health),
+                health,
+                browser,
+                browser_warning: Some(format!("{err:#}")),
+            })
+        }
     }
 }
 
@@ -247,6 +272,59 @@ mod tests {
 
         let snapshot = merge_gateway_health_snapshot(live, Some(identical));
 
+        assert!(snapshot.daemon_health.is_none());
+    }
+
+    #[test]
+    fn admin_snapshot_uses_daemon_doctor_report_without_busy_warning() {
+        let health = HealthCheck {
+            status: HealthStatus::Ok,
+            checked_at: Utc::now(),
+            browser_connected: true,
+            extension_connected: true,
+            authenticated: true,
+            details: Some("daemon attached".to_owned()),
+        };
+        let browser = BrowserStatusSnapshot {
+            running: true,
+            browser_kind: "chrome".to_owned(),
+            profile_dir: "profile".to_owned(),
+            attach_profile_dir: None,
+            attach_profile_note: None,
+            downloads_dir: "downloads".to_owned(),
+            target_url: "https://chatgpt.com".to_owned(),
+            current_url: Some("https://chatgpt.com/c/test".to_owned()),
+            page_title: Some("ChatGPT".to_owned()),
+            page_ready: true,
+            authenticated: true,
+            reload_count: 0,
+            screenshot_path: None,
+            browser_path: None,
+            extension_connected: true,
+            capability_report: None,
+            attach_mode: BrowserConnectionMode::AttachFirst,
+            browser_owner: BrowserOwner::External,
+            cdp_attached: true,
+            target_tab_found: true,
+            target_tab_id: Some("tab-1".to_owned()),
+            target_workspace_key: None,
+            debug_endpoint: Some("http://127.0.0.1:9222".to_owned()),
+            auth_source: AuthSource::Page,
+            extension_required: true,
+            last_capability_report_at: None,
+            action: None,
+            browser_process_closed: None,
+            reason: None,
+        };
+        let snapshot = admin_snapshot_from_health_and_browser(
+            health.clone(),
+            browser.clone(),
+            Some(health.clone()),
+        );
+
+        assert_eq!(snapshot.health, health);
+        assert_eq!(snapshot.browser, browser);
+        assert!(snapshot.browser_warning.is_none());
         assert!(snapshot.daemon_health.is_none());
     }
 }
