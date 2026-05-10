@@ -27,6 +27,7 @@ Use the first matching path unless the task clearly spans multiple paths.
      - daemon/state/recovery/IPC: `tablinq-daemon-debug`
      - browser adapter/extension/selectors/capabilities: `tablinq-browser-debug`
      - real signed-in ChatGPT session/live prompt/upload: `tablinq-browser-session-debug`
+     - prompt wording/duplicate avoidance for a live ChatGPT turn: `tablinq-prompt-style`
      - gateway HTTP/OpenAI-compatible API behavior: `tablinq-gateway-surface`
      - failure bundle/log/screenshot/DOM evidence: `tablinq-failure-bundle-review`
 
@@ -47,6 +48,7 @@ Use the first matching path unless the task clearly spans multiple paths.
 - Prefer one repo-local layer skill plus one general engineering skill.
 - Do not stack many skills unless the task genuinely crosses boundaries.
 - Do not use live browser/session guidance unless live ChatGPT interaction is actually required.
+- Use `tablinq-prompt-style` only when prompt wording itself is part of the work; otherwise keep prompt guidance local to `tablinq-browser-session-debug`.
 - For GitHub issue work, use `docs/agents/issue-tracker.md` and any explicitly available issue-workflow skill or connector.
 - Always state which skills were selected and why in the final response, matching the existing `AGENTS.md` output rule.
 
