@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn main() {
     println!("cargo:rerun-if-env-changed=TABLINQ_BUILD_COMMIT");
     println!("cargo:rerun-if-env-changed=TABLINQ_BUILD_DIRTY");
+    emit_git_rerun_directives();
 
     println!(
         "cargo:rustc-env=TABLINQ_BUILD_COMMIT={}",
@@ -33,6 +34,56 @@ fn main() {
             .map(|duration| duration.as_secs().to_string())
             .unwrap_or_else(|_| "0".to_owned())
     );
+}
+
+fn emit_git_rerun_directives() {
+    for path_name in ["HEAD", "packed-refs"] {
+        if let Some(path) = git_path(path_name) {
+            println!("cargo:rerun-if-changed={}", path);
+        }
+    }
+
+    if let Some(reference) = current_head_reference() {
+        if let Some(path) = git_path(&reference) {
+            println!("cargo:rerun-if-changed={}", path);
+        }
+    }
+}
+
+fn git_path(path: &str) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--git-path", path])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let path = String::from_utf8(output.stdout).ok()?;
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
+}
+
+fn current_head_reference() -> Option<String> {
+    let output = Command::new("git")
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let reference = String::from_utf8(output.stdout).ok()?;
+    let trimmed = reference.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_owned())
+    }
 }
 
 fn build_commit() -> Option<String> {
