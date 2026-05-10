@@ -8,7 +8,8 @@ param(
   [switch]$NoLaunchAfterInstall,
   [switch]$SkipPathUpdate,
   [switch]$SkipDependencyInstall,
-  [switch]$SkipPackageBuild
+  [switch]$SkipPackageBuild,
+  [switch]$AllowWorkspaceMismatch
 )
 
 $ErrorActionPreference = "Stop"
@@ -1132,7 +1133,7 @@ function Get-BuildMetadataFromPackage {
   }
 }
 
-function Get-BuildMetadata {
+function Get-BinaryBuildMetadata {
   param(
     [string]$ExecutablePath,
     [string]$WorkingDirectory
@@ -1140,11 +1141,6 @@ function Get-BuildMetadata {
 
   if (-not $ExecutablePath) {
     return $null
-  }
-
-  $packageMetadata = Get-BuildMetadataFromPackage -ExecutablePath $ExecutablePath
-  if ($packageMetadata) {
-    return $packageMetadata
   }
 
   try {
@@ -1198,9 +1194,10 @@ function Get-InstallVersionDiagnostics {
     [string]$RepoRoot
   )
 
-  $installedMetadata = Get-BuildMetadata -ExecutablePath $InstalledCli -WorkingDirectory $RepoRoot
+  $installedMetadata = Get-BinaryBuildMetadata -ExecutablePath $InstalledCli -WorkingDirectory $RepoRoot
+  $packageMetadata = Get-BuildMetadataFromPackage -ExecutablePath $InstalledCli
   $pathCommand = Resolve-CommandPath -CommandName "gpt"
-  $pathMetadata = Get-BuildMetadata -ExecutablePath $pathCommand -WorkingDirectory $RepoRoot
+  $pathMetadata = Get-BinaryBuildMetadata -ExecutablePath $pathCommand -WorkingDirectory $RepoRoot
   $workspaceHead = Get-WorkspaceHeadCommit -RepoRoot $RepoRoot
   $warnings = [System.Collections.Generic.List[string]]::new()
 
@@ -1232,22 +1229,58 @@ function Get-InstallVersionDiagnostics {
       }
       else {
         $workspaceState = "different"
-        $warnings.Add(
-          "Repo checkout HEAD $(Get-ShortCommit -Commit $workspaceHead) differs from installed CLI commit $(Get-ShortCommit -Commit $installedMetadata.git_commit). Use cargo run -p gpt -- ... when validating checkout-only changes."
-        ) | Out-Null
       }
     }
   }
 
   [pscustomobject]@{
     InstalledMetadata = $installedMetadata
+    PackageMetadata = $packageMetadata
     PathCommand = $pathCommand
     PathMetadata = $pathMetadata
+    PathPointsToInstalledCli = [bool]($pathCommand -and $pathCommand.Trim().Equals($InstalledCli, [System.StringComparison]::OrdinalIgnoreCase))
     PathState = $pathState
     PathDetail = $pathDetail
+    WorkspaceHead = $workspaceHead
     WorkspaceState = $workspaceState
     WorkspaceDetail = $workspaceDetail
     Warnings = $warnings
+  }
+}
+
+function Assert-InstallProvenance {
+  param(
+    [pscustomobject]$VersionDiagnostics,
+    [bool]$AllowWorkspaceMismatch,
+    [bool]$AllowMismatchModeAvailable,
+    [bool]$EnforcePathCurrent
+  )
+
+  $installedMetadata = $VersionDiagnostics.InstalledMetadata
+  $packageMetadata = $VersionDiagnostics.PackageMetadata
+  $repoHead = $VersionDiagnostics.WorkspaceHead
+
+  if (-not $installedMetadata -or -not $installedMetadata.git_commit) {
+    throw "Installed CLI build metadata is unavailable. Refusing to start services because install provenance cannot be verified."
+  }
+
+  if ($packageMetadata -and $packageMetadata.git_commit -and -not $packageMetadata.git_commit.Equals($installedMetadata.git_commit, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Package metadata commit $(Get-ShortCommit -Commit $packageMetadata.git_commit) does not match installed CLI commit $(Get-ShortCommit -Commit $installedMetadata.git_commit). Refusing to start services. Rebuild/package provenance is stale."
+  }
+
+  $workspaceMismatchAllowed = $AllowWorkspaceMismatch -and $AllowMismatchModeAvailable
+  if ($repoHead -and -not $installedMetadata.git_commit.Equals($repoHead, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $workspaceMismatchAllowed) {
+      throw "Installed CLI commit $(Get-ShortCommit -Commit $installedMetadata.git_commit) does not match repo HEAD $(Get-ShortCommit -Commit $repoHead). Refusing to start services. Rebuild/package provenance is stale."
+    }
+
+    $VersionDiagnostics.Warnings.Add(
+      "Repo checkout HEAD $(Get-ShortCommit -Commit $repoHead) differs from installed CLI commit $(Get-ShortCommit -Commit $installedMetadata.git_commit). -AllowWorkspaceMismatch was set for an explicit prebuilt/staged package."
+    ) | Out-Null
+  }
+
+  if ($EnforcePathCurrent -and $VersionDiagnostics.PathState -eq "stale") {
+    throw "Current shell resolves gpt to $($VersionDiagnostics.PathCommand), whose commit $(Get-ShortCommit -Commit $VersionDiagnostics.PathMetadata.git_commit) does not match installed CLI commit $(Get-ShortCommit -Commit $installedMetadata.git_commit). Refusing to start services. Update PATH or run the installed binary directly."
   }
 }
 
@@ -1651,9 +1684,12 @@ function Write-InstallSummary {
   Write-StatusLine -Label "Launch" -State $LaunchMode -Details $(if ($NoLaunchAfterInstall) { "use manual steps below" } else { "daemon and gateway checked" })
   Write-StatusLine -Label "Daemon" -State $(if ($daemonRunning) { "running" } else { "attention" }) -Details $daemonDetail
   Write-StatusLine -Label "Gateway" -State $(if ($gatewayRunning) { "running" } else { "attention" }) -Details $gatewayDetail
-  Write-StatusLine -Label "CLI build" -State $(if ($VersionDiagnostics.InstalledMetadata) { "ok" } else { "attention" }) -Details ("{0} {1}" -f (Join-Path $InstallRoot "bin\gpt.exe"), (Format-BuildMetadataSummary -Metadata $VersionDiagnostics.InstalledMetadata))
+  Write-StatusLine -Label "CLI build" -State $(if ($VersionDiagnostics.InstalledMetadata) { "ok" } else { "attention" }) -Details ("installed {0} {1}" -f (Join-Path $InstallRoot "bin\gpt.exe"), (Format-BuildMetadataSummary -Metadata $VersionDiagnostics.InstalledMetadata))
+  Write-StatusLine -Label "Package" -State $(if ($VersionDiagnostics.PackageMetadata) { "ok" } else { "attention" }) -Details ("metadata {0}" -f (Format-BuildMetadataSummary -Metadata $VersionDiagnostics.PackageMetadata))
   Write-StatusLine -Label "PATH gpt" -State $VersionDiagnostics.PathState -Details $VersionDiagnostics.PathDetail
+  Write-StatusLine -Label "PATH target" -State $(if ($VersionDiagnostics.PathPointsToInstalledCli) { "installed" } else { "other" }) -Details $(if ($VersionDiagnostics.PathPointsToInstalledCli) { "PATH points to freshly installed gpt.exe" } else { "PATH does not point directly to freshly installed gpt.exe" })
   Write-StatusLine -Label "Workspace" -State $VersionDiagnostics.WorkspaceState -Details $VersionDiagnostics.WorkspaceDetail
+  Write-StatusLine -Label "Checkout" -State $(if ($VersionDiagnostics.WorkspaceState -eq "matching") { "valid" } else { "not-current" }) -Details $(if ($VersionDiagnostics.WorkspaceState -eq "matching") { "installed binary is valid for testing current checkout" } else { "installed binary is not valid for testing current checkout changes" })
 
   if ($VersionDiagnostics.Warnings.Count -gt 0) {
     Write-Host ""
@@ -1681,9 +1717,10 @@ Invoke-WorkspaceDependencyInstall -ShouldInstallDependencies:(-not $effectiveSki
 Invoke-PackageBuildStep -ShouldBuildPackage:(-not $effectiveSkipPackageBuild) -PowerShellExecutable $preflight.PowerShellExecutable -PackageScriptPath $packageScriptPath -Profile $Profile -RepoRoot $repoRoot -InstallLogDir $preflight.InstallLogDir
 
 $packageInstall = Install-PackagePayload -PackageRoot $PackageRoot -InstallRoot $InstallRoot -StateRoot $StateRoot -RepoRoot $repoRoot -BrowserSelection $preflight.BrowserSelection -SkipRegistry:([bool]$SkipRegistry) -SkipPathUpdate:([bool]$SkipPathUpdate)
+$versionDiagnostics = Get-InstallVersionDiagnostics -InstalledCli $packageInstall.InstalledCli -RepoRoot $repoRoot
+Assert-InstallProvenance -VersionDiagnostics $versionDiagnostics -AllowWorkspaceMismatch:([bool]$AllowWorkspaceMismatch) -AllowMismatchModeAvailable:([bool]($usePrebuiltPackage -or $SkipPackageBuild)) -EnforcePathCurrent:([bool](-not $SkipPathUpdate))
 $autoStartMode = Set-LocalMachineConfiguration -EnableAutoStart:([bool]$EnableAutoStart) -InstallRoot $InstallRoot -StateRoot $StateRoot
 $serviceState = Get-InstallServiceState -InstalledCli $packageInstall.InstalledCli -InstallRoot $InstallRoot -StateRoot $StateRoot -RepoRoot $repoRoot -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall)
 $pathState = if ($SkipPathUpdate) { "unchanged" } else { "updated" }
-$versionDiagnostics = Get-InstallVersionDiagnostics -InstalledCli $packageInstall.InstalledCli -RepoRoot $repoRoot
 
 Write-InstallSummary -InstallRoot $InstallRoot -StateRoot $StateRoot -BrowserSelection $preflight.BrowserSelection -ConnectionMode $packageInstall.ConnectionMode -TargetUrl $packageInstall.TargetUrl -PathState $pathState -AutoStartMode $autoStartMode -LaunchMode $serviceState.LaunchMode -NoLaunchAfterInstall:([bool]$NoLaunchAfterInstall) -DaemonStatus $serviceState.DaemonStatus -GatewayStatus $serviceState.GatewayStatus -EnableAutoStart:([bool]$EnableAutoStart) -SkipPathUpdate:([bool]$SkipPathUpdate) -UsePathCommand:([bool]$packageInstall.UsePathCommand) -VersionDiagnostics $versionDiagnostics

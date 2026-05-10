@@ -5,17 +5,10 @@ pub fn build_metadata() -> BuildMetadata {
         application: "tablinq-gateway".to_owned(),
         version: env!("CARGO_PKG_VERSION").to_owned(),
         git_commit: env_commit(),
-        git_dirty: option_env!("TABLINQ_BUILD_DIRTY").unwrap_or("false") == "true",
-        target: option_env!("TABLINQ_BUILD_TARGET")
-            .unwrap_or(std::env::consts::ARCH)
-            .to_owned(),
-        profile: option_env!("TABLINQ_BUILD_PROFILE")
-            .unwrap_or("dev")
-            .to_owned(),
-        built_at_unix_epoch: option_env!("TABLINQ_BUILD_UNIX_EPOCH")
-            .unwrap_or("0")
-            .parse()
-            .unwrap_or(0),
+        git_dirty: env!("TABLINQ_BUILD_DIRTY") == "true",
+        target: env!("TABLINQ_BUILD_TARGET").to_owned(),
+        profile: env!("TABLINQ_BUILD_PROFILE").to_owned(),
+        built_at_unix_epoch: env!("TABLINQ_BUILD_UNIX_EPOCH").parse().unwrap_or(0),
     }
 }
 

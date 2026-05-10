@@ -92,6 +92,73 @@ function Get-RelativePath {
   }
 }
 
+function Get-WorkspaceHeadCommit {
+  param([string]$RepoRoot)
+
+  $output = & git -C $RepoRoot rev-parse HEAD 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to determine repo HEAD for package provenance."
+  }
+
+  $value = ($output | Out-String).Trim()
+  if (-not $value) {
+    throw "Unable to determine repo HEAD for package provenance."
+  }
+
+  $value
+}
+
+function Get-WorkspaceDirtyState {
+  param([string]$RepoRoot)
+
+  & git -C $RepoRoot diff --quiet --ignore-submodules HEAD -- 2>$null
+  if ($LASTEXITCODE -eq 0) {
+    return "false"
+  }
+
+  "true"
+}
+
+function Get-ShortCommit {
+  param([string]$Commit)
+
+  if (-not $Commit) {
+    return "unknown"
+  }
+
+  if ($Commit.Length -le 12) {
+    return $Commit
+  }
+
+  $Commit.Substring(0, 12)
+}
+
+function Get-BinaryBuildMetadata {
+  param(
+    [string]$BinaryPath,
+    [string]$BinaryName
+  )
+
+  $metadata = & $BinaryPath version --json | ConvertFrom-Json
+  if (-not $metadata.git_commit) {
+    throw "$BinaryName build metadata did not report git_commit."
+  }
+
+  $metadata
+}
+
+function Assert-BinaryCommitMatchesHead {
+  param(
+    [pscustomobject]$Metadata,
+    [string]$BinaryName,
+    [string]$RepoHead
+  )
+
+  if (-not $Metadata.git_commit.Equals($RepoHead, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "$BinaryName commit $(Get-ShortCommit -Commit $Metadata.git_commit) does not match repo HEAD $(Get-ShortCommit -Commit $RepoHead). Rebuild/package provenance is stale."
+  }
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $outputRoot = (Resolve-Path (New-Item -ItemType Directory -Force -Path $OutputDir)).Path
 $packageRoot = Join-Path $outputRoot "tablinq"
@@ -101,6 +168,8 @@ $cargoTargetRoot = if ($TargetDir) {
 } else {
   Join-Path $repoRoot "target"
 }
+$repoHead = Get-WorkspaceHeadCommit -RepoRoot $repoRoot
+$repoDirty = Get-WorkspaceDirtyState -RepoRoot $repoRoot
 
 if (Test-Path $packageRoot) {
   Remove-Item -Recurse -Force $packageRoot
@@ -114,6 +183,10 @@ $browserAdapterPackageRoot = Join-Path $packageRoot "browser-adapter"
 
 Push-Location $repoRoot
 try {
+  $previousBuildCommit = $env:TABLINQ_BUILD_COMMIT
+  $previousBuildDirty = $env:TABLINQ_BUILD_DIRTY
+  $env:TABLINQ_BUILD_COMMIT = $repoHead
+  $env:TABLINQ_BUILD_DIRTY = $repoDirty
   $cargoArgs = @("build", "--profile", $Profile, "-p", "gpt", "-p", "gptd", "-p", "tablinq-gateway", "-p", "tablinq-host")
   if ($TargetDir) {
     $cargoArgs += @("--target-dir", $cargoTargetRoot)
@@ -155,7 +228,10 @@ try {
   Copy-Item -Path (Join-Path $repoRoot "README.md") -Destination (Join-Path $packageRoot "README.md") -Force
 
   $extensionId = Get-ExtensionIdFromKey -ManifestPath (Join-Path $packageRoot "extension\\manifest.json")
-  $buildMetadata = & (Join-Path $binRoot "gpt.exe") version --json | ConvertFrom-Json
+  $buildMetadata = Get-BinaryBuildMetadata -BinaryPath (Join-Path $binRoot "gpt.exe") -BinaryName "gpt.exe"
+  Assert-BinaryCommitMatchesHead -Metadata $buildMetadata -BinaryName "gpt.exe" -RepoHead $repoHead
+  Assert-BinaryCommitMatchesHead -Metadata (Get-BinaryBuildMetadata -BinaryPath (Join-Path $binRoot "gptd.exe") -BinaryName "gptd.exe") -BinaryName "gptd.exe" -RepoHead $repoHead
+  Assert-BinaryCommitMatchesHead -Metadata (Get-BinaryBuildMetadata -BinaryPath (Join-Path $binRoot "tablinq-gateway.exe") -BinaryName "tablinq-gateway.exe") -BinaryName "tablinq-gateway.exe" -RepoHead $repoHead
   $packageMetadata = [ordered]@{
     package_version = $buildMetadata.version
     commit = $buildMetadata.git_commit
@@ -175,8 +251,11 @@ try {
   $packageMetadata | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $packageRoot "package-metadata.json")
   Write-Host "Packaged Tablinq to $packageRoot"
   Write-Host "Extension ID: $extensionId"
+  Write-Host ("Package commit: {0}" -f (Get-ShortCommit -Commit $buildMetadata.git_commit))
 }
 finally {
+  $env:TABLINQ_BUILD_COMMIT = $previousBuildCommit
+  $env:TABLINQ_BUILD_DIRTY = $previousBuildDirty
   if (Test-Path $packageStagingRoot) {
     Remove-Item -Recurse -Force $packageStagingRoot
   }
