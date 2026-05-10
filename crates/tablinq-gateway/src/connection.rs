@@ -156,10 +156,10 @@ pub(crate) fn handle_connection(
             &context.request_id,
         )?,
         Route::BrowserProfileInfo => {
-            browser::handle_browser_profile_info_request(core, &context.request_id)?
+            browser::handle_browser_profile_info_request(config, core, &context.request_id)?
         }
         Route::BrowserConnectionInfo => {
-            browser::handle_browser_connection_info_request(config, core, &context.request_id)
+            browser::handle_browser_connection_info_request(config, core, &context.request_id)?
         }
         Route::Sessions => metadata::handle_sessions_request(core, &context.request_id)?,
         Route::SessionConversations => {
