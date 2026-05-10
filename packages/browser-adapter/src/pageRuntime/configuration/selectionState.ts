@@ -221,11 +221,29 @@ export async function assertVisibleComposerSelection(
   const requestedModel = request.modelClass ?? "unspecified";
   const requestedEffort = request.effort ?? "none";
   const visible = describeVisibleComposerSelection(state);
-  const effectiveState = state.hasVisibleModelState
-    ? state
-    : await readSelectedComposerControlState(page);
+  const selectedState = await readSelectedComposerControlState(page);
+  const visibleEffort: VisibleComposerSelectionState["effort"] =
+    state.texts.some((text) => text.includes("extended"))
+      ? "extended"
+      : state.texts.some((text) => text.includes("standard"))
+        ? "standard"
+        : "none";
+  const effectiveState =
+    state.hasVisibleModelState &&
+    state.model === "none" &&
+    request.modelClass === "thinking" &&
+    visibleEffort !== "none" &&
+    !selectedState.hasUnsupportedPro
+      ? { ...state, model: "thinking" as const, effort: visibleEffort }
+      : state.hasVisibleModelState
+        ? state
+        : selectedState;
 
-  if (state.hasUnsupportedPro || effectiveState.hasUnsupportedPro) {
+  if (
+    state.hasUnsupportedPro ||
+    selectedState.hasUnsupportedPro ||
+    effectiveState.hasUnsupportedPro
+  ) {
     throw new Error(
       `capability missing: unsupported Pro model state is selected; requested_model=${requestedModel}; requested_effort=${requestedEffort}; visible=${visible}`,
     );
