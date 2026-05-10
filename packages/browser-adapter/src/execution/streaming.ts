@@ -124,6 +124,17 @@ export async function applyResearchSnapshot(
     });
     state.announcedStart = true;
   }
+  if (snapshot.status === "running" && state.lastStatus === "starting") {
+    await onUpdate({
+      status: "waiting_for_sources",
+      message: "gathering sources",
+      conversation_id: snapshot.conversationId,
+      message_id: snapshot.messageId,
+      current_url: snapshot.currentUrl,
+    });
+    state.lastStatus = "waiting_for_sources";
+    state.lastMessage = "";
+  }
   if (
     snapshot.status !== state.lastStatus ||
     snapshot.statusMessage !== state.lastMessage

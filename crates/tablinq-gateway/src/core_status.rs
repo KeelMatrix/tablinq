@@ -256,14 +256,14 @@ mod tests {
         );
 
         assert_eq!(snapshot.health.status, HealthStatus::Ok);
-        assert_eq!(snapshot.health.browser_connected, true);
-        assert_eq!(snapshot.health.extension_connected, true);
-        assert_eq!(snapshot.health.authenticated, true);
-        assert_eq!(snapshot.browser.running, true);
-        assert_eq!(snapshot.browser.cdp_attached, true);
-        assert_eq!(snapshot.browser.extension_connected, true);
-        assert_eq!(snapshot.browser.page_ready, true);
-        assert_eq!(snapshot.browser.target_tab_found, true);
+        assert!(snapshot.health.browser_connected);
+        assert!(snapshot.health.extension_connected);
+        assert!(snapshot.health.authenticated);
+        assert!(snapshot.browser.running);
+        assert!(snapshot.browser.cdp_attached);
+        assert!(snapshot.browser.extension_connected);
+        assert!(snapshot.browser.page_ready);
+        assert!(snapshot.browser.target_tab_found);
         assert_eq!(snapshot.browser.auth_source, AuthSource::Page);
     }
 
