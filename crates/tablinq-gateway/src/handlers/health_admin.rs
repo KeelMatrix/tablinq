@@ -1,6 +1,4 @@
-use crate::core_status::{
-    effective_doctor_report, effective_gateway_admin_snapshot, effective_gateway_health_snapshot,
-};
+use crate::core_status::{effective_doctor_report, effective_gateway_admin_snapshot};
 use crate::http::HttpResponse;
 use crate::json::json_response;
 use crate::process_control::GatewayStatusSnapshot;
@@ -30,15 +28,15 @@ pub(crate) fn handle_health_request(
     scheduler_status: &SchedulerSnapshot,
     request_id: &str,
 ) -> Result<HttpResponse> {
-    let health = effective_gateway_health_snapshot(config, core)?;
+    let admin = effective_gateway_admin_snapshot(config, core)?;
     Ok(json_response(
         200,
         json!({
             "service": "tablinq-gateway",
             "request_id": request_id,
-            "status": health.health.status,
-            "health": health.health,
-            "daemon_health": health.daemon_health,
+            "status": admin.health.status,
+            "health": admin.health,
+            "daemon_health": admin.daemon_health,
             "gateway": snapshot,
             "scheduler": scheduler_status,
         }),

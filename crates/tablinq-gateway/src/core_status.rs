@@ -6,12 +6,6 @@ use shared_protocol::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct EffectiveGatewayHealthSnapshot {
-    pub(crate) health: HealthCheck,
-    pub(crate) daemon_health: Option<HealthCheck>,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct EffectiveGatewayAdminSnapshot {
     pub(crate) health: HealthCheck,
     pub(crate) browser: BrowserStatusSnapshot,
@@ -31,17 +25,6 @@ pub(crate) fn daemon_diagnostic_health_snapshot(config: &AppConfig) -> Option<He
         DaemonResponse::Health(health) => Some(health),
         _ => None,
     }
-}
-
-pub(crate) fn effective_gateway_health_snapshot(
-    config: &AppConfig,
-    core: &CoreService,
-) -> Result<EffectiveGatewayHealthSnapshot> {
-    let health = gateway_live_health_snapshot(core)?;
-    Ok(merge_gateway_health_snapshot(
-        health,
-        daemon_diagnostic_health_snapshot(config),
-    ))
 }
 
 pub(crate) fn effective_gateway_admin_snapshot(
@@ -170,17 +153,6 @@ fn core_admin_snapshot(
     }
 }
 
-fn merge_gateway_health_snapshot(
-    health: HealthCheck,
-    daemon_health: Option<HealthCheck>,
-) -> EffectiveGatewayHealthSnapshot {
-    let daemon_health = diagnostic_daemon_health(daemon_health, &health);
-    EffectiveGatewayHealthSnapshot {
-        health,
-        daemon_health,
-    }
-}
-
 fn diagnostic_daemon_health(
     daemon_health: Option<HealthCheck>,
     health: &HealthCheck,
@@ -226,31 +198,6 @@ mod tests {
     use shared_protocol::HealthStatus;
 
     #[test]
-    fn effective_health_snapshot_prefers_gateway_core_browser_state_over_stale_daemon_health() {
-        let live = HealthCheck {
-            status: HealthStatus::Ok,
-            checked_at: Utc::now(),
-            browser_connected: true,
-            extension_connected: true,
-            authenticated: true,
-            details: Some("gateway core attached".to_owned()),
-        };
-        let stale = HealthCheck {
-            status: HealthStatus::Degraded,
-            checked_at: Utc::now(),
-            browser_connected: false,
-            extension_connected: false,
-            authenticated: false,
-            details: Some("daemon stale".to_owned()),
-        };
-
-        let snapshot = merge_gateway_health_snapshot(live.clone(), Some(stale.clone()));
-
-        assert_eq!(snapshot.health, live);
-        assert_eq!(snapshot.daemon_health, Some(stale));
-    }
-
-    #[test]
     fn daemon_health_is_exposed_only_as_diagnostic_when_it_conflicts_with_gateway_core() {
         let live = HealthCheck {
             status: HealthStatus::Ok,
@@ -270,22 +217,69 @@ mod tests {
             details: Some("daemon agrees".to_owned()),
         };
 
-        let snapshot = merge_gateway_health_snapshot(live, Some(identical));
-
-        assert!(snapshot.daemon_health.is_none());
+        assert!(diagnostic_daemon_health(Some(identical), &live).is_none());
     }
 
     #[test]
     fn admin_snapshot_uses_daemon_doctor_report_without_busy_warning() {
-        let health = HealthCheck {
+        let health = attached_health();
+        let browser = attached_browser_snapshot();
+        let snapshot = admin_snapshot_from_health_and_browser(
+            health.clone(),
+            browser.clone(),
+            Some(health.clone()),
+        );
+
+        assert_eq!(snapshot.health, health);
+        assert_eq!(snapshot.browser, browser);
+        assert!(snapshot.browser_warning.is_none());
+        assert!(snapshot.daemon_health.is_none());
+    }
+
+    #[test]
+    fn admin_snapshot_prefers_authoritative_attached_state_over_stale_degraded_state() {
+        let authoritative_health = attached_health();
+        let authoritative_browser = attached_browser_snapshot();
+        let stale_degraded_health = HealthCheck {
+            status: HealthStatus::Degraded,
+            checked_at: Utc::now(),
+            browser_connected: false,
+            extension_connected: false,
+            authenticated: false,
+            details: Some("stale gateway-local browser not connected".to_owned()),
+        };
+
+        let snapshot = admin_snapshot_from_health_and_browser(
+            authoritative_health,
+            authoritative_browser,
+            Some(stale_degraded_health),
+        );
+
+        assert_eq!(snapshot.health.status, HealthStatus::Ok);
+        assert_eq!(snapshot.health.browser_connected, true);
+        assert_eq!(snapshot.health.extension_connected, true);
+        assert_eq!(snapshot.health.authenticated, true);
+        assert_eq!(snapshot.browser.running, true);
+        assert_eq!(snapshot.browser.cdp_attached, true);
+        assert_eq!(snapshot.browser.extension_connected, true);
+        assert_eq!(snapshot.browser.page_ready, true);
+        assert_eq!(snapshot.browser.target_tab_found, true);
+        assert_eq!(snapshot.browser.auth_source, AuthSource::Page);
+    }
+
+    fn attached_health() -> HealthCheck {
+        HealthCheck {
             status: HealthStatus::Ok,
             checked_at: Utc::now(),
             browser_connected: true,
             extension_connected: true,
             authenticated: true,
             details: Some("daemon attached".to_owned()),
-        };
-        let browser = BrowserStatusSnapshot {
+        }
+    }
+
+    fn attached_browser_snapshot() -> BrowserStatusSnapshot {
+        BrowserStatusSnapshot {
             running: true,
             browser_kind: "chrome".to_owned(),
             profile_dir: "profile".to_owned(),
@@ -315,16 +309,6 @@ mod tests {
             action: None,
             browser_process_closed: None,
             reason: None,
-        };
-        let snapshot = admin_snapshot_from_health_and_browser(
-            health.clone(),
-            browser.clone(),
-            Some(health.clone()),
-        );
-
-        assert_eq!(snapshot.health, health);
-        assert_eq!(snapshot.browser, browser);
-        assert!(snapshot.browser_warning.is_none());
-        assert!(snapshot.daemon_health.is_none());
+        }
     }
 }
