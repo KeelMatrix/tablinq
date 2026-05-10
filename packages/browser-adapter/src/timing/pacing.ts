@@ -34,7 +34,8 @@ export type PressureSignalKind =
   | "overloaded"
   | "retry_visible"
   | "recovery_loop"
-  | "generation_failed";
+  | "generation_failed"
+  | "stopped_thinking";
 
 interface PressureState {
   untilMs: number;
@@ -63,6 +64,7 @@ const PRESSURE_SIGNAL_DURATIONS_MS: Record<PressureSignalKind, number> = {
   retry_visible: 12_000,
   recovery_loop: 10_000,
   generation_failed: 18_000,
+  stopped_thinking: 18_000,
 };
 const PRESSURE_RESET_WINDOW_MS = 20_000;
 const MAX_PRESSURE_COOLDOWN_MS = 30_000;

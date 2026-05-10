@@ -18,6 +18,7 @@ pub(crate) fn map_openai_error_parts(
         && matches!(
             metadata.error_code,
             ErrorCode::ProviderGenerationFailedNonretryable
+                | ErrorCode::ProviderStoppedThinking
                 | ErrorCode::ProviderConversationLoadFailed
         )
     {
@@ -25,6 +26,7 @@ pub(crate) fn map_openai_error_parts(
             ErrorCode::ProviderGenerationFailedNonretryable => {
                 "provider_generation_failed_nonretryable"
             }
+            ErrorCode::ProviderStoppedThinking => "provider_stopped_thinking",
             ErrorCode::ProviderConversationLoadFailed => "provider_conversation_load_failed",
             _ => unreachable!(),
         };
@@ -66,6 +68,9 @@ pub(crate) fn map_openai_error_parts(
             "provider_generation_failed_nonretryable",
             message,
         ),
+        ErrorCode::ProviderStoppedThinking => {
+            (502, "provider_error", "provider_stopped_thinking", message)
+        }
         ErrorCode::ProviderConversationLoadFailed => (
             502,
             "provider_error",

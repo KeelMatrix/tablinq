@@ -35,6 +35,7 @@
         "upload_failed",
         "research_job_failed",
         "provider_generation_failed_nonretryable",
+        "provider_stopped_thinking",
         "provider_conversation_load_failed"
       ]
     },

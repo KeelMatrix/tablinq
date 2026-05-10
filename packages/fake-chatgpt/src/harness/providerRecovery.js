@@ -68,6 +68,44 @@ export function createProviderRecoveryRuntime({
     setStreamingControls(false);
   }
 
+  function renderProviderStoppedThinking(promptText) {
+    const conversationId = currentConversationId();
+    const messageId = uniqueId("msg");
+
+    writeConversationState(conversationId, messageId);
+    localStorage.setItem(providerFailureStorageKey("priorPrompt"), promptText);
+    clearState(conversationId);
+    clearAskFailureState();
+    const existingStoppedThinking =
+      messageArticle instanceof HTMLElement &&
+      /stopped thinking/i.test(messageArticle.textContent || "");
+    if (existingStoppedThinking && messageArticle.parentElement) {
+      const article = document.createElement("article");
+      article.className = "message";
+      article.setAttribute("data-message-author-role", "assistant");
+      article.setAttribute("data-message-id", messageId);
+      article.innerHTML =
+        '<div class="markdown"><p><button type="button">Stopped thinking</button></p></div>';
+      messageArticle.parentElement.appendChild(article);
+      setStreamState("done");
+      setStreamingControls(false);
+      return;
+    }
+    if (messageArticle instanceof HTMLElement) {
+      messageArticle.hidden = false;
+      messageArticle.setAttribute("data-message-author-role", "assistant");
+      messageArticle.setAttribute("data-message-id", messageId);
+    }
+    if (message) {
+      message.innerHTML = '<button type="button">Stopped thinking</button>';
+    } else if (messageMarkdown instanceof HTMLElement) {
+      messageMarkdown.innerHTML =
+        '<p><button type="button">Stopped thinking</button></p>';
+    }
+    setStreamState("done");
+    setStreamingControls(false);
+  }
+
   function retryButtonClicked() {
     document.body.dataset.retryClicks = String(
       Number.parseInt(document.body.dataset.retryClicks || "0", 10) + 1,
@@ -78,6 +116,7 @@ export function createProviderRecoveryRuntime({
     clearAskFailureState,
     nextProviderFailureAttempt,
     renderProviderGenerationFailure,
+    renderProviderStoppedThinking,
     retryButtonClicked,
   };
 }

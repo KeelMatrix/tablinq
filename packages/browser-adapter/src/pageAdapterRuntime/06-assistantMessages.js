@@ -187,9 +187,11 @@ function createAssistantMessageRuntimeModule({
 
   const PROVIDER_GENERATION_FAILURE_CODE =
     "provider_generation_failed_nonretryable";
+  const PROVIDER_STOPPED_THINKING_CODE = "provider_stopped_thinking";
   const PROVIDER_GENERATION_FAILURE_MARKER =
     "something went wrong while generating the response";
   const PROVIDER_GENERATION_FAILURE_HELP_CENTER = "help center";
+  const PROVIDER_STOPPED_THINKING_MARKER = "stopped thinking";
 
   const readAskFailureState = (article) => {
     const explicitCode = datasetValue(document.body.dataset.askFailureCode);
@@ -216,6 +218,11 @@ function createAssistantMessageRuntimeModule({
     const candidateTexts = uniqueCollapsed([
       explicitMessage,
       article?.textContent ?? "",
+      ...(article
+        ? visibleUnique(
+            article.querySelectorAll("button, [role='button']"),
+          ).map((element) => element.textContent ?? "")
+        : []),
       ...queryVisible([
         "[role='alert']",
         "[aria-live='assertive']",
@@ -232,10 +239,32 @@ function createAssistantMessageRuntimeModule({
           normalized.includes(PROVIDER_GENERATION_FAILURE_HELP_CENTER)
         );
       }) ?? null;
+    if (failureMessage) {
+      return {
+        failureCode: PROVIDER_GENERATION_FAILURE_CODE,
+        failureMessage,
+        retryVisible,
+      };
+    }
+
+    const stoppedThinkingMessage =
+      article && !retryVisible
+        ? candidateTexts.find((value) => {
+            const normalized = normalizeText(value);
+            return normalized === PROVIDER_STOPPED_THINKING_MARKER;
+          })
+        : null;
+    if (stoppedThinkingMessage) {
+      return {
+        failureCode: PROVIDER_STOPPED_THINKING_CODE,
+        failureMessage: stoppedThinkingMessage,
+        retryVisible,
+      };
+    }
 
     return {
-      failureCode: failureMessage ? PROVIDER_GENERATION_FAILURE_CODE : null,
-      failureMessage,
+      failureCode: null,
+      failureMessage: null,
       retryVisible,
     };
   };

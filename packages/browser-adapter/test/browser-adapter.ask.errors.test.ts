@@ -207,6 +207,93 @@ describe("browser adapter ask: error paths", () => {
     await adapter.shutdown();
   });
 
+  it("sends continue once when the provider stops thinking", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "provider-stopped-thinking-once",
+      initialModel: "instant",
+      initialEffort: "standard",
+    });
+    const root = await harness.createWorkspace("browser");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const states: string[] = [];
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-provider-stopped-thinking-once",
+        prompt: "compare the two release paths",
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+      (state) => {
+        states.push(state.reason);
+      },
+    );
+
+    expect(result.output_text).toContain("Fake response for: continue");
+    expect(states).toContain(
+      "provider stopped thinking; sending one continue prompt",
+    );
+    await expect(
+      adapter.getManagedPageForTest()!.evaluate(() => ({
+        lastSubmittedPrompt: document.body.dataset.lastSubmittedPrompt,
+        lastSubmittedModel: document.body.dataset.lastSubmittedModel,
+        lastSubmittedEffort: document.body.dataset.lastSubmittedEffort,
+      })),
+    ).resolves.toEqual({
+      lastSubmittedPrompt: "continue",
+      lastSubmittedModel: "thinking",
+      lastSubmittedEffort: "extended",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("returns a provider error when the provider stops thinking twice", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "provider-stopped-thinking-twice",
+    });
+    const root = await harness.createWorkspace("browser");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    let error: any = null;
+    try {
+      await adapter.ask(
+        {
+          jobId: "job-ask-provider-stopped-thinking-twice",
+          prompt: "compare the two release paths",
+        },
+        () => {},
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeTruthy();
+    expect(error.code).toBe("provider_stopped_thinking");
+    expect(error.message).toContain("Start a new conversation");
+
+    await adapter.shutdown();
+  });
+
   it("refuses to open a missing provider conversation", async () => {
     const server = await harness.startServer();
     const targetUrl = withHarnessUrl(`${server.url}/c/provider-missing`, {

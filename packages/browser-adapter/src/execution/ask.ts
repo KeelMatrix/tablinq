@@ -1,6 +1,9 @@
 import type { AskExecutionCommand, AskResultSnapshot } from "../contracts";
 import {
   clearComposerIfNeeded,
+  clickSubmit,
+  fillComposer,
+  readAskBaseline,
   readAskSnapshot,
   scrollToBottomIfNeeded,
 } from "../pageRuntime";
@@ -12,7 +15,11 @@ import {
 } from "../snapshotState";
 import { NAVIGATION_TIMEOUT_MS } from "../timing";
 
-import { throwIfProviderGenerationFailed } from "./askProviderFailure";
+import {
+  PROVIDER_STOPPED_THINKING_CODE,
+  throwIfProviderGenerationFailed,
+  throwIfProviderStoppedThinking,
+} from "./askProviderFailure";
 import {
   recoverAskSnapshotRead,
   recoverInitialAskIfNeeded,
@@ -62,6 +69,7 @@ export async function runAsk(
     }
 
     const state = createAskRuntimeState(command, options, page, askBaseline);
+    let stoppedThinkingContinued = false;
     await emitAskIdentityUpdate(
       command,
       state,
@@ -115,6 +123,22 @@ export async function runAsk(
       }
 
       throwIfProviderGenerationFailed(snapshot);
+      const stoppedThinkingRecovery = await continueStoppedThinkingOnce(
+        page,
+        state,
+        snapshot,
+        onState,
+        timing,
+        responseWatchdog,
+        stoppedThinkingContinued,
+      );
+      if (stoppedThinkingRecovery.continued) {
+        stoppedThinkingContinued = true;
+        continue;
+      }
+      if (stoppedThinkingRecovery.terminal) {
+        throwIfProviderStoppedThinking(snapshot);
+      }
 
       await recordAskSnapshotProgress(
         host,
@@ -248,6 +272,53 @@ function createAskResponseStreamWatchdog(
     lastSnapshotText: "",
     reloadAttempts: 0,
   };
+}
+
+async function continueStoppedThinkingOnce(
+  page: Awaited<ReturnType<typeof openAskExecutionPage>>,
+  state: ReturnType<typeof createAskRuntimeState>,
+  snapshot: AskSnapshot,
+  onState: StateSink,
+  timing: AskTiming,
+  watchdog: AskResponseStreamWatchdog,
+  alreadyContinued: boolean,
+): Promise<{ continued: boolean; terminal: boolean }> {
+  if (snapshot.failureCode !== PROVIDER_STOPPED_THINKING_CODE) {
+    return { continued: false, terminal: false };
+  }
+  if (alreadyContinued) {
+    return { continued: false, terminal: true };
+  }
+
+  await onState({
+    state: "interrupted",
+    reason: "provider stopped thinking; sending one continue prompt",
+    at: new Date().toISOString(),
+    conversation_id: state.knownConversationId,
+    message_id: state.knownMessageId,
+    current_url: snapshot.currentUrl,
+    streaming_safe: false,
+  });
+  state.askBaseline = await readAskBaseline(page);
+  state.doneStreak = 0;
+  state.pendingMessageId = null;
+  state.pendingMessageText = "";
+  state.lastSnapshotSignature = null;
+  resetAskResponseStreamWatchdog(watchdog);
+  timing.timeoutAt = Date.now() + timing.executionTimeoutMs;
+  await fillComposer(page, "continue");
+  await clickSubmit(page);
+  return { continued: true, terminal: false };
+}
+
+function resetAskResponseStreamWatchdog(
+  watchdog: AskResponseStreamWatchdog,
+): void {
+  watchdog.startedAt = null;
+  watchdog.maxAt = null;
+  watchdog.nextSnapshotAt = null;
+  watchdog.lastSnapshotText = "";
+  watchdog.reloadAttempts = 0;
 }
 
 function askActiveDeadline(
