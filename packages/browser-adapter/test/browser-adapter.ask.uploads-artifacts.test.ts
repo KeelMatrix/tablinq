@@ -345,6 +345,15 @@ describe("browser adapter ask: uploads and artifacts", () => {
         () => {},
       ),
     ).rejects.toThrow(/attachments are still processing/i);
+    await expect(
+      adapter.getManagedPageForTest()!.evaluate(() => ({
+        composerValue:
+          (document.querySelector("#prompt-textarea") as HTMLTextAreaElement)
+            ?.value ?? "",
+      })),
+    ).resolves.toEqual({
+      composerValue: "",
+    });
 
     await adapter.shutdown();
   });
@@ -406,6 +415,15 @@ describe("browser adapter ask: uploads and artifacts", () => {
         () => {},
       ),
     ).rejects.toThrow(/submit never became ready/i);
+    await expect(
+      adapter.getManagedPageForTest()!.evaluate(() => ({
+        composerValue:
+          (document.querySelector("#prompt-textarea") as HTMLTextAreaElement)
+            ?.value ?? "",
+      })),
+    ).resolves.toEqual({
+      composerValue: "",
+    });
 
     await adapter.shutdown();
   });

@@ -235,6 +235,22 @@ export async function fillComposer(page: Page, prompt: string): Promise<void> {
   await callPageAdapter(page, "fillComposer", { prompt });
 }
 
+export async function clearComposerIfNeeded(page: Page): Promise<boolean> {
+  const state = await callPageAdapter<SubmitStateSnapshot>(
+    page,
+    "readSubmitState",
+  ).catch(() => null);
+  if (!state?.composerText) {
+    return false;
+  }
+  await callPageAdapter(page, "fillComposer", { prompt: "" });
+  const cleared = await callPageAdapter<SubmitStateSnapshot>(
+    page,
+    "readSubmitState",
+  ).catch(() => null);
+  return !cleared?.composerText;
+}
+
 export async function focusComposer(page: Page): Promise<void> {
   const composer = page.locator(
     [
