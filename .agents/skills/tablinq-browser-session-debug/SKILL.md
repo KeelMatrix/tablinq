@@ -75,8 +75,6 @@ When live prompting is necessary, generate exactly one prompt at a time, then ob
 
 ### 4. Generate natural prompts
 
-Use `references/prompt-style.md` for prompt shaping.
-
 A good live prompt should be:
 
 - plausible for a real user
@@ -93,6 +91,17 @@ Avoid:
 - explicit references to automation unless needed
 - huge prompt blocks unless testing long input
 - prompts that only exist to trigger edge cases and make no semantic sense
+
+Prefer:
+
+- first-person or direct phrasing when natural
+- short follow-up questions
+- concrete constraints
+- one question at a time
+
+Before sending a prompt, compare it against the latest user message, recent user turns when visible, any prompts already sent by the task, and pending composer text. Treat punctuation-only rewrites, polite rephrasings, synonym swaps with the same intent, and copied bug-report text already present in the chat as duplicates.
+
+When a task is mostly about crafting or reviewing prompt wording, the standalone `tablinq-prompt-style` skill may be useful, but this skill should remain sufficient on its own.
 
 ### 5. Maintain continuity in ongoing conversations
 

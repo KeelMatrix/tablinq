@@ -1,4 +1,11 @@
-# Prompt Style for Live ChatGPT Debug Sessions
+---
+name: tablinq-prompt-style
+description: Shape realistic live ChatGPT prompts for Tablinq debugging so prompts fit the active conversation, avoid duplicates, and exercise the UI without sounding synthetic.
+---
+
+# Tablinq Prompt Style
+
+Use this skill when Tablinq work needs a prompt that may be sent into a real signed-in ChatGPT session. This skill only covers prompt wording and duplicate avoidance. Pair it with `tablinq-browser-session-debug` when the task also needs live-session inspection, uploads, or DOM validation.
 
 ## Goal
 
@@ -17,9 +24,9 @@ Prefer:
 
 Avoid:
 
-- “Please provide a comprehensive, detailed...”
-- “As an AI language model...”
-- “Act as...” unless the test explicitly needs role prompting
+- "Please provide a comprehensive, detailed..."
+- "As an AI language model..."
+- "Act as..." unless the test explicitly needs role prompting
 - unnatural keyword stuffing
 - repeating the current topic from scratch
 - overly clean numbered requirements unless testing formatting
@@ -37,7 +44,7 @@ Before sending a prompt, compare it against:
 Treat these as duplicates and do not send:
 
 - same words with punctuation changes
-- same request with only “please” added
+- same request with only "please" added
 - same request with synonyms but same intent
 - asking again because the previous response was slow
 - a prompt copied from the bug report if it already exists in the current chat
