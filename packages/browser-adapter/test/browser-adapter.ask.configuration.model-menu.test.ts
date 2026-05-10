@@ -353,6 +353,140 @@ describe("browser adapter ask: model menu configuration", () => {
     await adapter.shutdown();
   });
 
+  it("submits thinking extended when the composer-right pill only says Extended", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-effort-only-extended";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "thinking",
+        initialEffort: "standard",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const forceEffortOnlyText = () => {
+        const trigger = document.querySelector(
+          "[data-harness-model-trigger='composer-right']",
+        );
+        if (!(trigger instanceof HTMLElement)) {
+          return;
+        }
+        const effortOnlyText =
+          document.body.dataset.selectedEffort === "extended"
+            ? "Extended"
+            : "Standard";
+        if (trigger.textContent !== effortOnlyText) {
+          trigger.textContent = effortOnlyText;
+        }
+      };
+      const originalSync = (
+        window as unknown as { syncSelectedState?: () => void }
+      ).syncSelectedState;
+      (
+        window as unknown as { syncSelectedState?: () => void }
+      ).syncSelectedState = () => {
+        originalSync?.();
+        forceEffortOnlyText();
+      };
+      new MutationObserver(forceEffortOnlyText).observe(document.body, {
+        attributes: true,
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+      (
+        window as unknown as { syncSelectedState?: () => void }
+      ).syncSelectedState?.();
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-effort-only-extended",
+        prompt: "submit composer right effort only extended",
+        conversationId,
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      visible: (
+        document.querySelector(
+          "[data-harness-model-trigger='composer-right']",
+        ) as HTMLElement | null
+      )?.textContent,
+      lastSubmittedModel: document.body.dataset.lastSubmittedModel,
+      lastSubmittedEffort: document.body.dataset.lastSubmittedEffort,
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "extended",
+      visible: "Extended",
+      lastSubmittedModel: "thinking",
+      lastSubmittedEffort: "extended",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("does not treat Pro with an effort-only composer-right pill as supported thinking", async () => {
+    const server = await harness.startServer();
+    const conversationId = "composer-right-pro-effort-only";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "pro",
+        initialEffort: "extended",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+
+    await adapter.getManagedPageForTest()!.evaluate(() => {
+      const trigger = document.querySelector(
+        "[data-harness-model-trigger='composer-right']",
+      );
+      if (!(trigger instanceof HTMLElement)) {
+        throw new Error("composer-right model trigger missing");
+      }
+      trigger.textContent = "Extended";
+    });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-composer-right-pro-effort-only",
+        prompt: "replace pro effort-only with supported thinking",
+        conversationId,
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      lastSubmittedModel: document.body.dataset.lastSubmittedModel,
+      lastSubmittedEffort: document.body.dataset.lastSubmittedEffort,
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "extended",
+      lastSubmittedModel: "thinking",
+      lastSubmittedEffort: "extended",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("selects Extended through the current configure modal without reopening the model picker", async () => {
     const server = await harness.startServer();
     const conversationId = "composer-right-configure-extended";
