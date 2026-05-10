@@ -5,7 +5,7 @@ use serde_json::json;
 use super::ansi::console_attributes_background_is_black;
 use super::ansi::{
     ANSI_GREEN, ANSI_RESET, ansi_color_supported, format_cli_error_with_color,
-    shell_background_is_black,
+    shell_background_is_black_with_console,
 };
 use super::execution::{
     JobStatusLine, ask_progress_status_line, extract_research_plan, research_progress_status_line,
@@ -88,15 +88,29 @@ fn ansi_color_supported_force_color_overrides_missing_windows_console_capability
 
 #[test]
 fn shell_background_is_black_requires_explicit_black_background() {
-    assert!(shell_background_is_black(&[(
-        "COLORFGBG".to_owned(),
-        "15;0".to_owned()
-    )]));
-    assert!(!shell_background_is_black(&[(
-        "COLORFGBG".to_owned(),
-        "0;15".to_owned()
-    )]));
-    assert!(!shell_background_is_black(&[]));
+    assert!(shell_background_is_black_with_console(
+        &[("COLORFGBG".to_owned(), "15;0".to_owned())],
+        Some(false)
+    ));
+    assert!(!shell_background_is_black_with_console(
+        &[("COLORFGBG".to_owned(), "0;15".to_owned())],
+        Some(true)
+    ));
+    assert!(!shell_background_is_black_with_console(&[], None));
+    assert!(shell_background_is_black_with_console(&[], Some(true)));
+    assert!(!shell_background_is_black_with_console(&[], Some(false)));
+}
+
+#[test]
+fn shell_background_color_env_overrides_console_background_probe() {
+    assert!(!shell_background_is_black_with_console(
+        &[("COLORFGBG".to_owned(), "0;15".to_owned())],
+        Some(true)
+    ));
+    assert!(shell_background_is_black_with_console(
+        &[("COLORFGBG".to_owned(), "15;0".to_owned())],
+        Some(false)
+    ));
 }
 
 #[test]

@@ -76,6 +76,13 @@ pub(super) fn ansi_color_supported(
 }
 
 pub(super) fn shell_background_is_black(env: &[(String, String)]) -> bool {
+    shell_background_is_black_with_console(env, windows_console_background_is_black())
+}
+
+pub(super) fn shell_background_is_black_with_console(
+    env: &[(String, String)],
+    console_background_is_black: Option<bool>,
+) -> bool {
     let colorfgbg = env
         .iter()
         .find(|(candidate, _)| candidate == "COLORFGBG")
@@ -89,8 +96,7 @@ pub(super) fn shell_background_is_black(env: &[(String, String)]) -> bool {
             == Some(0);
     }
 
-    #[cfg(windows)]
-    if let Some(is_black) = windows_console_background_is_black() {
+    if let Some(is_black) = console_background_is_black {
         return is_black;
     }
 
@@ -114,6 +120,11 @@ fn windows_stderr_supports_ansi() -> Option<bool> {
 
 #[cfg(not(windows))]
 fn windows_stderr_supports_ansi() -> Option<bool> {
+    None
+}
+
+#[cfg(not(windows))]
+fn windows_console_background_is_black() -> Option<bool> {
     None
 }
 
