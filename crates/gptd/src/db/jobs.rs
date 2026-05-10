@@ -245,6 +245,21 @@ pub(crate) fn update_recovery_metadata(
     Ok(())
 }
 
+pub(crate) fn clear_recovery(conn: &Connection, job_id: &str) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE job_details
+        SET recovered_at = NULL,
+            recovery_reason = NULL,
+            recovery_trace_json = NULL,
+            recovery_packet_json = NULL
+        WHERE job_id = ?1
+        "#,
+        [job_id],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn detail(conn: &Connection, job_id: &str) -> Result<Option<JobDetail>> {
     let row = conn
         .query_row(

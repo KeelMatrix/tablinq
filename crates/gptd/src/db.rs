@@ -229,6 +229,10 @@ impl Database {
         jobs::update_recovery_metadata(&self.conn, job_id, recovery_trace, recovery_packet)
     }
 
+    pub fn clear_job_recovery(&self, job_id: &str) -> Result<()> {
+        jobs::clear_recovery(&self.conn, job_id)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn upsert_conversation(
         &self,

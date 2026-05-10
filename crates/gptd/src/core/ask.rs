@@ -191,7 +191,7 @@ impl CoreService {
                 )?;
                 let (final_status, final_message) = final_status_and_message(
                     prepared.lifecycle_ref().lifecycle,
-                    recovery_state.recovered || provider_recovered,
+                    provider_recovered,
                 );
                 db.insert_job(
                     &prepared.job_id,
@@ -201,14 +201,6 @@ impl CoreService {
                     prepared.created_at,
                     completed_at,
                 )?;
-                if recovery_state.recovered {
-                    db.record_job_recovery(
-                        &prepared.job_id,
-                        completed_at,
-                        "reconciled the interrupted ask against the live conversation",
-                        Some(&result.current_url),
-                    )?;
-                }
                 if provider_recovered {
                     db.record_job_recovery(
                         &prepared.job_id,
@@ -244,6 +236,9 @@ impl CoreService {
                     result.recovery_trace.as_ref(),
                     result.recovery_packet.as_ref(),
                 )?;
+                if !provider_recovered {
+                    db.clear_job_recovery(&prepared.job_id)?;
+                }
                 on_event(EventPayload::JobState(JobState {
                     job_id: prepared.job_id.clone(),
                     status: final_status,
