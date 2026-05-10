@@ -1,5 +1,9 @@
 import type { AskExecutionCommand, AskResultSnapshot } from "../contracts";
-import { readAskSnapshot, scrollToBottomIfNeeded } from "../pageRuntime";
+import {
+  clearComposerIfNeeded,
+  readAskSnapshot,
+  scrollToBottomIfNeeded,
+} from "../pageRuntime";
 import { safePageUrl } from "../capabilityProbe";
 import {
   normalizeComparableAskText,
@@ -40,178 +44,186 @@ export async function runAsk(
   options: AskExecutionOptions,
 ): Promise<AskResultSnapshot> {
   let timing = resolveAskTiming(command);
-  let page = await openAskExecutionPage(host, command);
-  await scrollToBottomIfNeeded(page);
-  let askBaseline: AskBaseline | null = null;
-  const responseWatchdog = createAskResponseStreamWatchdog(timing);
+  let page: Awaited<ReturnType<typeof openAskExecutionPage>> | null = null;
+  try {
+    page = await openAskExecutionPage(host, command);
+    await scrollToBottomIfNeeded(page);
+    let askBaseline: AskBaseline | null = null;
+    const responseWatchdog = createAskResponseStreamWatchdog(timing);
 
-  if (options.submitPrompt) {
-    const prepared = await prepareAskSubmission(host, command, page, timing);
-    page = prepared.page;
-    askBaseline = prepared.askBaseline;
-    timing = {
-      ...timing,
-      timeoutAt: Date.now() + timing.executionTimeoutMs,
-    };
-  }
+    if (options.submitPrompt) {
+      const prepared = await prepareAskSubmission(host, command, page, timing);
+      page = prepared.page;
+      askBaseline = prepared.askBaseline;
+      timing = {
+        ...timing,
+        timeoutAt: Date.now() + timing.executionTimeoutMs,
+      };
+    }
 
-  const state = createAskRuntimeState(command, options, page, askBaseline);
-  await emitAskIdentityUpdate(
-    command,
-    state,
-    safePageUrl(page),
-    onState,
-    "observed ask baseline",
-  );
+    const state = createAskRuntimeState(command, options, page, askBaseline);
+    await emitAskIdentityUpdate(
+      command,
+      state,
+      safePageUrl(page),
+      onState,
+      "observed ask baseline",
+    );
 
-  const initialRecovery = await recoverInitialAskIfNeeded(
-    host,
-    command,
-    page,
-    state,
-    onChunk,
-    onState,
-    options,
-    timing.timeoutAt,
-  );
-  page = initialRecovery.page;
-  if (initialRecovery.result) {
-    return initialRecovery.result;
-  }
-
-  while (Date.now() < askActiveDeadline(responseWatchdog, timing.timeoutAt)) {
-    const activeDeadline = askActiveDeadline(
-      responseWatchdog,
+    const initialRecovery = await recoverInitialAskIfNeeded(
+      host,
+      command,
+      page,
+      state,
+      onChunk,
+      onState,
+      options,
       timing.timeoutAt,
     );
-    let snapshot: AskSnapshot;
-    try {
-      snapshot = await readAskSnapshot(page, state.askBaseline);
-    } catch (error) {
-      const recovered = await recoverAskSnapshotRead(
+    page = initialRecovery.page;
+    if (initialRecovery.result) {
+      return initialRecovery.result;
+    }
+
+    while (Date.now() < askActiveDeadline(responseWatchdog, timing.timeoutAt)) {
+      const activeDeadline = askActiveDeadline(
+        responseWatchdog,
+        timing.timeoutAt,
+      );
+      let snapshot: AskSnapshot;
+      try {
+        snapshot = await readAskSnapshot(page, state.askBaseline);
+      } catch (error) {
+        const recovered = await recoverAskSnapshotRead(
+          host,
+          command,
+          page,
+          state,
+          onChunk,
+          onState,
+          error,
+          activeDeadline,
+        );
+        if (recovered) {
+          page = recovered.page;
+          if (recovered.result) {
+            return recovered.result;
+          }
+          continue;
+        }
+        throw error;
+      }
+
+      throwIfProviderGenerationFailed(snapshot);
+
+      await recordAskSnapshotProgress(
         host,
         command,
-        page,
         state,
+        snapshot,
         onChunk,
         onState,
-        error,
-        activeDeadline,
+        "observed in-flight assistant identity",
       );
-      if (recovered) {
-        page = recovered.page;
-        if (recovered.result) {
-          return recovered.result;
-        }
-        continue;
-      }
-      throw error;
-    }
+      updateAskDoneStreak(state, snapshot);
 
-    throwIfProviderGenerationFailed(snapshot);
-
-    await recordAskSnapshotProgress(
-      host,
-      command,
-      state,
-      snapshot,
-      onChunk,
-      onState,
-      "observed in-flight assistant identity",
-    );
-    updateAskDoneStreak(state, snapshot);
-
-    const finalized = await finalizeStableAskIfReady(
-      host,
-      command,
-      page,
-      state,
-      snapshot,
-      onChunk,
-      onState,
-      timing.timeoutAt,
-    );
-    snapshot = finalized.snapshot;
-    if (finalized.result) {
-      return finalized.result;
-    }
-
-    const streamWatchdogResult = await handleAskResponseStreamWatchdog(
-      host,
-      command,
-      page,
-      state,
-      snapshot,
-      onChunk,
-      onState,
-      responseWatchdog,
-    );
-    page = streamWatchdogResult.page;
-    if (streamWatchdogResult.result) {
-      return streamWatchdogResult.result;
-    }
-    if (
-      streamWatchdogResult.active &&
-      timing.stickyStreamReloadStallMs >= responseWatchdog.snapshotIntervalMs
-    ) {
-      await sleepForAskPoll(
-        state,
-        askActiveDeadline(responseWatchdog, timing.timeoutAt),
-      );
-      continue;
-    }
-
-    const stickyStreamCompletion = await handleStickyStreamingAskIfNeeded(
-      host,
-      command,
-      page,
-      state,
-      snapshot,
-      onChunk,
-      onState,
-      timing,
-    );
-    page = stickyStreamCompletion.page;
-    if (stickyStreamCompletion.result) {
-      return stickyStreamCompletion.result;
-    }
-
-    if (state.stickyStreamFallbackAt === null) {
-      const stallRecovery = await recoverStalledAskIfNeeded(
+      const finalized = await finalizeStableAskIfReady(
         host,
         command,
         page,
         state,
+        snapshot,
+        onChunk,
+        onState,
+        timing.timeoutAt,
+      );
+      snapshot = finalized.snapshot;
+      if (finalized.result) {
+        return finalized.result;
+      }
+
+      const streamWatchdogResult = await handleAskResponseStreamWatchdog(
+        host,
+        command,
+        page,
+        state,
+        snapshot,
+        onChunk,
+        onState,
+        responseWatchdog,
+      );
+      page = streamWatchdogResult.page;
+      if (streamWatchdogResult.result) {
+        return streamWatchdogResult.result;
+      }
+      if (
+        streamWatchdogResult.active &&
+        timing.stickyStreamReloadStallMs >= responseWatchdog.snapshotIntervalMs
+      ) {
+        await sleepForAskPoll(
+          state,
+          askActiveDeadline(responseWatchdog, timing.timeoutAt),
+        );
+        continue;
+      }
+
+      const stickyStreamCompletion = await handleStickyStreamingAskIfNeeded(
+        host,
+        command,
+        page,
+        state,
+        snapshot,
         onChunk,
         onState,
         timing,
       );
-      page = stallRecovery.page;
-      if (stallRecovery.result) {
-        return stallRecovery.result;
+      page = stickyStreamCompletion.page;
+      if (stickyStreamCompletion.result) {
+        return stickyStreamCompletion.result;
       }
+
+      if (state.stickyStreamFallbackAt === null) {
+        const stallRecovery = await recoverStalledAskIfNeeded(
+          host,
+          command,
+          page,
+          state,
+          onChunk,
+          onState,
+          timing,
+        );
+        page = stallRecovery.page;
+        if (stallRecovery.result) {
+          return stallRecovery.result;
+        }
+      }
+
+      await sleepForAskPoll(state, timing.timeoutAt);
     }
 
-    await sleepForAskPoll(state, timing.timeoutAt);
-  }
+    if (responseWatchdog.startedAt !== null) {
+      throw new Error("ask timed out while streaming response");
+    }
 
-  if (responseWatchdog.startedAt !== null) {
-    throw new Error("ask timed out while streaming response");
-  }
+    const timeoutReload = await reloadAskOnceAfterTimeout(
+      host,
+      command,
+      page,
+      state,
+      onChunk,
+      onState,
+    );
+    if (timeoutReload.result) {
+      return timeoutReload.result;
+    }
 
-  const timeoutReload = await reloadAskOnceAfterTimeout(
-    host,
-    command,
-    page,
-    state,
-    onChunk,
-    onState,
-  );
-  if (timeoutReload.result) {
-    return timeoutReload.result;
+    throw new Error("ask timed out waiting for streamed response");
+  } catch (error) {
+    if (options.submitPrompt && page && !page.isClosed()) {
+      await clearComposerIfNeeded(page).catch(() => undefined);
+    }
+    throw error;
   }
-
-  throw new Error("ask timed out waiting for streamed response");
 }
 
 type AskResponseStreamWatchdog = {

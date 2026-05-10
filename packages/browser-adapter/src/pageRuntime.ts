@@ -25,6 +25,7 @@ export {
   waitForSubmitStarted,
   waitForInteractionSurface,
   fillComposer,
+  clearComposerIfNeeded,
   focusComposer,
   clickSubmit,
   clickActiveComposerSubmit,
