@@ -235,6 +235,47 @@ fn recovery_metadata_roundtrips_through_request_history_and_job_detail() {
 }
 
 #[test]
+fn job_recovery_metadata_can_be_cleared_after_completed_non_recovery() {
+    let (_dir, db) = test_db();
+    let now = Utc::now();
+    let recovery_trace = recovery_trace_fixture();
+    let recovery_packet = recovery_packet_fixture(now);
+
+    db.insert_job(
+        "job-clear-recovery",
+        JobStatus::Recovered,
+        Some("ask recovered"),
+        Some("conv-new"),
+        now,
+        now,
+    )
+    .unwrap();
+    db.upsert_job_detail("job-clear-recovery", JobKind::Ask, Some("input"), None)
+        .unwrap();
+    db.record_job_recovery(
+        "job-clear-recovery",
+        now,
+        "recovered from an earlier lifecycle update",
+        Some("https://chatgpt.com/c/conv-new"),
+    )
+    .unwrap();
+    db.update_job_recovery_metadata(
+        "job-clear-recovery",
+        Some(&recovery_trace),
+        Some(&recovery_packet),
+    )
+    .unwrap();
+
+    db.clear_job_recovery("job-clear-recovery").unwrap();
+
+    let job = db.job_detail("job-clear-recovery").unwrap().unwrap();
+    assert!(job.recovered_at.is_none());
+    assert!(job.recovery_reason.is_none());
+    assert!(job.recovery_trace.is_none());
+    assert!(job.recovery_packet.is_none());
+}
+
+#[test]
 fn conversation_recovery_manifest_roundtrips() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("tablinq.sqlite3");

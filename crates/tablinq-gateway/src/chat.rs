@@ -132,3 +132,216 @@ fn event_conversation_id(event: &EventPayload) -> Option<String> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::http::{HttpRequest, RequestContext};
+    use crate::openai::{ChatCompletionsRequest, RequestRole};
+    use chrono::Utc;
+    use gptd::Database;
+    use gptd::core::PreparedAskJob;
+    use serde_json::{Value, json};
+    use shared_protocol::{
+        AskCommand, ErrorCode, JobStatus, Mode, RecoveryStrategy, RequestExecutionKind,
+    };
+    use std::collections::BTreeMap;
+    use tempfile::tempdir;
+
+    fn prepared_auto_recover_ask() -> PreparedChatRequest {
+        let request: ChatCompletionsRequest = serde_json::from_value(json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "normal success" }],
+            "tablinq_auto_recover_provider_generation_failure": true
+        }))
+        .unwrap();
+        PreparedChatRequest {
+            request,
+            model_id: "tablinq-instant",
+            request_role: RequestRole::Primary,
+            parent_request_id: None,
+            file_ids: vec![],
+            job: PreparedChatJob::Ask(PreparedAskJob {
+                job_id: "job-normal-success".to_owned(),
+                command: AskCommand {
+                    prompt: "normal success".to_owned(),
+                    conversation_id: None,
+                    new_conversation: false,
+                    mode: Mode::Normal,
+                    model_class: None,
+                    effort: None,
+                    files: vec![],
+                    auto_recover_provider_generation_failure: true,
+                },
+                created_at: Utc::now(),
+            }),
+        }
+    }
+
+    fn request_context(request_id: &str) -> RequestContext {
+        RequestContext {
+            request_id: request_id.to_owned(),
+            request: HttpRequest {
+                method: "POST".to_owned(),
+                path: "/v1/chat/completions".to_owned(),
+                headers: BTreeMap::new(),
+                body: vec![],
+            },
+        }
+    }
+
+    #[test]
+    fn auto_recover_enabled_normal_success_surfaces_completed_status() {
+        let context = request_context("req-auto-recover-normal");
+        let prepared = prepared_auto_recover_ask();
+        let now = Utc::now();
+        let outcome = RequestOutcome {
+            kind: RequestOutcomeKind::Completed,
+            low_confidence: true,
+            conversation_id: Some("conv-normal".to_owned()),
+            interrupted_at: None,
+            interruption_reason: None,
+            recovered_at: None,
+            recovery_reason: None,
+            failed_at: None,
+            failure_reason: None,
+            recovery_trace: None,
+            recovery_packet: None,
+        };
+        let summary = build_request_summary(&context, &prepared, now, now, 0, outcome);
+
+        assert_eq!(summary.status, JobStatus::Completed);
+        assert_eq!(summary.execution_kind, RequestExecutionKind::Ask);
+        assert!(summary.recovered_at.is_none());
+        assert!(summary.recovery_reason.is_none());
+        assert!(summary.recovery_trace.is_none());
+        assert!(summary.recovery_packet.is_none());
+
+        let dir = tempdir().unwrap();
+        let db = Database::open(&dir.path().join("tablinq.sqlite3")).unwrap();
+        db.upsert_request_summary(&summary).unwrap();
+
+        let detail = db
+            .request_summary("req-auto-recover-normal")
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.status, JobStatus::Completed);
+        assert!(detail.recovered_at.is_none());
+        assert!(detail.recovery_reason.is_none());
+        assert!(detail.recovery_trace.is_none());
+        assert!(detail.recovery_packet.is_none());
+
+        let list = db.list_request_page(None, 10, 0).unwrap();
+        assert_eq!(list.requests[0].id, "req-auto-recover-normal");
+        assert_eq!(list.requests[0].status, JobStatus::Completed);
+
+        let usage_history = db.list_request_summaries(10).unwrap();
+        assert_eq!(
+            usage_history.requests[0].request_id,
+            "req-auto-recover-normal"
+        );
+        assert_eq!(usage_history.requests[0].status, JobStatus::Completed);
+    }
+
+    #[test]
+    fn direct_response_recovery_fields_match_completed_stored_status() {
+        let response = response::build_chat_completion_response(
+            "req-direct-normal",
+            "job-direct-normal",
+            "tablinq-instant",
+            RequestRole::Primary,
+            None,
+            Some("conv-normal"),
+            Some("session-normal"),
+            "done",
+            "stop",
+            None,
+        );
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["tablinq_recovery_available"], false);
+        assert_eq!(body["tablinq_recovery_attempted"], false);
+        assert_eq!(body["tablinq_recovery_strategy"], Value::Null);
+        assert_eq!(body["tablinq_replacement_request_id"], Value::Null);
+        assert_eq!(body["tablinq_replacement_conversation_id"], Value::Null);
+
+        let context = request_context("req-direct-normal");
+        let prepared = prepared_auto_recover_ask();
+        let now = Utc::now();
+        let summary = build_request_summary(
+            &context,
+            &prepared,
+            now,
+            now,
+            0,
+            RequestOutcome {
+                kind: RequestOutcomeKind::Completed,
+                low_confidence: false,
+                conversation_id: Some("conv-normal".to_owned()),
+                interrupted_at: None,
+                interruption_reason: None,
+                recovered_at: None,
+                recovery_reason: None,
+                failed_at: None,
+                failure_reason: None,
+                recovery_trace: None,
+                recovery_packet: None,
+            },
+        );
+        assert_eq!(summary.status, JobStatus::Completed);
+    }
+
+    #[test]
+    fn attempted_provider_recovery_summary_remains_recovered() {
+        let trace = RecoveryTrace {
+            recovery_available: true,
+            recovery_attempted: true,
+            recovery_strategy: Some(RecoveryStrategy::ReloadNewConversationReplayWithContext),
+            failure_code: Some(ErrorCode::ProviderGenerationFailedNonretryable),
+            failure_bundle_id: Some("bundle-provider".to_owned()),
+            prior_request_id: Some("job-provider:provider-attempt-0".to_owned()),
+            replacement_request_id: Some("job-provider:provider-attempt-1".to_owned()),
+            prior_conversation_id: Some("conv-old".to_owned()),
+            replacement_conversation_id: Some("conv-new".to_owned()),
+            recovery_attempt_count: 1,
+        };
+        let context = request_context("req-provider-recovered");
+        let mut prepared = prepared_auto_recover_ask();
+        if let PreparedChatJob::Ask(job) = &mut prepared.job {
+            job.job_id = "job-provider".to_owned();
+        }
+        let now = Utc::now();
+        let summary = build_request_summary(
+            &context,
+            &prepared,
+            now,
+            now,
+            0,
+            RequestOutcome {
+                kind: RequestOutcomeKind::Recovered,
+                low_confidence: true,
+                conversation_id: Some("conv-new".to_owned()),
+                interrupted_at: None,
+                interruption_reason: None,
+                recovered_at: Some(now),
+                recovery_reason: Some(
+                    "provider generation failure recovered via reload_new_conversation_replay_with_context"
+                        .to_owned(),
+                ),
+                failed_at: None,
+                failure_reason: None,
+                recovery_trace: Some(trace),
+                recovery_packet: None,
+            },
+        );
+
+        assert_eq!(summary.status, JobStatus::Recovered);
+        assert!(summary.recovered_at.is_some());
+        assert!(summary.recovery_reason.is_some());
+        assert!(
+            summary
+                .recovery_trace
+                .as_ref()
+                .is_some_and(|trace| trace.recovery_attempted)
+        );
+    }
+}

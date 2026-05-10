@@ -289,11 +289,7 @@ fn finish_streaming_success(
         }),
     )?;
     Ok(RequestOutcome {
-        kind: if result.low_confidence {
-            RequestOutcomeKind::Recovered
-        } else {
-            RequestOutcomeKind::Completed
-        },
+        kind: successful_outcome_kind(result.recovery_trace.as_ref()),
         low_confidence: result.low_confidence,
         conversation_id: Some(result.conversation_id),
         interrupted_at: None,
@@ -346,11 +342,7 @@ fn execute_non_streaming_chat_completion(
         .filter(|trace| trace.recovery_attempted)
         .and_then(recovery_reason_for_trace);
     Ok(RequestOutcome {
-        kind: if result.low_confidence {
-            RequestOutcomeKind::Recovered
-        } else {
-            RequestOutcomeKind::Completed
-        },
+        kind: successful_outcome_kind(result.recovery_trace.as_ref()),
         low_confidence: result.low_confidence,
         conversation_id: result.conversation_id,
         interrupted_at: None,
@@ -401,4 +393,47 @@ fn recovered_at_for_trace(recovery_trace: Option<&RecoveryTrace>) -> Option<chro
     recovery_trace
         .filter(|trace| trace.recovery_attempted)
         .map(|_| Utc::now())
+}
+
+fn successful_outcome_kind(recovery_trace: Option<&RecoveryTrace>) -> RequestOutcomeKind {
+    if recovery_trace
+        .map(|trace| trace.recovery_attempted)
+        .unwrap_or(false)
+    {
+        RequestOutcomeKind::Recovered
+    } else {
+        RequestOutcomeKind::Completed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shared_protocol::{ErrorCode, RecoveryStrategy};
+
+    #[test]
+    fn successful_outcome_does_not_treat_low_confidence_as_recovered() {
+        assert_eq!(successful_outcome_kind(None), RequestOutcomeKind::Completed);
+    }
+
+    #[test]
+    fn successful_outcome_is_recovered_only_after_recovery_attempt() {
+        let trace = RecoveryTrace {
+            recovery_available: true,
+            recovery_attempted: true,
+            recovery_strategy: Some(RecoveryStrategy::ReloadNewConversationReplayWithContext),
+            failure_code: Some(ErrorCode::ProviderGenerationFailedNonretryable),
+            failure_bundle_id: Some("bundle-1".to_owned()),
+            prior_request_id: Some("job-1:provider-attempt-0".to_owned()),
+            replacement_request_id: Some("job-1:provider-attempt-1".to_owned()),
+            prior_conversation_id: Some("conv-old".to_owned()),
+            replacement_conversation_id: Some("conv-new".to_owned()),
+            recovery_attempt_count: 1,
+        };
+
+        assert_eq!(
+            successful_outcome_kind(Some(&trace)),
+            RequestOutcomeKind::Recovered
+        );
+    }
 }
