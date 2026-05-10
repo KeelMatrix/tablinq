@@ -16,6 +16,8 @@ import {
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
 import { finalizeResearch } from "../src/execution/finalization";
+import { applyResearchSnapshot } from "../src/execution/streaming";
+import type { ResearchSnapshot } from "../src/snapshotState";
 import {
   createIsolatedTempDir,
   listAttachedPages,
@@ -102,6 +104,32 @@ async function installResearchStartupInteractionGuard(
 }
 
 describe("browser adapter research: attach mode", () => {
+  it("emits a waiting-for-sources handoff before the first running snapshot", async () => {
+    const updates: string[] = [];
+    const state = {
+      emittedText: "",
+      nextSeq: 0,
+      lastStatus: "starting",
+      lastMessage: "starting research",
+      announcedStart: false,
+      lastSnapshotSignature: null,
+    };
+    const snapshot: ResearchSnapshot = {
+      status: "running",
+      statusMessage: "Drafting report",
+      reportText: "",
+      conversationId: "conv-research-attach",
+      messageId: "msg-research-attach",
+      currentUrl: "https://chatgpt.test/c/conv-research-attach",
+    };
+
+    await applyResearchSnapshot(state, snapshot, (update) => {
+      updates.push(update.status);
+    });
+
+    expect(updates).toEqual(["starting", "waiting_for_sources", "running"]);
+  });
+
   it("runs research jobs with progress updates in attach mode", async () => {
     const server = await harness.startServer();
     const targetUrl = withHarnessUrl(server.url, {
