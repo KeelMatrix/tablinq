@@ -46,6 +46,8 @@ export type HarnessUrlOptions = {
     | "provider-generation-failure-recover"
     | "provider-generation-failure-after-success"
     | "provider-generation-failure-twice"
+    | "provider-stopped-thinking-once"
+    | "provider-stopped-thinking-twice"
     | "conversation-load-failure"
     | "conversation-load-failure-delayed"
     | "research-success"

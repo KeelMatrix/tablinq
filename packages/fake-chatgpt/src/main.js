@@ -271,6 +271,7 @@ function submitPrompt(method) {
     document.body.dataset.selectedEffort || "";
   const promptText =
     "value" in composer ? composer.value.trim() : composer.textContent.trim();
+  document.body.dataset.lastSubmittedPrompt = promptText;
   if (
     document.body.dataset.selectedMode === "research" &&
     deepResearchRuntime.onDeepResearchLanding()

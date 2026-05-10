@@ -6,6 +6,7 @@ import { conversationIdFromUrl } from "../urls";
 
 const PROVIDER_GENERATION_FAILURE_CODE =
   "provider_generation_failed_nonretryable";
+export const PROVIDER_STOPPED_THINKING_CODE = "provider_stopped_thinking";
 export const PROVIDER_CONVERSATION_LOAD_FAILURE_CODE =
   "provider_conversation_load_failed";
 const PROVIDER_NETWORK_PREFLIGHT_TIMEOUT_MS = 1_500;
@@ -18,13 +19,19 @@ type ProviderReachableResult =
   | { ok: false; timedOut: boolean; reason?: string };
 
 class AskProviderFailure extends Error {
-  readonly code = PROVIDER_GENERATION_FAILURE_CODE;
+  readonly code: string;
   readonly currentUrl: string;
   readonly retryVisible: boolean;
 
-  constructor(message: string, currentUrl: string, retryVisible: boolean) {
+  constructor(
+    code: string,
+    message: string,
+    currentUrl: string,
+    retryVisible: boolean,
+  ) {
     super(message);
     this.name = "AskProviderFailure";
+    this.code = code;
     this.currentUrl = currentUrl;
     this.retryVisible = retryVisible;
   }
@@ -53,8 +60,22 @@ export function throwIfProviderGenerationFailed(snapshot: AskSnapshot): void {
   }
   noteProviderPressureFromText(snapshot.failureMessage);
   throw new AskProviderFailure(
+    PROVIDER_GENERATION_FAILURE_CODE,
     snapshot.failureMessage ??
       "Something went wrong while generating the response. If this issue persists please contact us through our help center.",
+    snapshot.currentUrl,
+    snapshot.retryVisible,
+  );
+}
+
+export function throwIfProviderStoppedThinking(snapshot: AskSnapshot): void {
+  if (snapshot.failureCode !== PROVIDER_STOPPED_THINKING_CODE) {
+    return;
+  }
+  noteProviderPressure("stopped_thinking");
+  throw new AskProviderFailure(
+    PROVIDER_STOPPED_THINKING_CODE,
+    "provider_stopped_thinking: ChatGPT stopped thinking twice for this request. Start a new conversation and retry the request there.",
     snapshot.currentUrl,
     snapshot.retryVisible,
   );

@@ -24,6 +24,10 @@ use url::Url;
 pub fn error_code_for_message(message: &str) -> ErrorCode {
     if is_provider_generation_failure_message(message) {
         ErrorCode::ProviderGenerationFailedNonretryable
+    } else if message.contains("provider_stopped_thinking")
+        || message.to_ascii_lowercase().contains("stopped thinking")
+    {
+        ErrorCode::ProviderStoppedThinking
     } else if message.contains("provider_conversation_load_failed")
         || message.contains("did not load conversation")
     {

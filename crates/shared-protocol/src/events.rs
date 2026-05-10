@@ -20,6 +20,7 @@ pub enum ErrorCode {
     UploadFailed,
     ResearchJobFailed,
     ProviderGenerationFailedNonretryable,
+    ProviderStoppedThinking,
     ProviderConversationLoadFailed,
 }
 

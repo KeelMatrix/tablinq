@@ -55,6 +55,8 @@ export const scenarioRegistry = {
     providerGenerationFailureAfterSuccess: true,
   },
   "provider-generation-failure-twice": { providerGenerationFailureTwice: true },
+  "provider-stopped-thinking-once": { providerStoppedThinkingOnce: true },
+  "provider-stopped-thinking-twice": { providerStoppedThinkingTwice: true },
   "conversation-load-failure": { conversationLoadFailure: true },
   "conversation-load-failure-delayed": {
     conversationLoadFailure: true,
@@ -122,6 +124,12 @@ export function createScenarioState(window) {
     usesProviderGenerationFailureTwice: Boolean(
       definition.providerGenerationFailureTwice,
     ),
+    usesProviderStoppedThinkingOnce: Boolean(
+      definition.providerStoppedThinkingOnce,
+    ),
+    usesProviderStoppedThinkingTwice: Boolean(
+      definition.providerStoppedThinkingTwice,
+    ),
     usesConversationLoadFailure: Boolean(definition.conversationLoadFailure),
     usesDelayedConversationLoadFailure: Boolean(
       definition.delayedConversationLoadFailure,
@@ -157,6 +165,7 @@ export function initializeScenarioDataset(document, window, config) {
   document.body.dataset.lastMessageId = "";
   document.body.dataset.uploadPopoverOpen = "false";
   document.body.dataset.lastSubmissionMethod = "";
+  document.body.dataset.lastSubmittedPrompt = "";
   document.body.dataset.lastSubmittedModel = "";
   document.body.dataset.lastSubmittedEffort = "";
   document.body.dataset.staleSubmitClicks = "0";

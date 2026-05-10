@@ -18,6 +18,8 @@ export function createAskRuntime({
     usesProviderGenerationFailureRecovery,
     usesProviderGenerationFailureAfterSuccess,
     usesProviderGenerationFailureTwice,
+    usesProviderStoppedThinkingOnce,
+    usesProviderStoppedThinkingTwice,
   } = config;
   const { messageArticle, messageMarkdown, message } = refs;
   const { uploadedFiles, setStreamingControls, prepareArtifact } = uploads;
@@ -33,6 +35,7 @@ export function createAskRuntime({
     clearAskFailureState,
     nextProviderFailureAttempt,
     renderProviderGenerationFailure,
+    renderProviderStoppedThinking,
   } = providerRecovery;
 
   function renderChunk(state) {
@@ -358,6 +361,13 @@ export function createAskRuntime({
           renderProviderGenerationFailure(promptText);
           return;
         }
+      }
+    }
+    if (usesProviderStoppedThinkingOnce || usesProviderStoppedThinkingTwice) {
+      const attempt = nextProviderFailureAttempt();
+      if (usesProviderStoppedThinkingTwice || attempt === 1) {
+        renderProviderStoppedThinking(promptText);
+        return;
       }
     }
 

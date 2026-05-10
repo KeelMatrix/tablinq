@@ -23,6 +23,10 @@ pub(crate) fn provider_guidance_for_code(code: &str) -> Vec<&'static str> {
         "research_job_failed" => vec![
             "provider mode refuses failed research runs instead of returning incomplete research output",
         ],
+        "provider_stopped_thinking" => vec![
+            "ChatGPT stopped thinking twice for the same request after Tablinq sent one continue prompt",
+            "start a new conversation and retry the request there",
+        ],
         _ => Vec::new(),
     }
 }
@@ -34,7 +38,8 @@ pub(crate) fn refusal_reason_for_code(code: &str) -> Option<&str> {
         | "browser_unavailable"
         | "upstream_timeout"
         | "ui_drift"
-        | "research_job_failed" => Some(code),
+        | "research_job_failed"
+        | "provider_stopped_thinking" => Some(code),
         _ => None,
     }
 }
