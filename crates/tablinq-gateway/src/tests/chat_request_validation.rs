@@ -424,7 +424,7 @@ fn sequential_gateway_requests_return_responses_without_abort() {
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
-    for index in 0..25 {
+    for index in 0..30 {
         let status = http_request(
             &snapshot.host,
             snapshot.port,
@@ -438,14 +438,52 @@ fn sequential_gateway_requests_return_responses_without_abort() {
         assert_eq!(status.status_code, 200);
 
         let request_id = format!("req-sequential-{index}");
-        let body = if index % 2 == 0 {
-            b"{".to_vec()
-        } else {
-            serde_json::to_vec(&json!({
-                "model": "tablinq-missing",
-                "messages": [{ "role": "user", "content": "hello" }]
-            }))
-            .unwrap()
+        let (content_type, body, expected_code) = match index % 6 {
+            0 => ("application/json", b"{".to_vec(), "invalid_request_json"),
+            1 => (
+                "application/json",
+                serde_json::to_vec(&json!({
+                    "messages": [{ "role": "user", "content": "hello" }]
+                }))
+                .unwrap(),
+                "invalid_request_json",
+            ),
+            2 => (
+                "application/json",
+                serde_json::to_vec(&json!({
+                    "model": "tablinq-missing",
+                    "messages": [{ "role": "user", "content": "hello" }]
+                }))
+                .unwrap(),
+                "unsupported_model",
+            ),
+            3 => (
+                "application/json",
+                serde_json::to_vec(&json!({
+                    "model": "tablinq-instant",
+                    "messages": [{ "role": "assistant", "content": "hello" }]
+                }))
+                .unwrap(),
+                "unsupported_role",
+            ),
+            4 => (
+                "application/json",
+                serde_json::to_vec(&json!({
+                    "model": "tablinq-instant",
+                    "messages": []
+                }))
+                .unwrap(),
+                "empty_messages",
+            ),
+            _ => (
+                "text/plain",
+                serde_json::to_vec(&json!({
+                    "model": "tablinq-instant",
+                    "messages": [{ "role": "user", "content": "hello" }]
+                }))
+                .unwrap(),
+                "unsupported_content_type",
+            ),
         };
         let response = http_request(
             &snapshot.host,
@@ -454,7 +492,7 @@ fn sequential_gateway_requests_return_responses_without_abort() {
             V1_CHAT_COMPLETIONS_PATH,
             &[
                 ("authorization", auth.as_str()),
-                ("content-type", "application/json"),
+                ("content-type", content_type),
                 ("x-request-id", request_id.as_str()),
             ],
             &body,
@@ -465,6 +503,7 @@ fn sequential_gateway_requests_return_responses_without_abort() {
         let json: Value = serde_json::from_slice(&response.body).unwrap();
         assert_eq!(json["request_id"], request_id);
         assert!(json["error"].is_object());
+        assert_eq!(json["error"]["code"], expected_code);
     }
 
     stop_gateway_process(Some(&state_root)).unwrap();

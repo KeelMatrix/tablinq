@@ -43,6 +43,9 @@ pub(crate) fn handle_connection(
     logger: &JsonLogger,
 ) -> Result<()> {
     stream
+        .set_nonblocking(false)
+        .context("set gateway connection blocking")?;
+    stream
         .set_read_timeout(Some(Duration::from_millis(
             config.gateway_request_timeout_ms(),
         )))
@@ -82,7 +85,7 @@ pub(crate) fn handle_connection(
                     "error": format!("{err:#}"),
                 }),
             );
-            return write_http_response(&mut stream, &request_id, response);
+            return write_http_response_logged(&mut stream, logger, &request_id, None, response);
         }
     };
 
@@ -97,14 +100,26 @@ pub(crate) fn handle_connection(
         route_requires_openai_auth_error_shape(&context.request.path),
     ) {
         let _ = log_response(logger, &context.request_id, response.status_code);
-        return write_http_response(&mut stream, &context.request_id, response);
+        return write_http_response_logged(
+            &mut stream,
+            logger,
+            &context.request_id,
+            Some(route),
+            response,
+        );
     }
     let scheduler_status = match scheduler.snapshot() {
         Ok(status) => status,
         Err(err) => {
             let response = internal_server_error_response(&context.request_id, &err);
             let _ = log_response(logger, &context.request_id, response.status_code);
-            return write_http_response(&mut stream, &context.request_id, response);
+            return write_http_response_logged(
+                &mut stream,
+                logger,
+                &context.request_id,
+                Some(route),
+                response,
+            );
         }
     };
 
@@ -228,20 +243,19 @@ pub(crate) fn handle_connection(
                         &remote_addr,
                     )
                 })) {
-                    Ok(Ok(())) => Ok(DispatchResult::Written),
+                    Ok(Ok(chat::ChatCompletionsResult::Response(response))) => {
+                        Ok(DispatchResult::Response(response))
+                    }
+                    Ok(Ok(chat::ChatCompletionsResult::Written)) => Ok(DispatchResult::Written),
                     Ok(Err(err)) if is_client_disconnect_error(&err) => Err(err),
-                    Ok(Err(err)) => {
-                        let response = internal_server_error_response(&context.request_id, &err);
-                        let _ = log_response(logger, &context.request_id, response.status_code);
-                        write_http_response(&mut stream, &context.request_id, response)?;
-                        Ok(DispatchResult::Written)
-                    }
-                    Err(panic) => {
-                        let response = panic_response(&context.request_id, panic);
-                        let _ = log_response(logger, &context.request_id, response.status_code);
-                        write_http_response(&mut stream, &context.request_id, response)?;
-                        Ok(DispatchResult::Written)
-                    }
+                    Ok(Err(err)) => Ok(DispatchResult::Response(internal_server_error_response(
+                        &context.request_id,
+                        &err,
+                    ))),
+                    Err(panic) => Ok(DispatchResult::Response(panic_response(
+                        &context.request_id,
+                        panic,
+                    ))),
                 };
             }
             Route::NotFound => {
@@ -307,7 +321,13 @@ pub(crate) fn handle_connection(
     };
 
     let _ = log_response(logger, &context.request_id, response.status_code);
-    write_http_response(&mut stream, &context.request_id, response)
+    write_http_response_logged(
+        &mut stream,
+        logger,
+        &context.request_id,
+        Some(route),
+        response,
+    )
 }
 
 fn internal_server_error_response(request_id: &str, err: &anyhow::Error) -> HttpResponse {
@@ -345,4 +365,46 @@ fn panic_message(panic: &Box<dyn Any + Send>) -> &str {
 
 fn route_requires_openai_auth_error_shape(path: &str) -> bool {
     normalized_request_path(path).starts_with("/v1/")
+}
+
+fn write_http_response_logged(
+    stream: &mut TcpStream,
+    logger: &JsonLogger,
+    request_id: &str,
+    route: Option<Route>,
+    response: HttpResponse,
+) -> Result<()> {
+    let status_code = response.status_code;
+    let route = route
+        .map(|route| format!("{route:?}"))
+        .unwrap_or_else(|| "RequestParse".to_owned());
+    match write_http_response(stream, request_id, response) {
+        Ok(()) => Ok(()),
+        Err(err) if is_client_disconnect_error(&err) => {
+            let _ = logger.warn(
+                "gateway client closed before response completed",
+                json!({
+                    "request_id": request_id,
+                    "route": route,
+                    "status_code": status_code,
+                    "phase": "write_response",
+                    "error": format!("{err:#}"),
+                }),
+            );
+            Err(err)
+        }
+        Err(err) => {
+            let _ = logger.warn(
+                "gateway response write failed",
+                json!({
+                    "request_id": request_id,
+                    "route": route,
+                    "status_code": status_code,
+                    "phase": "write_response",
+                    "error": format!("{err:#}"),
+                }),
+            );
+            Err(err)
+        }
+    }
 }

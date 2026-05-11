@@ -96,12 +96,25 @@ pub(crate) fn map_openai_error_parts(
 }
 
 pub(crate) fn is_client_disconnect_error(err: &anyhow::Error) -> bool {
+    if err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| {
+                matches!(
+                    io_error.kind(),
+                    std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::UnexpectedEof
+                )
+            })
+    }) {
+        return true;
+    }
+
     let message = format!("{err:#}").to_ascii_lowercase();
     message.contains("broken pipe")
         || message.contains("connection reset")
-        || message.contains("connection abort")
         || message.contains("forcibly closed")
-        || message.contains("os error 10053")
 }
 
 #[cfg(test)]
@@ -116,6 +129,9 @@ mod tests {
         )));
         assert!(is_client_disconnect_error(&anyhow!(
             "connection reset by peer"
+        )));
+        assert!(!is_client_disconnect_error(&anyhow!(
+            "write complete HTTP response: An established connection was aborted by the software in your host machine. (os error 10053)"
         )));
         assert!(!is_client_disconnect_error(&anyhow!("provider timed out")));
     }

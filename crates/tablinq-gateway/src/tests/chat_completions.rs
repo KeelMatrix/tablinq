@@ -12,49 +12,54 @@ fn chat_completions_without_stream_option_falls_back_to_non_streaming_path() {
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
-    let body = serde_json::to_vec(&json!({
-        "model": "tablinq-instant",
-        "messages": [
-            { "role": "user", "content": "hello from gateway" }
-        ]
-    }))
-    .unwrap();
-    let response = http_request(
-        &snapshot.host,
-        snapshot.port,
-        "POST",
-        V1_CHAT_COMPLETIONS_PATH,
-        &[
-            ("authorization", auth.as_str()),
-            ("content-type", "application/json"),
-        ],
-        &body,
-        20_000,
-    )
-    .unwrap();
-    assert_eq!(
-        response.status_code,
-        200,
-        "{}",
-        String::from_utf8_lossy(&response.body)
-    );
-    let body: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(body["object"], "chat.completion");
-    assert_eq!(body["model"], "tablinq-instant");
-    assert_eq!(body["choices"][0]["message"]["role"], "assistant");
-    assert!(body["tablinq_conversation_id"].as_str().is_some());
-    assert_eq!(body["tablinq_session_id"], "browser-primary");
-    assert!(
-        body["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap()
-            .contains("Fake response for")
-    );
-    assert_eq!(body["choices"][0]["finish_reason"], "stop");
-    assert_eq!(body["usage"]["prompt_tokens"], Value::Null);
-    assert_eq!(body["usage"]["completion_tokens"], Value::Null);
-    assert_eq!(body["usage"]["total_tokens"], Value::Null);
-    assert_eq!(body["tablinq_usage"]["status"], "unknown");
+    for index in 0..3 {
+        let body = serde_json::to_vec(&json!({
+            "model": "tablinq-instant",
+            "messages": [
+                { "role": "user", "content": format!("hello from gateway {index}") }
+            ]
+        }))
+        .unwrap();
+        let request_id = format!("req-valid-nonresearch-{index}");
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", request_id.as_str()),
+            ],
+            &body,
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(
+            response.status_code,
+            200,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let body: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(body["object"], "chat.completion");
+        assert_eq!(body["request_id"], request_id);
+        assert_eq!(body["model"], "tablinq-instant");
+        assert_eq!(body["choices"][0]["message"]["role"], "assistant");
+        assert!(body["tablinq_conversation_id"].as_str().is_some());
+        assert_eq!(body["tablinq_session_id"], "browser-primary");
+        assert!(
+            body["choices"][0]["message"]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Fake response for")
+        );
+        assert_eq!(body["choices"][0]["finish_reason"], "stop");
+        assert_eq!(body["usage"]["prompt_tokens"], Value::Null);
+        assert_eq!(body["usage"]["completion_tokens"], Value::Null);
+        assert_eq!(body["usage"]["total_tokens"], Value::Null);
+        assert_eq!(body["tablinq_usage"]["status"], "unknown");
+    }
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

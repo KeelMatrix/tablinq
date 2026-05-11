@@ -5,7 +5,7 @@ use gptd::logging::JsonLogger;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -267,6 +267,15 @@ pub(crate) fn write_http_response(
     request_id: &str,
     mut response: HttpResponse,
 ) -> Result<()> {
+    if !response
+        .headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("connection"))
+    {
+        response
+            .headers
+            .push(("Connection".to_owned(), "close".to_owned()));
+    }
     response
         .headers
         .push(("x-request-id".to_owned(), request_id.to_owned()));
@@ -274,20 +283,25 @@ pub(crate) fn write_http_response(
         .headers
         .push(("content-length".to_owned(), response.body.len().to_string()));
 
+    let mut bytes = Vec::with_capacity(128 + response.headers.len() * 48 + response.body.len());
     write!(
-        stream,
+        &mut bytes,
         "HTTP/1.1 {} {}\r\n",
         response.status_code, response.reason_phrase
     )
-    .context("write HTTP status line")?;
+    .context("encode HTTP status line")?;
     for (name, value) in &response.headers {
-        write!(stream, "{name}: {value}\r\n").context("write HTTP header")?;
+        write!(&mut bytes, "{name}: {value}\r\n").context("encode HTTP header")?;
     }
-    write!(stream, "\r\n").context("write HTTP header terminator")?;
+    write!(&mut bytes, "\r\n").context("encode HTTP header terminator")?;
+    bytes.extend_from_slice(&response.body);
+
     stream
-        .write_all(&response.body)
-        .context("write HTTP response body")?;
-    stream.flush().context("flush HTTP response")
+        .write_all(&bytes)
+        .context("write complete HTTP response")?;
+    stream.flush().context("flush HTTP response")?;
+    let _ = stream.shutdown(Shutdown::Write);
+    Ok(())
 }
 
 pub(crate) fn next_request_id(counter: &AtomicU64) -> String {
@@ -485,9 +499,41 @@ pub(crate) fn http_request_with_declared_content_length(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufReader, Read};
+    use std::net::TcpListener;
+    use std::thread;
 
     #[test]
     fn forbidden_status_uses_standard_reason_phrase() {
         assert_eq!(reason_phrase_for_status(403), "Forbidden");
+    }
+
+    #[test]
+    fn write_http_response_adds_connection_close_to_manual_responses() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let writer = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            write_http_response(
+                &mut stream,
+                "req-write",
+                HttpResponse {
+                    status_code: 200,
+                    reason_phrase: "OK",
+                    headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
+                    body: b"{}".to_vec(),
+                },
+            )
+            .unwrap();
+        });
+
+        let stream = TcpStream::connect(addr).unwrap();
+        let mut text = String::new();
+        BufReader::new(stream).read_to_string(&mut text).unwrap();
+        writer.join().unwrap();
+
+        assert!(text.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(text.contains("\r\nConnection: close\r\n"));
+        assert!(text.ends_with("\r\n\r\n{}"));
     }
 }
