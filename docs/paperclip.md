@@ -40,7 +40,7 @@ Paperclip is a good fit when you want file-backed browser automation, research-s
 
 1. Upload local files to `POST /v1/files`.
 2. Pass returned IDs through `tablinq_file_ids` on `POST /v1/chat/completions`.
-3. Read generated artifact metadata from `GET /v1/artifacts`.
+3. Read generated artifact metadata from `GET /v1/artifacts?limit=<n>&offset=<n>`.
 4. Download artifact content from `GET /v1/artifacts/{id}/content`.
 
 ## Usage guidance
@@ -48,6 +48,8 @@ Paperclip is a good fit when you want file-backed browser automation, research-s
 - keep concurrency at `1`
 - respect `retry_after_ms` on `429` responses
 - prefer one warm browser session over parallel browser work
+- use `view=summary`, `limit`, and `offset` for repeated request, job, file, artifact, and conversation polling
+- use `view=full`, `compact=false`, or explicit includes only for forensic debugging
 - treat usage accounting as provider-specific or estimated
 - reuse prior uploads with `tablinq_file_ids` instead of re-uploading unchanged files
 
@@ -57,9 +59,9 @@ Paperclip is a good fit when you want file-backed browser automation, research-s
 - reuse `tablinq_conversation_id` only when later work should inherit that context
 - persist `request_id`, `tablinq_session_id`, and `tablinq_conversation_id` from responses client-side
 - use `GET /v1/conversations/{conversation_id}` for direct metadata, latest known request or job IDs, and recovery-manifest summary
-- use `GET /v1/conversations/{conversation_id}/messages` for agent-readable history instead of stitching requests manually
-- use `GET /v1/conversations/{conversation_id}/snapshot` when Paperclip needs replay-safe continuation context or durable file and artifact context
-- use `GET /v1/conversations` for discovery only, and `POST /v1/conversations/select` only when the active browser thread must change
+- use `GET /v1/conversations/{conversation_id}/messages?limit=<n>&offset=<n>` for agent-readable history instead of stitching requests manually
+- use `GET /v1/conversations/{conversation_id}/snapshot?compact=true` when Paperclip needs replay-safe continuation context or durable file and artifact context
+- use `GET /v1/conversations?limit=<n>&offset=<n>` for discovery only, and `POST /v1/conversations/select` only when the active browser thread must change
 
 ## Cancellation and recovery guidance
 
