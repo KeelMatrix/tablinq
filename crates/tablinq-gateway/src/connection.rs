@@ -178,10 +178,10 @@ pub(crate) fn handle_connection(
                 &context.request_id,
             )?,
             Route::Config => health_admin::handle_config_request(core, &context.request_id),
-            Route::Jobs => requests::handle_jobs_request(core, &context.request_id)?,
+            Route::Jobs => requests::handle_jobs_request(core, &context)?,
             Route::JobDetail => requests::handle_job_detail_request(core, &context)?,
             Route::JobCancel => requests::handle_job_cancel_request(core, &context)?,
-            Route::Usage => metadata::handle_usage_request(core, &context.request_id)?,
+            Route::Usage => metadata::handle_usage_request(core, &context)?,
             Route::BrowserAttach => browser::handle_browser_attach_request(
                 core,
                 &context.request.body,
@@ -203,9 +203,7 @@ pub(crate) fn handle_connection(
                 conversations::handle_session_conversations_request(core, &context)?
             }
             Route::Requests => requests::handle_requests_request(core, &context)?,
-            Route::Conversations => {
-                conversations::handle_conversations_request(core, &context.request_id)?
-            }
+            Route::Conversations => conversations::handle_conversations_request(core, &context)?,
             Route::ConversationMessages => {
                 conversations::handle_conversation_messages_request(core, &context)?
             }
@@ -217,14 +215,10 @@ pub(crate) fn handle_connection(
             }
             Route::RequestEvidence => requests::handle_request_evidence_request(core, &context)?,
             Route::RequestSummary => requests::handle_request_summary_request(core, &context)?,
-            Route::FilesList => {
-                files::handle_files_list_request(upload_store, &context.request_id)?
-            }
+            Route::FilesList => files::handle_files_list_request(upload_store, &context)?,
             Route::FileUpload => files::handle_file_upload_request(upload_store, &context)?,
             Route::FileDetail => files::handle_file_detail_request(upload_store, &context)?,
-            Route::ArtifactsList => {
-                artifacts::handle_artifacts_list_request(core, &context.request_id)?
-            }
+            Route::ArtifactsList => artifacts::handle_artifacts_list_request(core, &context)?,
             Route::ArtifactDetail => artifacts::handle_artifact_request(core, &context)?,
             Route::RequestAction => requests::handle_cancel_request(core, scheduler, &context)?,
             Route::ConversationSelect => {

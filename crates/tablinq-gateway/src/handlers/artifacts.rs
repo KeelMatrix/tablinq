@@ -1,6 +1,9 @@
 use crate::http::{HttpResponse, RequestContext};
-use crate::json::{api_error_response, artifact_object, json_response, reason_phrase_for_status};
-use crate::routes::artifact_id_from_path;
+use crate::json::{
+    api_error_response, artifact_object, compact_artifact_object, json_response, pagination_object,
+    reason_phrase_for_status, response_meta_object,
+};
+use crate::routes::{artifact_id_from_path, paginate_items, parse_state_list_query};
 use anyhow::{Context, Result};
 use gptd::CoreService;
 use serde_json::json;
@@ -8,20 +11,39 @@ use std::fs;
 
 pub(crate) fn handle_artifacts_list_request(
     core: &CoreService,
-    request_id: &str,
+    context: &RequestContext,
 ) -> Result<HttpResponse> {
-    let artifacts = core
-        .list_artifacts()?
-        .artifacts
+    let query = match parse_state_list_query(&context.request.path, &context.request_id, &[]) {
+        Ok(query) => query,
+        Err(response) => return Ok(response),
+    };
+    let compact = query.wants_summary();
+    let page = paginate_items(core.list_artifacts()?.artifacts, query.pagination);
+    let pagination = pagination_object(&page);
+    let artifacts = page
+        .items
         .into_iter()
-        .map(|artifact| artifact_object(core, artifact))
+        .map(|artifact| {
+            if compact {
+                Ok(compact_artifact_object(artifact))
+            } else {
+                artifact_object(core, artifact)
+            }
+        })
         .collect::<Result<Vec<_>>>()?;
+    let truncated_fields = if compact {
+        vec!["linked_job_ids", "linked_request_ids"]
+    } else {
+        vec![]
+    };
     Ok(json_response(
         200,
         json!({
             "object": "list",
-            "request_id": request_id,
+            "request_id": context.request_id,
             "data": artifacts,
+            "pagination": pagination,
+            "meta": response_meta_object(query.view, query.compact, truncated_fields),
         }),
     ))
 }

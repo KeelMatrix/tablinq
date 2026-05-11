@@ -1,25 +1,48 @@
 use crate::http::{HttpResponse, RequestContext};
-use crate::json::{api_error_response, json_response, staged_file_object};
-use crate::routes::file_id_from_path;
+use crate::json::{
+    api_error_response, compact_staged_file_object, json_response, pagination_object,
+    response_meta_object, staged_file_object,
+};
+use crate::routes::{file_id_from_path, paginate_items, parse_state_list_query};
 use crate::uploads::UploadStore;
 use anyhow::Result;
 use serde_json::json;
 
 pub(crate) fn handle_files_list_request(
     upload_store: &UploadStore,
-    request_id: &str,
+    context: &RequestContext,
 ) -> Result<HttpResponse> {
-    let files = upload_store
-        .list()?
+    let query = match parse_state_list_query(&context.request.path, &context.request_id, &[]) {
+        Ok(query) => query,
+        Err(response) => return Ok(response),
+    };
+    let compact = query.wants_summary();
+    let page = paginate_items(upload_store.list()?, query.pagination);
+    let pagination = pagination_object(&page);
+    let files = page
+        .items
         .into_iter()
-        .map(staged_file_object)
+        .map(|file| {
+            if compact {
+                compact_staged_file_object(file)
+            } else {
+                staged_file_object(file)
+            }
+        })
         .collect::<Vec<_>>();
+    let truncated_fields = if compact {
+        vec!["linked_request_ids", "linked_conversation_ids"]
+    } else {
+        vec![]
+    };
     Ok(json_response(
         200,
         json!({
             "object": "list",
-            "request_id": request_id,
+            "request_id": context.request_id,
             "data": files,
+            "pagination": pagination,
+            "meta": response_meta_object(query.view, query.compact, truncated_fields),
         }),
     ))
 }

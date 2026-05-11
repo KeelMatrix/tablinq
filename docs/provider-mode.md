@@ -77,6 +77,9 @@ Some state and diagnostics endpoints can return large JSON bodies because they e
 Common controls:
 
 - `limit=<n>` and `offset=<n>` paginate list-like responses. Use a small limit such as `20` for polling and increase it only for one-off inspection.
+- the gateway accepts `limit` values from `1` through `100`
+- routes that previously returned unbounded lists still preserve that default when no response-shaping query is supplied; production clients should send `limit` or `view=summary` explicitly
+- `view=summary` without an explicit `limit` uses a default page size of `50`
 - paginated responses include metadata such as `limit`, `offset`, `returned`, `has_more`, and `next_offset` when another page is available.
 - `view=summary` returns compact list/detail shapes suitable for production polling.
 - `view=detail` returns the normal diagnostic detail for a route.
@@ -85,7 +88,7 @@ Common controls:
 - `compact=true` asks large diagnostic payloads to omit or summarize heavy fields. `compact=false` or `view=full` is the explicit debugging path.
 - compacted or bounded responses report metadata such as `compact`, `truncated`, `truncated_fields`, `max_items`, `returned_items`, `has_more`, or route-specific pagination fields.
 
-Invalid response-shaping query parameters return HTTP `400` JSON using the normal nested error envelope. This includes invalid `limit`, negative `offset`, unsupported `view`, unsupported `include`, and invalid boolean values for `compact` or `summary`.
+Invalid response-shaping query parameters return HTTP `400` JSON using the normal nested error envelope. This includes invalid `limit`, negative `offset`, unsupported `view`, unsupported `include`, unsupported route/query combinations, and invalid boolean values for `compact` or `summary`.
 
 Route guidance:
 

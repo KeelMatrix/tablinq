@@ -171,10 +171,15 @@ fn empty_state_routes_keep_current_response_envelopes() {
     let jobs = get_json(snapshot, &auth, "/v1/jobs", 200);
     assert_eq!(jobs["object"], "tablinq.job_list");
     assert_eq!(jobs["data"].as_array().unwrap().len(), 0);
+    assert!(jobs["pagination"]["limit"].is_null());
+    assert_eq!(jobs["pagination"]["returned"], 0);
+    assert_eq!(jobs["pagination"]["has_more"], false);
 
     let conversations = get_json(snapshot, &auth, "/v1/conversations", 200);
     assert_eq!(conversations["object"], "tablinq.conversation_list");
     assert_eq!(conversations["data"].as_array().unwrap().len(), 0);
+    assert!(conversations["pagination"]["limit"].is_null());
+    assert_eq!(conversations["pagination"]["returned"], 0);
 
     let usage = get_json(snapshot, &auth, "/v1/usage", 200);
     assert_eq!(usage["object"], "tablinq.request_summary_list");
@@ -188,10 +193,14 @@ fn empty_state_routes_keep_current_response_envelopes() {
     let files = get_json(snapshot, &auth, "/v1/files", 200);
     assert_eq!(files["object"], "list");
     assert_eq!(files["data"].as_array().unwrap().len(), 0);
+    assert!(files["pagination"]["limit"].is_null());
+    assert_eq!(files["pagination"]["returned"], 0);
 
     let artifacts = get_json(snapshot, &auth, "/v1/artifacts", 200);
     assert_eq!(artifacts["object"], "list");
     assert_eq!(artifacts["data"].as_array().unwrap().len(), 0);
+    assert!(artifacts["pagination"]["limit"].is_null());
+    assert_eq!(artifacts["pagination"]["returned"], 0);
 
     for path in [
         "/v1/requests/req-missing",
@@ -260,6 +269,8 @@ fn seeded_state_routes_keep_current_default_shapes_and_ordering() {
     assert_eq!(jobs["data"].as_array().unwrap().len(), 3);
     assert_eq!(jobs["data"][0]["job_id"], "job-shape-3");
     assert_eq!(jobs["data"][0]["conversation_id"], "conv-alpha");
+    assert!(jobs["pagination"]["limit"].is_null());
+    assert_eq!(jobs["pagination"]["returned"], 3);
 
     let conversations = get_json(snapshot, &auth, "/v1/conversations", 200);
     assert_eq!(conversations["object"], "tablinq.conversation_list");
@@ -269,6 +280,8 @@ fn seeded_state_routes_keep_current_default_shapes_and_ordering() {
         conversations["data"][0]["routes"]["messages"],
         "/v1/conversations/conv-gamma/messages"
     );
+    assert!(conversations["pagination"]["limit"].is_null());
+    assert_eq!(conversations["pagination"]["returned"], 3);
 
     let conversation = get_json(snapshot, &auth, "/v1/conversations/conv-alpha", 200);
     assert_eq!(conversation["object"], "tablinq.conversation");
@@ -319,6 +332,7 @@ fn seeded_state_routes_keep_current_default_shapes_and_ordering() {
     let files = get_json(snapshot, &auth, "/v1/files", 200);
     assert_eq!(files["object"], "list");
     assert_eq!(files["data"].as_array().unwrap().len(), 2);
+    assert!(files["pagination"]["limit"].is_null());
     assert!(
         files["data"]
             .as_array()
@@ -337,6 +351,7 @@ fn seeded_state_routes_keep_current_default_shapes_and_ordering() {
     let artifacts = get_json(snapshot, &auth, "/v1/artifacts", 200);
     assert_eq!(artifacts["object"], "list");
     assert_eq!(artifacts["data"].as_array().unwrap().len(), 4);
+    assert!(artifacts["pagination"]["limit"].is_null());
     assert_eq!(artifacts["data"][0]["id"], "artifact-evidence-shape-3");
     assert_eq!(
         artifacts["data"][0]["content_url"],
@@ -345,7 +360,7 @@ fn seeded_state_routes_keep_current_default_shapes_and_ordering() {
 }
 
 #[test]
-fn current_query_parameter_behavior_is_characterized_before_tightening() {
+fn invalid_response_shape_query_parameters_return_structured_errors() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();
     seed_state_fixture(&config);
@@ -379,28 +394,28 @@ fn current_query_parameter_behavior_is_characterized_before_tightening() {
     assert_eq!(requests_unknown["data"].as_array().unwrap().len(), 3);
     assert_eq!(requests_unknown["pagination"]["limit"], 50);
 
-    let jobs_limit_ignored = get_json(snapshot, &auth, "/v1/jobs?limit=1", 200);
-    assert_eq!(jobs_limit_ignored["data"].as_array().unwrap().len(), 3);
-    assert!(jobs_limit_ignored.get("pagination").is_none());
-
-    let conversations_limit_ignored = get_json(snapshot, &auth, "/v1/conversations?limit=1", 200);
+    let invalid_offset = get_json(snapshot, &auth, "/v1/jobs?offset=-1", 400);
     assert_eq!(
-        conversations_limit_ignored["data"]
-            .as_array()
-            .unwrap()
-            .len(),
-        3
+        invalid_offset["error"]["message"],
+        "offset must be a non-negative integer"
     );
-    assert!(conversations_limit_ignored.get("pagination").is_none());
 
-    let request_include_ignored = get_json(
+    let invalid_view = get_json(snapshot, &auth, "/v1/conversations?view=everything", 400);
+    assert_eq!(
+        invalid_view["error"]["message"],
+        "view must be one of summary, detail, full"
+    );
+
+    let invalid_include = get_json(
         snapshot,
         &auth,
-        "/v1/requests/req-shape-3?include=evidence",
-        200,
+        "/v1/requests/req-shape-3?include=everything",
+        400,
     );
-    assert_eq!(request_include_ignored["data"]["request_id"], "req-shape-3");
-    assert!(request_include_ignored["data"].get("evidence").is_none());
+    assert_eq!(
+        invalid_include["error"]["message"],
+        "unsupported include: everything"
+    );
 
     let messages_unknown = get_json(
         snapshot,
@@ -411,26 +426,203 @@ fn current_query_parameter_behavior_is_characterized_before_tightening() {
     assert_eq!(messages_unknown["pagination"]["limit"], 50);
     assert_eq!(messages_unknown["data"].as_array().unwrap().len(), 6);
 
-    let snapshot_compact_ignored = get_json(
+    let invalid_compact = get_json(
         snapshot,
         &auth,
         "/v1/conversations/conv-alpha/snapshot?compact=not-bool",
+        400,
+    );
+    assert_eq!(
+        invalid_compact["error"]["message"],
+        "compact must be true or false"
+    );
+
+    let invalid_summary = get_json(snapshot, &auth, "/v1/usage?summary=not-bool", 400);
+    assert_eq!(
+        invalid_summary["error"]["message"],
+        "summary must be true or false"
+    );
+
+    let invalid_order = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations/conv-alpha/messages?order=random",
+        400,
+    );
+    assert_eq!(
+        invalid_order["error"]["message"],
+        "order must be one of asc, desc"
+    );
+
+    let artifacts_invalid_limit =
+        get_json(snapshot, &auth, "/v1/artifacts?limit=not-a-number", 400);
+    assert_eq!(
+        artifacts_invalid_limit["error"]["message"],
+        "limit must be a positive integer"
+    );
+}
+
+#[test]
+fn response_size_controls_paginate_compact_and_expand_state_routes() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    seed_state_fixture(&config);
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    for (name, body, expected_id) in [
+        ("one.txt", b"one".as_slice(), "one.txt"),
+        ("two.txt", b"two".as_slice(), "two.txt"),
+        ("three.txt", b"three".as_slice(), "three.txt"),
+    ] {
+        let upload = upload_file(snapshot, &auth, name, "text/plain", body);
+        assert_eq!(upload.status_code, 201);
+        let upload_body: Value = serde_json::from_slice(&upload.body).unwrap();
+        assert_eq!(upload_body["data"]["file_name"], expected_id);
+    }
+
+    let requests = get_json(
+        snapshot,
+        &auth,
+        "/v1/requests?limit=1&offset=1&view=summary",
+        200,
+    );
+    assert_eq!(requests["data"].as_array().unwrap().len(), 1);
+    assert_eq!(requests["data"][0]["id"], "req-shape-2");
+    assert_eq!(requests["pagination"]["limit"], 1);
+    assert_eq!(requests["pagination"]["offset"], 1);
+    assert_eq!(requests["pagination"]["returned"], 1);
+    assert_eq!(requests["pagination"]["has_more"], true);
+    assert_eq!(requests["pagination"]["next_offset"], 2);
+    assert_eq!(requests["meta"]["view"], "summary");
+
+    let request_full = get_json(snapshot, &auth, "/v1/requests/req-shape-3?view=full", 200);
+    assert_eq!(request_full["data"]["usage"]["status"], "unknown");
+    assert_eq!(request_full["meta"]["truncated"], false);
+
+    let request_with_evidence = get_json(
+        snapshot,
+        &auth,
+        "/v1/requests/req-shape-3?view=summary&include=evidence",
         200,
     );
     assert_eq!(
-        snapshot_compact_ignored["data"]["conversation"]["conversation_id"],
-        "conv-alpha"
+        request_with_evidence["data"]["evidence"]["id"],
+        "artifact-evidence-shape-3"
     );
-    assert!(snapshot_compact_ignored.get("meta").is_none());
+    assert_eq!(request_with_evidence["meta"]["truncated"], true);
 
-    let usage_summary_ignored = get_json(snapshot, &auth, "/v1/usage?summary=not-bool", 200);
-    assert_eq!(usage_summary_ignored["data"].as_array().unwrap().len(), 3);
-    assert_eq!(usage_summary_ignored["limit"], 50);
+    let evidence_page = get_json(
+        snapshot,
+        &auth,
+        "/v1/requests/req-shape-3/evidence?limit=1",
+        200,
+    );
+    assert_eq!(evidence_page["pagination"]["returned"], 1);
+    assert_eq!(evidence_page["pagination"]["has_more"], false);
 
-    let files_offset_ignored = get_json(snapshot, &auth, "/v1/files?offset=-1", 200);
-    assert_eq!(files_offset_ignored["object"], "list");
+    let jobs = get_json(
+        snapshot,
+        &auth,
+        "/v1/jobs?limit=1&offset=1&view=summary",
+        200,
+    );
+    assert_eq!(jobs["data"].as_array().unwrap().len(), 1);
+    assert_eq!(jobs["data"][0]["job_id"], "job-shape-2");
+    assert_eq!(jobs["pagination"]["next_offset"], 2);
 
-    let artifacts_limit_ignored =
-        get_json(snapshot, &auth, "/v1/artifacts?limit=not-a-number", 200);
-    assert_eq!(artifacts_limit_ignored["data"].as_array().unwrap().len(), 4);
+    let conversations = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations?limit=1&offset=1&view=summary",
+        200,
+    );
+    assert_eq!(conversations["data"].as_array().unwrap().len(), 1);
+    assert_eq!(conversations["data"][0]["conversation_id"], "conv-beta");
+    assert!(conversations["data"][0].get("last_prompt").is_none());
+    assert_eq!(conversations["meta"]["truncated"], true);
+
+    let messages = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations/conv-alpha/messages?limit=2&offset=1",
+        200,
+    );
+    assert_eq!(messages["pagination"]["returned"], 2);
+    assert_eq!(messages["pagination"]["has_more"], true);
+    assert_eq!(messages["pagination"]["next_offset"], 3);
+
+    let messages_desc = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations/conv-alpha/messages?limit=1&order=desc",
+        200,
+    );
+    assert_eq!(messages_desc["data"][0]["content"], "response text 3");
+    assert_eq!(messages_desc["meta"]["order"], "desc");
+
+    let compact_snapshot = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations/conv-alpha/snapshot?compact=true",
+        200,
+    );
+    assert_eq!(compact_snapshot["meta"]["compact"], true);
+    assert_eq!(compact_snapshot["meta"]["truncated"], true);
+    assert_eq!(compact_snapshot["meta"]["max_items"], 3);
+    assert_eq!(compact_snapshot["meta"]["returned_items"], 3);
+    assert!(
+        compact_snapshot["data"]
+            .get("tracked_generated_artifacts")
+            .is_none()
+    );
+
+    let full_snapshot = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations/conv-alpha/snapshot?compact=false&view=full",
+        200,
+    );
+    assert_eq!(full_snapshot["meta"]["truncated"], false);
+    assert_eq!(
+        full_snapshot["data"]["recent_messages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        6
+    );
+
+    let usage = get_json(
+        snapshot,
+        &auth,
+        "/v1/usage?summary=true&limit=1&offset=1",
+        200,
+    );
+    assert_eq!(usage["data"].as_array().unwrap().len(), 1);
+    assert_eq!(usage["data"][0]["request_id"], "req-shape-2");
+    assert!(usage["data"][0].get("warnings").is_none());
+    assert_eq!(usage["pagination"]["returned"], 1);
+
+    let files = get_json(
+        snapshot,
+        &auth,
+        "/v1/files?limit=1&offset=1&view=summary",
+        200,
+    );
+    assert_eq!(files["data"].as_array().unwrap().len(), 1);
+    assert!(files["data"][0].get("linked_request_ids").is_none());
+    assert_eq!(files["pagination"]["returned"], 1);
+    assert_eq!(files["pagination"]["has_more"], true);
+
+    let artifacts = get_json(
+        snapshot,
+        &auth,
+        "/v1/artifacts?limit=1&offset=1&view=summary",
+        200,
+    );
+    assert_eq!(artifacts["data"].as_array().unwrap().len(), 1);
+    assert!(artifacts["data"][0].get("linked_job_ids").is_none());
+    assert_eq!(artifacts["pagination"]["returned"], 1);
+    assert_eq!(artifacts["pagination"]["has_more"], true);
 }
