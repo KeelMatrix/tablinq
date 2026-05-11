@@ -116,6 +116,7 @@ Actions:
 - inspect the request with `gpt jobs show <job-id>` or `GET /v1/requests/{request_id}`
 - do not blindly resubmit the same prompt
 - if needed, rerun `gpt browser attach` and `gpt browser open`
+- if a local client loses the connection during `POST /v1/chat/completions`, do not immediately resend the same prompt. Inspect request state first, preferably using a stable `X-Request-Id` or the returned `request_id`.
 
 ## Provider page says "Something went wrong while generating the response"
 
