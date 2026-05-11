@@ -316,6 +316,7 @@ A packaged layout is still not a usable local install. Windows needs extra machi
 
 **Notes**
 
+- Run this script from PowerShell 7 (`pwsh`). Windows PowerShell 5.1 is not the intended install shell and can misreport child-process exit status around dependency or package steps.
 - Supports several `-Skip...` switches so operators can bypass dependency install, package build, registry changes, autostart setup, or PATH updates.
 - Uses `-NoLaunchAfterInstall` only when you explicitly do not want the script to start services immediately.
 - Prefer this over calling lower-level steps manually unless you are debugging a specific install stage.

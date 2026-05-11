@@ -40,8 +40,10 @@ A normal package install gives you:
 From a repo checkout, run the one entry point:
 
 ```powershell
-scripts/install.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1
 ```
+
+Use PowerShell 7 (`pwsh`) for the Windows installer. Windows PowerShell 5.1 is not the intended installer shell; it can misreport child-process exit status for package/dependency steps even when their logs show success.
 
 What `scripts/install.ps1` does:
 
@@ -73,13 +75,13 @@ What still requires you:
 To enable Windows logon-time autostart explicitly later, rerun the installer with:
 
 ```powershell
-scripts/install.ps1 -EnableAutoStart
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 -EnableAutoStart
 ```
 
 To skip the default daemon and gateway launch, opt out explicitly:
 
 ```powershell
-scripts/install.ps1 -NoLaunchAfterInstall
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1 -NoLaunchAfterInstall
 ```
 
 ## Unix-like systems
