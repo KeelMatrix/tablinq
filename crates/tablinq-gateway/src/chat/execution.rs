@@ -15,7 +15,7 @@ use crate::errors::{
     capture_gateway_failure_bundle, is_client_disconnect_error, map_openai_error_value,
 };
 use crate::http::{HttpResponse, RequestContext, log_response, write_http_response};
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use gptd::CoreService;
 use gptd::logging::JsonLogger;
@@ -311,6 +311,27 @@ fn execute_non_streaming_chat_completion(
     prepared: &PreparedChatRequest,
 ) -> Result<RequestOutcome> {
     let result = execute_prepared_job_non_streaming(core, context, prepared)?;
+    if peer_closed_before_final_response(stream)? {
+        let err = anyhow!("client closed before final response");
+        let interruption = mark_downstream_interrupted(
+            core,
+            prepared,
+            result.conversation_id.as_deref(),
+            final_response_disconnect_message(&err),
+        );
+        return recover_downstream_interruption(
+            core,
+            None,
+            context,
+            prepared,
+            interruption,
+            DownstreamRecovery {
+                conversation_id: result.conversation_id,
+                recovery_trace: result.recovery_trace,
+                recovery_packet: result.recovery_packet,
+            },
+        );
+    }
     let _ = log_response(logger, &context.request_id, result.response.status_code);
     if let Err(err) = write_http_response(stream, &context.request_id, result.response) {
         if is_client_disconnect_error(&err) {
@@ -387,6 +408,34 @@ fn execute_prepared_job_non_streaming(
         recovery_trace: result.recovery_trace,
         recovery_packet: result.recovery_packet,
     })
+}
+
+fn peer_closed_before_final_response(stream: &TcpStream) -> Result<bool> {
+    stream
+        .set_nonblocking(true)
+        .context("set final response peer probe nonblocking")?;
+    let mut byte = [0u8; 1];
+    let probe_result = match stream.peek(&mut byte) {
+        Ok(0) => Ok(true),
+        Ok(_) => Ok(false),
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::UnexpectedEof
+            ) =>
+        {
+            Ok(true)
+        }
+        Err(err) => Err(err).context("probe final response peer"),
+    };
+    let restore_result = stream
+        .set_nonblocking(false)
+        .context("restore final response peer probe blocking");
+    restore_result?;
+    probe_result
 }
 
 fn recovered_at_for_trace(recovery_trace: Option<&RecoveryTrace>) -> Option<chrono::DateTime<Utc>> {

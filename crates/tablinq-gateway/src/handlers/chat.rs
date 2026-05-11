@@ -8,7 +8,7 @@ use crate::errors::{
 use crate::handlers::requests::{
     cancellation_response, client_id_for_request, queue_error_response,
 };
-use crate::http::{RequestContext, log_response, write_http_response};
+use crate::http::{HttpResponse, RequestContext};
 use crate::scheduler::{GatewayScheduler, SchedulerSnapshot};
 use crate::uploads::UploadStore;
 use anyhow::Result;
@@ -17,6 +17,11 @@ use gptd::CoreService;
 use gptd::logging::JsonLogger;
 use std::net::TcpStream;
 use std::time::Instant;
+
+pub(crate) enum ChatCompletionsResult {
+    Response(HttpResponse),
+    Written,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_chat_completions_request(
@@ -28,13 +33,12 @@ pub(crate) fn handle_chat_completions_request(
     context: &RequestContext,
     logger: &JsonLogger,
     remote_addr: &str,
-) -> Result<()> {
+) -> Result<ChatCompletionsResult> {
     let prepared = match prepare_chat_completions_request(core, upload_store, context) {
         Ok(prepared) => prepared,
         Err(err) => {
             let response = map_openai_error(&context.request_id, &err, None);
-            let _ = log_response(logger, &context.request_id, response.status_code);
-            return write_http_response(stream, &context.request_id, response);
+            return Ok(ChatCompletionsResult::Response(response));
         }
     };
     let _ = upload_store.mark_linked_usage(
@@ -70,8 +74,7 @@ pub(crate) fn handle_chat_completions_request(
                 queue_wait_ms,
                 outcome_from_error(&err),
             ));
-            let _ = log_response(logger, &context.request_id, response.status_code);
-            return write_http_response(stream, &context.request_id, response);
+            return Ok(ChatCompletionsResult::Response(response));
         }
     };
     let queue_wait_ms = queue_wait_started_at.elapsed().as_millis() as u64;
@@ -105,8 +108,7 @@ pub(crate) fn handle_chat_completions_request(
                 recovery_packet: None,
             },
         ));
-        let _ = log_response(logger, &context.request_id, response.status_code);
-        return write_http_response(stream, &context.request_id, response);
+        return Ok(ChatCompletionsResult::Response(response));
     }
     match execute_chat_completions_request(stream, core, context, logger, &prepared, &client_id) {
         Ok(outcome) => {
@@ -141,9 +143,8 @@ pub(crate) fn handle_chat_completions_request(
                 capture_gateway_failure_artifacts(core, context, &prepared, &client_id, &err);
             let response =
                 map_openai_error(&context.request_id, &err, failure_bundle_id.as_deref());
-            let _ = log_response(logger, &context.request_id, response.status_code);
-            return write_http_response(stream, &context.request_id, response);
+            return Ok(ChatCompletionsResult::Response(response));
         }
     }
-    Ok(())
+    Ok(ChatCompletionsResult::Written)
 }
