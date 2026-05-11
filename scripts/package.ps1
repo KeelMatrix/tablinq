@@ -111,12 +111,16 @@ function Get-WorkspaceHeadCommit {
 function Get-WorkspaceDirtyState {
   param([string]$RepoRoot)
 
-  & git -C $RepoRoot diff --quiet --ignore-submodules HEAD -- 2>$null
-  if ($LASTEXITCODE -eq 0) {
-    return "false"
+  $output = & git -C $RepoRoot status --porcelain=v1 --untracked-files=no --ignore-submodules 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to determine repo dirty state for package provenance."
   }
 
-  "true"
+  if (($output | Out-String).Trim()) {
+    return "true"
+  }
+
+  "false"
 }
 
 function Get-ShortCommit {
