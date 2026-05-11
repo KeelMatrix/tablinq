@@ -371,6 +371,8 @@ Configurable inputs include:
 - `Model`
 - `Count`
 - `Prompt`
+- `CompactLog`, which polls `GET /v1/requests?view=summary&limit=5` after successful requests
+- `FullLog`, which keeps raw `view=full` request-state logging available for forensic runs
 
 **Why it exists**
 
@@ -380,11 +382,14 @@ This is not a developer build or install helper. It is an operational confidence
 
 - You want a quick soak/stability check against a running local gateway.
 - You are debugging request handling, auth headers, request IDs, or response timing.
+- You want compact repeated status logging without dumping full request history.
 
 **Do not use it for**
 
 - Functional repo validation.
 - Packaging or installation.
+
+Use `-FullLog` only for targeted failure capture. Prefer `-CompactLog` for repeated stability loops.
 
 ---
 
