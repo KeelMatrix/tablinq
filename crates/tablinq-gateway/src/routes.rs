@@ -33,6 +33,7 @@ pub(crate) const V1_REQUESTS_PREFIX: &str = "/v1/requests/";
 pub(crate) const REQUEST_SUMMARY_LIMIT: usize = 50;
 pub(crate) const REQUEST_LIST_MAX_LIMIT: usize = 100;
 pub(crate) const CONVERSATION_MESSAGE_LIST_DEFAULT_LIMIT: usize = 50;
+pub(crate) const STATE_LIST_DEFAULT_LIMIT: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route {
@@ -170,17 +171,111 @@ pub(crate) fn method_not_allowed_for_path(path: &str) -> Option<&'static str> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct RequestListQuery {
-    pub(crate) limit: usize,
-    pub(crate) offset: usize,
-    pub(crate) status: Option<JobStatus>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResponseView {
+    Summary,
+    Detail,
+    Full,
+}
+
+impl ResponseView {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Summary => "summary",
+            Self::Detail => "detail",
+            Self::Full => "full",
+        }
+    }
+
+    pub(crate) fn is_summary(self) -> bool {
+        matches!(self, Self::Summary)
+    }
+
+    pub(crate) fn is_full(self) -> bool {
+        matches!(self, Self::Full)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(crate) struct PaginationQuery {
+    pub(crate) limit: Option<usize>,
+    pub(crate) offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PaginatedItems<T> {
+    pub(crate) items: Vec<T>,
+    pub(crate) limit: Option<usize>,
+    pub(crate) offset: usize,
+    pub(crate) returned: usize,
+    pub(crate) has_more: bool,
+    pub(crate) next_offset: Option<usize>,
+    pub(crate) total: usize,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StateListQuery {
+    pub(crate) pagination: PaginationQuery,
+    pub(crate) view: ResponseView,
+    pub(crate) compact: bool,
+    pub(crate) includes: Vec<String>,
+}
+
+impl StateListQuery {
+    pub(crate) fn wants_summary(&self) -> bool {
+        self.view.is_summary() || self.compact
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RequestListQuery {
+    pub(crate) pagination: PaginationQuery,
+    pub(crate) status: Option<JobStatus>,
+    pub(crate) view: ResponseView,
+    pub(crate) compact: bool,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct ConversationMessageQuery {
     pub(crate) limit: usize,
     pub(crate) offset: usize,
+    pub(crate) order: MessageOrder,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MessageOrder {
+    Asc,
+    Desc,
+}
+
+impl MessageOrder {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Asc => "asc",
+            Self::Desc => "desc",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RequestDetailQuery {
+    pub(crate) view: ResponseView,
+    pub(crate) includes: Vec<String>,
+    pub(crate) compact: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SnapshotQuery {
+    pub(crate) view: ResponseView,
+    pub(crate) includes: Vec<String>,
+    pub(crate) compact: bool,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct UsageQuery {
+    pub(crate) pagination: PaginationQuery,
+    pub(crate) view: ResponseView,
+    pub(crate) summary: bool,
 }
 
 pub(crate) fn parse_request_list_query(
@@ -188,43 +283,21 @@ pub(crate) fn parse_request_list_query(
     request_id: &str,
 ) -> std::result::Result<RequestListQuery, HttpResponse> {
     let mut query = RequestListQuery {
-        limit: REQUEST_SUMMARY_LIMIT,
-        offset: 0,
+        pagination: PaginationQuery {
+            limit: Some(REQUEST_SUMMARY_LIMIT),
+            offset: 0,
+        },
         status: None,
+        view: ResponseView::Detail,
+        compact: false,
     };
     for (key, value) in request_query_pairs(path) {
         match key {
             "limit" => {
-                let parsed = value.parse::<usize>().map_err(|_| {
-                    api_error_response(
-                        400,
-                        request_id,
-                        "invalid_request_error",
-                        "invalid_request",
-                        "limit must be a positive integer",
-                    )
-                })?;
-                if parsed == 0 || parsed > REQUEST_LIST_MAX_LIMIT {
-                    return Err(api_error_response(
-                        400,
-                        request_id,
-                        "invalid_request_error",
-                        "invalid_request",
-                        format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
-                    ));
-                }
-                query.limit = parsed;
+                query.pagination.limit = Some(parse_limit(value, request_id)?);
             }
             "offset" => {
-                query.offset = value.parse::<usize>().map_err(|_| {
-                    api_error_response(
-                        400,
-                        request_id,
-                        "invalid_request_error",
-                        "invalid_request",
-                        "offset must be a non-negative integer",
-                    )
-                })?;
+                query.pagination.offset = parse_offset(value, request_id)?;
             }
             "status" => {
                 query.status = Some(value.parse::<JobStatus>().map_err(|_| {
@@ -236,6 +309,15 @@ pub(crate) fn parse_request_list_query(
                         format!("unsupported status filter: {value}"),
                     )
                 })?);
+            }
+            "view" => {
+                query.view = parse_view(value, request_id)?;
+            }
+            "compact" => {
+                query.compact = parse_bool(value, "compact", request_id)?;
+            }
+            "include" | "summary" | "order" => {
+                return Err(unsupported_query_param_response(request_id, key));
             }
             _ => {}
         }
@@ -250,45 +332,351 @@ pub(crate) fn parse_conversation_message_query(
     let mut query = ConversationMessageQuery {
         limit: CONVERSATION_MESSAGE_LIST_DEFAULT_LIMIT,
         offset: 0,
+        order: MessageOrder::Asc,
     };
     for (key, value) in request_query_pairs(path) {
         match key {
             "limit" => {
-                let parsed = value.parse::<usize>().map_err(|_| {
-                    api_error_response(
-                        400,
-                        request_id,
-                        "invalid_request_error",
-                        "invalid_request",
-                        "limit must be a positive integer",
-                    )
-                })?;
-                if parsed == 0 || parsed > REQUEST_LIST_MAX_LIMIT {
-                    return Err(api_error_response(
-                        400,
-                        request_id,
-                        "invalid_request_error",
-                        "invalid_request",
-                        format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
-                    ));
-                }
-                query.limit = parsed;
+                query.limit = parse_limit(value, request_id)?;
             }
             "offset" => {
-                query.offset = value.parse::<usize>().map_err(|_| {
-                    api_error_response(
-                        400,
-                        request_id,
-                        "invalid_request_error",
-                        "invalid_request",
-                        "offset must be a non-negative integer",
-                    )
-                })?;
+                query.offset = parse_offset(value, request_id)?;
+            }
+            "order" => {
+                query.order = parse_message_order(value, request_id)?;
+            }
+            "view" | "include" | "compact" | "summary" => {
+                return Err(unsupported_query_param_response(request_id, key));
             }
             _ => {}
         }
     }
     Ok(query)
+}
+
+pub(crate) fn parse_state_list_query(
+    path: &str,
+    request_id: &str,
+    allowed_includes: &[&str],
+) -> std::result::Result<StateListQuery, HttpResponse> {
+    let mut query = StateListQuery {
+        pagination: PaginationQuery {
+            limit: None,
+            offset: 0,
+        },
+        view: ResponseView::Detail,
+        compact: false,
+        includes: vec![],
+    };
+    let mut saw_explicit_shape = false;
+    for (key, value) in request_query_pairs(path) {
+        match key {
+            "limit" => {
+                query.pagination.limit = Some(parse_limit(value, request_id)?);
+                saw_explicit_shape = true;
+            }
+            "offset" => {
+                query.pagination.offset = parse_offset(value, request_id)?;
+                saw_explicit_shape = true;
+            }
+            "view" => {
+                query.view = parse_view(value, request_id)?;
+                saw_explicit_shape = true;
+            }
+            "compact" => {
+                query.compact = parse_bool(value, "compact", request_id)?;
+                saw_explicit_shape = true;
+            }
+            "include" => {
+                append_includes(&mut query.includes, value, allowed_includes, request_id)?;
+                saw_explicit_shape = true;
+            }
+            "summary" | "order" => {
+                return Err(unsupported_query_param_response(request_id, key));
+            }
+            _ => {}
+        }
+    }
+    if query.pagination.limit.is_none()
+        && (query.pagination.offset > 0 || query.view.is_summary() || query.compact)
+    {
+        query.pagination.limit = Some(STATE_LIST_DEFAULT_LIMIT);
+    }
+    if !saw_explicit_shape {
+        query.view = ResponseView::Detail;
+    }
+    Ok(query)
+}
+
+pub(crate) fn parse_request_detail_query(
+    path: &str,
+    request_id: &str,
+) -> std::result::Result<RequestDetailQuery, HttpResponse> {
+    let mut query = RequestDetailQuery {
+        view: ResponseView::Detail,
+        includes: vec![],
+        compact: false,
+    };
+    for (key, value) in request_query_pairs(path) {
+        match key {
+            "view" => query.view = parse_view(value, request_id)?,
+            "include" => append_includes(
+                &mut query.includes,
+                value,
+                &["evidence", "debug", "raw"],
+                request_id,
+            )?,
+            "compact" => query.compact = parse_bool(value, "compact", request_id)?,
+            "limit" | "offset" | "summary" | "order" => {
+                return Err(unsupported_query_param_response(request_id, key));
+            }
+            _ => {}
+        }
+    }
+    Ok(query)
+}
+
+pub(crate) fn parse_request_evidence_query(
+    path: &str,
+    request_id: &str,
+) -> std::result::Result<PaginationQuery, HttpResponse> {
+    let mut query = PaginationQuery {
+        limit: Some(1),
+        offset: 0,
+    };
+    for (key, value) in request_query_pairs(path) {
+        match key {
+            "limit" => query.limit = Some(parse_limit(value, request_id)?),
+            "offset" => query.offset = parse_offset(value, request_id)?,
+            "view" | "include" | "compact" | "summary" | "order" => {
+                return Err(unsupported_query_param_response(request_id, key));
+            }
+            _ => {}
+        }
+    }
+    Ok(query)
+}
+
+pub(crate) fn parse_snapshot_query(
+    path: &str,
+    request_id: &str,
+) -> std::result::Result<SnapshotQuery, HttpResponse> {
+    parse_expansion_query(path, request_id, &["messages", "artifacts", "debug", "raw"])
+}
+
+pub(crate) fn parse_conversation_detail_query(
+    path: &str,
+    request_id: &str,
+) -> std::result::Result<SnapshotQuery, HttpResponse> {
+    parse_expansion_query(
+        path,
+        request_id,
+        &["messages", "snapshot", "artifacts", "debug", "raw"],
+    )
+}
+
+fn parse_expansion_query(
+    path: &str,
+    request_id: &str,
+    allowed_includes: &[&str],
+) -> std::result::Result<SnapshotQuery, HttpResponse> {
+    let mut query = SnapshotQuery {
+        view: ResponseView::Detail,
+        includes: vec![],
+        compact: false,
+    };
+    for (key, value) in request_query_pairs(path) {
+        match key {
+            "view" => query.view = parse_view(value, request_id)?,
+            "include" => append_includes(&mut query.includes, value, allowed_includes, request_id)?,
+            "compact" => query.compact = parse_bool(value, "compact", request_id)?,
+            "limit" | "offset" | "summary" | "order" => {
+                return Err(unsupported_query_param_response(request_id, key));
+            }
+            _ => {}
+        }
+    }
+    Ok(query)
+}
+
+pub(crate) fn parse_usage_query(
+    path: &str,
+    request_id: &str,
+) -> std::result::Result<UsageQuery, HttpResponse> {
+    let mut query = UsageQuery {
+        pagination: PaginationQuery {
+            limit: Some(REQUEST_SUMMARY_LIMIT),
+            offset: 0,
+        },
+        view: ResponseView::Detail,
+        summary: false,
+    };
+    for (key, value) in request_query_pairs(path) {
+        match key {
+            "limit" => query.pagination.limit = Some(parse_limit(value, request_id)?),
+            "offset" => query.pagination.offset = parse_offset(value, request_id)?,
+            "view" => query.view = parse_view(value, request_id)?,
+            "summary" => query.summary = parse_bool(value, "summary", request_id)?,
+            "include" | "compact" | "order" => {
+                return Err(unsupported_query_param_response(request_id, key));
+            }
+            _ => {}
+        }
+    }
+    Ok(query)
+}
+
+pub(crate) fn paginate_items<T>(items: Vec<T>, pagination: PaginationQuery) -> PaginatedItems<T> {
+    let total = items.len();
+    let start = pagination.offset.min(total);
+    let page_limit = pagination
+        .limit
+        .unwrap_or_else(|| total.saturating_sub(start));
+    let end = start.saturating_add(page_limit).min(total);
+    let take = end.saturating_sub(start);
+    let page_items = items.into_iter().skip(start).take(take).collect::<Vec<_>>();
+    let returned = page_items.len();
+    let has_more = end < total;
+    PaginatedItems {
+        items: page_items,
+        limit: pagination.limit,
+        offset: pagination.offset,
+        returned,
+        has_more,
+        next_offset: has_more.then_some(end),
+        total,
+    }
+}
+
+pub(crate) fn includes_value(includes: &[String], value: &str) -> bool {
+    includes.iter().any(|item| item == value)
+}
+
+fn parse_limit(value: &str, request_id: &str) -> std::result::Result<usize, HttpResponse> {
+    let parsed = value.parse::<usize>().map_err(|_| {
+        api_error_response(
+            400,
+            request_id,
+            "invalid_request_error",
+            "invalid_request",
+            "limit must be a positive integer",
+        )
+    })?;
+    if parsed == 0 || parsed > REQUEST_LIST_MAX_LIMIT {
+        return Err(api_error_response(
+            400,
+            request_id,
+            "invalid_request_error",
+            "invalid_request",
+            format!("limit must be between 1 and {REQUEST_LIST_MAX_LIMIT}"),
+        ));
+    }
+    Ok(parsed)
+}
+
+fn parse_offset(value: &str, request_id: &str) -> std::result::Result<usize, HttpResponse> {
+    value.parse::<usize>().map_err(|_| {
+        api_error_response(
+            400,
+            request_id,
+            "invalid_request_error",
+            "invalid_request",
+            "offset must be a non-negative integer",
+        )
+    })
+}
+
+fn parse_bool(
+    value: &str,
+    name: &str,
+    request_id: &str,
+) -> std::result::Result<bool, HttpResponse> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(api_error_response(
+            400,
+            request_id,
+            "invalid_request_error",
+            "invalid_request",
+            format!("{name} must be true or false"),
+        )),
+    }
+}
+
+fn parse_view(value: &str, request_id: &str) -> std::result::Result<ResponseView, HttpResponse> {
+    match value {
+        "summary" => Ok(ResponseView::Summary),
+        "detail" => Ok(ResponseView::Detail),
+        "full" => Ok(ResponseView::Full),
+        _ => Err(api_error_response(
+            400,
+            request_id,
+            "invalid_request_error",
+            "invalid_request",
+            "view must be one of summary, detail, full",
+        )),
+    }
+}
+
+fn parse_message_order(
+    value: &str,
+    request_id: &str,
+) -> std::result::Result<MessageOrder, HttpResponse> {
+    match value {
+        "asc" => Ok(MessageOrder::Asc),
+        "desc" => Ok(MessageOrder::Desc),
+        _ => Err(api_error_response(
+            400,
+            request_id,
+            "invalid_request_error",
+            "invalid_request",
+            "order must be one of asc, desc",
+        )),
+    }
+}
+
+fn append_includes(
+    includes: &mut Vec<String>,
+    value: &str,
+    allowed: &[&str],
+    request_id: &str,
+) -> std::result::Result<(), HttpResponse> {
+    for include in value.split(',') {
+        let include = include.trim();
+        if include.is_empty() {
+            return Err(api_error_response(
+                400,
+                request_id,
+                "invalid_request_error",
+                "invalid_request",
+                "include must not be empty",
+            ));
+        }
+        if !allowed.iter().any(|allowed| allowed == &include) {
+            return Err(api_error_response(
+                400,
+                request_id,
+                "invalid_request_error",
+                "invalid_request",
+                format!("unsupported include: {include}"),
+            ));
+        }
+        if !includes.iter().any(|existing| existing == include) {
+            includes.push(include.to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn unsupported_query_param_response(request_id: &str, key: &str) -> HttpResponse {
+    api_error_response(
+        400,
+        request_id,
+        "invalid_request_error",
+        "invalid_request",
+        format!("unsupported query parameter for this route: {key}"),
+    )
 }
 
 pub(crate) fn normalized_request_path(path: &str) -> &str {
@@ -457,9 +845,10 @@ mod tests {
         let query =
             parse_request_list_query("/v1/requests?limit=25&offset=5&status=running", "req")
                 .expect("valid request query");
-        assert_eq!(query.limit, 25);
-        assert_eq!(query.offset, 5);
+        assert_eq!(query.pagination.limit, Some(25));
+        assert_eq!(query.pagination.offset, 5);
         assert_eq!(query.status, Some(JobStatus::Running));
+        assert_eq!(query.view, ResponseView::Detail);
 
         let err = parse_request_list_query("/v1/requests?limit=0", "req")
             .expect_err("invalid limit should become HTTP response");
@@ -472,5 +861,6 @@ mod tests {
             .expect("valid conversation message query");
         assert_eq!(query.limit, CONVERSATION_MESSAGE_LIST_DEFAULT_LIMIT);
         assert_eq!(query.offset, 0);
+        assert_eq!(query.order, MessageOrder::Asc);
     }
 }

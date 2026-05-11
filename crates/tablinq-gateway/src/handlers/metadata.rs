@@ -1,9 +1,9 @@
 use crate::capabilities::{CapabilityCatalog, CapabilityCatalogCache};
-use crate::http::HttpResponse;
-use crate::json::json_response;
+use crate::http::{HttpResponse, RequestContext};
+use crate::json::{json_response, pagination_object, response_meta_object};
 use crate::openai::{PROVIDER_MODELS, model_object, provider_capability_catalog};
 use crate::process_control::GatewayStatusSnapshot;
-use crate::routes::REQUEST_SUMMARY_LIMIT;
+use crate::routes::{REQUEST_SUMMARY_LIMIT, paginate_items, parse_usage_query};
 use anyhow::Result;
 use gptd::CoreService;
 use serde_json::json;
@@ -238,15 +238,57 @@ pub(crate) fn handle_provider_request(
     )
 }
 
-pub(crate) fn handle_usage_request(core: &CoreService, request_id: &str) -> Result<HttpResponse> {
+pub(crate) fn handle_usage_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let query = match parse_usage_query(&context.request.path, &context.request_id) {
+        Ok(query) => query,
+        Err(response) => return Ok(response),
+    };
     let history = core.list_request_summaries(REQUEST_SUMMARY_LIMIT)?;
+    let page = paginate_items(history.requests, query.pagination);
+    let pagination = pagination_object(&page);
+    let summary = query.summary || query.view.is_summary();
+    let data = page
+        .items
+        .into_iter()
+        .map(|request| {
+            if summary {
+                json!({
+                    "request_id": request.request_id,
+                    "job_id": request.job_id,
+                    "model_id": request.model_id,
+                    "execution_kind": request.execution_kind,
+                    "status": request.status,
+                    "cancelled": request.cancelled,
+                    "start_time": request.start_time,
+                    "end_time": request.end_time,
+                    "duration_ms": request.duration_ms,
+                    "queue_wait_ms": request.queue_wait_ms,
+                    "usage": {
+                        "status": request.usage.status,
+                    },
+                })
+            } else {
+                serde_json::to_value(request).unwrap_or_else(|_| json!({}))
+            }
+        })
+        .collect::<Vec<_>>();
+    let truncated_fields = if summary {
+        vec!["recovery_trace", "recovery_packet", "warnings"]
+    } else {
+        vec![]
+    };
     Ok(json_response(
         200,
         json!({
             "object": "tablinq.request_summary_list",
-            "request_id": request_id,
-            "data": history.requests,
+            "request_id": context.request_id,
+            "data": data,
             "limit": REQUEST_SUMMARY_LIMIT,
+            "pagination": pagination,
+            "meta": response_meta_object(query.view, summary, truncated_fields),
             "warnings": ["token usage is unavailable for the browser-backed provider"],
         }),
     ))

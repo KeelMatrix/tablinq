@@ -1,5 +1,7 @@
 use crate::http::{HttpResponse, json_response as http_json_response};
-use crate::routes::{V1_ARTIFACTS_PATH, V1_CONVERSATIONS_SELECT_PATH};
+use crate::routes::{
+    PaginatedItems, ResponseView, V1_ARTIFACTS_PATH, V1_CONVERSATIONS_SELECT_PATH,
+};
 use crate::uploads::StagedFileMetadata;
 use anyhow::Result;
 use gptd::CoreService;
@@ -48,6 +50,18 @@ pub(crate) fn conversation_summary_object(summary: ConversationSummary) -> Value
         "tab_url": summary.tab_url,
         "last_prompt": summary.last_prompt,
         "last_response": summary.last_response,
+        "last_seen_at": summary.last_seen_at,
+        "routes": conversation_route_hints_object(&conversation_id, None),
+    })
+}
+
+pub(crate) fn compact_conversation_summary_object(summary: ConversationSummary) -> Value {
+    let conversation_id = summary.conversation_id.clone();
+    json!({
+        "conversation_id": conversation_id.clone(),
+        "tablinq_conversation_id": conversation_id.clone(),
+        "session_id": summary.session_id,
+        "label": summary.label,
         "last_seen_at": summary.last_seen_at,
         "routes": conversation_route_hints_object(&conversation_id, None),
     })
@@ -110,6 +124,19 @@ pub(crate) fn staged_file_object(metadata: StagedFileMetadata) -> Value {
     })
 }
 
+pub(crate) fn compact_staged_file_object(metadata: StagedFileMetadata) -> Value {
+    json!({
+        "id": metadata.file_id,
+        "object": "tablinq.file",
+        "file_name": metadata.file_name,
+        "content_type": metadata.content_type,
+        "size_bytes": metadata.size_bytes,
+        "sha256": metadata.sha256,
+        "created_at": metadata.created_at,
+        "expires_at": metadata.expires_at,
+    })
+}
+
 pub(crate) fn artifact_object(core: &CoreService, artifact: ArtifactSummary) -> Result<Value> {
     let linked_job_ids = core.artifact_job_ids(&artifact.artifact_id)?;
     let linked_request_ids = core.artifact_request_ids(&artifact.artifact_id)?;
@@ -127,6 +154,45 @@ pub(crate) fn artifact_object(core: &CoreService, artifact: ArtifactSummary) -> 
         "linked_request_ids": linked_request_ids,
         "content_url": format!("{V1_ARTIFACTS_PATH}/{}/content", artifact.artifact_id),
     }))
+}
+
+pub(crate) fn compact_artifact_object(artifact: ArtifactSummary) -> Value {
+    json!({
+        "id": artifact.artifact_id,
+        "object": "tablinq.artifact",
+        "file_name": artifact.file_name,
+        "content_type": artifact.content_type,
+        "size_bytes": artifact.size_bytes,
+        "sha256": artifact.sha256,
+        "conversation_id": artifact.conversation_id,
+        "message_id": artifact.message_id,
+        "created_at": artifact.created_at,
+        "content_url": format!("{V1_ARTIFACTS_PATH}/{}/content", artifact.artifact_id),
+    })
+}
+
+pub(crate) fn pagination_object<T>(page: &PaginatedItems<T>) -> Value {
+    json!({
+        "limit": page.limit,
+        "offset": page.offset,
+        "returned": page.returned,
+        "has_more": page.has_more,
+        "next_offset": page.next_offset,
+        "total": page.total,
+    })
+}
+
+pub(crate) fn response_meta_object(
+    view: ResponseView,
+    compact: bool,
+    truncated_fields: Vec<&'static str>,
+) -> Value {
+    json!({
+        "view": view.as_str(),
+        "compact": compact,
+        "truncated": !truncated_fields.is_empty(),
+        "truncated_fields": truncated_fields,
+    })
 }
 
 pub(crate) fn conversation_not_found_response(

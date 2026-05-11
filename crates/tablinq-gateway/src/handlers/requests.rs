@@ -1,8 +1,13 @@
 use crate::http::{HttpRequest, HttpResponse, RequestContext};
-use crate::json::{api_error_response, artifact_object, json_response, reason_phrase_for_status};
+use crate::json::{
+    api_error_response, artifact_object, json_response, reason_phrase_for_status,
+    response_meta_object,
+};
 use crate::routes::{
-    cancel_job_id_from_path, cancel_request_id_from_path, job_id_from_path,
-    parse_request_list_query, request_evidence_request_id_from_path, request_id_from_path,
+    ResponseView, cancel_job_id_from_path, cancel_request_id_from_path, includes_value,
+    job_id_from_path, paginate_items, parse_request_detail_query, parse_request_evidence_query,
+    parse_request_list_query, parse_state_list_query, request_evidence_request_id_from_path,
+    request_id_from_path,
 };
 use crate::scheduler::{CancelDisposition, GatewayScheduler, SchedulerSnapshot};
 use anyhow::Result;
@@ -18,21 +23,34 @@ pub(crate) fn handle_requests_request(
         Ok(query) => query,
         Err(response) => return Ok(response),
     };
-    let page = core.list_request_page(query.status, query.limit, query.offset)?;
+    let limit = query
+        .pagination
+        .limit
+        .unwrap_or(crate::routes::REQUEST_SUMMARY_LIMIT);
+    let page = core.list_request_page(query.status, limit, query.pagination.offset)?;
+    let returned = page.requests.len();
+    let data = page.requests;
+    let page_limit = page.limit;
+    let page_offset = page.offset;
+    let next_offset = page.next_offset;
+    let status = page.status;
     Ok(json_response(
         200,
         json!({
             "object": "tablinq.request_list",
             "request_id": context.request_id,
-            "data": page.requests,
+            "data": data,
             "pagination": {
-                "limit": page.limit,
-                "offset": page.offset,
-                "next_offset": page.next_offset,
-                "has_more": page.next_offset.is_some(),
+                "limit": page_limit,
+                "offset": page_offset,
+                "returned": returned,
+                "next_offset": next_offset,
+                "has_more": next_offset.is_some(),
+                "total": Value::Null,
             },
+            "meta": response_meta_object(query.view, query.compact, vec![]),
             "filter": {
-                "status": page.status,
+                "status": status,
             },
         }),
     ))
@@ -51,6 +69,10 @@ pub(crate) fn handle_request_summary_request(
             "request was not found",
         ));
     };
+    let query = match parse_request_detail_query(&context.request.path, &context.request_id) {
+        Ok(query) => query,
+        Err(response) => return Ok(response),
+    };
 
     let summary = match core.request_summary(target_request_id) {
         Ok(summary) => summary,
@@ -64,13 +86,69 @@ pub(crate) fn handle_request_summary_request(
             ));
         }
     };
+    let raw_summary = serde_json::to_value(&summary).unwrap_or_else(|_| json!({}));
+    let mut data = if query.view.is_summary() || query.compact {
+        json!({
+            "request_id": summary.request_id,
+            "job_id": summary.job_id,
+            "model_id": summary.model_id,
+            "request_role": summary.request_role,
+            "parent_request_id": summary.parent_request_id,
+            "execution_kind": summary.execution_kind,
+            "status": summary.status,
+            "cancelled": summary.cancelled,
+            "start_time": summary.start_time,
+            "end_time": summary.end_time,
+            "duration_ms": summary.duration_ms,
+            "queue_wait_ms": summary.queue_wait_ms,
+        })
+    } else {
+        raw_summary.clone()
+    };
+    let mut truncated_fields = Vec::new();
+    if query.view.is_summary() || query.compact {
+        truncated_fields.extend(["recovery_trace", "recovery_packet", "usage", "warnings"]);
+    }
+    if includes_value(&query.includes, "evidence")
+        && let Some(object) = data.as_object_mut()
+    {
+        let evidence = match core.latest_request_evidence(target_request_id) {
+            Ok(artifact) => artifact_object(core, artifact)?,
+            Err(_) => Value::Null,
+        };
+        object.insert("evidence".to_owned(), evidence);
+    }
+    if includes_value(&query.includes, "debug")
+        && let Some(object) = data.as_object_mut()
+    {
+        object.insert(
+            "debug".to_owned(),
+            json!({
+                "recovery_trace": raw_summary["recovery_trace"].clone(),
+                "recovery_packet": raw_summary["recovery_packet"].clone(),
+                "warnings": raw_summary["warnings"].clone(),
+            }),
+        );
+    }
+    if includes_value(&query.includes, "raw")
+        && let Some(object) = data.as_object_mut()
+    {
+        object.insert("raw".to_owned(), raw_summary);
+    }
 
     Ok(json_response(
         200,
         json!({
             "object": "tablinq.request_summary",
             "request_id": context.request_id,
-            "data": summary,
+            "data": data,
+            "meta": {
+                "view": query.view.as_str(),
+                "compact": query.compact,
+                "include": query.includes,
+                "truncated": !truncated_fields.is_empty(),
+                "truncated_fields": truncated_fields,
+            },
         }),
     ))
 }
@@ -89,6 +167,11 @@ pub(crate) fn handle_request_evidence_request(
             "request evidence was not found",
         ));
     };
+    let pagination = match parse_request_evidence_query(&context.request.path, &context.request_id)
+    {
+        Ok(query) => query,
+        Err(response) => return Ok(response),
+    };
 
     let artifact = match core.latest_request_evidence(target_request_id) {
         Ok(artifact) => artifact,
@@ -102,13 +185,35 @@ pub(crate) fn handle_request_evidence_request(
             ));
         }
     };
+    let page = paginate_items(vec![artifact], pagination);
+    let limit = page.limit;
+    let offset = page.offset;
+    let returned = page.returned;
+    let next_offset = page.next_offset;
+    let has_more = page.has_more;
+    let total = page.total;
+    let data = page
+        .items
+        .into_iter()
+        .next()
+        .map(|artifact| artifact_object(core, artifact))
+        .transpose()?;
 
     Ok(json_response(
         200,
         json!({
             "object": "tablinq.request_evidence",
             "request_id": context.request_id,
-            "data": artifact_object(core, artifact)?,
+            "data": data,
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "returned": returned,
+                "next_offset": next_offset,
+                "has_more": has_more,
+                "total": total,
+            },
+            "meta": response_meta_object(ResponseView::Detail, false, vec![]),
         }),
     ))
 }
@@ -157,14 +262,26 @@ pub(crate) fn handle_cancel_request(
     ))
 }
 
-pub(crate) fn handle_jobs_request(core: &CoreService, request_id: &str) -> Result<HttpResponse> {
+pub(crate) fn handle_jobs_request(
+    core: &CoreService,
+    context: &RequestContext,
+) -> Result<HttpResponse> {
+    let query = match parse_state_list_query(&context.request.path, &context.request_id, &[]) {
+        Ok(query) => query,
+        Err(response) => return Ok(response),
+    };
     let jobs = core.list_jobs()?;
+    let page = paginate_items(jobs.jobs, query.pagination);
+    let pagination = crate::json::pagination_object(&page);
+    let data = page.items;
     Ok(json_response(
         200,
         json!({
             "object": "tablinq.job_list",
-            "request_id": request_id,
-            "data": jobs.jobs,
+            "request_id": context.request_id,
+            "data": data,
+            "pagination": pagination,
+            "meta": response_meta_object(query.view, query.compact, vec![]),
         }),
     ))
 }
