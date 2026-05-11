@@ -90,6 +90,8 @@ Common controls:
 
 Invalid response-shaping query parameters return HTTP `400` JSON using the normal nested error envelope. This includes invalid `limit`, negative `offset`, unsupported `view`, unsupported `include`, unsupported route/query combinations, and invalid boolean values for `compact` or `summary`.
 
+Unknown query parameters that do not affect response shape remain compatibility-tolerant and are ignored.
+
 Route guidance:
 
 - `GET /v1/requests`: use `limit`, `offset`, and `view=summary|detail|full`. Production polling should use `view=summary&limit=<n>`. Debugging can use `view=full`.
@@ -97,9 +99,10 @@ Route guidance:
 - `GET /v1/requests/{request_id}/evidence`: use pagination metadata when evidence is large; this route remains request-scoped debugging data, not a scraping API.
 - `GET /v1/jobs`: use `limit`, `offset`, and `view=summary|detail|full`.
 - `GET /v1/conversations`: use `limit`, `offset`, and compact summaries for discovery.
+- `GET /v1/conversations/{conversation_id}?include=messages`: embeds a bounded first page of messages and includes nested `pagination` metadata with `limit`, `offset`, `returned`, `has_more`, `next_offset`, and `total_items`.
 - `GET /v1/conversations/{conversation_id}/messages`: use `limit`, `offset`, and `order=asc|desc` when supported. Avoid unbounded transcript reads in production loops.
-- `GET /v1/conversations/{conversation_id}/snapshot`: use `compact=true` for replay planning and `include=messages,artifacts,debug,raw` only for targeted inspection.
-- `GET /v1/usage`: use `summary=true` for polling and `summary=false` or `view=full` for detailed history.
+- `GET /v1/conversations/{conversation_id}/snapshot`: use `compact=true` for replay planning and `include=messages,artifacts,debug,raw` only for targeted inspection. Compact snapshots include `max_items`, `returned_items`, and `has_more` for bounded `recent_messages`.
+- `GET /v1/usage`: use `limit`, `offset`, and `summary=true` for polling, or `summary=false`/`view=full` for detailed history. Pagination metadata is computed against the durable request-history count.
 - `GET /v1/files` and `GET /v1/artifacts`: use `limit`, `offset`, and summary views for repeated listing; fetch individual details or artifact content only when needed.
 
 ## Supported API presets

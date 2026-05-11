@@ -281,6 +281,11 @@ pub(crate) fn handle_conversation_snapshot_request(
     };
     let mut data = conversation_snapshot_object(snapshot);
     let mut truncated_fields = Vec::new();
+    let original_recent_message_count = data
+        .get("recent_messages")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
     let max_items =
         if query.compact && !query.view.is_full() && !includes_value(&query.includes, "messages") {
             Some(3usize)
@@ -337,7 +342,7 @@ pub(crate) fn handle_conversation_snapshot_request(
                 "truncated_fields": truncated_fields,
                 "max_items": max_items,
                 "returned_items": returned_items,
-                "has_more": max_items.is_some_and(|limit| returned_items >= limit),
+                "has_more": max_items.is_some_and(|limit| original_recent_message_count > limit),
             },
         }),
     ))

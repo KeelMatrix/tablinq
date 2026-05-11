@@ -1,9 +1,9 @@
 use crate::capabilities::{CapabilityCatalog, CapabilityCatalogCache};
 use crate::http::{HttpResponse, RequestContext};
-use crate::json::{json_response, pagination_object, response_meta_object};
+use crate::json::{json_response, response_meta_object};
 use crate::openai::{PROVIDER_MODELS, model_object, provider_capability_catalog};
 use crate::process_control::GatewayStatusSnapshot;
-use crate::routes::{REQUEST_SUMMARY_LIMIT, paginate_items, parse_usage_query};
+use crate::routes::parse_usage_query;
 use anyhow::Result;
 use gptd::CoreService;
 use serde_json::json;
@@ -246,12 +246,30 @@ pub(crate) fn handle_usage_request(
         Ok(query) => query,
         Err(response) => return Ok(response),
     };
-    let history = core.list_request_summaries(REQUEST_SUMMARY_LIMIT)?;
-    let page = paginate_items(history.requests, query.pagination);
-    let pagination = pagination_object(&page);
+    let limit = query
+        .pagination
+        .limit
+        .unwrap_or(crate::routes::REQUEST_SUMMARY_LIMIT);
+    let offset = query.pagination.offset;
+    let (history, total) = core.list_request_summaries_page(limit, offset)?;
+    let returned = history.requests.len();
+    let next_offset = if offset.saturating_add(returned) < total {
+        Some(offset.saturating_add(returned))
+    } else {
+        None
+    };
+    let has_more = next_offset.is_some();
+    let pagination = json!({
+        "limit": limit,
+        "offset": offset,
+        "returned": returned,
+        "has_more": has_more,
+        "next_offset": next_offset,
+        "total": total,
+    });
     let summary = query.summary || query.view.is_summary();
-    let data = page
-        .items
+    let data = history
+        .requests
         .into_iter()
         .map(|request| {
             if summary {
@@ -286,7 +304,7 @@ pub(crate) fn handle_usage_request(
             "object": "tablinq.request_summary_list",
             "request_id": context.request_id,
             "data": data,
-            "limit": REQUEST_SUMMARY_LIMIT,
+            "limit": crate::routes::REQUEST_SUMMARY_LIMIT,
             "pagination": pagination,
             "meta": response_meta_object(query.view, summary, truncated_fields),
             "warnings": ["token usage is unavailable for the browser-backed provider"],
