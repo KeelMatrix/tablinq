@@ -32,15 +32,15 @@ if ($IsWindows) {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $packageScriptPath = Join-Path $PSScriptRoot "package.ps1"
 $explicitPackageRoot = $PSBoundParameters.ContainsKey("PackageRoot")
-if ($explicitPackageRoot) {
-  throw "Prebuilt package installs are disabled. Remove -PackageRoot and let scripts/install.ps1 build a fresh package from the current checkout."
+if ($explicitPackageRoot -and (Test-Path $PackageRoot)) {
+  $PackageRoot = (Resolve-Path $PackageRoot).Path
 }
-if ($SkipPackageBuild) {
+if ($SkipPackageBuild -and -not $explicitPackageRoot) {
   throw "Skipping package build is disabled. scripts/install.ps1 must build a fresh package from the current checkout."
 }
-$usePrebuiltPackage = $false
-$effectiveSkipDependencyInstall = $SkipDependencyInstall
-$effectiveSkipPackageBuild = $false
+$usePrebuiltPackage = $explicitPackageRoot -and (Test-Path $PackageRoot)
+$effectiveSkipDependencyInstall = $SkipDependencyInstall -or $usePrebuiltPackage
+$effectiveSkipPackageBuild = $SkipPackageBuild -or $usePrebuiltPackage
 $daemonTaskName = "Tablinq Daemon"
 $gatewayTaskName = "Tablinq Gateway"
 $script:InstallProgressId = 8701
