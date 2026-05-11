@@ -235,7 +235,7 @@ fn seeded_state_routes_keep_current_default_shapes_and_ordering() {
 
     let requests = get_json(snapshot, &auth, "/v1/requests", 200);
     assert_eq!(requests["object"], "tablinq.request_list");
-    assert_eq!(requests["request_id"].as_str().is_some(), true);
+    assert!(requests["request_id"].as_str().is_some());
     assert_eq!(requests["data"].as_array().unwrap().len(), 3);
     assert_eq!(requests["data"][0]["id"], "req-shape-3");
     assert_eq!(requests["data"][0]["status"], "completed");
