@@ -43,10 +43,10 @@ fn emit_git_rerun_directives() {
         }
     }
 
-    if let Some(reference) = current_head_reference() {
-        if let Some(path) = git_path(&reference) {
-            println!("cargo:rerun-if-changed={}", path);
-        }
+    if let Some(reference) = current_head_reference()
+        && let Some(path) = git_path(&reference)
+    {
+        println!("cargo:rerun-if-changed={}", path);
     }
 }
 
