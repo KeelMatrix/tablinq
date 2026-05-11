@@ -1,10 +1,11 @@
 use crate::auth::authorize_request;
 use crate::capabilities::CapabilityCatalogCache;
+use crate::errors::is_client_disconnect_error;
 use crate::handlers::{
     artifacts, browser, chat, conversations, files, health_admin, metadata, requests,
 };
 use crate::http::{
-    json_response, log_request, log_response, next_request_id, parse_http_request,
+    HttpResponse, json_response, log_request, log_response, next_request_id, parse_http_request,
     write_http_response,
 };
 use crate::json::api_error_response;
@@ -16,9 +17,16 @@ use anyhow::{Context, Result};
 use gptd::logging::JsonLogger;
 use gptd::{AppConfig, CoreService};
 use serde_json::json;
+use std::any::Any;
 use std::net::TcpStream;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::time::Duration;
+
+enum DispatchResult {
+    Response(HttpResponse),
+    Written,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_connection(
@@ -67,18 +75,18 @@ pub(crate) fn handle_connection(
                     format!("{err:#}"),
                 )
             };
-            logger.warn(
+            let _ = logger.warn(
                 "gateway request parse failed",
                 json!({
                     "request_id": request_id,
                     "error": format!("{err:#}"),
                 }),
-            )?;
+            );
             return write_http_response(&mut stream, &request_id, response);
         }
     };
 
-    log_request(logger, &context.request_id, &context.request, &remote_addr)?;
+    let _ = log_request(logger, &context.request_id, &context.request, &remote_addr);
     let route = match_route(&context.request.method, &context.request.path);
 
     if let Err(response) = authorize_request(
@@ -88,152 +96,184 @@ pub(crate) fn handle_connection(
         &context.request_id,
         route_requires_openai_auth_error_shape(&context.request.path),
     ) {
-        log_response(logger, &context.request_id, response.status_code)?;
+        let _ = log_response(logger, &context.request_id, response.status_code);
         return write_http_response(&mut stream, &context.request_id, response);
     }
-    let scheduler_status = scheduler.snapshot()?;
+    let scheduler_status = match scheduler.snapshot() {
+        Ok(status) => status,
+        Err(err) => {
+            let response = internal_server_error_response(&context.request_id, &err);
+            let _ = log_response(logger, &context.request_id, response.status_code);
+            return write_http_response(&mut stream, &context.request_id, response);
+        }
+    };
 
-    let response = match route {
-        Route::Health => health_admin::handle_health_request(
-            config,
-            core,
-            snapshot,
-            &scheduler_status,
-            &context.request_id,
-        )?,
-        Route::Ready => {
-            health_admin::handle_ready_request(snapshot, &scheduler_status, &context.request_id)
-        }
-        Route::AdminStatus => health_admin::handle_admin_status_request(
-            config,
-            core,
-            snapshot,
-            &scheduler_status,
-            &context.request_id,
-        )?,
-        Route::AdminShutdown => {
-            health_admin::handle_admin_shutdown_request(shutdown, &context.request_id)
-        }
-        Route::AdminClear => health_admin::handle_admin_clear_request(
-            core,
-            &context.request.body,
-            &context.request_id,
-        )?,
-        Route::Models => {
-            metadata::handle_models_request(core, capability_cache, snapshot, &context.request_id)
-        }
-        Route::Capabilities => {
-            metadata::handle_capabilities_request(core, capability_cache, &context.request_id)?
-        }
-        Route::Provider => {
-            metadata::handle_provider_request(core, capability_cache, snapshot, &context.request_id)
-        }
-        Route::Status => health_admin::handle_status_request(
-            core,
-            snapshot,
-            &scheduler_status,
-            &context.request_id,
-        ),
-        Route::Doctor => health_admin::handle_doctor_request(
-            config,
-            core,
-            &scheduler_status,
-            &context.request_id,
-        )?,
-        Route::Config => health_admin::handle_config_request(core, &context.request_id),
-        Route::Jobs => requests::handle_jobs_request(core, &context.request_id)?,
-        Route::JobDetail => requests::handle_job_detail_request(core, &context)?,
-        Route::JobCancel => requests::handle_job_cancel_request(core, &context)?,
-        Route::Usage => metadata::handle_usage_request(core, &context.request_id)?,
-        Route::BrowserAttach => browser::handle_browser_attach_request(
-            core,
-            &context.request.body,
-            &context.request_id,
-        )?,
-        Route::BrowserDetach => browser::handle_browser_detach_request(
-            core,
-            &context.request.body,
-            &context.request_id,
-        )?,
-        Route::BrowserProfileInfo => {
-            browser::handle_browser_profile_info_request(config, core, &context.request_id)?
-        }
-        Route::BrowserConnectionInfo => {
-            browser::handle_browser_connection_info_request(config, core, &context.request_id)?
-        }
-        Route::Sessions => metadata::handle_sessions_request(core, &context.request_id)?,
-        Route::SessionConversations => {
-            conversations::handle_session_conversations_request(core, &context)?
-        }
-        Route::Requests => requests::handle_requests_request(core, &context)?,
-        Route::Conversations => {
-            conversations::handle_conversations_request(core, &context.request_id)?
-        }
-        Route::ConversationMessages => {
-            conversations::handle_conversation_messages_request(core, &context)?
-        }
-        Route::ConversationSnapshot => {
-            conversations::handle_conversation_snapshot_request(core, &context)?
-        }
-        Route::ConversationDetail => {
-            conversations::handle_conversation_detail_request(core, &context)?
-        }
-        Route::RequestEvidence => requests::handle_request_evidence_request(core, &context)?,
-        Route::RequestSummary => requests::handle_request_summary_request(core, &context)?,
-        Route::FilesList => files::handle_files_list_request(upload_store, &context.request_id)?,
-        Route::FileUpload => files::handle_file_upload_request(upload_store, &context)?,
-        Route::FileDetail => files::handle_file_detail_request(upload_store, &context)?,
-        Route::ArtifactsList => {
-            artifacts::handle_artifacts_list_request(core, &context.request_id)?
-        }
-        Route::ArtifactDetail => artifacts::handle_artifact_request(core, &context)?,
-        Route::RequestAction => requests::handle_cancel_request(core, scheduler, &context)?,
-        Route::ConversationSelect => {
-            conversations::handle_conversation_select_request(core, &context)?
-        }
-        Route::ChatCompletions => {
-            return chat::handle_chat_completions_request(
-                &mut stream,
+    let response_result = catch_unwind(AssertUnwindSafe(|| -> Result<DispatchResult> {
+        let response = match route {
+            Route::Health => health_admin::handle_health_request(
+                config,
                 core,
-                upload_store,
-                scheduler,
-                scheduler_status,
-                &context,
-                logger,
-                &remote_addr,
-            );
-        }
-        Route::NotFound => {
-            if let Some(allowed_method) = method_not_allowed_for_path(&context.request.path) {
-                let mut response =
-                    if normalized_request_path(&context.request.path).starts_with("/v1/") {
-                        api_error_response(
-                            405,
-                            &context.request_id,
-                            "invalid_request_error",
-                            "method_not_allowed",
-                            format!(
-                                "{} is not allowed for {}; use {}",
-                                context.request.method,
-                                normalized_request_path(&context.request.path),
-                                allowed_method
-                            ),
-                        )
-                    } else {
-                        json_response(
-                            405,
-                            json!({
-                                "request_id": context.request_id,
-                                "error": "method_not_allowed",
-                            }),
-                        )
-                    };
-                response
-                    .headers
-                    .push(("allow".to_owned(), allowed_method.to_owned()));
-                response
-            } else {
-                if normalized_request_path(&context.request.path).starts_with("/v1/") {
+                snapshot,
+                &scheduler_status,
+                &context.request_id,
+            )?,
+            Route::Ready => {
+                health_admin::handle_ready_request(snapshot, &scheduler_status, &context.request_id)
+            }
+            Route::AdminStatus => health_admin::handle_admin_status_request(
+                config,
+                core,
+                snapshot,
+                &scheduler_status,
+                &context.request_id,
+            )?,
+            Route::AdminShutdown => {
+                health_admin::handle_admin_shutdown_request(shutdown, &context.request_id)
+            }
+            Route::AdminClear => health_admin::handle_admin_clear_request(
+                core,
+                &context.request.body,
+                &context.request_id,
+            )?,
+            Route::Models => metadata::handle_models_request(
+                core,
+                capability_cache,
+                snapshot,
+                &context.request_id,
+            ),
+            Route::Capabilities => {
+                metadata::handle_capabilities_request(core, capability_cache, &context.request_id)?
+            }
+            Route::Provider => metadata::handle_provider_request(
+                core,
+                capability_cache,
+                snapshot,
+                &context.request_id,
+            ),
+            Route::Status => health_admin::handle_status_request(
+                core,
+                snapshot,
+                &scheduler_status,
+                &context.request_id,
+            ),
+            Route::Doctor => health_admin::handle_doctor_request(
+                config,
+                core,
+                &scheduler_status,
+                &context.request_id,
+            )?,
+            Route::Config => health_admin::handle_config_request(core, &context.request_id),
+            Route::Jobs => requests::handle_jobs_request(core, &context.request_id)?,
+            Route::JobDetail => requests::handle_job_detail_request(core, &context)?,
+            Route::JobCancel => requests::handle_job_cancel_request(core, &context)?,
+            Route::Usage => metadata::handle_usage_request(core, &context.request_id)?,
+            Route::BrowserAttach => browser::handle_browser_attach_request(
+                core,
+                &context.request.body,
+                &context.request_id,
+            )?,
+            Route::BrowserDetach => browser::handle_browser_detach_request(
+                core,
+                &context.request.body,
+                &context.request_id,
+            )?,
+            Route::BrowserProfileInfo => {
+                browser::handle_browser_profile_info_request(config, core, &context.request_id)?
+            }
+            Route::BrowserConnectionInfo => {
+                browser::handle_browser_connection_info_request(config, core, &context.request_id)?
+            }
+            Route::Sessions => metadata::handle_sessions_request(core, &context.request_id)?,
+            Route::SessionConversations => {
+                conversations::handle_session_conversations_request(core, &context)?
+            }
+            Route::Requests => requests::handle_requests_request(core, &context)?,
+            Route::Conversations => {
+                conversations::handle_conversations_request(core, &context.request_id)?
+            }
+            Route::ConversationMessages => {
+                conversations::handle_conversation_messages_request(core, &context)?
+            }
+            Route::ConversationSnapshot => {
+                conversations::handle_conversation_snapshot_request(core, &context)?
+            }
+            Route::ConversationDetail => {
+                conversations::handle_conversation_detail_request(core, &context)?
+            }
+            Route::RequestEvidence => requests::handle_request_evidence_request(core, &context)?,
+            Route::RequestSummary => requests::handle_request_summary_request(core, &context)?,
+            Route::FilesList => {
+                files::handle_files_list_request(upload_store, &context.request_id)?
+            }
+            Route::FileUpload => files::handle_file_upload_request(upload_store, &context)?,
+            Route::FileDetail => files::handle_file_detail_request(upload_store, &context)?,
+            Route::ArtifactsList => {
+                artifacts::handle_artifacts_list_request(core, &context.request_id)?
+            }
+            Route::ArtifactDetail => artifacts::handle_artifact_request(core, &context)?,
+            Route::RequestAction => requests::handle_cancel_request(core, scheduler, &context)?,
+            Route::ConversationSelect => {
+                conversations::handle_conversation_select_request(core, &context)?
+            }
+            Route::ChatCompletions => {
+                return match catch_unwind(AssertUnwindSafe(|| {
+                    chat::handle_chat_completions_request(
+                        &mut stream,
+                        core,
+                        upload_store,
+                        scheduler,
+                        scheduler_status,
+                        &context,
+                        logger,
+                        &remote_addr,
+                    )
+                })) {
+                    Ok(Ok(())) => Ok(DispatchResult::Written),
+                    Ok(Err(err)) if is_client_disconnect_error(&err) => Err(err),
+                    Ok(Err(err)) => {
+                        let response = internal_server_error_response(&context.request_id, &err);
+                        let _ = log_response(logger, &context.request_id, response.status_code);
+                        write_http_response(&mut stream, &context.request_id, response)?;
+                        Ok(DispatchResult::Written)
+                    }
+                    Err(panic) => {
+                        let response = panic_response(&context.request_id, panic);
+                        let _ = log_response(logger, &context.request_id, response.status_code);
+                        write_http_response(&mut stream, &context.request_id, response)?;
+                        Ok(DispatchResult::Written)
+                    }
+                };
+            }
+            Route::NotFound => {
+                if let Some(allowed_method) = method_not_allowed_for_path(&context.request.path) {
+                    let mut response =
+                        if normalized_request_path(&context.request.path).starts_with("/v1/") {
+                            api_error_response(
+                                405,
+                                &context.request_id,
+                                "invalid_request_error",
+                                "method_not_allowed",
+                                format!(
+                                    "{} is not allowed for {}; use {}",
+                                    context.request.method,
+                                    normalized_request_path(&context.request.path),
+                                    allowed_method
+                                ),
+                            )
+                        } else {
+                            json_response(
+                                405,
+                                json!({
+                                    "request_id": context.request_id,
+                                    "error": "method_not_allowed",
+                                }),
+                            )
+                        };
+                    response
+                        .headers
+                        .push(("allow".to_owned(), allowed_method.to_owned()));
+                    response
+                } else if normalized_request_path(&context.request.path).starts_with("/v1/") {
                     api_error_response(
                         404,
                         &context.request_id,
@@ -254,11 +294,53 @@ pub(crate) fn handle_connection(
                     )
                 }
             }
-        }
+        };
+        Ok(DispatchResult::Response(response))
+    }));
+
+    let response = match response_result {
+        Ok(Ok(DispatchResult::Response(response))) => response,
+        Ok(Ok(DispatchResult::Written)) => return Ok(()),
+        Ok(Err(err)) if is_client_disconnect_error(&err) => return Err(err),
+        Ok(Err(err)) => internal_server_error_response(&context.request_id, &err),
+        Err(panic) => panic_response(&context.request_id, panic),
     };
 
-    log_response(logger, &context.request_id, response.status_code)?;
+    let _ = log_response(logger, &context.request_id, response.status_code);
     write_http_response(&mut stream, &context.request_id, response)
+}
+
+fn internal_server_error_response(request_id: &str, err: &anyhow::Error) -> HttpResponse {
+    api_error_response(
+        500,
+        request_id,
+        "server_error",
+        "internal_error",
+        format!("{request_id}: {err:#}"),
+    )
+}
+
+fn panic_response(request_id: &str, panic: Box<dyn Any + Send>) -> HttpResponse {
+    api_error_response(
+        500,
+        request_id,
+        "server_error",
+        "handler_panic",
+        format!(
+            "{request_id}: request handler panicked: {}",
+            panic_message(&panic)
+        ),
+    )
+}
+
+fn panic_message(panic: &Box<dyn Any + Send>) -> &str {
+    if let Some(message) = panic.downcast_ref::<&str>() {
+        message
+    } else if let Some(message) = panic.downcast_ref::<String>() {
+        message.as_str()
+    } else {
+        "unknown panic payload"
+    }
 }
 
 fn route_requires_openai_auth_error_shape(path: &str) -> bool {

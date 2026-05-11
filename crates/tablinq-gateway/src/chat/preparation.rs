@@ -50,6 +50,7 @@ pub(crate) fn prepare_chat_completions_request(
     upload_store: &UploadStore,
     context: &RequestContext,
 ) -> Result<PreparedChatRequest> {
+    require_json_content_type(context)?;
     let request: ChatCompletionsRequest = serde_json::from_slice(&context.request.body)
         .map_err(|err| invalid_request_json_error(format!("invalid JSON body: {err}")))?;
     openai::validate_chat_request(&request)?;
@@ -101,4 +102,24 @@ pub(crate) fn prepare_chat_completions_request(
         file_ids: flattened.file_ids,
         job,
     })
+}
+
+fn require_json_content_type(context: &RequestContext) -> Result<()> {
+    let content_type = context.request.headers.get("content-type").map(|value| {
+        value
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
+    });
+    if content_type.as_deref() == Some("application/json") {
+        return Ok(());
+    }
+
+    Err(invalid_request_error(
+        "unsupported_content_type",
+        "POST /v1/chat/completions requires content-type application/json",
+    )
+    .into())
 }

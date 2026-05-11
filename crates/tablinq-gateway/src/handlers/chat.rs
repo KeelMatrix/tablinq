@@ -33,7 +33,7 @@ pub(crate) fn handle_chat_completions_request(
         Ok(prepared) => prepared,
         Err(err) => {
             let response = map_openai_error(&context.request_id, &err, None);
-            log_response(logger, &context.request_id, response.status_code)?;
+            let _ = log_response(logger, &context.request_id, response.status_code);
             return write_http_response(stream, &context.request_id, response);
         }
     };
@@ -70,7 +70,7 @@ pub(crate) fn handle_chat_completions_request(
                 queue_wait_ms,
                 outcome_from_error(&err),
             ));
-            log_response(logger, &context.request_id, response.status_code)?;
+            let _ = log_response(logger, &context.request_id, response.status_code);
             return write_http_response(stream, &context.request_id, response);
         }
     };
@@ -105,7 +105,7 @@ pub(crate) fn handle_chat_completions_request(
                 recovery_packet: None,
             },
         ));
-        log_response(logger, &context.request_id, response.status_code)?;
+        let _ = log_response(logger, &context.request_id, response.status_code);
         return write_http_response(stream, &context.request_id, response);
     }
     match execute_chat_completions_request(stream, core, context, logger, &prepared, &client_id) {
@@ -141,7 +141,7 @@ pub(crate) fn handle_chat_completions_request(
                 capture_gateway_failure_artifacts(core, context, &prepared, &client_id, &err);
             let response =
                 map_openai_error(&context.request_id, &err, failure_bundle_id.as_deref());
-            log_response(logger, &context.request_id, response.status_code)?;
+            let _ = log_response(logger, &context.request_id, response.status_code);
             return write_http_response(stream, &context.request_id, response);
         }
     }

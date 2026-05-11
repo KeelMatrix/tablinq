@@ -1,4 +1,5 @@
 use super::*;
+use crate::routes::V1_STATUS_PATH;
 
 #[test]
 fn unknown_model_returns_openai_shaped_invalid_request_error() {
@@ -333,6 +334,138 @@ fn invalid_json_and_unknown_fields_do_not_become_transport_errors() {
     assert_eq!(unknown_field_body["request_id"], "req-unknown-field");
     assert_eq!(unknown_field_body["error"]["type"], "invalid_request_error");
     assert_ne!(unknown_field_body["error"]["code"], "transport_error");
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn required_chat_validation_failures_return_http_json() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    for (request_id, headers, body, expected_code) in [
+        (
+            "req-missing-model",
+            vec![
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "req-missing-model"),
+            ],
+            serde_json::to_vec(&json!({
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .unwrap(),
+            "invalid_request_json",
+        ),
+        (
+            "req-empty-messages",
+            vec![
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", "req-empty-messages"),
+            ],
+            serde_json::to_vec(&json!({
+                "model": "tablinq-instant",
+                "messages": []
+            }))
+            .unwrap(),
+            "empty_messages",
+        ),
+        (
+            "req-wrong-content-type",
+            vec![
+                ("authorization", auth.as_str()),
+                ("content-type", "text/plain"),
+                ("x-request-id", "req-wrong-content-type"),
+            ],
+            serde_json::to_vec(&json!({
+                "model": "tablinq-instant",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .unwrap(),
+            "unsupported_content_type",
+        ),
+    ] {
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &headers,
+            &body,
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(
+            response.status_code,
+            400,
+            "{}",
+            String::from_utf8_lossy(&response.body)
+        );
+        let json: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(json["request_id"], request_id);
+        assert_eq!(json["error"]["type"], "invalid_request_error");
+        assert_eq!(json["error"]["code"], expected_code);
+    }
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+}
+
+#[test]
+fn sequential_gateway_requests_return_responses_without_abort() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    for index in 0..25 {
+        let status = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            V1_STATUS_PATH,
+            &[("authorization", auth.as_str())],
+            &[],
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(status.status_code, 200);
+
+        let request_id = format!("req-sequential-{index}");
+        let body = if index % 2 == 0 {
+            b"{".to_vec()
+        } else {
+            serde_json::to_vec(&json!({
+                "model": "tablinq-missing",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .unwrap()
+        };
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            V1_CHAT_COMPLETIONS_PATH,
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+                ("x-request-id", request_id.as_str()),
+            ],
+            &body,
+            5_000,
+        )
+        .unwrap();
+        assert_eq!(response.status_code, 400);
+        let json: Value = serde_json::from_slice(&response.body).unwrap();
+        assert_eq!(json["request_id"], request_id);
+        assert!(json["error"].is_object());
+    }
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
