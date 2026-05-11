@@ -181,6 +181,58 @@ pub(crate) fn list_summaries(conn: &Connection, limit: usize) -> Result<RequestH
     })
 }
 
+pub(crate) fn list_summaries_page(
+    conn: &Connection,
+    limit: usize,
+    offset: usize,
+) -> Result<(RequestHistory, usize)> {
+    let total = conn.query_row("SELECT COUNT(*) FROM request_history", [], |row| {
+        row.get::<_, i64>(0)
+    })? as usize;
+    let mut statement = conn.prepare(
+        r#"
+        SELECT request_id,
+               job_id,
+               model_id,
+               request_role,
+               parent_request_id,
+               execution_kind,
+               status,
+               cancelled,
+               start_time,
+               end_time,
+               duration_ms,
+               queue_wait_ms,
+               interrupted_at,
+               interruption_reason,
+               recovered_at,
+               recovery_reason,
+               failed_at,
+               failure_reason,
+               recovery_trace_json,
+               recovery_packet_json,
+               usage_status,
+               prompt_tokens,
+               completion_tokens,
+               total_tokens,
+               warnings_json
+        FROM request_history
+        ORDER BY start_time DESC
+        LIMIT ?1 OFFSET ?2
+        "#,
+    )?;
+    let rows = statement.query_map(
+        params![limit as i64, offset as i64],
+        map_request_summary_row,
+    )?;
+    Ok((
+        RequestHistory {
+            requests: rows.collect::<std::result::Result<Vec<_>, _>>()?,
+        },
+        total,
+    ))
+}
+
 pub(crate) fn list_page(
     conn: &Connection,
     status: Option<JobStatus>,

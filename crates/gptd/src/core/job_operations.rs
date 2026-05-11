@@ -32,6 +32,14 @@ impl CoreService {
         self.open_db()?.list_request_summaries(limit)
     }
 
+    pub fn list_request_summaries_page(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(RequestHistory, usize)> {
+        self.open_db()?.list_request_summaries_page(limit, offset)
+    }
+
     pub fn list_request_page(
         &self,
         status: Option<JobStatus>,

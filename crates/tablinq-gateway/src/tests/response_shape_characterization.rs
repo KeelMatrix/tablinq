@@ -133,6 +133,103 @@ fn seed_state_fixture(config: &AppConfig) {
         .unwrap();
 }
 
+fn seed_request_summary_page_fixture(config: &AppConfig, count: usize) {
+    let db = Database::open(&config.paths.db_path).unwrap();
+    let now = fixed_time();
+
+    for index in 1..=count {
+        let created_at = now + chrono::Duration::minutes(index as i64);
+        db.upsert_request_summary(&RequestSummary {
+            request_id: format!("req-page-{index}"),
+            job_id: format!("job-page-{index}"),
+            model_id: Some("tablinq-instant".to_owned()),
+            request_role: Some("primary".to_owned()),
+            parent_request_id: None,
+            execution_kind: RequestExecutionKind::Ask,
+            status: JobStatus::Completed,
+            cancelled: false,
+            start_time: created_at,
+            end_time: Some(created_at + chrono::Duration::seconds(30)),
+            duration_ms: Some(30_000),
+            queue_wait_ms: index as u64,
+            interrupted_at: None,
+            interruption_reason: None,
+            recovered_at: None,
+            recovery_reason: None,
+            failed_at: None,
+            failure_reason: None,
+            recovery_trace: None,
+            recovery_packet: None,
+            usage: RequestUsage {
+                status: "unknown".to_owned(),
+                prompt_tokens: None,
+                completion_tokens: None,
+                total_tokens: None,
+            },
+            warnings: vec![],
+        })
+        .unwrap();
+    }
+}
+
+fn seed_conversation_history_fixture(
+    config: &AppConfig,
+    conversation_id: &str,
+    job_count: usize,
+    omit_last_output: bool,
+) {
+    let db = Database::open(&config.paths.db_path).unwrap();
+    let now = fixed_time();
+    db.upsert_session(
+        "session-history",
+        "History session",
+        Some(&format!("https://chatgpt.com/c/{conversation_id}")),
+        now,
+    )
+    .unwrap();
+    db.upsert_conversation(
+        conversation_id,
+        "session-history",
+        &format!("Conversation {conversation_id}"),
+        Some(&format!("https://chatgpt.com/c/{conversation_id}")),
+        None,
+        None,
+        None,
+        now,
+    )
+    .unwrap();
+
+    for index in 1..=job_count {
+        let job_id = format!("{conversation_id}-job-{index}");
+        let created_at = now + chrono::Duration::minutes(index as i64);
+        db.insert_job(
+            &job_id,
+            JobStatus::Completed,
+            Some(&format!("job {index} complete")),
+            Some(conversation_id),
+            created_at,
+            created_at + chrono::Duration::seconds(30),
+        )
+        .unwrap();
+        db.upsert_job_detail(
+            &job_id,
+            JobKind::Ask,
+            Some(&format!("request text {index}")),
+            None,
+        )
+        .unwrap();
+        if !(omit_last_output && index == job_count) {
+            db.update_job_output(
+                &job_id,
+                Some(&format!("response text {index}")),
+                Some(&format!("https://chatgpt.com/c/{conversation_id}")),
+                None,
+            )
+            .unwrap();
+        }
+    }
+}
+
 fn get_json(
     snapshot: &GatewayStatusSnapshot,
     auth: &str,
@@ -185,6 +282,12 @@ fn empty_state_routes_keep_current_response_envelopes() {
     assert_eq!(usage["object"], "tablinq.request_summary_list");
     assert_eq!(usage["data"].as_array().unwrap().len(), 0);
     assert_eq!(usage["limit"], 50);
+    assert_eq!(usage["pagination"]["limit"], 50);
+    assert_eq!(usage["pagination"]["offset"], 0);
+    assert_eq!(usage["pagination"]["returned"], 0);
+    assert_eq!(usage["pagination"]["has_more"], false);
+    assert!(usage["pagination"]["next_offset"].is_null());
+    assert_eq!(usage["pagination"]["total"], 0);
     assert!(usage["warnings"].as_array().unwrap().iter().any(|item| {
         item.as_str()
             .is_some_and(|text| text.contains("token usage is unavailable"))
@@ -572,6 +675,7 @@ fn response_size_controls_paginate_compact_and_expand_state_routes() {
     assert_eq!(compact_snapshot["meta"]["truncated"], true);
     assert_eq!(compact_snapshot["meta"]["max_items"], 3);
     assert_eq!(compact_snapshot["meta"]["returned_items"], 3);
+    assert_eq!(compact_snapshot["meta"]["has_more"], true);
     assert!(
         compact_snapshot["data"]
             .get("tracked_generated_artifacts")
@@ -625,4 +729,113 @@ fn response_size_controls_paginate_compact_and_expand_state_routes() {
     assert!(artifacts["data"][0].get("linked_job_ids").is_none());
     assert_eq!(artifacts["pagination"]["returned"], 1);
     assert_eq!(artifacts["pagination"]["has_more"], true);
+}
+
+#[test]
+fn usage_pagination_handles_offsets_beyond_default_summary_limit() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    seed_request_summary_page_fixture(&config, 60);
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let offset_page = get_json(snapshot, &auth, "/v1/usage?offset=50", 200);
+    assert_eq!(offset_page["pagination"]["limit"], 50);
+    assert_eq!(offset_page["pagination"]["offset"], 50);
+    assert_eq!(offset_page["pagination"]["returned"], 10);
+    assert_eq!(offset_page["pagination"]["has_more"], false);
+    assert!(offset_page["pagination"]["next_offset"].is_null());
+    assert_eq!(offset_page["pagination"]["total"], 60);
+    assert_eq!(offset_page["data"][0]["request_id"], "req-page-10");
+
+    let single_page = get_json(snapshot, &auth, "/v1/usage?limit=1&offset=51", 200);
+    assert_eq!(single_page["pagination"]["limit"], 1);
+    assert_eq!(single_page["pagination"]["offset"], 51);
+    assert_eq!(single_page["pagination"]["returned"], 1);
+    assert_eq!(single_page["pagination"]["has_more"], true);
+    assert_eq!(single_page["pagination"]["next_offset"], 52);
+    assert_eq!(single_page["pagination"]["total"], 60);
+    assert_eq!(single_page["data"][0]["request_id"], "req-page-9");
+}
+
+#[test]
+fn compact_snapshot_has_more_uses_original_recent_message_count() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    seed_conversation_history_fixture(&config, "conv-three-messages", 2, true);
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let exact_limit = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations/conv-three-messages/snapshot?compact=true",
+        200,
+    );
+    assert_eq!(exact_limit["meta"]["max_items"], 3);
+    assert_eq!(exact_limit["meta"]["returned_items"], 3);
+    assert_eq!(exact_limit["meta"]["has_more"], false);
+    assert!(
+        !exact_limit["meta"]["truncated_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item == "recent_messages")
+    );
+}
+
+#[test]
+fn compact_snapshot_reports_has_more_when_original_recent_messages_exceed_limit() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    seed_state_fixture(&config);
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let compact_snapshot = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations/conv-alpha/snapshot?compact=true",
+        200,
+    );
+    assert_eq!(compact_snapshot["meta"]["max_items"], 3);
+    assert_eq!(compact_snapshot["meta"]["returned_items"], 3);
+    assert_eq!(compact_snapshot["meta"]["has_more"], true);
+    assert!(
+        compact_snapshot["meta"]["truncated_fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item == "recent_messages")
+    );
+}
+
+#[test]
+fn conversation_detail_include_messages_reports_embedded_message_pagination() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    seed_conversation_history_fixture(&config, "conv-many-messages", 30, false);
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let detail = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations/conv-many-messages?include=messages",
+        200,
+    );
+    assert_eq!(
+        detail["data"]["messages"]["data"].as_array().unwrap().len(),
+        50
+    );
+    assert_eq!(detail["data"]["messages"]["pagination"]["limit"], 50);
+    assert_eq!(detail["data"]["messages"]["pagination"]["offset"], 0);
+    assert_eq!(detail["data"]["messages"]["pagination"]["returned"], 50);
+    assert_eq!(detail["data"]["messages"]["pagination"]["has_more"], true);
+    assert_eq!(detail["data"]["messages"]["pagination"]["next_offset"], 50);
+    assert_eq!(detail["data"]["messages"]["pagination"]["total_items"], 60);
 }

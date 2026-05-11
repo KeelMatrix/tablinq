@@ -111,6 +111,14 @@ impl Database {
         requests::list_summaries(&self.conn, limit)
     }
 
+    pub fn list_request_summaries_page(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<(RequestHistory, usize)> {
+        requests::list_summaries_page(&self.conn, limit, offset)
+    }
+
     pub fn list_request_page(
         &self,
         status: Option<JobStatus>,

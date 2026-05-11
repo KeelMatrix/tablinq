@@ -132,7 +132,7 @@ Actions:
 - use `view=summary` for repeated polling and `view=full` only for targeted debugging
 - use `compact=true` for conversation snapshots unless a full replay/debug payload is needed
 - use `include=evidence`, `include=messages`, `include=debug`, or `include=raw` only when those heavy fields are part of the investigation
-- inspect pagination and truncation metadata before assuming a response contained everything
+- inspect pagination and truncation metadata before assuming a response contained everything; embedded conversation messages also carry their own nested pagination metadata
 - keep full raw response capture available for failing forensic runs, but do not make full-detail logging the default for stability loops
 
 ## Provider page says "Something went wrong while generating the response"
