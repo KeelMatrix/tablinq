@@ -280,14 +280,14 @@ fn finish_streaming_success(
         }
         return Err(err);
     }
-    logger.info(
+    let _ = logger.info(
         "gateway streamed chat completion",
         serde_json::json!({
             "request_id": context.request_id,
             "model": prepared.model_id,
             "job_id": prepared.job_id(),
         }),
-    )?;
+    );
     Ok(RequestOutcome {
         kind: successful_outcome_kind(result.recovery_trace.as_ref()),
         low_confidence: result.low_confidence,
@@ -311,7 +311,7 @@ fn execute_non_streaming_chat_completion(
     prepared: &PreparedChatRequest,
 ) -> Result<RequestOutcome> {
     let result = execute_prepared_job_non_streaming(core, context, prepared)?;
-    log_response(logger, &context.request_id, result.response.status_code)?;
+    let _ = log_response(logger, &context.request_id, result.response.status_code);
     if let Err(err) = write_http_response(stream, &context.request_id, result.response) {
         if is_client_disconnect_error(&err) {
             let interruption = mark_downstream_interrupted(
