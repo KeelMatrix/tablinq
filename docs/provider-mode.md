@@ -70,6 +70,35 @@ Recommended posture:
 
 `POST /admin/shutdown` and `POST /admin/clear` are administrative operations. `POST /admin/clear` is destructive and requires an authenticated JSON body of `{"all":true,"force":true}`.
 
+## Response size controls
+
+Some state and diagnostics endpoints can return large JSON bodies because they expose durable request, job, conversation, file, artifact, usage, and browser-evidence state. Production clients should request bounded or compact responses for polling and repeated health loops, then opt into full detail only when debugging a specific request.
+
+Common controls:
+
+- `limit=<n>` and `offset=<n>` paginate list-like responses. Use a small limit such as `20` for polling and increase it only for one-off inspection.
+- paginated responses include metadata such as `limit`, `offset`, `returned`, `has_more`, and `next_offset` when another page is available.
+- `view=summary` returns compact list/detail shapes suitable for production polling.
+- `view=detail` returns the normal diagnostic detail for a route.
+- `view=full` keeps full debugging data available.
+- `include=<field>` expands heavy optional fields such as `evidence`, `messages`, `snapshot`, `raw`, or `debug` where that route supports them. Comma-separated includes are accepted on routes that expose more than one expansion.
+- `compact=true` asks large diagnostic payloads to omit or summarize heavy fields. `compact=false` or `view=full` is the explicit debugging path.
+- compacted or bounded responses report metadata such as `compact`, `truncated`, `truncated_fields`, `max_items`, `returned_items`, `has_more`, or route-specific pagination fields.
+
+Invalid response-shaping query parameters return HTTP `400` JSON using the normal nested error envelope. This includes invalid `limit`, negative `offset`, unsupported `view`, unsupported `include`, and invalid boolean values for `compact` or `summary`.
+
+Route guidance:
+
+- `GET /v1/requests`: use `limit`, `offset`, and `view=summary|detail|full`. Production polling should use `view=summary&limit=<n>`. Debugging can use `view=full`.
+- `GET /v1/requests/{request_id}`: use `include=evidence,debug,raw` only when the client needs those heavy fields.
+- `GET /v1/requests/{request_id}/evidence`: use pagination metadata when evidence is large; this route remains request-scoped debugging data, not a scraping API.
+- `GET /v1/jobs`: use `limit`, `offset`, and `view=summary|detail|full`.
+- `GET /v1/conversations`: use `limit`, `offset`, and compact summaries for discovery.
+- `GET /v1/conversations/{conversation_id}/messages`: use `limit`, `offset`, and `order=asc|desc` when supported. Avoid unbounded transcript reads in production loops.
+- `GET /v1/conversations/{conversation_id}/snapshot`: use `compact=true` for replay planning and `include=messages,artifacts,debug,raw` only for targeted inspection.
+- `GET /v1/usage`: use `summary=true` for polling and `summary=false` or `view=full` for detailed history.
+- `GET /v1/files` and `GET /v1/artifacts`: use `limit`, `offset`, and summary views for repeated listing; fetch individual details or artifact content only when needed.
+
 ## Supported API presets
 
 - `tablinq-instant`
@@ -118,8 +147,8 @@ Also:
 
 - keep `stream` omitted or explicitly `false`; use `POST /v1/requests/{request_id}/cancel` for cancellation instead of SSE
 - on `429`, wait for `retry_after_ms` before retrying
-- use `GET /v1/requests?status=<status>&limit=<n>&offset=<n>` for paginated request polling
-- inspect `GET /v1/requests/{request_id}` or `GET /v1/usage` to separate queue delay from upstream execution time
+- use `GET /v1/requests?status=<status>&limit=<n>&offset=<n>&view=summary` for paginated request polling
+- inspect `GET /v1/requests/{request_id}` or `GET /v1/usage?summary=true` to separate queue delay from upstream execution time
 - inspect `GET /v1/requests/{request_id}/evidence` when a request times out, recovers, or looks uncertain; Tablinq captures a compact browser-state artifact automatically for those cases
 - treat token usage as unknown or provider-specific unless the integration explicitly expects estimates
 
@@ -135,10 +164,10 @@ Also:
 
 - create: send `POST /v1/chat/completions` with `tablinq_new_conversation = true` when the next task must not inherit browser context
 - persist: store `tablinq_conversation_id`, `tablinq_session_id`, and `request_id` from chat responses client-side
-- discover: use `GET /v1/conversations` only to list recent reusable conversation IDs and route hints
+- discover: use `GET /v1/conversations?limit=<n>&offset=<n>` only to list recent reusable conversation IDs and route hints
 - inspect metadata: use `GET /v1/conversations/{conversation_id}` for direct conversation detail, counts, latest known request or job IDs, session info, and recovery-manifest metadata
 - inspect history: use `GET /v1/conversations/{conversation_id}/messages?limit=<n>&offset=<n>` for normalized agent-facing history with explicit provenance and fallback summaries when exact provider transcript data is unavailable
-- reuse safely: use `GET /v1/conversations/{conversation_id}/snapshot` when an agent needs the best preserved replay-safe context packet for continuing or replaying work in a fresh conversation
+- reuse safely: use `GET /v1/conversations/{conversation_id}/snapshot?compact=true` when an agent needs the best preserved replay-safe context packet for continuing or replaying work in a fresh conversation
 - select active browser thread: call `POST /v1/conversations/select` only when you need the browser to switch to an existing thread or clear the active selection; do not use it for history retrieval
 - reuse in-place: pass the stored `tablinq_conversation_id` back to `POST /v1/chat/completions` only when follow-up context should stay in that browser conversation
 - session scope: use `GET /v1/sessions/{session_id}/conversations` when you need conversations for one attached browser session rather than the global list
@@ -153,14 +182,14 @@ curl -H "Authorization: Bearer $TABLINQ_API_KEY" \
   "http://127.0.0.1:3847/v1/conversations/conv-123/messages?limit=20&offset=0"
 
 curl -H "Authorization: Bearer $TABLINQ_API_KEY" \
-  http://127.0.0.1:3847/v1/conversations/conv-123/snapshot
+  "http://127.0.0.1:3847/v1/conversations/conv-123/snapshot?compact=true"
 ```
 
 ## Files and artifacts
 
 1. Upload files with `POST /v1/files`.
 2. Pass staged IDs through `tablinq_file_ids` or supported file references in chat content.
-3. Read artifact metadata through `GET /v1/artifacts`.
+3. Read artifact metadata through `GET /v1/artifacts?limit=<n>&offset=<n>`.
 4. Download artifact content through `GET /v1/artifacts/{id}/content`.
 
 `POST /v1/chat/completions` also accepts direct local file paths through `tablinq_files`, but uploaded `tablinq_file_ids` are the safer provider-facing contract. Tool calling, `stream = true`, structured response formats other than plain text, and `n > 1` are rejected because the upstream execution is one browser conversation, not a parallel stateless API.

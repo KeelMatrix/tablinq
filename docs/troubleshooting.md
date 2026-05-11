@@ -118,6 +118,23 @@ Actions:
 - if needed, rerun `gpt browser attach` and `gpt browser open`
 - if a local client loses the connection during `POST /v1/chat/completions`, do not immediately resend the same prompt. Inspect request state first, preferably using a stable `X-Request-Id` or the returned `request_id`.
 
+## Large provider responses
+
+Symptoms:
+
+- provider clients spend time parsing large JSON bodies from list, snapshot, evidence, file, or artifact routes
+- repeated smoke or stability loops produce oversized logs
+- diagnostics are useful but production clients only need recent status
+
+Actions:
+
+- use `limit` and `offset` on list-style routes such as `GET /v1/requests`, `GET /v1/jobs`, `GET /v1/conversations`, `GET /v1/files`, and `GET /v1/artifacts`
+- use `view=summary` for repeated polling and `view=full` only for targeted debugging
+- use `compact=true` for conversation snapshots unless a full replay/debug payload is needed
+- use `include=evidence`, `include=messages`, `include=debug`, or `include=raw` only when those heavy fields are part of the investigation
+- inspect pagination and truncation metadata before assuming a response contained everything
+- keep full raw response capture available for failing forensic runs, but do not make full-detail logging the default for stability loops
+
 ## Provider page says "Something went wrong while generating the response"
 
 Symptoms:
