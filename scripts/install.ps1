@@ -14,15 +14,33 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if ($IsWindows) {
+  try {
+    $effectiveExecutionPolicy = Get-ExecutionPolicy
+    if ($effectiveExecutionPolicy -eq "Restricted") {
+      throw "PowerShell execution policy is Restricted for this shell. Use a normal PowerShell 7 shell with local script execution enabled, then run ./scripts/install.ps1."
+    }
+  }
+  catch {
+    if ($_.Exception.Message) {
+      throw $_.Exception.Message
+    }
+    throw
+  }
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $packageScriptPath = Join-Path $PSScriptRoot "package.ps1"
 $explicitPackageRoot = $PSBoundParameters.ContainsKey("PackageRoot")
-if ($explicitPackageRoot -and (Test-Path $PackageRoot)) {
-  $PackageRoot = (Resolve-Path $PackageRoot).Path
+if ($explicitPackageRoot) {
+  throw "Prebuilt package installs are disabled. Remove -PackageRoot and let scripts/install.ps1 build a fresh package from the current checkout."
 }
-$usePrebuiltPackage = $explicitPackageRoot -and (Test-Path $PackageRoot)
-$effectiveSkipDependencyInstall = $SkipDependencyInstall -or $usePrebuiltPackage
-$effectiveSkipPackageBuild = $SkipPackageBuild -or $usePrebuiltPackage
+if ($SkipPackageBuild) {
+  throw "Skipping package build is disabled. scripts/install.ps1 must build a fresh package from the current checkout."
+}
+$usePrebuiltPackage = $false
+$effectiveSkipDependencyInstall = $SkipDependencyInstall
+$effectiveSkipPackageBuild = $false
 $daemonTaskName = "Tablinq Daemon"
 $gatewayTaskName = "Tablinq Gateway"
 $script:InstallProgressId = 8701
@@ -197,6 +215,62 @@ function Resolve-PnpmInvocationSpec {
   }
 }
 
+function Get-LogProgressSummary {
+  param(
+    [string]$StdoutPath,
+    [string]$StderrPath
+  )
+
+  $candidates = @()
+  foreach ($item in @(
+    @{ Label = "stdout"; Path = $StdoutPath },
+    @{ Label = "stderr"; Path = $StderrPath }
+  )) {
+    if (-not (Test-Path $item.Path)) {
+      continue
+    }
+
+    $file = Get-Item -Path $item.Path -ErrorAction SilentlyContinue
+    if (-not $file) {
+      continue
+    }
+
+    $tailContent = Get-Content -Path $item.Path -Tail 5 -ErrorAction SilentlyContinue
+    $tail = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in @($tailContent)) {
+      $text = [string]$entry
+      if ($text.Trim()) {
+        $tail.Add($text) | Out-Null
+      }
+    }
+    $line = if ($tail.Count -gt 0) { $tail[$tail.Count - 1].Trim() } else { "" }
+    $candidates += [pscustomobject]@{
+      Label = $item.Label
+      Path = $item.Path
+      LastWriteTime = $file.LastWriteTime
+      Length = $file.Length
+      Line = $line
+    }
+  }
+
+  if ($candidates.Count -eq 0) {
+    return $null
+  }
+
+  $latest = $candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+  $details = if ($latest.Line) {
+    "{0}: {1}" -f $latest.Label, $latest.Line
+  }
+  else {
+    "{0}: {1} bytes" -f $latest.Label, $latest.Length
+  }
+
+  [pscustomobject]@{
+    Details = $details
+    LastWriteTime = $latest.LastWriteTime
+  }
+}
+
 function Resolve-InvocationSpec {
   param(
     [string]$FilePath,
@@ -248,7 +322,9 @@ function Invoke-Step {
     [string]$FilePath,
     [string[]]$ArgumentList = @(),
     [string]$WorkingDirectory,
-    [string]$LogPath
+    [string]$LogPath,
+    [int]$TimeoutSeconds = 0,
+    [int]$HeartbeatSeconds = 15
   )
 
   $displayLabel = if ($Label) { $Label } else { $FilePath }
@@ -264,7 +340,7 @@ function Invoke-Step {
 
   try {
     try {
-      $process = Start-Process -FilePath $invocation.LaunchFilePath -ArgumentList $invocation.LaunchArguments -PassThru -Wait -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+      $process = Start-Process -FilePath $invocation.LaunchFilePath -ArgumentList $invocation.LaunchArguments -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
     }
     catch {
       $message = @(
@@ -278,6 +354,47 @@ function Invoke-Step {
       throw $message
     }
 
+    $nextHeartbeat = if ($HeartbeatSeconds -gt 0) {
+      $startedAt.AddSeconds($HeartbeatSeconds)
+    }
+    else {
+      [datetime]::MaxValue
+    }
+
+    while (-not $process.HasExited) {
+      Start-Sleep -Milliseconds 250
+      $process.Refresh()
+
+      if ($TimeoutSeconds -gt 0 -and (Get-Date) -ge $startedAt.AddSeconds($TimeoutSeconds)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        Show-CommandFailureLog -StdoutPath $stdoutPath -StderrPath $stderrPath
+        $message = @(
+          "Command timed out: $displayLabel",
+          "Timeout seconds: $TimeoutSeconds",
+          "Resolved path: $($invocation.ResolvedPath)",
+          "Launch command: $($invocation.DisplayCommand)",
+          "Working directory: $WorkingDirectory",
+          "Launch strategy: $($invocation.Strategy)",
+          "Stdout log: $stdoutPath",
+          "Stderr log: $stderrPath"
+        ) -join [Environment]::NewLine
+        throw $message
+      }
+
+      if ((Get-Date) -ge $nextHeartbeat) {
+        $elapsed = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
+        $summary = Get-LogProgressSummary -StdoutPath $stdoutPath -StderrPath $stderrPath
+        if ($summary) {
+          Write-Host ("  [wait] {0} still running ({1}s) - {2}" -f $displayLabel, $elapsed, $summary.Details)
+        }
+        else {
+          Write-Host ("  [wait] {0} still running ({1}s)" -f $displayLabel, $elapsed)
+        }
+        $nextHeartbeat = (Get-Date).AddSeconds($HeartbeatSeconds)
+      }
+    }
+
+    $process.WaitForExit()
     $process.Refresh()
 
     if ($process.ExitCode -ne 0) {
@@ -335,10 +452,75 @@ function Resolve-PowerShellExecutable {
 }
 
 function Remove-PathIfExists {
-  param([string]$Path)
+  param(
+    [string]$Path,
+    [int]$TimeoutSeconds = 30,
+    [int]$RetryDelayMilliseconds = 500
+  )
 
-  if (Test-Path $Path) {
-    Remove-Item -Recurse -Force $Path
+  if (-not (Test-Path $Path)) {
+    return
+  }
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  $reportedWait = $false
+  while (Test-Path $Path) {
+    try {
+      Remove-Item -Recurse -Force $Path -ErrorAction Stop
+    }
+    catch {
+      if ((Get-Date) -ge $deadline) {
+        throw "Timed out removing path $Path after $TimeoutSeconds seconds. This is commonly caused by antivirus or a locked file."
+      }
+
+      if (-not $reportedWait) {
+        Write-Host ("  [wait] removing locked path: {0}" -f $Path)
+        $reportedWait = $true
+      }
+      Start-Sleep -Milliseconds $RetryDelayMilliseconds
+      continue
+    }
+
+    if (Test-Path $Path) {
+      if ((Get-Date) -ge $deadline) {
+        throw "Timed out waiting for path removal at $Path after $TimeoutSeconds seconds."
+      }
+
+      if (-not $reportedWait) {
+        Write-Host ("  [wait] path still present after remove attempt: {0}" -f $Path)
+        $reportedWait = $true
+      }
+      Start-Sleep -Milliseconds $RetryDelayMilliseconds
+    }
+  }
+}
+
+function Rename-PathWithRetry {
+  param(
+    [string]$Path,
+    [string]$NewName,
+    [int]$TimeoutSeconds = 30,
+    [int]$RetryDelayMilliseconds = 500
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  $reportedWait = $false
+  while ($true) {
+    try {
+      Rename-Item -Path $Path -NewName $NewName -Force -ErrorAction Stop
+      return
+    }
+    catch {
+      if ((Get-Date) -ge $deadline) {
+        throw "Timed out renaming $Path to $NewName after $TimeoutSeconds seconds. This is commonly caused by a locked file or antivirus."
+      }
+
+      if (-not $reportedWait) {
+        Write-Host ("  [wait] waiting to rename {0}" -f $Path)
+        $reportedWait = $true
+      }
+      Start-Sleep -Milliseconds $RetryDelayMilliseconds
+    }
   }
 }
 
@@ -1442,7 +1624,8 @@ function Invoke-WorkspaceDependencyInstall {
   }
 
   Start-InstallPhase -Title "Installing workspace dependencies"
-  Invoke-Step -Label "pnpm install" -FilePath "pnpm" -ArgumentList @("install") -WorkingDirectory $RepoRoot -LogPath (Join-Path $InstallLogDir "install-pnpm")
+  Write-Host ("  logs: {0}.stdout.log, {0}.stderr.log" -f (Join-Path $InstallLogDir "install-pnpm"))
+  Invoke-Step -Label "pnpm install" -FilePath "pnpm" -ArgumentList @("install") -WorkingDirectory $RepoRoot -LogPath (Join-Path $InstallLogDir "install-pnpm") -TimeoutSeconds 900 -HeartbeatSeconds 20
 }
 
 function Invoke-PackageBuildStep {
@@ -1460,6 +1643,7 @@ function Invoke-PackageBuildStep {
   }
 
   Start-InstallPhase -Title "Building package"
+  Write-Host ("  logs: {0}.stdout.log, {0}.stderr.log" -f (Join-Path $InstallLogDir "install-package"))
   Invoke-Step -FilePath $PowerShellExecutable -ArgumentList @(
     "-ExecutionPolicy",
     "Bypass",
@@ -1467,7 +1651,7 @@ function Invoke-PackageBuildStep {
     $PackageScriptPath,
     "-Profile",
     $Profile
-  ) -WorkingDirectory $RepoRoot -Label "package.ps1" -LogPath (Join-Path $InstallLogDir "install-package")
+  ) -WorkingDirectory $RepoRoot -Label "package.ps1" -LogPath (Join-Path $InstallLogDir "install-package") -TimeoutSeconds 1800 -HeartbeatSeconds 20
 }
 
 function Install-PackagePayload {
@@ -1497,6 +1681,7 @@ function Install-PackagePayload {
   Remove-PathIfExists -Path $stagingRoot
   Remove-PathIfExists -Path $backupRoot
 
+  Write-Host "  preparing staged install directory"
   New-Item -ItemType Directory -Force -Path $stagingRoot | Out-Null
   Copy-Item -Path (Join-Path $PackageRoot "*") -Destination $stagingRoot -Recurse -Force -Exclude "bin"
 
@@ -1560,9 +1745,11 @@ function Install-PackagePayload {
   }
 
   if (Test-Path $InstallRoot) {
-    Rename-Item -Path $InstallRoot -NewName ([System.IO.Path]::GetFileName($backupRoot)) -Force
+    Write-Host "  rotating existing install directory"
+    Rename-PathWithRetry -Path $InstallRoot -NewName ([System.IO.Path]::GetFileName($backupRoot))
   }
-  Rename-Item -Path $stagingRoot -NewName ([System.IO.Path]::GetFileName($InstallRoot)) -Force
+  Write-Host "  promoting staged install directory"
+  Rename-PathWithRetry -Path $stagingRoot -NewName ([System.IO.Path]::GetFileName($InstallRoot))
   Remove-PathIfExists -Path $backupRoot
 
   Assert-PathExists -Path (Join-Path $InstallRoot "bin\gpt.exe") -Label "Installed CLI"
