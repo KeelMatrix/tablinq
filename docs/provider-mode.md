@@ -214,3 +214,18 @@ Persist `request_id` and inspect request status when a client connection drops u
 - `gpt gateway start`
 
 See [openclaude.md](openclaude.md) and [paperclip.md](paperclip.md) for client-specific guidance.
+
+## Client retry and idempotency guidance
+
+Tablinq is a browser-backed local provider. Clients should use normal HTTP timeouts and may retry idempotent read requests such as `GET /health`, `GET /v1/requests`, `GET /v1/jobs`, `GET /v1/conversations`, and `GET /v1/usage`.
+
+Do not blindly retry prompt-submitting `POST /v1/chat/completions` after a timeout, disconnect, or transport error. The request may already have reached the gateway or browser. Instead, send a stable `X-Request-Id` when possible, persist returned `request_id` values, and inspect:
+
+- `GET /v1/requests/{request_id}`
+- `GET /v1/requests/{request_id}/evidence`
+- `GET /v1/requests`
+- `GET /v1/jobs`
+
+Clients do not need artificial sleeps between normal API calls. If a client sends bursty requests, it should still respect Tablinq’s browser-backed concurrency model and use the documented queue/status endpoints to observe progress.
+
+For prompt POSTs, treat structured HTTP errors as authoritative. Transport-level failures should be considered ambiguous unless request state proves the request was not accepted.

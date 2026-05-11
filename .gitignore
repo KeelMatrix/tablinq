@@ -28,6 +28,12 @@ npm-debug.log*
 pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.stdout.log
+*.stderr.log
+tablinq-step*.md
+step4-upload-field-note-*
+__pycache__/
+*.pyc
 
 # === OS ===
 .DS_Store
@@ -44,7 +50,7 @@ Thumbs.db
 .env.*
 *.local
 .agents/skills/tablinq-telegram-agent-ping/scripts/.env.local
-!.agents/skills/tablinq-telegram-agent-ping/scripts/.env.example
+!.env.example
 
 # === SQLite / local state ===
 *.db
