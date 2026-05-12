@@ -42,6 +42,7 @@ export async function createTrackedManagedAdapter(
       profileDir: path.join(root, "profile"),
       downloadsDir: path.join(root, "downloads"),
       defaultTargetUrl: targetUrl,
+      connectionMode: "managed_only",
       ...options.adapterOptions,
     }),
   );

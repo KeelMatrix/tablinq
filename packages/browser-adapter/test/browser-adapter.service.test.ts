@@ -25,6 +25,8 @@ describe("browser adapter service helpers", () => {
       "downloads",
       "--default-target-url",
       "https://chatgpt.test",
+      "--connection-mode",
+      "attach_first",
       "--extension-required",
       "false",
       "--auto-open-target-tab",
@@ -35,6 +37,7 @@ describe("browser adapter service helpers", () => {
       profileDir: "profile",
       downloadsDir: "downloads",
       defaultTargetUrl: "https://chatgpt.test",
+      connectionMode: "attach_first",
       extensionRequired: false,
       autoOpenTargetTab: false,
     });
@@ -71,10 +74,35 @@ describe("browser adapter service helpers", () => {
       profile_dir: "profile",
       downloads_dir: "downloads",
       target_url: "https://chatgpt.test",
-      attach_mode: "managed_only",
-      browser_owner: "managed",
+      attach_mode: "attach_first",
+      browser_owner: "external",
       extension_required: false,
     });
+  });
+
+  it("requires an explicit adapter connection mode", () => {
+    expect(() =>
+      parseArgs([
+        "--profile-dir",
+        "profile",
+        "--downloads-dir",
+        "downloads",
+        "--default-target-url",
+        "https://chatgpt.test",
+      ]),
+    ).toThrow(/--connection-mode/);
+    expect(() =>
+      parseArgs([
+        "--profile-dir",
+        "profile",
+        "--downloads-dir",
+        "downloads",
+        "--default-target-url",
+        "https://chatgpt.test",
+        "--connection-mode",
+        "managed",
+      ]),
+    ).toThrow(/attach_first, managed_fallback, managed_only/);
   });
 
   it("maps recover_ask baseline fields with nullish defaults only", () => {

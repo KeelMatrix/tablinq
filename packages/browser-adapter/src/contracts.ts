@@ -232,7 +232,7 @@ export interface BrowserAdapterOptions {
   defaultTargetUrl: string;
   defaultBrowserPath?: string | null;
   extensionDir?: string | null;
-  connectionMode?: "attach_first" | "managed_fallback" | "managed_only" | null;
+  connectionMode: "attach_first" | "managed_fallback" | "managed_only";
   debugEndpoint?: string | null;
   extensionRequired?: boolean;
   autoOpenTargetTab?: boolean;

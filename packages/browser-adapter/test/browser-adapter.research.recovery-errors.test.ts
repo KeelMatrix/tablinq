@@ -100,6 +100,7 @@ describe("browser adapter research: recovery and error cases", () => {
           variant: "live",
           scenario: "research-deep-landing-submit-fail",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -150,6 +151,7 @@ describe("browser adapter research: recovery and error cases", () => {
           variant: "live",
           scenario: "research-failure",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -186,6 +188,7 @@ describe("browser adapter research: recovery and error cases", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -216,6 +219,7 @@ describe("browser adapter research: recovery and error cases", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "research-failure",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -250,6 +254,7 @@ describe("browser adapter research: recovery and error cases", () => {
           variant: "live",
           scenario: "research-success",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({

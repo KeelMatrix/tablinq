@@ -62,6 +62,7 @@ describe("browser adapter recovery: ask streaming recovery", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl: server.url, headless: true });
@@ -106,6 +107,7 @@ describe("browser adapter recovery: ask streaming recovery", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -167,6 +169,7 @@ describe("browser adapter recovery: ask streaming recovery", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -249,6 +252,7 @@ describe("browser adapter recovery: ask streaming recovery", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "stall-recover",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -296,6 +300,7 @@ describe("browser adapter recovery: ask streaming recovery", () => {
           variant: "live",
           scenario: "stall-recover-transient",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({

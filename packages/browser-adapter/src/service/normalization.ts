@@ -87,9 +87,10 @@ export function parseArgs(argv: string[]): ServiceArgs {
   const profileDir = args.get("--profile-dir");
   const downloadsDir = args.get("--downloads-dir");
   const defaultTargetUrl = args.get("--default-target-url");
+  const connectionMode = parseConnectionMode(args.get("--connection-mode"));
   if (!profileDir || !downloadsDir || !defaultTargetUrl) {
     throw new Error(
-      "service.ts requires --profile-dir, --downloads-dir, and --default-target-url",
+      "service.ts requires --profile-dir, --downloads-dir, --default-target-url, and --connection-mode",
     );
   }
 
@@ -98,9 +99,7 @@ export function parseArgs(argv: string[]): ServiceArgs {
     downloadsDir,
     defaultTargetUrl,
     defaultBrowserPath: args.get("--default-browser-path"),
-    connectionMode:
-      (args.get("--connection-mode") as ServiceArgs["connectionMode"]) ??
-      undefined,
+    connectionMode,
     debugEndpoint: args.get("--debug-endpoint") ?? undefined,
     extensionRequired: parseBooleanFlag(args.get("--extension-required"), true),
     autoOpenTargetTab: parseBooleanFlag(
@@ -138,11 +137,9 @@ export function fallbackStatusSnapshot(
     browser_path: args.defaultBrowserPath ?? null,
     extension_connected: false,
     capability_report: null,
-    attach_mode: args.connectionMode ?? "managed_only",
+    attach_mode: args.connectionMode,
     browser_owner:
-      (args.connectionMode ?? "managed_only") === "managed_only"
-        ? "managed"
-        : "external",
+      args.connectionMode === "managed_only" ? "managed" : "external",
     cdp_attached: false,
     target_tab_found: false,
     target_tab_id: null,
@@ -155,6 +152,21 @@ export function fallbackStatusSnapshot(
     browser_process_closed: null,
     reason: null,
   };
+}
+
+function parseConnectionMode(
+  raw: string | undefined,
+): ServiceArgs["connectionMode"] {
+  if (
+    raw === "attach_first" ||
+    raw === "managed_fallback" ||
+    raw === "managed_only"
+  ) {
+    return raw;
+  }
+  throw new Error(
+    "service.ts requires --connection-mode to be one of attach_first, managed_fallback, managed_only",
+  );
 }
 
 function normalizeAskBaseline(request: RecoverAskRequest): AskBaseline | null {
