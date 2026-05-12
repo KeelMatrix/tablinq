@@ -12,6 +12,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     isTransientAskStatusElement,
     isInsideReasoningArtifactMessage,
     findMessageContentRoot,
+    thoughtDividerBeforeMessage,
   } = messageFilters;
 
   const TEX_ANNOTATION_SELECTOR = "annotation[encoding^='application/x-tex']";
@@ -1033,9 +1034,125 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     return serializeInlineChildren(element);
   };
 
+  const isExplicitAssistantMessage = (element) =>
+    normalizeText(element?.getAttribute?.("data-message-author-role") ?? "") ===
+    "assistant";
+
+  const previousVisibleSibling = (element) => {
+    let current = element?.previousElementSibling ?? null;
+    while (current) {
+      if (current instanceof HTMLElement && isVisible(current)) {
+        return current;
+      }
+      current = current.previousElementSibling;
+    }
+    return null;
+  };
+
+  const hasUsefulPreThoughtArtifactMarker = (element) =>
+    Boolean(
+      element.matches?.(".ProseMirror, [id^='textdoc-message-']") ||
+      findUsefulPreThoughtArtifactContentRoot(element) ||
+      element.querySelector(
+        [
+          "[data-slot='artifact-link']",
+          "[data-testid='artifact-download']",
+        ].join(", "),
+      ),
+    );
+
+  const findUsefulPreThoughtArtifactContentRoot = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return null;
+    }
+    const textdoc = element.querySelector(
+      "[id^='textdoc-message-'] .markdown, [id^='textdoc-message-'] .ProseMirror",
+    );
+    if (textdoc instanceof HTMLElement) {
+      return textdoc;
+    }
+    const prosemirror = element.querySelector(".ProseMirror");
+    return prosemirror instanceof HTMLElement ? prosemirror : null;
+  };
+
+  const isUsefulPreThoughtArtifactText = (text) => {
+    const normalized = normalizeText(text);
+    return normalized.length >= 40 && !isTransientAskStatusText(normalized);
+  };
+
+  const collectPreThoughtArtifactText = (answerRoot) => {
+    if (!(answerRoot instanceof HTMLElement)) {
+      return "";
+    }
+    if (!isExplicitAssistantMessage(answerRoot)) {
+      return "";
+    }
+    if (!thoughtDividerBeforeMessage(answerRoot)) {
+      return "";
+    }
+
+    const blocks = [];
+    let current = previousVisibleSibling(previousVisibleSibling(answerRoot));
+    while (current instanceof HTMLElement) {
+      if (isExplicitAssistantMessage(current)) {
+        break;
+      }
+      if (
+        !isTransientAskStatusElement(current) &&
+        !isInsideReasoningArtifactMessage(current) &&
+        hasUsefulPreThoughtArtifactMarker(current)
+      ) {
+        const contentRoot =
+          findUsefulPreThoughtArtifactContentRoot(current) ?? current;
+        const text = serializeBlock(contentRoot);
+        if (isUsefulPreThoughtArtifactText(text)) {
+          blocks.unshift(text);
+        }
+      }
+      current = previousVisibleSibling(current);
+    }
+    const seen = new Set();
+    const uniqueBlocks = [];
+    for (const block of blocks) {
+      const key = normalizeText(block);
+      if (!key || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      uniqueBlocks.push(block);
+    }
+    return uniqueBlocks.join("\n\n");
+  };
+
+  const isPreThoughtArtifactContentOnlyRoot = (root, contentRoot) => {
+    if (
+      !(root instanceof HTMLElement) ||
+      !(contentRoot instanceof HTMLElement) ||
+      isExplicitAssistantMessage(root)
+    ) {
+      return false;
+    }
+    if (!hasUsefulPreThoughtArtifactMarker(contentRoot)) {
+      return false;
+    }
+
+    let current = contentRoot;
+    while (current instanceof HTMLElement && current !== root) {
+      const next = current.nextElementSibling;
+      if (next instanceof HTMLElement && isVisible(next)) {
+        return isTransientAskStatusElement(next);
+      }
+      current = current.parentElement;
+    }
+    return false;
+  };
+
   const collectText = (root) => {
     const contentRoot = findMessageContentRoot(root);
     if (!(contentRoot instanceof HTMLElement)) {
+      return "";
+    }
+    if (isPreThoughtArtifactContentOnlyRoot(root, contentRoot)) {
       return "";
     }
     if (isTransientAskStatusElement(contentRoot)) {
@@ -1050,7 +1167,10 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       streamRunning,
     });
     if (serialized && !isTransientAskStatusText(serialized)) {
-      return serialized;
+      const preThoughtArtifactText = collectPreThoughtArtifactText(root);
+      return preThoughtArtifactText
+        ? `${preThoughtArtifactText}\n\n${serialized}`
+        : serialized;
     }
 
     const directText = uniqueCollapsed(

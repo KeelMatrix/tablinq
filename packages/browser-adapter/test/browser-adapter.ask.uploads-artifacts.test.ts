@@ -28,7 +28,9 @@ import { stopFakeChatGptServer } from "./helpers";
 import {
   createAskRuntimeDom,
   liveActualAnswerText,
+  liveCanvasArtifactText,
   liveStyleAnswerMessage,
+  liveStyleCanvasArtifactTurn,
   liveStyleReasoningTurn,
   liveThoughtArtifactText,
 } from "./helpers/askRuntimeDom";
@@ -101,6 +103,77 @@ describe("browser adapter ask: uploads and artifacts", () => {
     expect(snapshot.text).not.toBe(
       `${liveActualAnswerText}\n\n${liveActualAnswerText}`,
     );
+    dom.window.close();
+  });
+
+  it("keeps useful pre-thought canvas text with the following answer", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    const answerText =
+      "Create this folder in the repo: scripts/smoke/local-gateway/";
+    main.insertAdjacentHTML(
+      "beforeend",
+      liveStyleCanvasArtifactTurn(answerText),
+    );
+    dom.window.document.body.dataset.streamState = "done";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.messageId).toBe("actual-answer-msg");
+    expect(snapshot.text).toContain(liveCanvasArtifactText);
+    expect(snapshot.text).toContain(answerText);
+    expect(snapshot.text).not.toContain(liveThoughtArtifactText);
+    expect(snapshot.text).not.toContain("Thought for 23s");
+    expect(snapshot.text).not.toContain("Copy\n\nEdit\n\nDownload");
+    dom.window.close();
+  });
+
+  it("does not emit pre-thought canvas text before a following answer exists", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML("beforeend", liveStyleCanvasArtifactTurn());
+    dom.window.document.body.dataset.streamState = "running";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.text).toBe("");
+    expect(snapshot.text).not.toContain(liveCanvasArtifactText);
+    expect(snapshot.text).not.toContain(liveThoughtArtifactText);
+    dom.window.close();
+  });
+
+  it("does not prepend provider labels that appear before the thought divider", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    const answerText = "The useful answer starts here.";
+    main.insertAdjacentHTML(
+      "beforeend",
+      `
+      <section data-testid="conversation-turn-4">
+        <div class="flex max-w-full flex-col gap-4 grow">
+          <div data-message-author-role="assistant" data-message-id="reasoning-artifact-msg">
+            <div class="markdown"><p>${liveThoughtArtifactText}</p></div>
+          </div>
+          <div class="provider-labels">
+            <span>Searching</span>
+            <span>Sources</span>
+            <button type="button">Copy</button>
+          </div>
+          <div class="flex items-center justify-between">
+            <button type="button">Thought for 11s</button>
+          </div>
+          ${liveStyleAnswerMessage(answerText)}
+        </div>
+      </section>`,
+    );
+    dom.window.document.body.dataset.streamState = "done";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.text).toBe(answerText);
+    expect(snapshot.text).not.toContain("Searching");
+    expect(snapshot.text).not.toContain("Sources");
+    expect(snapshot.text).not.toContain(liveThoughtArtifactText);
     dom.window.close();
   });
 
