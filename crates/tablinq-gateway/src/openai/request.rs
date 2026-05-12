@@ -69,6 +69,8 @@ pub struct ChatCompletionsRequest {
     pub _user: Option<Value>,
     #[serde(rename = "metadata", default)]
     pub _metadata: Option<Value>,
+    #[serde(rename = "store", default)]
+    pub _store: Option<Value>,
     #[serde(rename = "logprobs", default)]
     pub _logprobs: Option<Value>,
     #[serde(rename = "stream_options", default)]
@@ -155,13 +157,6 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
         return Err(invalid_request_error(
             "empty_messages",
             "messages must contain at least one item",
-        )
-        .into());
-    }
-    if request.stream {
-        return Err(invalid_request_error(
-            "streaming_unsupported",
-            "browser-backed ChatGPT responses are not append-only stable and may be rewritten before finalization, so live streaming is disabled for correctness; use stream:false or omit the option",
         )
         .into());
     }
@@ -307,6 +302,7 @@ mod tests {
             "frequency_penalty": 0.0,
             "user": "client-user",
             "metadata": { "client": "integration-test" },
+            "store": false,
             "logprobs": true,
             "stream_options": { "include_usage": true },
             "tool_choice": "auto",
@@ -330,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_true_is_rejected_for_correctness() {
+    fn stream_true_is_accepted_for_final_only_sse() {
         let request: ChatCompletionsRequest = serde_json::from_value(json!({
             "model": "tablinq-instant",
             "stream": true,
@@ -338,8 +334,7 @@ mod tests {
         }))
         .expect("request decodes");
 
-        let err = validate_chat_request(&request).expect_err("streaming should fail");
-        assert!(err.to_string().contains("append-only stable"));
+        validate_chat_request(&request).expect("streaming request validates");
     }
 
     #[test]

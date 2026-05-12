@@ -8,8 +8,7 @@ mod sse_writer;
 use chrono::{DateTime, Utc};
 use gptd::browser::execution_error_metadata;
 use shared_protocol::{
-    EventPayload, JobStatus, RecoveryPacket, RecoveryTrace, RequestExecutionKind, RequestSummary,
-    RequestUsage,
+    JobStatus, RecoveryPacket, RecoveryTrace, RequestExecutionKind, RequestSummary, RequestUsage,
 };
 
 pub(crate) use execution::execute_chat_completions_request;
@@ -121,15 +120,6 @@ pub(crate) fn outcome_from_error(err: &anyhow::Error) -> RequestOutcome {
             .as_ref()
             .and_then(|item| item.recovery_trace.clone()),
         recovery_packet: metadata.and_then(|item| item.recovery_packet),
-    }
-}
-
-fn event_conversation_id(event: &EventPayload) -> Option<String> {
-    match event {
-        EventPayload::StreamChunk(chunk) => chunk.conversation_id.clone(),
-        EventPayload::JobState(state) => state.conversation_id.clone(),
-        EventPayload::ArtifactReady(artifact) => artifact.conversation_id.clone(),
-        _ => None,
     }
 }
 

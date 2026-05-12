@@ -92,8 +92,9 @@ pub fn model_object(
         "tablinq_model_class": spec.model_class.map(model_class_name),
         "tablinq_effort": spec.effort.map(effort_name),
         "tablinq_execution_kind": if spec.uses_research { "research" } else { "ask" },
-        "tablinq_streaming": false,
-        "tablinq_streaming_status": "unsupported",
+        "tablinq_streaming": true,
+        "tablinq_streaming_status": "final_only",
+        "tablinq_live_streaming": false,
         "tablinq_files": files.availability == "available",
         "tablinq_files_status": files.availability,
         "tablinq_artifacts": artifacts.availability == "available",
@@ -405,8 +406,9 @@ mod tests {
 
         let model = model_object(&PROVIDER_MODELS[0], Some(&report), "live");
 
-        assert_eq!(model["tablinq_streaming"], false);
-        assert_eq!(model["tablinq_streaming_status"], "unsupported");
+        assert_eq!(model["tablinq_streaming"], true);
+        assert_eq!(model["tablinq_streaming_status"], "final_only");
+        assert_eq!(model["tablinq_live_streaming"], false);
         assert_eq!(model["tablinq_files"], false);
         assert_eq!(model["tablinq_files_status"], "unavailable");
         assert_eq!(model["tablinq_artifacts"], false);

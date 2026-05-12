@@ -37,9 +37,12 @@ fn unknown_model_returns_openai_shaped_invalid_request_error() {
 }
 
 #[test]
-fn stream_true_returns_openai_shaped_invalid_request_error() {
+fn stream_true_no_longer_fails_validation_before_execution() {
     let _guard = integration_lock();
-    let (_dir, config) = test_config();
+    require_browser_integration_prereqs!();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url);
     let state_root = config.paths.state_root.clone();
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
@@ -52,7 +55,7 @@ fn stream_true_returns_openai_shaped_invalid_request_error() {
         &[
             ("authorization", auth.as_str()),
             ("content-type", "application/json"),
-            ("x-request-id", "req-stream-unsupported"),
+            ("x-request-id", "req-stream-accepted"),
         ],
         &serde_json::to_vec(&json!({
             "model": "tablinq-instant",
@@ -60,20 +63,19 @@ fn stream_true_returns_openai_shaped_invalid_request_error() {
             "messages": [{ "role": "user", "content": "hello" }]
         }))
         .unwrap(),
-        5_000,
+        20_000,
     )
     .unwrap();
-    assert_eq!(response.status_code, 400);
-    let body: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(body["request_id"], "req-stream-unsupported");
-    assert_eq!(body["error"]["type"], "invalid_request_error");
-    assert_eq!(body["error"]["code"], "streaming_unsupported");
-    assert!(body["error"]["message"].as_str().is_some_and(|message| {
-        message.contains("append-only stable") && message.contains("stream:false")
-    }));
+    assert_ne!(response.status_code, 400);
+    assert_eq!(
+        response.headers.get("content-type").map(String::as_str),
+        Some("text/event-stream")
+    );
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
 }
 
 #[test]
@@ -108,6 +110,7 @@ fn common_ignored_openai_fields_do_not_fail_chat_requests() {
             "frequency_penalty": 0.0,
             "user": "client-user",
             "metadata": { "client": "integration-test" },
+            "store": false,
             "logprobs": true,
             "stream_options": { "include_usage": true },
             "tool_choice": "auto",
