@@ -4,28 +4,33 @@ This folder contains local Windows smoke-test scripts for validating the Tablinq
 
 These scripts are intended for developer validation after `scripts/install.ps1` has installed the current checkout and the installed `gpt.exe` matches the repo HEAD.
 
+Run commands from the repo root unless a parameter explicitly points somewhere else.
+
 ## Folder contents
 
 ```text
-run_step1_readiness.ps1
-tablinq_step1_readiness.py
+scripts\smoke\local-gateway\run_step1_readiness.ps1
+scripts\smoke\local-gateway\tablinq_step1_readiness.py
 
-run_step1_2_diagnostics.ps1
-tablinq_step1_2_diagnostics.py
+scripts\smoke\local-gateway\run_step1_2_diagnostics.ps1
+scripts\smoke\local-gateway\tablinq_step1_2_diagnostics.py
 
-run_step2_control_plane.ps1
-tablinq_step2_control_plane.py
+scripts\smoke\local-gateway\run_step2_control_plane.ps1
+scripts\smoke\local-gateway\tablinq_step2_control_plane.py
 
-run_step3_chat_matrix.ps1
-tablinq_step3_chat_matrix.py
+scripts\smoke\local-gateway\run_step3_chat_matrix.ps1
+scripts\smoke\local-gateway\tablinq_step3_chat_matrix.py
 
-run_step4_robustness.ps1
-tablinq_step4_robustness.py
+scripts\smoke\local-gateway\run_step4_robustness.ps1
+scripts\smoke\local-gateway\tablinq_step4_robustness.py
+
+scripts\smoke\local-gateway\run_step5_response_shape.ps1
+scripts\smoke\local-gateway\tablinq_step5_response_shape.py
 ```
 
 ## Prerequisites
 
-Run from Windows PowerShell.
+Run from Windows PowerShell at the repo root.
 
 Before using these scripts:
 
@@ -45,7 +50,7 @@ gpt version
 
 The installed `gpt version` commit should match the repo HEAD, and the install summary should report the checkout as valid.
 
-3. Create an `.env.local` file in the same folder as these smoke scripts.
+3. Create an `.env.local` file in `scripts\smoke\local-gateway`.
 
 Expected API key variable names, in priority order:
 
@@ -86,14 +91,14 @@ Generated logs redact the API key in cURL output.
 
 ## Run order
 
-Run the scripts in this order.
+Run the scripts in this order from the repo root.
 
 ### Step 1: readiness
 
 Starts the browser debug flow, attaches, and verifies basic gateway/browser readiness.
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step1_readiness.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step1_readiness.ps1
 ```
 
 Pass condition:
@@ -111,7 +116,7 @@ Pass condition:
 Runs after Step 1 while the browser remains open. Rechecks health/status convergence and transport stability on core browser/status routes.
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step1_2_diagnostics.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step1_2_diagnostics.ps1
 ```
 
 Pass condition:
@@ -125,7 +130,7 @@ Pass condition:
 Exercises non-prompting gateway routes, route contracts, auth failures, bad IDs, browser attach/detach/restore, metadata, discovery, and stability loops.
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step2_control_plane.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step2_control_plane.ps1
 ```
 
 Pass condition:
@@ -141,7 +146,7 @@ Pass condition:
 Sends real non-research `/v1/chat/completions` prompts through several gateway modes and request shapes, including follow-up, search, thinking modes, multipart content, primary/branch metadata, auto-recover metadata, and invalid validation cases.
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step3_chat_matrix.ps1 -IncludeInvalidCases
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step3_chat_matrix.ps1 -IncludeInvalidCases
 ```
 
 Pass condition:
@@ -160,7 +165,7 @@ Exercises negative/malformed route probes, upload/file flow, cancellation/race b
 Use `-NoTxt` when `.txt` uploads are temporarily broken at the provider level. In `-NoTxt` mode, the script uploads an extensionless file with `Content-Type: text/plain`.
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step4_robustness.ps1 -NoTxt
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step4_robustness.ps1 -NoTxt
 ```
 
 Pass condition:
@@ -175,9 +180,31 @@ Pass condition:
 - no final transport failures
 - no semantic failures
 
+### Step 5: response shape and pagination
+
+Runs after Steps 1-4 so the gateway has recent requests, conversations, files, artifacts, and usage rows to inspect. The script is non-prompting: it only attaches, reads API state, validates response-shape contracts, and probes invalid query combinations.
+
+```powershell
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step5_response_shape.ps1
+```
+
+Pass condition:
+
+- attach convergence passes
+- list routes return coherent `limit`, `offset`, `count`, `has_more`, `view`, and `compact` metadata
+- `/v1/usage` supports explicit durable pagination, including offsets past the historical 50-row boundary
+- conversation message pagination supports `limit`, `offset`, and `order=desc`
+- detail routes honor `view`, `include`, and compact snapshot behavior
+- request evidence pagination works when a suitable request exists
+- unsupported response-shape query params return structured HTTP errors
+- no final transport failures
+- no semantic failures
+
+If a Step 5 ID-specific probe has no suitable existing object, the script records a warning and skips that subcase instead of fabricating state.
+
 ## Output files
 
-Each script writes a timestamped markdown log in the same folder. Logs include:
+Each script writes a timestamped markdown log in `scripts\smoke\local-gateway`. Logs include:
 
 - short notes describing each probe
 - raw redacted cURL requests
@@ -189,11 +216,12 @@ Each script writes a timestamped markdown log in the same folder. Logs include:
 Example generated files:
 
 ```text
-tablinq-step1-readiness-v2-YYYYMMDD-HHMMSS.md
-tablinq-step1-2-diagnostics-YYYYMMDD-HHMMSS.md
-tablinq-step2-control-plane-v2-YYYYMMDD-HHMMSS.md
-tablinq-step3-chat-matrix-v5-YYYYMMDD-HHMMSS.md
-tablinq-step4-robustness-YYYYMMDD-HHMMSS.md
+scripts\smoke\local-gateway\tablinq-step1-readiness-v2-YYYYMMDD-HHMMSS.md
+scripts\smoke\local-gateway\tablinq-step1-2-diagnostics-YYYYMMDD-HHMMSS.md
+scripts\smoke\local-gateway\tablinq-step2-control-plane-v2-YYYYMMDD-HHMMSS.md
+scripts\smoke\local-gateway\tablinq-step3-chat-matrix-v5-YYYYMMDD-HHMMSS.md
+scripts\smoke\local-gateway\tablinq-step4-robustness-YYYYMMDD-HHMMSS.md
+scripts\smoke\local-gateway\tablinq-step5-response-shape-YYYYMMDD-HHMMSS.md
 ```
 
 Generated logs and temporary upload fixtures should not normally be committed.
@@ -203,40 +231,43 @@ Generated logs and temporary upload fixtures should not normally be committed.
 Commit only these files:
 
 ```text
-README.md
-run_step1_readiness.ps1
-tablinq_step1_readiness.py
-run_step1_2_diagnostics.ps1
-tablinq_step1_2_diagnostics.py
-run_step2_control_plane.ps1
-tablinq_step2_control_plane.py
-run_step3_chat_matrix.ps1
-tablinq_step3_chat_matrix.py
-run_step4_robustness.ps1
-tablinq_step4_robustness.py
+scripts\smoke\local-gateway\README.md
+scripts\smoke\local-gateway\run_step1_readiness.ps1
+scripts\smoke\local-gateway\tablinq_step1_readiness.py
+scripts\smoke\local-gateway\run_step1_2_diagnostics.ps1
+scripts\smoke\local-gateway\tablinq_step1_2_diagnostics.py
+scripts\smoke\local-gateway\run_step2_control_plane.ps1
+scripts\smoke\local-gateway\tablinq_step2_control_plane.py
+scripts\smoke\local-gateway\run_step3_chat_matrix.ps1
+scripts\smoke\local-gateway\tablinq_step3_chat_matrix.py
+scripts\smoke\local-gateway\run_step4_robustness.ps1
+scripts\smoke\local-gateway\tablinq_step4_robustness.py
+scripts\smoke\local-gateway\run_step5_response_shape.ps1
+scripts\smoke\local-gateway\tablinq_step5_response_shape.py
 ```
 
 Do not commit:
 
 ```text
-*.md logs
-*.stdout.log
-*.stderr.log
-__pycache__/
-step4-upload-field-note-*
-.env.local
+scripts\smoke\local-gateway\tablinq-step*.md
+scripts\smoke\local-gateway\*.stdout.log
+scripts\smoke\local-gateway\*.stderr.log
+scripts\smoke\local-gateway\__pycache__\
+scripts\smoke\local-gateway\step4-upload-field-note-*
+scripts\smoke\local-gateway\.env.local
 ```
 
 ## Suggested final validation before committing
 
-From this folder:
+From the repo root:
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step1_readiness.ps1
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step1_2_diagnostics.ps1
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step2_control_plane.ps1
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step3_chat_matrix.ps1 -IncludeInvalidCases
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\run_step4_robustness.ps1 -NoTxt
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step1_readiness.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step1_2_diagnostics.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step2_control_plane.ps1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step3_chat_matrix.ps1 -IncludeInvalidCases
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step4_robustness.ps1 -NoTxt
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\scripts\smoke\local-gateway\run_step5_response_shape.ps1
 ```
 
 All final verdicts should be `healthy`.
