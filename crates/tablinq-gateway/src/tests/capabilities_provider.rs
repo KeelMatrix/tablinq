@@ -97,11 +97,12 @@ fn provider_endpoint_exposes_openclaude_preset_metadata() {
             "tablinq-search",
         ])
     );
-    assert_eq!(body["presets"]["openclaude"]["streaming"], false);
+    assert_eq!(body["presets"]["openclaude"]["streaming"], true);
+    assert_eq!(body["presets"]["openclaude"]["live_streaming"], false);
     assert!(
         body["presets"]["openclaude"]["streaming_note"]
             .as_str()
-            .is_some_and(|note| note.contains("stream to false or omit it"))
+            .is_some_and(|note| note.contains("final-only"))
     );
 
     stop_gateway_process(Some(&state_root)).unwrap();
@@ -148,7 +149,8 @@ fn provider_endpoint_exposes_paperclip_preset_metadata() {
         "queue"
     );
     assert_eq!(body["presets"]["paperclip"]["max_parallel_requests"], 1);
-    assert_eq!(body["presets"]["paperclip"]["streaming"], false);
+    assert_eq!(body["presets"]["paperclip"]["streaming"], true);
+    assert_eq!(body["presets"]["paperclip"]["live_streaming"], false);
     assert_eq!(body["presets"]["paperclip"]["files"], true);
     assert_eq!(body["presets"]["paperclip"]["artifacts"], true);
     assert_eq!(
@@ -219,12 +221,17 @@ fn documented_provider_contract_surfaces_are_present() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|value| value == "stream must be false or omitted")
+            .any(|value| value
+                == "stream true emits final-only chunks and never live partial browser drafts")
     );
     assert_eq!(provider_body["request_queueing"]["dependent_work"], "queue");
     assert_eq!(
         provider_body["provider_capabilities"]["capabilities"]["streaming"]["gateway_support"],
-        "unsupported"
+        "final_only"
+    );
+    assert_eq!(
+        provider_body["provider_capabilities"]["capabilities"]["streaming"]["live_token_streaming"],
+        false
     );
     assert_eq!(
         provider_body["presets"]["openclaude"]["max_parallel_requests"],
@@ -306,49 +313,6 @@ fn documented_provider_contract_surfaces_are_present() {
             .any(|value| value.as_str()
                 == Some("token usage is unavailable for the browser-backed provider"))
     );
-
-    stop_gateway_process(Some(&state_root)).unwrap();
-    handle.join().unwrap().unwrap();
-    let _ = fake_server.kill();
-    let _ = fake_server.wait();
-}
-
-#[test]
-fn openclaude_primary_streaming_requests_are_rejected() {
-    let _guard = integration_lock();
-    require_browser_integration_prereqs!();
-    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
-    let (_dir, mut config) = test_config();
-    config.file.browser_target_url = Some(fake_url);
-    let state_root = config.paths.state_root.clone();
-    let auth = auth_header(&config);
-    let (handle, snapshot) = spawn_gateway(config);
-
-    let body = openclaude_request_body("tablinq-search", "latest roadmap", "primary", true, None);
-    let response = http_request(
-        &snapshot.host,
-        snapshot.port,
-        "POST",
-        V1_CHAT_COMPLETIONS_PATH,
-        &[
-            ("authorization", auth.as_str()),
-            ("content-type", "application/json"),
-            ("x-request-id", "oc-primary-1"),
-        ],
-        &body,
-        20_000,
-    )
-    .unwrap();
-    assert_eq!(
-        response.status_code,
-        400,
-        "{}",
-        String::from_utf8_lossy(&response.body)
-    );
-    let body: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(body["request_id"], "oc-primary-1");
-    assert_eq!(body["error"]["code"], "streaming_unsupported");
-    assert_eq!(body["error"]["type"], "invalid_request_error");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -495,8 +459,9 @@ fn models_endpoint_returns_openai_model_catalog() {
     assert_eq!(models[0]["id"], "tablinq-instant");
     assert_eq!(models[0]["tablinq_model_class"], "instant");
     assert_eq!(models[0]["tablinq_effort"], "none");
-    assert_eq!(models[0]["tablinq_streaming"], false);
-    assert_eq!(models[0]["tablinq_streaming_status"], "unsupported");
+    assert_eq!(models[0]["tablinq_streaming"], true);
+    assert_eq!(models[0]["tablinq_streaming_status"], "final_only");
+    assert_eq!(models[0]["tablinq_live_streaming"], false);
     assert_eq!(models[1]["id"], "tablinq-thinking-standard");
     assert_eq!(models[1]["tablinq_model_class"], "thinking");
     assert_eq!(models[1]["tablinq_effort"], "standard");

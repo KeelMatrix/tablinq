@@ -54,7 +54,7 @@ If you want to retain command output or before/after snapshots from a live check
 
 1. Call `POST /v1/chat/completions` with `tablinq-instant` and confirm the response includes `request_id`, `tablinq_job_id`, and warnings metadata.
 2. Call `POST /v1/chat/completions` with `"stream": false` and confirm the normal non-streaming response path still works.
-3. Call `POST /v1/chat/completions` with `"stream": true` and confirm a `400` response with code `streaming_unsupported` before any request is queued or executed.
+3. Call `POST /v1/chat/completions` with `"stream": true` and confirm an SSE response arrives after finalization with one final content chunk, one stop chunk, and `data: [DONE]`.
 4. Call `GET /v1/provider`, configure an OpenClaude preset, and confirm `primary` requests execute while `subagent` requests are rejected with `subagents_disabled`.
 5. Upload a file to `POST /v1/files`, run a research completion with the returned file ID, and confirm `GET /v1/artifacts?view=summary&limit=20` returns a linked artifact.
 6. Run `scripts/soak_gateway.ps1 -CompactLog` for repeated sequential requests and confirm request IDs advance without leaving the gateway or daemon unhealthy. Use `-FullLog` only when you need forensic response capture.

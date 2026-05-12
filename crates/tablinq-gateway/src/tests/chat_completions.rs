@@ -1,6 +1,25 @@
 #![allow(unused_imports, dead_code)]
 use super::*;
 
+fn parse_sse_data_lines(response: &SimpleHttpResponse) -> Vec<String> {
+    String::from_utf8(response.body.clone())
+        .unwrap()
+        .split("\n\n")
+        .filter_map(|event| event.strip_prefix("data: "))
+        .map(str::trim)
+        .filter(|event| !event.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn parse_sse_json_chunks(response: &SimpleHttpResponse) -> Vec<Value> {
+    parse_sse_data_lines(response)
+        .into_iter()
+        .filter(|event| event != "[DONE]")
+        .map(|event| serde_json::from_str(&event).unwrap())
+        .collect()
+}
+
 #[test]
 fn chat_completions_without_stream_option_falls_back_to_non_streaming_path() {
     let _guard = integration_lock();
@@ -349,7 +368,7 @@ fn chat_completions_reject_unknown_conversation_ids() {
 }
 
 #[test]
-fn chat_completions_stream_true_returns_a_clear_openai_error() {
+fn chat_completions_stream_true_returns_final_only_sse() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
@@ -359,11 +378,12 @@ fn chat_completions_stream_true_returns_a_clear_openai_error() {
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
+    let prompt = "final-only stream answer";
     let body = serde_json::to_vec(&json!({
-        "model": "tablinq-search",
+        "model": "tablinq-instant",
         "stream": true,
         "messages": [
-            { "role": "user", "content": "latest roadmap" }
+            { "role": "user", "content": prompt }
         ]
     }))
     .unwrap();
@@ -375,20 +395,56 @@ fn chat_completions_stream_true_returns_a_clear_openai_error() {
         &[
             ("authorization", auth.as_str()),
             ("content-type", "application/json"),
+            ("x-request-id", "req-stream-final-only"),
         ],
         &body,
         20_000,
     )
     .unwrap();
-    assert_eq!(response.status_code, 400);
-    let body: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(body["error"]["code"], "streaming_unsupported");
-    assert!(
-        body["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("rewritten before finalization")
-                && message.contains("stream:false"))
+    assert_eq!(
+        response.status_code,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
     );
+    assert_eq!(
+        response.headers.get("content-type").map(String::as_str),
+        Some("text/event-stream")
+    );
+
+    let data_lines = parse_sse_data_lines(&response);
+    assert_eq!(data_lines.last().map(String::as_str), Some("[DONE]"));
+    let chunks = parse_sse_json_chunks(&response);
+    assert_eq!(chunks.len(), 2);
+    let final_text = format!("Fake response for: {prompt}");
+    assert_eq!(chunks[0]["object"], "chat.completion.chunk");
+    assert!(chunks[0]["id"].as_str().unwrap().starts_with("chatcmpl-"));
+    assert_eq!(chunks[0]["model"], "tablinq-instant");
+    assert_eq!(chunks[0]["request_id"], "req-stream-final-only");
+    assert!(chunks[0]["tablinq_job_id"].as_str().is_some());
+    assert!(chunks[0]["tablinq_conversation_id"].as_str().is_some());
+    assert_eq!(chunks[0]["tablinq_session_id"], "browser-primary");
+    assert_eq!(chunks[0]["choices"][0]["index"], 0);
+    assert_eq!(
+        chunks[0]["choices"][0]["delta"]["content"].as_str(),
+        Some(final_text.as_str())
+    );
+    assert_eq!(chunks[0]["choices"][0]["finish_reason"], Value::Null);
+    assert_eq!(chunks[1]["object"], "chat.completion.chunk");
+    assert_eq!(chunks[1]["id"], chunks[0]["id"]);
+    assert_eq!(chunks[1]["choices"][0]["delta"], json!({}));
+    assert_eq!(chunks[1]["choices"][0]["finish_reason"], "stop");
+    assert!(!chunks.iter().any(|chunk| {
+        chunk["choices"][0]["delta"]["content"]
+            .as_str()
+            .is_some_and(|content| content != final_text)
+    }));
+
+    let content_chunks = chunks
+        .iter()
+        .filter(|chunk| chunk["choices"][0]["delta"]["content"].as_str().is_some())
+        .count();
+    assert_eq!(content_chunks, 1);
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -397,7 +453,7 @@ fn chat_completions_stream_true_returns_a_clear_openai_error() {
 }
 
 #[test]
-fn chat_completions_stream_true_errors_preserve_request_ids_and_openai_shape() {
+fn chat_completions_stream_true_submits_same_browser_prompt_as_stream_false() {
     let _guard = integration_lock();
     require_browser_integration_prereqs!();
     let (mut fake_server, fake_url) = spawn_fake_chatgpt();
@@ -407,10 +463,116 @@ fn chat_completions_stream_true_errors_preserve_request_ids_and_openai_shape() {
     let auth = auth_header(&config);
     let (handle, snapshot) = spawn_gateway(config);
 
-    let body = serde_json::to_vec(&json!({
+    let prompt = "system: keep literal | assistant: keep literal | stream parity";
+    let non_stream_body = serde_json::to_vec(&json!({
+        "model": "tablinq-instant",
+        "stream": false,
+        "messages": [{ "role": "user", "content": prompt }]
+    }))
+    .unwrap();
+    let non_stream = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+            ("x-request-id", "req-stream-parity-false"),
+        ],
+        &non_stream_body,
+        20_000,
+    )
+    .unwrap();
+    assert_eq!(non_stream.status_code, 200);
+    let non_stream_json: Value = serde_json::from_slice(&non_stream.body).unwrap();
+
+    let stream_body = serde_json::to_vec(&json!({
         "model": "tablinq-instant",
         "stream": true,
-        "messages": [{ "role": "user", "content": "reject this streaming request" }]
+        "messages": [{ "role": "user", "content": prompt }]
+    }))
+    .unwrap();
+    let stream = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+            ("x-request-id", "req-stream-parity-true"),
+        ],
+        &stream_body,
+        20_000,
+    )
+    .unwrap();
+    assert_eq!(stream.status_code, 200);
+    let stream_chunks = parse_sse_json_chunks(&stream);
+    let final_text = format!("Fake response for: {prompt}");
+    assert_eq!(
+        non_stream_json["choices"][0]["message"]["content"].as_str(),
+        Some(final_text.as_str())
+    );
+    assert_eq!(
+        stream_chunks[0]["choices"][0]["delta"]["content"].as_str(),
+        Some(final_text.as_str())
+    );
+
+    for conversation_id in [
+        non_stream_json["tablinq_conversation_id"].as_str().unwrap(),
+        stream_chunks[0]["tablinq_conversation_id"]
+            .as_str()
+            .unwrap(),
+    ] {
+        let messages = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "GET",
+            &format!("/v1/conversations/{conversation_id}/messages"),
+            &[("authorization", auth.as_str())],
+            &[],
+            20_000,
+        )
+        .unwrap();
+        assert_eq!(messages.status_code, 200);
+        let messages_body: Value = serde_json::from_slice(&messages.body).unwrap();
+        assert!(
+            messages_body["data"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| {
+                    item["source_kind"] == "request_detail"
+                        && item["role"] == "user"
+                        && item["content"] == prompt
+                })
+        );
+    }
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn chat_completions_stream_true_execution_errors_are_sse_errors() {
+    let _guard = integration_lock();
+    require_browser_integration_prereqs!();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(format!("{fake_url}/?missing=search"));
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let body = serde_json::to_vec(&json!({
+        "model": "tablinq-search",
+        "stream": true,
+        "messages": [
+            { "role": "user", "content": "search should be unavailable" }
+        ]
     }))
     .unwrap();
     let response = http_request(
@@ -427,11 +589,90 @@ fn chat_completions_stream_true_errors_preserve_request_ids_and_openai_shape() {
         20_000,
     )
     .unwrap();
-    assert_eq!(response.status_code, 400);
-    let body: Value = serde_json::from_slice(&response.body).unwrap();
-    assert_eq!(body["request_id"], "req-stream-capability");
-    assert_eq!(body["error"]["code"], "streaming_unsupported");
-    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(
+        response.status_code,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    assert_eq!(
+        response.headers.get("content-type").map(String::as_str),
+        Some("text/event-stream")
+    );
+    let data_lines = parse_sse_data_lines(&response);
+    assert_eq!(data_lines.last().map(String::as_str), Some("[DONE]"));
+    let error_event: Value = serde_json::from_str(&data_lines[0]).unwrap();
+    assert_eq!(error_event["object"], "error");
+    assert_eq!(error_event["request_id"], "req-stream-capability");
+    assert_eq!(error_event["error"]["type"], "invalid_request_error");
+    assert_eq!(error_event["error"]["code"], "capability_missing");
+    assert!(
+        error_event["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("capability"))
+    );
+
+    stop_gateway_process(Some(&state_root)).unwrap();
+    handle.join().unwrap().unwrap();
+    let _ = fake_server.kill();
+    let _ = fake_server.wait();
+}
+
+#[test]
+fn openclaude_shaped_stream_true_request_returns_final_only_sse() {
+    let _guard = integration_lock();
+    require_browser_integration_prereqs!();
+    let (mut fake_server, fake_url) = spawn_fake_chatgpt();
+    let (_dir, mut config) = test_config();
+    config.file.browser_target_url = Some(fake_url);
+    let state_root = config.paths.state_root.clone();
+    let auth = auth_header(&config);
+    let (handle, snapshot) = spawn_gateway(config);
+
+    let body = serde_json::to_vec(&json!({
+        "model": "tablinq-instant",
+        "stream": true,
+        "store": false,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "max_tokens": 128,
+        "max_completion_tokens": 64,
+        "metadata": { "client": "openclaude-regression" },
+        "messages": [{ "role": "user", "content": "openclaude streaming regression" }]
+    }))
+    .unwrap();
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+            ("x-request-id", "req-openclaude-stream"),
+        ],
+        &body,
+        20_000,
+    )
+    .unwrap();
+    assert_eq!(
+        response.status_code,
+        200,
+        "{}",
+        String::from_utf8_lossy(&response.body)
+    );
+    let chunks = parse_sse_json_chunks(&response);
+    assert_eq!(chunks.len(), 2);
+    for chunk in &chunks {
+        assert_eq!(chunk["object"], "chat.completion.chunk");
+        assert_eq!(chunk["model"], "tablinq-instant");
+    }
+    assert_eq!(
+        chunks[0]["choices"][0]["delta"]["content"].as_str(),
+        Some("Fake response for: openclaude streaming regression")
+    );
+    assert_eq!(chunks[1]["choices"][0]["finish_reason"], "stop");
+    assert_eq!(parse_sse_data_lines(&response).last().unwrap(), "[DONE]");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

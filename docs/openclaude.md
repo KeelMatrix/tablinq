@@ -7,7 +7,7 @@ Use Tablinq's local gateway as an OpenAI-compatible provider for OpenClaude.
 - bring up Tablinq through the normal attach-first flow
 - base URL: `http://127.0.0.1:3847/v1`
 - API key: `gateway.api_key` from `config.toml`
-- streaming: omit the option or set `false`
+- streaming: `true` is supported as final-only OpenAI SSE for OpenClaude compatibility; Tablinq does not emit live partial browser text
 - max parallel requests: `1`
 - max parallel branches: `1`
 - subagents: disabled by default
@@ -40,7 +40,7 @@ Use `tablinq-research` only when you explicitly want the longer-running research
     "apiKey": "<gateway.api_key>"
   },
   "model": "tablinq-search",
-  "stream": false,
+  "stream": true,
   "max_parallel_requests": 1,
   "max_parallel_branches": 1,
   "subagents": false,
@@ -68,7 +68,8 @@ Use `tablinq-research` only when you explicitly want the longer-running research
 
 ## Cancellation and recovery guidance
 
-- keep `stream` omitted or explicitly `false`; browser-backed ChatGPT drafts may be rewritten before finalization, so live streaming is disabled for correctness
+- `stream = true` is accepted, but Tablinq waits for ChatGPT finalization before emitting the final content chunk, a stop chunk, and `[DONE]`
+- browser-backed ChatGPT drafts may be rewritten before finalization, so live token streaming remains disabled for correctness
 - persist the returned `request_id`
 - cancel with `POST /v1/requests/{request_id}/cancel`
 - if the client disconnects, inspect `GET /v1/requests/{request_id}` before assuming the work is lost
@@ -83,7 +84,7 @@ For request-scoped evidence capture and how to consume `GET /v1/requests/{reques
 ```json
 {
   "model": "tablinq-search",
-  "stream": false,
+  "stream": true,
   "tablinq_request_role": "primary",
   "tablinq_new_conversation": true,
   "messages": [
