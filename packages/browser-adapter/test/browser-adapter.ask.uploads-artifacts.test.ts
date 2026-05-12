@@ -192,6 +192,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl: server.url, headless: true });
@@ -230,6 +231,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: withHarnessUrl(server.url, { missing: ["upload"] }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -313,6 +315,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -357,6 +360,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -403,6 +407,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -441,6 +446,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl: server.url, headless: true });
@@ -473,6 +479,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });

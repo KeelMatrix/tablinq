@@ -215,6 +215,7 @@ describe("browser adapter foundation: pacing and retry primitives", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
 
@@ -258,6 +259,7 @@ describe("browser adapter foundation: pacing and retry primitives", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
 
@@ -302,6 +304,7 @@ describe("browser adapter foundation: pacing and retry primitives", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
 
@@ -351,6 +354,7 @@ describe("browser adapter foundation: pacing and retry primitives", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
 
@@ -399,6 +403,7 @@ describe("browser adapter foundation: pacing and retry primitives", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl: server.url, headless: true });

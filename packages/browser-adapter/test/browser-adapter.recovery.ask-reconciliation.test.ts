@@ -127,6 +127,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "recover-complete",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -173,6 +174,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "recover-done-transient",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -221,6 +223,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "recover-message-successor",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -269,6 +272,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "recover-running-transient",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -323,6 +327,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "recover-same-message-rewrite",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -375,6 +380,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -425,6 +431,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -481,6 +488,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "recover-mismatch",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -525,6 +533,7 @@ describe("browser adapter recovery: ask reconciliation recovery", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "recover-wrong-conversation",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({

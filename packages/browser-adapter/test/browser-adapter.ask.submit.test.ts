@@ -644,6 +644,7 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -684,6 +685,7 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: withHarnessUrl(server.url, { variant: "live" }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -750,6 +752,7 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
 
@@ -818,6 +821,7 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });

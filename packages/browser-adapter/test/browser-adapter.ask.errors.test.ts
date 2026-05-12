@@ -100,6 +100,7 @@ describe("browser adapter ask: error paths", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: withHarnessUrl(server.url, { scenario: "timeout" }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -139,6 +140,7 @@ describe("browser adapter ask: error paths", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -173,6 +175,7 @@ describe("browser adapter ask: error paths", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -221,6 +224,7 @@ describe("browser adapter ask: error paths", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -270,6 +274,7 @@ describe("browser adapter ask: error paths", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });

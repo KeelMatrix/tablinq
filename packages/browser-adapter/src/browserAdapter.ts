@@ -103,7 +103,7 @@ export class BrowserAdapter {
     this.downloadsDir = resolve(options.downloadsDir);
     this.defaultTargetUrl = options.defaultTargetUrl;
     this.defaultBrowserPath = options.defaultBrowserPath ?? null;
-    this.connectionMode = options.connectionMode ?? "managed_only";
+    this.connectionMode = options.connectionMode;
     this.debugEndpoint = options.debugEndpoint ?? "http://127.0.0.1:9222";
     this.extensionRequired = options.extensionRequired ?? true;
     this.capabilityCache = new CapabilityStrategyCache(

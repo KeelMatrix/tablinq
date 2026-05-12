@@ -196,6 +196,7 @@ export function createBrowserIntegrationHarness() {
           profileDir: path.join(root, "profile"),
           downloadsDir: path.join(root, "downloads"),
           defaultTargetUrl: targetUrl,
+          connectionMode: "managed_only",
         }),
       );
     },

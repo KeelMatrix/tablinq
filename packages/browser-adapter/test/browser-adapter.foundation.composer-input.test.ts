@@ -53,6 +53,7 @@ describe("browser adapter foundation: composer input handling", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
 
@@ -86,6 +87,7 @@ describe("browser adapter foundation: composer input handling", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
       }),
     );
 

@@ -48,6 +48,7 @@ describe("browser adapter research: result extraction", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           scenario: "research-success",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({

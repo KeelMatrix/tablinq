@@ -287,6 +287,7 @@ describe("browser adapter ask: live controls configuration", () => {
           initialModel: "thinking",
           initialEffort: "extended",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -337,6 +338,7 @@ describe("browser adapter ask: live controls configuration", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: withHarnessUrl(server.url, { missing: ["search"] }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -368,6 +370,7 @@ describe("browser adapter ask: live controls configuration", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           variant: "live",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({
@@ -456,6 +459,7 @@ describe("browser adapter ask: live controls configuration", () => {
         defaultTargetUrl: withHarnessUrl(server.url, {
           variant: "live",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({

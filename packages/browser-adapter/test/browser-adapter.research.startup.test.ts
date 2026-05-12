@@ -1042,6 +1042,7 @@ describe("browser adapter research: startup and configuration", () => {
         profileDir: path.join(root, "profile"),
         downloadsDir: path.join(root, "downloads"),
         defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({ targetUrl, headless: true });
@@ -1143,6 +1144,7 @@ describe("browser adapter research: startup and configuration", () => {
           variant: "live",
           scenario: "research-success",
         }),
+        connectionMode: "managed_only",
       }),
     );
     await adapter.open({

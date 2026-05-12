@@ -51,7 +51,7 @@ flowchart LR
 
 - The CLI never talks to the browser directly.
 - The daemon supervises the browser adapter process.
-- The browser adapter is launched from packaged `service.js` output when present and falls back to repo `service.ts` in a developer checkout.
+- The browser adapter is launched from packaged `service.js` output when present and falls back to repo `service.ts` in a developer checkout. The daemon passes the adapter connection mode explicitly; the adapter does not infer a managed-browser default.
 - In `attach_first`, the adapter connects to a running local debug endpoint, discovers the best ChatGPT tab, or opens a target tab if needed.
 - In `managed_only` or `managed_fallback`, the adapter can still launch an owned managed context for debugging, CI, or machines that cannot expose an attachable browser.
 - In attach mode, Tablinq does not own the whole browser and must detach cleanly instead of killing the user's browser process.

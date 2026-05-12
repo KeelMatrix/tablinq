@@ -13,7 +13,7 @@ export interface ServiceArgs {
   downloadsDir: string;
   defaultTargetUrl: string;
   defaultBrowserPath?: string;
-  connectionMode?: "attach_first" | "managed_fallback" | "managed_only";
+  connectionMode: "attach_first" | "managed_fallback" | "managed_only";
   debugEndpoint?: string;
   extensionRequired?: boolean;
   autoOpenTargetTab?: boolean;
