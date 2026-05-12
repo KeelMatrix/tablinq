@@ -95,12 +95,12 @@ export function assessRecoveredAskSnapshot(
     (candidate.state === "running" || candidate.state === "done");
   const identityCompatible =
     sameMessageIdentity || successorMessage || baselineSuccessorMessage;
-  const legacyTextCompatible =
+  const recoveredTextCompatible =
     relationIsUsable ||
     transientOnlyOutput ||
     placeholderCompatibleText(state.emittedText, candidate.text) ||
     markdownCompatibleRecoveredText(state.emittedText, candidate.text);
-  const sameMessageCompatible = identityCompatible || legacyTextCompatible;
+  const sameMessageCompatible = identityCompatible || recoveredTextCompatible;
   const sameMessageDrift =
     conversationMatches &&
     messageMatches &&
@@ -130,7 +130,7 @@ export function assessRecoveredAskSnapshot(
       candidate.state === "done" &&
       hasAssistantSignal &&
       !identityCompatible &&
-      !legacyTextCompatible &&
+      !recoveredTextCompatible &&
       !successorMessage);
   logRecoveryDecision("ask", {
     commandConversationId,
@@ -151,7 +151,7 @@ export function assessRecoveredAskSnapshot(
     transientOnlyOutput,
     sameMessageCompatible,
     identityCompatible,
-    legacyTextCompatible,
+    recoveredTextCompatible,
     sameMessageDrift,
     successorMessage,
     baselineSuccessorMessage,
