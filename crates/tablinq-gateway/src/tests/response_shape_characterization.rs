@@ -281,7 +281,7 @@ fn empty_state_routes_keep_current_response_envelopes() {
     let usage = get_json(snapshot, &auth, "/v1/usage", 200);
     assert_eq!(usage["object"], "tablinq.request_summary_list");
     assert_eq!(usage["data"].as_array().unwrap().len(), 0);
-    assert_eq!(usage["limit"], 50);
+    assert!(usage.get("limit").is_none());
     assert_eq!(usage["pagination"]["limit"], 50);
     assert_eq!(usage["pagination"]["offset"], 0);
     assert_eq!(usage["pagination"]["returned"], 0);
@@ -430,7 +430,8 @@ fn seeded_state_routes_keep_current_default_shapes_and_ordering() {
     assert_eq!(usage["object"], "tablinq.request_summary_list");
     assert_eq!(usage["data"].as_array().unwrap().len(), 3);
     assert_eq!(usage["data"][0]["request_id"], "req-shape-3");
-    assert_eq!(usage["limit"], 50);
+    assert!(usage.get("limit").is_none());
+    assert_eq!(usage["pagination"]["limit"], 50);
 
     let files = get_json(snapshot, &auth, "/v1/files", 200);
     assert_eq!(files["object"], "list");
