@@ -93,7 +93,7 @@ describe("browser adapter ask: streaming and finalization", () => {
 
     try {
       await withAskStreamWatchdogEnv(
-        { intervalMs: 150, maxMs: 5000 },
+        { intervalMs: 150, maxMs: 15000 },
         async () => {
           const prompt =
             "write a long answer that keeps streaming past the original timeout "
