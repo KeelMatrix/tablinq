@@ -494,10 +494,6 @@ fn invalid_response_shape_query_parameters_return_structured_errors() {
         "limit must be a positive integer"
     );
 
-    let requests_unknown = get_json(snapshot, &auth, "/v1/requests?unknown=1", 200);
-    assert_eq!(requests_unknown["data"].as_array().unwrap().len(), 3);
-    assert_eq!(requests_unknown["pagination"]["limit"], 50);
-
     let invalid_offset = get_json(snapshot, &auth, "/v1/jobs?offset=-1", 400);
     assert_eq!(
         invalid_offset["error"]["message"],
@@ -520,15 +516,6 @@ fn invalid_response_shape_query_parameters_return_structured_errors() {
         invalid_include["error"]["message"],
         "unsupported include: everything"
     );
-
-    let messages_unknown = get_json(
-        snapshot,
-        &auth,
-        "/v1/conversations/conv-alpha/messages?unknown=1",
-        200,
-    );
-    assert_eq!(messages_unknown["pagination"]["limit"], 50);
-    assert_eq!(messages_unknown["data"].as_array().unwrap().len(), 6);
 
     let invalid_compact = get_json(
         snapshot,
@@ -563,6 +550,41 @@ fn invalid_response_shape_query_parameters_return_structured_errors() {
     assert_eq!(
         artifacts_invalid_limit["error"]["message"],
         "limit must be a positive integer"
+    );
+}
+
+#[test]
+fn unknown_non_response_shape_query_parameters_are_ignored() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    seed_state_fixture(&config);
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let requests_with_ignored_unknown = get_json(snapshot, &auth, "/v1/requests?unknown=1", 200);
+    assert_eq!(
+        requests_with_ignored_unknown["data"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(requests_with_ignored_unknown["pagination"]["limit"], 50);
+
+    let messages_with_ignored_unknown = get_json(
+        snapshot,
+        &auth,
+        "/v1/conversations/conv-alpha/messages?unknown=1",
+        200,
+    );
+    assert_eq!(messages_with_ignored_unknown["pagination"]["limit"], 50);
+    assert_eq!(
+        messages_with_ignored_unknown["data"]
+            .as_array()
+            .unwrap()
+            .len(),
+        6
     );
 }
 
