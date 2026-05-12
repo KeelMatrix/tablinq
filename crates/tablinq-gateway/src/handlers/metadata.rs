@@ -304,7 +304,6 @@ pub(crate) fn handle_usage_request(
             "object": "tablinq.request_summary_list",
             "request_id": context.request_id,
             "data": data,
-            "limit": crate::routes::REQUEST_SUMMARY_LIMIT,
             "pagination": pagination,
             "meta": response_meta_object(query.view, summary, truncated_fields),
             "warnings": ["token usage is unavailable for the browser-backed provider"],
