@@ -339,8 +339,20 @@ function Invoke-Step {
   }
 
   try {
+    $waitForExitCode = $PSVersionTable.PSEdition -ne "Core"
     try {
-      $process = Start-Process -FilePath $invocation.LaunchFilePath -ArgumentList $invocation.LaunchArguments -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+      $startProcessArguments = @{
+        FilePath = $invocation.LaunchFilePath
+        ArgumentList = $invocation.LaunchArguments
+        PassThru = $true
+        NoNewWindow = $true
+        RedirectStandardOutput = $stdoutPath
+        RedirectStandardError = $stderrPath
+      }
+      if ($waitForExitCode) {
+        $startProcessArguments.Wait = $true
+      }
+      $process = Start-Process @startProcessArguments
     }
     catch {
       $message = @(
@@ -361,7 +373,7 @@ function Invoke-Step {
       [datetime]::MaxValue
     }
 
-    while (-not $process.HasExited) {
+    while (-not $waitForExitCode -and -not $process.HasExited) {
       Start-Sleep -Milliseconds 250
       $process.Refresh()
 
@@ -1087,7 +1099,15 @@ function Invoke-InternalCli {
   $stdoutPath = [System.IO.Path]::GetTempFileName()
   $stderrPath = [System.IO.Path]::GetTempFileName()
   try {
-    $process = Start-Process -FilePath $CliExecutablePath -ArgumentList (@("--state-root", $StateRoot) + $Arguments) -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $startProcessArguments = @{
+      FilePath = $CliExecutablePath
+      ArgumentList = (@("--state-root", $StateRoot) + $Arguments)
+      PassThru = $true
+      NoNewWindow = $true
+      RedirectStandardOutput = $stdoutPath
+      RedirectStandardError = $stderrPath
+    }
+    $process = Start-Process @startProcessArguments
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while (-not $process.HasExited -and (Get-Date) -lt $deadline) {
       Start-Sleep -Milliseconds 100
@@ -1106,8 +1126,17 @@ function Invoke-InternalCli {
     $stderr = Get-Content -Path $stderrPath -Raw -ErrorAction SilentlyContinue
     $stdoutText = if ($null -ne $stdout) { ($stdout | Out-String).Trim() } else { "" }
     $stderrText = if ($null -ne $stderr) { $stderr.Trim() } else { "" }
+    $exitCode = if ($null -ne $process.ExitCode) {
+      $process.ExitCode
+    }
+    elseif ($stderrText) {
+      1
+    }
+    else {
+      0
+    }
     [pscustomobject]@{
-      ExitCode = $process.ExitCode
+      ExitCode = $exitCode
       Stdout = $stdoutText
       Stderr = $stderrText
     }
@@ -1135,7 +1164,7 @@ function Invoke-InternalCliJson {
   }
 
   try {
-    return ($result.Stdout | ConvertFrom-Json -Depth 20)
+    return ($result.Stdout | ConvertFrom-Json)
   }
   catch {
     throw "Command returned non-JSON output: $($Arguments -join ' ')"
@@ -1154,7 +1183,7 @@ function Get-DaemonStatus {
   }
 
   try {
-    return ($result.Stdout | ConvertFrom-Json -Depth 20)
+    return ($result.Stdout | ConvertFrom-Json)
   }
   catch {
     return $null
@@ -1173,7 +1202,7 @@ function Get-GatewayStatus {
   }
 
   try {
-    return ($result.Stdout | ConvertFrom-Json -Depth 20)
+    return ($result.Stdout | ConvertFrom-Json)
   }
   catch {
     return $null
@@ -1345,7 +1374,7 @@ function Get-BinaryBuildMetadata {
       return $null
     }
 
-    return ($text | ConvertFrom-Json -Depth 10)
+    return ($text | ConvertFrom-Json)
   }
   catch {
     return $null
