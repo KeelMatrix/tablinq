@@ -1,5 +1,6 @@
 use super::*;
 use chrono::Duration;
+use sha2::{Digest, Sha256};
 use shared_protocol::{
     ArtifactMetadata, CapabilityMatrix, ConversationRecoveryManifest, FailureBundle, JobKind,
     RequestExecutionKind, RequestUsage, SessionList,
@@ -112,6 +113,22 @@ fn recovery_packet_fixture(now: chrono::DateTime<Utc>) -> RecoveryPacket {
     }
 }
 
+fn header_value<'a>(headers: &'a [serde_json::Value], name: &str) -> Option<&'a str> {
+    headers
+        .iter()
+        .find(|item| {
+            item["name"]
+                .as_str()
+                .is_some_and(|value| value.eq_ignore_ascii_case(name))
+        })
+        .and_then(|item| item["value"].as_str())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn seed_session(db: &Database, now: chrono::DateTime<Utc>) {
     db.upsert_session(
         "session-1",
@@ -150,6 +167,146 @@ fn migrations_are_applied_on_open() {
         db.migration_count().unwrap(),
         migrations::MIGRATIONS.len() as u32
     );
+}
+
+#[test]
+fn gateway_http_requests_migration_creates_table_and_indexes() {
+    let (_dir, db) = test_db();
+
+    let table_count: u32 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'gateway_http_requests'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(table_count, 1);
+
+    let mut rows = db
+        .conn
+        .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'gateway_http_requests'",
+        )
+        .unwrap();
+    let indexes = rows
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+
+    for index in [
+        "gateway_http_requests_created_at_idx",
+        "gateway_http_requests_request_id_idx",
+        "gateway_http_requests_path_idx",
+        "gateway_http_requests_status_idx",
+    ] {
+        assert!(indexes.iter().any(|name| name == index), "missing {index}");
+    }
+}
+
+#[test]
+fn gateway_http_header_redaction_is_case_insensitive() {
+    let headers = gateway_http_headers_json([
+        ("Authorization", "Bearer secret"),
+        ("proxy-Authorization", "proxy secret"),
+        ("COOKIE", "a=b"),
+        ("set-cookie", "sid=secret"),
+        ("X-API-Key", "api secret"),
+        ("x-request-id", "req-visible"),
+    ])
+    .unwrap();
+    let headers: serde_json::Value = serde_json::from_str(&headers).unwrap();
+    let headers = headers.as_array().unwrap();
+
+    for name in [
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+    ] {
+        let value = header_value(headers, name);
+        assert_eq!(value, Some("[redacted]"));
+    }
+    assert_eq!(header_value(headers, "x-request-id"), Some("req-visible"));
+}
+
+#[test]
+fn gateway_http_request_body_capture_truncates_and_hashes_full_bytes() {
+    let (_dir, db) = test_db();
+    let now = Utc::now();
+    let body = vec![b'a'; GATEWAY_HTTP_BODY_CAPTURE_LIMIT + 17];
+    let start = GatewayHttpRequestStart {
+        request_id: Some("req-monitor-request-body".to_owned()),
+        remote_addr: Some("127.0.0.1:1".to_owned()),
+        method: "POST".to_owned(),
+        path: "/v1/chat/completions".to_owned(),
+        route: Some("ChatCompletions".to_owned()),
+        request_headers_json: None,
+        request_body: Some(capture_gateway_http_body(&body)),
+        parse_error: None,
+        started_at: now,
+        created_at: now,
+    };
+
+    db.start_gateway_http_request(&start).unwrap();
+    let record = db
+        .latest_gateway_http_request("req-monitor-request-body")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        record.request_body_text.unwrap().len(),
+        GATEWAY_HTTP_BODY_CAPTURE_LIMIT
+    );
+    assert_eq!(record.request_body_sha256, Some(sha256_hex(&body)));
+    assert!(record.request_body_truncated);
+}
+
+#[test]
+fn gateway_http_response_body_capture_truncates_and_hashes_full_bytes() {
+    let (_dir, db) = test_db();
+    let now = Utc::now();
+    let row_id = db
+        .start_gateway_http_request(&GatewayHttpRequestStart {
+            request_id: Some("req-monitor-response-body".to_owned()),
+            remote_addr: Some("127.0.0.1:1".to_owned()),
+            method: "GET".to_owned(),
+            path: "/v1/models".to_owned(),
+            route: Some("Models".to_owned()),
+            request_headers_json: None,
+            request_body: Some(capture_gateway_http_body(&[])),
+            parse_error: None,
+            started_at: now,
+            created_at: now,
+        })
+        .unwrap();
+    let body = vec![b'z'; GATEWAY_HTTP_BODY_CAPTURE_LIMIT + 29];
+
+    db.finish_gateway_http_request(
+        row_id,
+        &GatewayHttpRequestFinish {
+            response_status_code: Some(200),
+            response_headers_json: None,
+            response_body: Some(capture_gateway_http_body(&body)),
+            response_capture_omitted_reason: None,
+            finished_at: now,
+            duration_ms: 5,
+        },
+    )
+    .unwrap();
+    let record = db
+        .latest_gateway_http_request("req-monitor-response-body")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        record.response_body_text.unwrap().len(),
+        GATEWAY_HTTP_BODY_CAPTURE_LIMIT
+    );
+    assert_eq!(record.response_body_sha256, Some(sha256_hex(&body)));
+    assert!(record.response_body_truncated);
 }
 
 #[test]

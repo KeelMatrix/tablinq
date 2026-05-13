@@ -50,7 +50,17 @@ pub(crate) struct SimpleHttpResponse {
 pub(crate) struct HttpParseError {
     pub(crate) status_code: u16,
     pub(crate) code: &'static str,
+    pub(crate) partial: Box<PartialHttpRequest>,
     message: String,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct PartialHttpRequest {
+    pub(crate) request_id: Option<String>,
+    pub(crate) method: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) headers: BTreeMap<String, String>,
+    pub(crate) body: Option<Vec<u8>>,
 }
 
 impl std::fmt::Display for HttpParseError {
@@ -140,7 +150,9 @@ pub(crate) fn parse_http_request(
         .to_ascii_uppercase();
     let path = request_line_parts
         .next()
-        .ok_or_else(|| bad_http_request("missing HTTP path"))?
+        .ok_or_else(|| {
+            bad_http_request("missing HTTP path").with_partial(Some(method.clone()), None, None)
+        })?
         .to_owned();
 
     let mut headers = BTreeMap::new();
@@ -148,10 +160,23 @@ pub(crate) fn parse_http_request(
     let mut header_count = 0usize;
     loop {
         let line =
-            read_limited_http_line(&mut reader, MAX_HTTP_HEADER_LINE_BYTES, "HTTP header line")?;
+            read_limited_http_line(&mut reader, MAX_HTTP_HEADER_LINE_BYTES, "HTTP header line")
+                .map_err(|err| {
+                    err.with_partial(
+                        Some(method.clone()),
+                        Some(path.clone()),
+                        Some(headers.clone()),
+                    )
+                })?;
         total_header_bytes += line.len();
         if total_header_bytes > MAX_HTTP_HEADER_BYTES {
-            return Err(bad_http_request("HTTP headers exceed gateway limit"));
+            return Err(
+                bad_http_request("HTTP headers exceed gateway limit").with_partial(
+                    Some(method),
+                    Some(path),
+                    Some(headers),
+                ),
+            );
         }
         let trimmed = line.trim_end();
         if trimmed.is_empty() {
@@ -159,46 +184,72 @@ pub(crate) fn parse_http_request(
         }
         header_count += 1;
         if header_count > MAX_HTTP_HEADER_COUNT {
-            return Err(bad_http_request("too many HTTP headers"));
+            return Err(bad_http_request("too many HTTP headers").with_partial(
+                Some(method),
+                Some(path),
+                Some(headers),
+            ));
         }
-        let (name, value) = trimmed
-            .split_once(':')
-            .ok_or_else(|| bad_http_request("invalid HTTP header line"))?;
+        let (name, value) = trimmed.split_once(':').ok_or_else(|| {
+            bad_http_request("invalid HTTP header line").with_partial(
+                Some(method.clone()),
+                Some(path.clone()),
+                Some(headers.clone()),
+            )
+        })?;
         headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
     }
 
     if headers.contains_key("transfer-encoding") {
-        return Err(bad_http_request("unsupported Transfer-Encoding"));
+        return Err(
+            bad_http_request("unsupported Transfer-Encoding").with_partial(
+                Some(method),
+                Some(path),
+                Some(headers),
+            ),
+        );
     }
 
     let content_length = headers
         .get("content-length")
         .map(|value| {
-            value
-                .parse::<usize>()
-                .map_err(|err| bad_http_request(format!("parse Content-Length: {err}")))
+            value.parse::<usize>().map_err(|err| {
+                bad_http_request(format!("parse Content-Length: {err}")).with_partial(
+                    Some(method.clone()),
+                    Some(path.clone()),
+                    Some(headers.clone()),
+                )
+            })
         })
         .transpose()?
         .unwrap_or(0);
     let request_path = normalized_request_path(&path);
     if method == "POST" && request_path == V1_FILES_PATH {
         if content_length > crate::uploads::MAX_STAGED_UPLOAD_BYTES {
-            return Err(payload_too_large(
-                "payload_too_large",
-                "file exceeds 20 MiB limit",
-            ));
+            return Err(
+                payload_too_large("payload_too_large", "file exceeds 20 MiB limit").with_partial(
+                    Some(method),
+                    Some(path),
+                    Some(headers),
+                ),
+            );
         }
     } else if content_length > MAX_NON_UPLOAD_REQUEST_BODY_BYTES {
-        return Err(payload_too_large(
-            "payload_too_large",
-            "request body exceeds gateway limit",
-        ));
+        return Err(
+            payload_too_large("payload_too_large", "request body exceeds gateway limit")
+                .with_partial(Some(method), Some(path), Some(headers)),
+        );
     }
     let mut body = vec![0u8; content_length];
     if content_length > 0 {
-        reader
-            .read_exact(&mut body)
-            .map_err(|err| bad_http_request(format!("read HTTP request body: {err}")))?;
+        reader.read_exact(&mut body).map_err(|err| {
+            bad_http_request(format!("read HTTP request body: {err}")).with_partial_and_body(
+                Some(method.clone()),
+                Some(path.clone()),
+                Some(headers.clone()),
+                Some(body.clone()),
+            )
+        })?;
     }
 
     let request_id = headers
@@ -250,6 +301,7 @@ pub(crate) fn bad_http_request(message: impl Into<String>) -> HttpParseError {
     HttpParseError {
         status_code: 400,
         code: "bad_request",
+        partial: Box::default(),
         message: message.into(),
     }
 }
@@ -258,39 +310,72 @@ pub(crate) fn payload_too_large(code: &'static str, message: impl Into<String>) 
     HttpParseError {
         status_code: 413,
         code,
+        partial: Box::default(),
         message: message.into(),
     }
+}
+
+impl HttpParseError {
+    fn with_partial(
+        self,
+        method: Option<String>,
+        path: Option<String>,
+        headers: Option<BTreeMap<String, String>>,
+    ) -> Self {
+        self.with_partial_and_body(method, path, headers, None)
+    }
+
+    fn with_partial_and_body(
+        mut self,
+        method: Option<String>,
+        path: Option<String>,
+        headers: Option<BTreeMap<String, String>>,
+        body: Option<Vec<u8>>,
+    ) -> Self {
+        let headers = headers.unwrap_or_default();
+        self.partial.request_id = headers
+            .get("x-request-id")
+            .cloned()
+            .filter(|value| !value.trim().is_empty());
+        self.partial.method = method;
+        self.partial.path = path;
+        self.partial.headers = headers;
+        self.partial.body = body;
+        self
+    }
+}
+
+pub(crate) fn finalized_http_response_headers(
+    request_id: &str,
+    response: &HttpResponse,
+) -> Vec<(String, String)> {
+    let mut headers = response.headers.clone();
+    if !headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("connection"))
+    {
+        headers.push(("Connection".to_owned(), "close".to_owned()));
+    }
+    headers.push(("x-request-id".to_owned(), request_id.to_owned()));
+    headers.push(("content-length".to_owned(), response.body.len().to_string()));
+    headers
 }
 
 pub(crate) fn write_http_response(
     stream: &mut TcpStream,
     request_id: &str,
-    mut response: HttpResponse,
+    response: HttpResponse,
 ) -> Result<()> {
-    if !response
-        .headers
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("connection"))
-    {
-        response
-            .headers
-            .push(("Connection".to_owned(), "close".to_owned()));
-    }
-    response
-        .headers
-        .push(("x-request-id".to_owned(), request_id.to_owned()));
-    response
-        .headers
-        .push(("content-length".to_owned(), response.body.len().to_string()));
+    let headers = finalized_http_response_headers(request_id, &response);
 
-    let mut bytes = Vec::with_capacity(128 + response.headers.len() * 48 + response.body.len());
+    let mut bytes = Vec::with_capacity(128 + headers.len() * 48 + response.body.len());
     write!(
         &mut bytes,
         "HTTP/1.1 {} {}\r\n",
         response.status_code, response.reason_phrase
     )
     .context("encode HTTP status line")?;
-    for (name, value) in &response.headers {
+    for (name, value) in &headers {
         write!(&mut bytes, "{name}: {value}\r\n").context("encode HTTP header")?;
     }
     write!(&mut bytes, "\r\n").context("encode HTTP header terminator")?;

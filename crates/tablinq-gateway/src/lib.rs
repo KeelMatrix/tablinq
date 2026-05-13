@@ -9,6 +9,7 @@ mod errors;
 mod handlers;
 mod http;
 mod json;
+mod monitoring;
 mod openai;
 mod process_control;
 mod routes;

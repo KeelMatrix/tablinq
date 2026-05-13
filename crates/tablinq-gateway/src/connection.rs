@@ -9,6 +9,7 @@ use crate::http::{
     write_http_response,
 };
 use crate::json::api_error_response;
+use crate::monitoring::{GatewayHttpMonitor, GatewayHttpResponseCapture};
 use crate::process_control::GatewayStatusSnapshot;
 use crate::routes::{Route, match_route, method_not_allowed_for_path, normalized_request_path};
 use crate::scheduler::GatewayScheduler;
@@ -25,7 +26,7 @@ use std::time::Duration;
 
 enum DispatchResult {
     Response(HttpResponse),
-    Written,
+    Written(GatewayHttpResponseCapture),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -60,7 +61,11 @@ pub(crate) fn handle_connection(
     let context = match parse_http_request(&mut stream, request_counter) {
         Ok(context) => context,
         Err(err) => {
-            let request_id = next_request_id(request_counter);
+            let request_id = err
+                .partial
+                .request_id
+                .clone()
+                .unwrap_or_else(|| next_request_id(request_counter));
             let response = if err.status_code == 413 {
                 api_error_response(
                     413,
@@ -85,12 +90,34 @@ pub(crate) fn handle_connection(
                     "error": format!("{err:#}"),
                 }),
             );
-            return write_http_response_logged(&mut stream, logger, &request_id, None, response);
+            let mut monitor = GatewayHttpMonitor::start_parse_failure(
+                config,
+                logger,
+                &request_id,
+                &remote_addr,
+                &err,
+            );
+            return write_http_response_logged(
+                &mut stream,
+                logger,
+                &request_id,
+                None,
+                &mut monitor,
+                response,
+            );
         }
     };
 
     let _ = log_request(logger, &context.request_id, &context.request, &remote_addr);
     let route = match_route(&context.request.method, &context.request.path);
+    let mut monitor = GatewayHttpMonitor::start(
+        config,
+        logger,
+        &context.request_id,
+        &remote_addr,
+        &context.request,
+        route,
+    );
 
     if let Err(response) = authorize_request(
         config,
@@ -105,6 +132,7 @@ pub(crate) fn handle_connection(
             logger,
             &context.request_id,
             Some(route),
+            &mut monitor,
             response,
         );
     }
@@ -118,6 +146,7 @@ pub(crate) fn handle_connection(
                 logger,
                 &context.request_id,
                 Some(route),
+                &mut monitor,
                 response,
             );
         }
@@ -240,7 +269,9 @@ pub(crate) fn handle_connection(
                     Ok(Ok(chat::ChatCompletionsResult::Response(response))) => {
                         Ok(DispatchResult::Response(response))
                     }
-                    Ok(Ok(chat::ChatCompletionsResult::Written)) => Ok(DispatchResult::Written),
+                    Ok(Ok(chat::ChatCompletionsResult::Written(response_capture))) => {
+                        Ok(DispatchResult::Written(response_capture))
+                    }
                     Ok(Err(err)) if is_client_disconnect_error(&err) => Err(err),
                     Ok(Err(err)) => Ok(DispatchResult::Response(internal_server_error_response(
                         &context.request_id,
@@ -308,7 +339,10 @@ pub(crate) fn handle_connection(
 
     let response = match response_result {
         Ok(Ok(DispatchResult::Response(response))) => response,
-        Ok(Ok(DispatchResult::Written)) => return Ok(()),
+        Ok(Ok(DispatchResult::Written(response_capture))) => {
+            monitor.finish(logger, response_capture);
+            return Ok(());
+        }
         Ok(Err(err)) if is_client_disconnect_error(&err) => return Err(err),
         Ok(Err(err)) => internal_server_error_response(&context.request_id, &err),
         Err(panic) => panic_response(&context.request_id, panic),
@@ -320,6 +354,7 @@ pub(crate) fn handle_connection(
         logger,
         &context.request_id,
         Some(route),
+        &mut monitor,
         response,
     )
 }
@@ -366,13 +401,17 @@ fn write_http_response_logged(
     logger: &JsonLogger,
     request_id: &str,
     route: Option<Route>,
+    monitor: &mut GatewayHttpMonitor,
     response: HttpResponse,
 ) -> Result<()> {
     let status_code = response.status_code;
     let route = route
         .map(|route| format!("{route:?}"))
         .unwrap_or_else(|| "RequestParse".to_owned());
-    match write_http_response(stream, request_id, response) {
+    let response_capture = GatewayHttpResponseCapture::from_http_response(request_id, &response);
+    let write_result = write_http_response(stream, request_id, response);
+    monitor.finish(logger, response_capture);
+    match write_result {
         Ok(()) => Ok(()),
         Err(err) if is_client_disconnect_error(&err) => {
             let _ = logger.warn(

@@ -2,6 +2,7 @@ mod artifacts;
 mod clear;
 mod conversations;
 mod failure_bundles;
+mod gateway_http;
 mod jobs;
 mod migrations;
 mod requests;
@@ -18,6 +19,12 @@ use shared_protocol::{
     RequestListPage, RequestSummary, SessionList,
 };
 use std::path::Path;
+
+pub use gateway_http::{
+    GATEWAY_HTTP_BODY_CAPTURE_LIMIT, GATEWAY_HTTP_STREAMING_RESPONSE_REASON,
+    GatewayHttpCapturedBody, GatewayHttpRequestFinish, GatewayHttpRequestRecord,
+    GatewayHttpRequestStart, capture_gateway_http_body, gateway_http_headers_json,
+};
 
 const REQUEST_HISTORY_LIMIT: usize = 200;
 #[cfg(test)]
@@ -332,6 +339,29 @@ impl Database {
 
     pub fn latest_failure_bundle(&self) -> Result<Option<FailureBundle>> {
         failure_bundles::latest(&self.conn)
+    }
+
+    pub fn start_gateway_http_request(&self, start: &GatewayHttpRequestStart) -> Result<i64> {
+        gateway_http::insert_start(&self.conn, start)
+    }
+
+    pub fn finish_gateway_http_request(
+        &self,
+        id: i64,
+        finish: &GatewayHttpRequestFinish,
+    ) -> Result<()> {
+        gateway_http::finish(&self.conn, id, finish)
+    }
+
+    pub fn latest_gateway_http_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<GatewayHttpRequestRecord>> {
+        gateway_http::latest_by_request_id(&self.conn, request_id)
+    }
+
+    pub fn gateway_http_request_count(&self) -> Result<u64> {
+        gateway_http::count(&self.conn)
     }
 }
 

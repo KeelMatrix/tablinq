@@ -3,12 +3,22 @@ use serde_json::Value;
 use std::io::Write;
 use std::net::TcpStream;
 
+pub(crate) fn sse_response_headers(request_id: &str) -> Vec<(String, String)> {
+    vec![
+        ("Content-Type".to_owned(), "text/event-stream".to_owned()),
+        ("Cache-Control".to_owned(), "no-cache".to_owned()),
+        ("Connection".to_owned(), "close".to_owned()),
+        ("X-Request-Id".to_owned(), request_id.to_owned()),
+    ]
+}
+
 pub(crate) fn write_sse_headers(stream: &mut TcpStream, request_id: &str) -> Result<()> {
-    write!(
-        stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\nX-Request-Id: {request_id}\r\n\r\n"
-    )
-    .context("write SSE headers")?;
+    let headers = sse_response_headers(request_id);
+    write!(stream, "HTTP/1.1 200 OK\r\n").context("write SSE headers")?;
+    for (name, value) in headers {
+        write!(stream, "{name}: {value}\r\n").context("write SSE header")?;
+    }
+    write!(stream, "\r\n").context("write SSE header terminator")?;
     stream.flush().context("flush SSE headers")
 }
 

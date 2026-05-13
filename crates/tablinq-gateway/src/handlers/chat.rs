@@ -9,6 +9,7 @@ use crate::handlers::requests::{
     cancellation_response, client_id_for_request, queue_error_response,
 };
 use crate::http::{HttpResponse, RequestContext};
+use crate::monitoring::GatewayHttpResponseCapture;
 use crate::scheduler::{GatewayScheduler, SchedulerSnapshot};
 use crate::uploads::UploadStore;
 use anyhow::Result;
@@ -20,7 +21,7 @@ use std::time::Instant;
 
 pub(crate) enum ChatCompletionsResult {
     Response(HttpResponse),
-    Written,
+    Written(GatewayHttpResponseCapture),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -111,7 +112,8 @@ pub(crate) fn handle_chat_completions_request(
         return Ok(ChatCompletionsResult::Response(response));
     }
     match execute_chat_completions_request(stream, core, context, logger, &prepared, &client_id) {
-        Ok(outcome) => {
+        Ok(execution) => {
+            let outcome = execution.outcome;
             let _ = upload_store.mark_linked_usage(
                 &prepared.file_ids,
                 &context.request_id,
@@ -129,6 +131,7 @@ pub(crate) fn handle_chat_completions_request(
             if should_capture_evidence {
                 let _ = maybe_capture_request_evidence(core, &context.request_id, None, true);
             }
+            Ok(ChatCompletionsResult::Written(execution.response_capture))
         }
         Err(err) => {
             let _ = core.record_request_summary(&build_request_summary(
@@ -143,8 +146,7 @@ pub(crate) fn handle_chat_completions_request(
                 capture_gateway_failure_artifacts(core, context, &prepared, &client_id, &err);
             let response =
                 map_openai_error(&context.request_id, &err, failure_bundle_id.as_deref());
-            return Ok(ChatCompletionsResult::Response(response));
+            Ok(ChatCompletionsResult::Response(response))
         }
     }
-    Ok(ChatCompletionsResult::Written)
 }
