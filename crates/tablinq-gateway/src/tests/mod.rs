@@ -30,6 +30,8 @@ mod failure_recovery_status;
 
 mod gateway_process;
 
+mod gateway_http_monitoring;
+
 mod request_parsing;
 
 mod response_shape_characterization;

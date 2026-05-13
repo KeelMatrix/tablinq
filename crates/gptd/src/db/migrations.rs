@@ -160,6 +160,43 @@ pub(crate) const MIGRATIONS: &[(&str, &str)] = &[
         ALTER TABLE conversations ADD COLUMN recovery_manifest_json TEXT;
         "#,
     ),
+    (
+        "0010_gateway_http_requests",
+        r#"
+        CREATE TABLE IF NOT EXISTS gateway_http_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT,
+            remote_addr TEXT,
+            method TEXT NOT NULL,
+            path TEXT NOT NULL,
+            route TEXT,
+            request_headers_json TEXT,
+            request_body_text TEXT,
+            request_body_sha256 TEXT,
+            request_body_truncated INTEGER NOT NULL DEFAULT 0,
+            response_status_code INTEGER,
+            response_headers_json TEXT,
+            response_body_text TEXT,
+            response_body_sha256 TEXT,
+            response_body_truncated INTEGER NOT NULL DEFAULT 0,
+            response_capture_omitted_reason TEXT,
+            parse_error TEXT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            duration_ms INTEGER,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS gateway_http_requests_created_at_idx
+            ON gateway_http_requests(created_at DESC);
+        CREATE INDEX IF NOT EXISTS gateway_http_requests_request_id_idx
+            ON gateway_http_requests(request_id);
+        CREATE INDEX IF NOT EXISTS gateway_http_requests_path_idx
+            ON gateway_http_requests(path);
+        CREATE INDEX IF NOT EXISTS gateway_http_requests_status_idx
+            ON gateway_http_requests(response_status_code);
+        "#,
+    ),
 ];
 
 pub(crate) fn apply(conn: &Connection) -> Result<()> {

@@ -15,6 +15,7 @@ use crate::errors::{
     capture_gateway_failure_bundle, is_client_disconnect_error, map_openai_error_value,
 };
 use crate::http::{HttpResponse, RequestContext, log_response, write_http_response};
+use crate::monitoring::GatewayHttpResponseCapture;
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use gptd::CoreService;
@@ -32,6 +33,11 @@ struct NonStreamingExecution {
     recovery_packet: Option<RecoveryPacket>,
 }
 
+pub(crate) struct ChatExecutionResult {
+    pub(crate) outcome: RequestOutcome,
+    pub(crate) response_capture: GatewayHttpResponseCapture,
+}
+
 pub(crate) fn execute_chat_completions_request(
     stream: &mut TcpStream,
     core: &CoreService,
@@ -39,7 +45,7 @@ pub(crate) fn execute_chat_completions_request(
     logger: &JsonLogger,
     prepared: &PreparedChatRequest,
     client_id: &str,
-) -> Result<RequestOutcome> {
+) -> Result<ChatExecutionResult> {
     if prepared.request.stream {
         execute_streaming_chat_completion(stream, core, context, logger, prepared, client_id)
     } else {
@@ -55,7 +61,7 @@ fn execute_streaming_chat_completion(
     logger: &JsonLogger,
     prepared: &PreparedChatRequest,
     client_id: &str,
-) -> Result<RequestOutcome> {
+) -> Result<ChatExecutionResult> {
     let stream_id = format!("chatcmpl-{}", Utc::now().timestamp_millis());
     match ensure_browser_session(core)
         .and_then(|_| execute_prepared_job_non_streaming(core, context, prepared))
@@ -78,7 +84,10 @@ fn execute_streaming_chat_completion(
                 )?;
                 write_stream_done(stream)?;
             }
-            Ok(outcome_from_error(&err))
+            Ok(ChatExecutionResult {
+                outcome: outcome_from_error(&err),
+                response_capture: GatewayHttpResponseCapture::streaming(&context.request_id),
+            })
         }
     }
 }
@@ -92,7 +101,7 @@ fn finish_streaming_success(
     prepared: &PreparedChatRequest,
     stream_id: &str,
     result: NonStreamingExecution,
-) -> Result<RequestOutcome> {
+) -> Result<ChatExecutionResult> {
     let recovered_at = recovered_at_for_trace(result.recovery_trace.as_ref());
     let recovery_reason = result
         .recovery_trace
@@ -108,7 +117,7 @@ fn finish_streaming_success(
             result.conversation_id.as_deref(),
             final_response_disconnect_message(&err),
         );
-        return recover_downstream_interruption(
+        let outcome = recover_downstream_interruption(
             core,
             None,
             context,
@@ -119,7 +128,11 @@ fn finish_streaming_success(
                 recovery_trace: result.recovery_trace,
                 recovery_packet: result.recovery_packet,
             },
-        );
+        )?;
+        return Ok(ChatExecutionResult {
+            outcome,
+            response_capture: GatewayHttpResponseCapture::streaming(&context.request_id),
+        });
     }
 
     if let Err(err) = write_stream_headers(stream, &context.request_id) {
@@ -130,7 +143,7 @@ fn finish_streaming_success(
                 result.conversation_id.as_deref(),
                 stream_disconnect_message(&err),
             );
-            return recover_downstream_interruption(
+            let outcome = recover_downstream_interruption(
                 core,
                 None,
                 context,
@@ -141,7 +154,11 @@ fn finish_streaming_success(
                     recovery_trace: result.recovery_trace,
                     recovery_packet: result.recovery_packet,
                 },
-            );
+            )?;
+            return Ok(ChatExecutionResult {
+                outcome,
+                response_capture: GatewayHttpResponseCapture::streaming(&context.request_id),
+            });
         }
         return Err(err);
     }
@@ -161,7 +178,7 @@ fn finish_streaming_success(
                 result.conversation_id.as_deref(),
                 stream_disconnect_message(&err),
             );
-            return recover_downstream_interruption(
+            let outcome = recover_downstream_interruption(
                 core,
                 None,
                 context,
@@ -172,7 +189,11 @@ fn finish_streaming_success(
                     recovery_trace: result.recovery_trace,
                     recovery_packet: result.recovery_packet,
                 },
-            );
+            )?;
+            return Ok(ChatExecutionResult {
+                outcome,
+                response_capture: GatewayHttpResponseCapture::streaming(&context.request_id),
+            });
         }
         return Err(err);
     }
@@ -191,7 +212,7 @@ fn finish_streaming_success(
                 result.conversation_id.as_deref(),
                 stream_disconnect_message(&err),
             );
-            return recover_downstream_interruption(
+            let outcome = recover_downstream_interruption(
                 core,
                 None,
                 context,
@@ -202,7 +223,11 @@ fn finish_streaming_success(
                     recovery_trace: result.recovery_trace,
                     recovery_packet: result.recovery_packet,
                 },
-            );
+            )?;
+            return Ok(ChatExecutionResult {
+                outcome,
+                response_capture: GatewayHttpResponseCapture::streaming(&context.request_id),
+            });
         }
         return Err(err);
     }
@@ -214,7 +239,7 @@ fn finish_streaming_success(
                 result.conversation_id.as_deref(),
                 stream_disconnect_message(&err),
             );
-            return recover_downstream_interruption(
+            let outcome = recover_downstream_interruption(
                 core,
                 None,
                 context,
@@ -225,7 +250,11 @@ fn finish_streaming_success(
                     recovery_trace: result.recovery_trace,
                     recovery_packet: result.recovery_packet,
                 },
-            );
+            )?;
+            return Ok(ChatExecutionResult {
+                outcome,
+                response_capture: GatewayHttpResponseCapture::streaming(&context.request_id),
+            });
         }
         return Err(err);
     }
@@ -237,18 +266,21 @@ fn finish_streaming_success(
             "job_id": prepared.job_id(),
         }),
     );
-    Ok(RequestOutcome {
-        kind: successful_outcome_kind(result.recovery_trace.as_ref()),
-        low_confidence: result.low_confidence,
-        conversation_id: result.conversation_id,
-        interrupted_at: None,
-        interruption_reason: None,
-        recovered_at,
-        recovery_reason,
-        failed_at: None,
-        failure_reason: None,
-        recovery_trace: result.recovery_trace,
-        recovery_packet: result.recovery_packet,
+    Ok(ChatExecutionResult {
+        outcome: RequestOutcome {
+            kind: successful_outcome_kind(result.recovery_trace.as_ref()),
+            low_confidence: result.low_confidence,
+            conversation_id: result.conversation_id,
+            interrupted_at: None,
+            interruption_reason: None,
+            recovered_at,
+            recovery_reason,
+            failed_at: None,
+            failure_reason: None,
+            recovery_trace: result.recovery_trace,
+            recovery_packet: result.recovery_packet,
+        },
+        response_capture: GatewayHttpResponseCapture::streaming(&context.request_id),
     })
 }
 
@@ -258,7 +290,7 @@ fn execute_non_streaming_chat_completion(
     context: &RequestContext,
     logger: &JsonLogger,
     prepared: &PreparedChatRequest,
-) -> Result<RequestOutcome> {
+) -> Result<ChatExecutionResult> {
     let result = execute_prepared_job_non_streaming(core, context, prepared)?;
     if peer_closed_before_final_response(stream)? {
         let err = anyhow!("client closed before final response");
@@ -268,7 +300,7 @@ fn execute_non_streaming_chat_completion(
             result.conversation_id.as_deref(),
             final_response_disconnect_message(&err),
         );
-        return recover_downstream_interruption(
+        let outcome = recover_downstream_interruption(
             core,
             None,
             context,
@@ -279,9 +311,17 @@ fn execute_non_streaming_chat_completion(
                 recovery_trace: result.recovery_trace,
                 recovery_packet: result.recovery_packet,
             },
-        );
+        )?;
+        return Ok(ChatExecutionResult {
+            outcome,
+            response_capture: GatewayHttpResponseCapture::no_response(
+                "client_closed_before_response",
+            ),
+        });
     }
     let _ = log_response(logger, &context.request_id, result.response.status_code);
+    let response_capture =
+        GatewayHttpResponseCapture::from_http_response(&context.request_id, &result.response);
     if let Err(err) = write_http_response(stream, &context.request_id, result.response) {
         if is_client_disconnect_error(&err) {
             let interruption = mark_downstream_interrupted(
@@ -290,7 +330,7 @@ fn execute_non_streaming_chat_completion(
                 result.conversation_id.as_deref(),
                 final_response_disconnect_message(&err),
             );
-            return recover_downstream_interruption(
+            let outcome = recover_downstream_interruption(
                 core,
                 None,
                 context,
@@ -301,7 +341,11 @@ fn execute_non_streaming_chat_completion(
                     recovery_trace: result.recovery_trace,
                     recovery_packet: result.recovery_packet,
                 },
-            );
+            )?;
+            return Ok(ChatExecutionResult {
+                outcome,
+                response_capture,
+            });
         }
         return Err(err);
     }
@@ -311,18 +355,21 @@ fn execute_non_streaming_chat_completion(
         .as_ref()
         .filter(|trace| trace.recovery_attempted)
         .and_then(recovery_reason_for_trace);
-    Ok(RequestOutcome {
-        kind: successful_outcome_kind(result.recovery_trace.as_ref()),
-        low_confidence: result.low_confidence,
-        conversation_id: result.conversation_id,
-        interrupted_at: None,
-        interruption_reason: None,
-        recovered_at,
-        recovery_reason,
-        failed_at: None,
-        failure_reason: None,
-        recovery_trace: result.recovery_trace,
-        recovery_packet: result.recovery_packet,
+    Ok(ChatExecutionResult {
+        outcome: RequestOutcome {
+            kind: successful_outcome_kind(result.recovery_trace.as_ref()),
+            low_confidence: result.low_confidence,
+            conversation_id: result.conversation_id,
+            interrupted_at: None,
+            interruption_reason: None,
+            recovered_at,
+            recovery_reason,
+            failed_at: None,
+            failure_reason: None,
+            recovery_trace: result.recovery_trace,
+            recovery_packet: result.recovery_packet,
+        },
+        response_capture,
     })
 }
 
