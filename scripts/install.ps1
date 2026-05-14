@@ -324,14 +324,21 @@ function Invoke-Step {
     [string]$WorkingDirectory,
     [string]$LogPath,
     [int]$TimeoutSeconds = 0,
-    [int]$HeartbeatSeconds = 15
+    [int]$HeartbeatSeconds = 15,
+    [string]$StandardInputText = $null
   )
 
   $displayLabel = if ($Label) { $Label } else { $FilePath }
   $stdoutPath = if ($LogPath) { "$LogPath.stdout.log" } else { [System.IO.Path]::GetTempFileName() }
   $stderrPath = if ($LogPath) { "$LogPath.stderr.log" } else { [System.IO.Path]::GetTempFileName() }
+  $stdinPath = $null
   $startedAt = Get-Date
   $invocation = Resolve-InvocationSpec -FilePath $FilePath -ArgumentList $ArgumentList
+
+  if ($null -ne $StandardInputText) {
+    $stdinPath = [System.IO.Path]::GetTempFileName()
+    [System.IO.File]::WriteAllText($stdinPath, $StandardInputText, [System.Text.Encoding]::ASCII)
+  }
 
   Write-Host ("  -> {0}" -f $displayLabel)
   if ($WorkingDirectory) {
@@ -348,6 +355,9 @@ function Invoke-Step {
         NoNewWindow = $true
         RedirectStandardOutput = $stdoutPath
         RedirectStandardError = $stderrPath
+      }
+      if ($stdinPath) {
+        $startProcessArguments.RedirectStandardInput = $stdinPath
       }
       if ($waitForExitCode) {
         $startProcessArguments.Wait = $true
@@ -434,6 +444,9 @@ function Invoke-Step {
 
     if (-not $LogPath) {
       Remove-Item -Path $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+    if ($stdinPath) {
+      Remove-Item -Path $stdinPath -Force -ErrorAction SilentlyContinue
     }
   }
 }
@@ -1654,7 +1667,7 @@ function Invoke-WorkspaceDependencyInstall {
 
   Start-InstallPhase -Title "Installing workspace dependencies"
   Write-Host ("  logs: {0}.stdout.log, {0}.stderr.log" -f (Join-Path $InstallLogDir "install-pnpm"))
-  Invoke-Step -Label "pnpm install" -FilePath "pnpm" -ArgumentList @("install") -WorkingDirectory $RepoRoot -LogPath (Join-Path $InstallLogDir "install-pnpm") -TimeoutSeconds 900 -HeartbeatSeconds 20
+  Invoke-Step -Label "pnpm install" -FilePath "pnpm" -ArgumentList @("install") -WorkingDirectory $RepoRoot -LogPath (Join-Path $InstallLogDir "install-pnpm") -TimeoutSeconds 900 -HeartbeatSeconds 20 -StandardInputText "y`r`n"
 }
 
 function Invoke-PackageBuildStep {
