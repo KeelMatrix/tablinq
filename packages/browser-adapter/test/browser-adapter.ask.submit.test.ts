@@ -16,7 +16,14 @@ import {
 } from "../src/browserAdapter";
 import type { StreamChunkSnapshot } from "../src/browserAdapter";
 import { finalizeAsk } from "../src/execution/finalization";
+import {
+  buildPromptAttachmentRecoveryPrompt,
+  choosePromptAttachmentFilename,
+  evaluatePromptAttachmentRecovery,
+  PROMPT_ATTACHMENT_RECOVERY_PROMPT,
+} from "../src/execution/promptAttachmentRecovery";
 import { applyAskSnapshot } from "../src/execution/streaming";
+import type { ComposerAttachmentState } from "../src/pageRuntime/attachments";
 import {
   createIsolatedTempDir,
   listAttachedPages,
@@ -40,6 +47,16 @@ import {
 import { installBrowserAdapterHarness } from "./helpers/browserAdapterHarness";
 
 const harness = installBrowserAdapterHarness();
+
+const attachmentState = (
+  visibleNames: string[],
+  visibleCount = visibleNames.length,
+): ComposerAttachmentState => ({
+  visibleCount,
+  visibleNames,
+  normalizedNames: visibleNames.map((name) => name.toLowerCase()),
+  attachmentsProcessing: false,
+});
 
 function mermaidPreviewSvg(labels: string[]): string {
   return encodeURIComponent(`
@@ -207,6 +224,189 @@ async function withShortAskStreamWatchdog<T>(
 }
 
 describe("browser adapter ask: submit readiness and surface locking", () => {
+  it("does not recover when the composer still contains direct prompt text", () => {
+    const decision = evaluatePromptAttachmentRecovery({
+      baseline: attachmentState([]),
+      current: attachmentState([]),
+      submitState: { composerText: "direct prompt remains" },
+    });
+
+    expect(decision.shouldRecover).toBe(false);
+    expect(decision.recoveryPrompt).toBeNull();
+  });
+
+  it("includes one newly detected txt filename in the recovery prompt", () => {
+    const baseline = attachmentState(["notes.md"]);
+    const current = attachmentState(["notes.md", "prompt-auto-upload.txt"]);
+
+    expect(choosePromptAttachmentFilename(baseline, current)).toBe(
+      "prompt-auto-upload.txt",
+    );
+    expect(buildPromptAttachmentRecoveryPrompt("prompt-auto-upload.txt")).toBe(
+      "Prompt was uploaded as a txt attachment (prompt-auto-upload.txt). Treat it as authoritative and follow it exactly.",
+    );
+  });
+
+  it("omits ambiguous or missing filenames from the recovery prompt", () => {
+    expect(
+      choosePromptAttachmentFilename(
+        attachmentState([]),
+        attachmentState(["first.txt", "second.txt"]),
+      ),
+    ).toBeNull();
+    expect(
+      evaluatePromptAttachmentRecovery({
+        baseline: attachmentState([]),
+        current: attachmentState([], 1),
+        submitState: { composerText: "" },
+      }).recoveryPrompt,
+    ).toBe(PROMPT_ATTACHMENT_RECOVERY_PROMPT);
+  });
+
+  it("keeps explicit attachment baselines out of prompt-upload filename selection", () => {
+    const baseline = attachmentState(["explicit-one.txt", "explicit-two.txt"]);
+    const current = attachmentState([
+      "explicit-one.txt",
+      "explicit-two.txt",
+      "prompt-auto-upload.txt",
+    ]);
+
+    expect(choosePromptAttachmentFilename(baseline, current)).toBe(
+      "prompt-auto-upload.txt",
+    );
+  });
+
+  it("recovers when ChatGPT converts a prompt into an upload with no explicit files", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "auto-upload-prompt",
+    });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-auto-upload-prompt",
+        prompt: "exercise auto upload recovery",
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles,
+      lastSubmittedPrompt: document.body.dataset.lastSubmittedPrompt,
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+    }));
+
+    expect(state).toEqual({
+      uploadedFiles: "prompt-auto-upload.txt",
+      lastSubmittedPrompt:
+        "Prompt was uploaded as a txt attachment (prompt-auto-upload.txt). Treat it as authoritative and follow it exactly.",
+      lastSubmissionMethod: "button",
+    });
+    expect(result.output_text).toBe(
+      "Fake response for: Prompt was uploaded as a txt attachment (prompt-auto-upload.txt). Treat it as authoritative and follow it exactly.",
+    );
+
+    await adapter.shutdown();
+  });
+
+  it("preserves explicit files while recovering a converted prompt upload", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const firstFile = path.join(root, "explicit-one.txt");
+    const secondFile = path.join(root, "explicit-two.txt");
+    await writeFile(firstFile, "first explicit upload content", "utf8");
+    await writeFile(secondFile, "second explicit upload content", "utf8");
+    const targetUrl = withHarnessUrl(server.url, {
+      variant: "live",
+      scenario: "auto-upload-prompt",
+    });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-auto-upload-with-explicit-files",
+        prompt: "exercise auto upload recovery with files",
+        files: [firstFile, secondFile],
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles,
+      lastSubmittedPrompt: document.body.dataset.lastSubmittedPrompt,
+    }));
+
+    expect(state).toEqual({
+      uploadedFiles: "explicit-one.txt|explicit-two.txt|prompt-auto-upload.txt",
+      lastSubmittedPrompt:
+        "Prompt was uploaded as a txt attachment (prompt-auto-upload.txt). Treat it as authoritative and follow it exactly.",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("does not insert recovery text for explicit files without prompt auto-upload", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const firstFile = path.join(root, "plain-explicit-one.txt");
+    const secondFile = path.join(root, "plain-explicit-two.txt");
+    await writeFile(firstFile, "plain first upload", "utf8");
+    await writeFile(secondFile, "plain second upload", "utf8");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-explicit-files-no-auto-upload",
+        prompt: "direct prompt with explicit files",
+        files: [firstFile, secondFile],
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles,
+      lastSubmittedPrompt: document.body.dataset.lastSubmittedPrompt,
+    }));
+
+    expect(state).toEqual({
+      uploadedFiles: "plain-explicit-one.txt|plain-explicit-two.txt",
+      lastSubmittedPrompt: "direct prompt with explicit files",
+    });
+
+    await adapter.shutdown();
+  });
+
   it("prefers hidden Mermaid source over preview SVG labels", async () => {
     const source = "graph TD\n  A[Start] --> B[Done]";
     const text = await readInsertedAskMarkdown(

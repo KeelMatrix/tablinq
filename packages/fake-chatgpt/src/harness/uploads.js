@@ -1,6 +1,12 @@
 export function createUploadRuntime({ document, variant, config, refs }) {
-  const { uploadList, sendButton, staleSendButton, stopButton, artifactLink } =
-    refs;
+  const {
+    uploadList,
+    sendButton,
+    staleSendButton,
+    stopButton,
+    artifactLink,
+    composer,
+  } = refs;
   let uploadProcessingTimer = null;
 
   function setUploadPopoverOpen(open) {
@@ -36,10 +42,16 @@ export function createUploadRuntime({ document, variant, config, refs }) {
   function syncSubmissionControls() {
     const running = document.body.dataset.streamState === "running";
     const uploadProcessing = document.body.dataset.uploadProcessing === "true";
+    const composerText =
+      composer && "value" in composer
+        ? composer.value.trim()
+        : (composer?.textContent ?? "").trim();
     const submitBlocked =
-      config.hasBlockedSubmitAfterUpload &&
+      !running &&
       uploadedFiles().length > 0 &&
-      !running;
+      ((config.hasBlockedSubmitAfterUpload &&
+        !config.autoUploadsComposerPrompt) ||
+        (config.autoUploadsComposerPrompt && !composerText));
     if (sendButton instanceof HTMLElement) {
       sendButton.toggleAttribute("hidden", running);
       sendButton.setAttribute(
@@ -112,6 +124,10 @@ export function createUploadRuntime({ document, variant, config, refs }) {
     resetArtifactLink();
   }
 
+  function appendUploadedFile(fileName) {
+    setUploadedFiles([...uploadedFiles(), fileName]);
+  }
+
   function buildArtifactPayload(promptText) {
     const uploads = uploadedFiles();
     return [
@@ -159,6 +175,7 @@ export function createUploadRuntime({ document, variant, config, refs }) {
     setUploadProcessing,
     resetArtifactLink,
     setUploadedFiles,
+    appendUploadedFile,
     buildArtifactPayload,
     prepareArtifact,
   };

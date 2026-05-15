@@ -107,6 +107,7 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
       "materializeAskCodePreviewSources",
       "readAskBaseline",
       "readAskSnapshot",
+      "readComposerAttachmentState",
       "readResearchSnapshot",
       "readResearchSubmissionState",
       "readSubmitState",
@@ -193,6 +194,7 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
       "materializeAskCodePreviewSources",
       "readAskBaseline",
       "readAskSnapshot",
+      "readComposerAttachmentState",
       "readResearchSnapshot",
       "readResearchSubmissionState",
       "readSubmitState",
@@ -218,6 +220,12 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
     expect(composer.value).toBe("Hello command facade");
     expect(adapter.submitReady()).toBe(true);
     expect(adapter.uploadAcknowledged({ names: ["brief.txt"] })).toBe(true);
+    expect(adapter.readComposerAttachmentState()).toMatchObject({
+      visibleCount: 0,
+      visibleNames: [],
+      normalizedNames: [],
+      attachmentsProcessing: false,
+    });
 
     await adapter.applyAskConfiguration({
       report: {
@@ -245,6 +253,43 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
       conversationId: "conv-command",
       messageId: "msg-command",
       currentUrl: "https://chatgpt.com/c/conv-command",
+    });
+    dom.window.close();
+  });
+
+  it("reads visible composer attachment state with sanitized filenames", async () => {
+    const runtimeSource = loadPageAdapterSource();
+    const dom = new JSDOM(
+      `<!doctype html><html><body data-stream-state="idle">
+        <main>
+          <form data-testid="composer-root">
+            <textarea id="prompt-textarea" aria-label="Message"></textarea>
+            <button data-testid="send-button" aria-label="Send prompt" type="button"></button>
+          </form>
+          <div data-slot="upload-list">
+            <span class="pill" data-testid="upload-chip" aria-label="Attached file explicit-one.txt">explicit-one.txt</span>
+            <span class="pill" data-testid="upload-chip">prompt-auto-upload.txt</span>
+            <span class="pill" data-slot="upload-processing" data-upload-processing="true" aria-busy="true">Processing uploads...</span>
+          </div>
+        </main>
+      </body></html>`,
+      {
+        url: "https://chatgpt.com/c/conv-attachment-state",
+        runScripts: "outside-only",
+      },
+    );
+    const adapter = dom.window.eval(
+      `${runtimeSource.replace(
+        /^export\s+/gm,
+        "",
+      )}\ncreateTablinqPageAdapterRuntime();`,
+    );
+
+    expect(adapter.readComposerAttachmentState()).toEqual({
+      visibleCount: 2,
+      visibleNames: ["explicit-one.txt", "prompt-auto-upload.txt"],
+      normalizedNames: ["explicit-one.txt", "prompt-auto-upload.txt"],
+      attachmentsProcessing: true,
     });
     dom.window.close();
   });

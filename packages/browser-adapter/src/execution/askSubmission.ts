@@ -20,12 +20,14 @@ import {
   waitForInteractionSurface,
   waitForSubmitReadyAfterUploads,
 } from "../pageRuntime";
+import { readComposerAttachmentState } from "../pageRuntime/attachments";
 import type { AskBaseline } from "../snapshotState";
 import { SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS } from "../timing";
 import { conversationIdFromUrl } from "../urls";
 
 import { ensureProviderReachable } from "./askProviderFailure";
 import type { AskTiming } from "./askTiming";
+import { recoverPromptAttachmentUploadIfNeeded } from "./promptAttachmentRecovery";
 import type { BrowserExecutionHost } from "./types";
 
 export async function openAskExecutionPage(
@@ -92,7 +94,13 @@ export async function prepareAskSubmission(
     command.files ?? [],
     host.getLastCapabilityReport(),
   );
+  const attachmentBaseline = await readComposerAttachmentState(page);
   await fillComposer(page, command.prompt);
+  await recoverPromptAttachmentUploadIfNeeded(
+    page,
+    attachmentBaseline,
+    timing.timeoutAt,
+  );
   if ((command.files ?? []).length > 0) {
     await waitForSubmitReadyAfterUploads(
       page,
@@ -129,6 +137,11 @@ export async function prepareAskSubmission(
         await ensureConfiguredEffort(page, report, command.effort);
       }
     }
+    await recoverPromptAttachmentUploadIfNeeded(
+      page,
+      attachmentBaseline,
+      timing.timeoutAt,
+    );
   }
   await maybeApplySubmitJitter(command.submitJitterMs, timing.timeoutAt);
   await assertVisibleComposerSelection(page, {

@@ -49,6 +49,9 @@ function createCommandRuntime({
     uploadAcknowledged(payload) {
       return composerRuntime.uploadAcknowledged(payload);
     },
+    readComposerAttachmentState() {
+      return composerRuntime.readComposerAttachmentState();
+    },
     readAskBaseline() {
       const article = messageRuntime.findLatestAssistantMessage();
       const messages = messageRuntime.findAssistantMessages();

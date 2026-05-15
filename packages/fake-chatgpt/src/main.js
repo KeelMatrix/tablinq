@@ -167,6 +167,7 @@ const uploadRuntime = createUploadRuntime({
     staleSendButton,
     stopButton,
     artifactLink,
+    composer,
   },
 });
 const {
@@ -180,6 +181,7 @@ const {
   setUploadProcessing,
   resetArtifactLink,
   setUploadedFiles,
+  appendUploadedFile,
   prepareArtifact,
 } = uploadRuntime;
 
@@ -285,6 +287,30 @@ function submitPrompt(method) {
   askRuntime.startStream(promptText);
 }
 
+function readComposerText() {
+  if (!composer) {
+    return "";
+  }
+  return "value" in composer
+    ? composer.value.trim()
+    : composer.textContent.trim();
+}
+
+function maybeAutoUploadPromptFromComposer() {
+  if (
+    !scenarioState.autoUploadsComposerPrompt ||
+    document.body.dataset.promptAutoUploaded === "true" ||
+    !readComposerText()
+  ) {
+    syncSubmissionControls();
+    return;
+  }
+  document.body.dataset.promptAutoUploaded = "true";
+  appendUploadedFile("prompt-auto-upload.txt");
+  clearComposer();
+  syncSubmissionControls();
+}
+
 menuRuntime.registerSelectionEvents();
 
 uploadEntry?.addEventListener("click", () => {
@@ -327,6 +353,10 @@ uploadInput?.addEventListener("change", () => {
   if (hasDelayedUploadProcessing) {
     scheduleUploadProcessingClear(2200);
   }
+});
+
+composer?.addEventListener("input", () => {
+  window.setTimeout(maybeAutoUploadPromptFromComposer, 120);
 });
 
 window.__tablinqCancelStream = () => {

@@ -75,4 +75,9 @@ export {
   readAskBaseline,
   readAskSnapshot,
 } from "./pageRuntime/snapshots";
+export {
+  normalizeComposerAttachmentState,
+  readComposerAttachmentState,
+} from "./pageRuntime/attachments";
+export type { ComposerAttachmentState } from "./pageRuntime/attachments";
 export { uploadAttachments } from "./pageRuntime/uploads";
