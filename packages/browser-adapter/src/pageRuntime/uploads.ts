@@ -1,5 +1,6 @@
 import { basename, resolve } from "node:path";
 import { stat } from "node:fs/promises";
+import type { Buffer } from "node:buffer";
 import type { Locator, Page } from "playwright-core";
 
 import type { CapabilityReportPayload } from "../contracts";
@@ -17,9 +18,18 @@ import {
   sleep,
 } from "./common";
 
+type MemoryUploadAttachmentInput = {
+  name: string;
+  mimeType: string;
+  buffer: Buffer;
+};
+
+export type UploadAttachmentInput = string | MemoryUploadAttachmentInput;
+type PlaywrightUploadInputBatch = string[] | MemoryUploadAttachmentInput[];
+
 export async function uploadAttachments(
   page: Page,
-  files: string[],
+  files: UploadAttachmentInput[],
   report: CapabilityReportPayload | null,
 ): Promise<void> {
   if (files.length === 0) {
@@ -27,7 +37,19 @@ export async function uploadAttachments(
   }
 
   const resolvedFiles = await Promise.all(
-    files.map(async (filePath) => {
+    files.map(async (file) => {
+      if (typeof file !== "string") {
+        if (file.buffer.length > MAX_UPLOAD_FILE_BYTES) {
+          throw new Error(`upload failed: file exceeds 20 MiB: ${file.name}`);
+        }
+        return {
+          input: file,
+          name: file.name,
+          sizeBytes: file.buffer.length,
+        };
+      }
+
+      const filePath = file;
       const absolutePath = resolve(filePath);
       const fileStat = await stat(absolutePath).catch(() => null);
       if (!fileStat?.isFile()) {
@@ -37,7 +59,8 @@ export async function uploadAttachments(
         throw new Error(`upload failed: file exceeds 20 MiB: ${absolutePath}`);
       }
       return {
-        absolutePath,
+        input: absolutePath,
+        name: basename(absolutePath),
         sizeBytes: fileStat.size,
       };
     }),
@@ -50,11 +73,12 @@ export async function uploadAttachments(
   }
 
   const fileInput = await waitForUploadFileInput(page);
+  const inputBatch = toPlaywrightUploadInputBatch(
+    resolvedFiles.map((item) => item.input),
+  );
   if (fileInput) {
     await prepareHighRiskInteraction(page, "upload_entry", fileInput);
-    await fileInput.setInputFiles(
-      resolvedFiles.map((item) => item.absolutePath),
-    );
+    await fileInput.setInputFiles(inputBatch);
   } else {
     const uploadEntry = page
       .locator(
@@ -83,12 +107,10 @@ export async function uploadAttachments(
     if (!chooser) {
       throw new Error("upload failed: file chooser did not open");
     }
-    await chooser.setFiles(resolvedFiles.map((item) => item.absolutePath));
+    await chooser.setFiles(inputBatch);
   }
 
-  const expectedNames = resolvedFiles.map((file) =>
-    basename(file.absolutePath),
-  );
+  const expectedNames = resolvedFiles.map((file) => file.name);
   const acknowledged = await waitForUploadAcknowledged(
     page,
     expectedNames,
@@ -99,6 +121,23 @@ export async function uploadAttachments(
       `upload failed: the page did not acknowledge uploaded files: ${expectedNames.join(", ")}`,
     );
   }
+}
+
+function toPlaywrightUploadInputBatch(
+  inputs: UploadAttachmentInput[],
+): PlaywrightUploadInputBatch {
+  if (inputs.every((input): input is string => typeof input === "string")) {
+    return inputs;
+  }
+  if (
+    inputs.every(
+      (input): input is MemoryUploadAttachmentInput =>
+        typeof input !== "string",
+    )
+  ) {
+    return inputs;
+  }
+  throw new Error("upload failed: mixed path and in-memory upload batch");
 }
 
 function uploadSurfaceLocator(page: Page): Locator {

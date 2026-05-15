@@ -339,9 +339,15 @@ uploadInput?.addEventListener("change", () => {
   const fileNames = Array.from(uploadInput.files || []).map(
     (file) => file.name,
   );
-  setUploadedFiles(fileNames);
+  const mergedFileNames = [...uploadedFiles()];
+  for (const fileName of fileNames) {
+    if (!mergedFileNames.includes(fileName)) {
+      mergedFileNames.push(fileName);
+    }
+  }
+  setUploadedFiles(mergedFileNames);
   stopUploadProcessingTimer();
-  if (fileNames.length === 0) {
+  if (mergedFileNames.length === 0) {
     setUploadProcessing(false);
     return;
   }

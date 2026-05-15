@@ -29,6 +29,7 @@ import { ensureProviderReachable } from "./askProviderFailure";
 import type { AskTiming } from "./askTiming";
 import { recoverPromptAttachmentUploadIfNeeded } from "./promptAttachmentRecovery";
 import type { BrowserExecutionHost } from "./types";
+import { uploadUserPromptTextIfNeeded } from "./userPromptUpload";
 
 export async function openAskExecutionPage(
   host: BrowserExecutionHost,
@@ -89,19 +90,27 @@ export async function prepareAskSubmission(
     }
   }
   const askBaseline = await readAskBaseline(page);
-  await uploadAttachments(
-    page,
-    command.files ?? [],
-    host.getLastCapabilityReport(),
-  );
+  const explicitFiles = command.files ?? [];
+  await uploadAttachments(page, explicitFiles, host.getLastCapabilityReport());
   const attachmentBaseline = await readComposerAttachmentState(page);
-  await fillComposer(page, command.prompt);
-  await recoverPromptAttachmentUploadIfNeeded(
+  const uploadedUserPrompt = await uploadUserPromptTextIfNeeded({
     page,
+    prompt: command.prompt,
+    explicitFiles,
     attachmentBaseline,
-    timing.timeoutAt,
-  );
-  if ((command.files ?? []).length > 0) {
+    report: host.getLastCapabilityReport(),
+  });
+  if (uploadedUserPrompt) {
+    await fillComposer(page, uploadedUserPrompt.instruction);
+  } else {
+    await fillComposer(page, command.prompt);
+    await recoverPromptAttachmentUploadIfNeeded(
+      page,
+      attachmentBaseline,
+      timing.timeoutAt,
+    );
+  }
+  if (explicitFiles.length > 0 || uploadedUserPrompt) {
     await waitForSubmitReadyAfterUploads(
       page,
       Math.min(
@@ -137,11 +146,15 @@ export async function prepareAskSubmission(
         await ensureConfiguredEffort(page, report, command.effort);
       }
     }
-    await recoverPromptAttachmentUploadIfNeeded(
-      page,
-      attachmentBaseline,
-      timing.timeoutAt,
-    );
+    if (uploadedUserPrompt) {
+      await fillComposer(page, uploadedUserPrompt.instruction);
+    } else {
+      await recoverPromptAttachmentUploadIfNeeded(
+        page,
+        attachmentBaseline,
+        timing.timeoutAt,
+      );
+    }
   }
   await maybeApplySubmitJitter(command.submitJitterMs, timing.timeoutAt);
   await assertVisibleComposerSelection(page, {

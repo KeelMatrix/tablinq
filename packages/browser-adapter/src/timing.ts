@@ -6,6 +6,7 @@ export const PROBE_TIMEOUT_MS = 5_000;
 export const ATTACH_PROBE_GRACE_MS = 1_500;
 export const INTERACTION_TIMEOUT_MS = 7_500;
 export const MAX_UPLOAD_FILE_BYTES = 20 * 1024 * 1024;
+export const MAX_COMPOSER_UPLOAD_FILES = 10;
 export const UPLOAD_ACK_TIMEOUT_MIN_MS = 10_000;
 export const UPLOAD_ACK_TIMEOUT_MAX_MS = 40_000;
 export const ADDITIONAL_UPLOAD_ACK_WEIGHT = 0.9;

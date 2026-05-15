@@ -327,6 +327,12 @@ function createComposerRuntimeModule({
     "[aria-label*='attachment']",
   ].join(", ");
 
+  const attachmentNameSelectors = [
+    uploadAttachmentSelectors,
+    "[role='group'][aria-label*='.']",
+    "button[aria-label*='.']",
+  ].join(", ");
+
   const visibleAttachmentElements = () => {
     const elements = visibleUnique(
       document.querySelectorAll(uploadAttachmentSelectors),
@@ -378,11 +384,23 @@ function createComposerRuntimeModule({
 
   const readComposerAttachmentState = () => {
     const elements = visibleAttachmentElements();
+    const nameElements = visibleUnique(
+      document.querySelectorAll(attachmentNameSelectors),
+    ).filter(isVisible);
+    const allNameElements = [];
+    const seen = new Set();
+    for (const element of [...elements, ...nameElements]) {
+      if (seen.has(element)) {
+        continue;
+      }
+      seen.add(element);
+      allNameElements.push(element);
+    }
     const visibleNames = uniqueCollapsed(
-      elements.flatMap(attachmentNameCandidates),
+      allNameElements.flatMap(attachmentNameCandidates),
     );
     return {
-      visibleCount: elements.length,
+      visibleCount: Math.max(elements.length, visibleNames.length),
       visibleNames,
       normalizedNames: unique(visibleNames),
       attachmentsProcessing: attachmentsStillProcessing(),

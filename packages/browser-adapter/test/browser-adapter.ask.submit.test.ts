@@ -22,6 +22,12 @@ import {
   evaluatePromptAttachmentRecovery,
   PROMPT_ATTACHMENT_RECOVERY_PROMPT,
 } from "../src/execution/promptAttachmentRecovery";
+import {
+  buildUploadedUserPromptInstruction,
+  chooseUserPromptUploadFileName,
+  shouldUploadUserPromptText,
+  USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
+} from "../src/execution/userPromptUpload";
 import { applyAskSnapshot } from "../src/execution/streaming";
 import type { ComposerAttachmentState } from "../src/pageRuntime/attachments";
 import {
@@ -224,6 +230,224 @@ async function withShortAskStreamWatchdog<T>(
 }
 
 describe("browser adapter ask: submit readiness and surface locking", () => {
+  it("chooses prompt upload only above the raw text threshold when upload slots remain", () => {
+    expect(
+      shouldUploadUserPromptText({
+        prompt: "x".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS),
+        preUploadedFileCount: 0,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUploadUserPromptText({
+        prompt: "x".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+        preUploadedFileCount: 9,
+      }),
+    ).toBe(true);
+    expect(
+      shouldUploadUserPromptText({
+        prompt: "x".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+        preUploadedFileCount: 10,
+      }),
+    ).toBe(false);
+  });
+
+  it("chooses unique user prompt upload names with bounded suffix attempts", () => {
+    const timestamp = new Date("2026-05-15T01:02:03.456Z");
+
+    expect(chooseUserPromptUploadFileName({ timestamp })).toBe(
+      "user-prompt-20260515T010203456Z.txt",
+    );
+    expect(
+      chooseUserPromptUploadFileName({
+        timestamp,
+        existingNames: ["user-prompt-20260515T010203456Z.txt"],
+      }),
+    ).toBe("user-prompt-20260515T010203456Z-2.txt");
+    expect(() =>
+      chooseUserPromptUploadFileName({
+        timestamp,
+        existingNames: [
+          "user-prompt-20260515T010203456Z.txt",
+          "user-prompt-20260515T010203456Z-2.txt",
+        ],
+        maxAttempts: 2,
+      }),
+    ).toThrow(/unique prompt upload file name/);
+  });
+
+  it("keeps current composer insertion for prompts at the upload threshold", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-threshold-direct-prompt",
+        prompt: "s".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS),
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles ?? "",
+      lastSubmittedPromptLength:
+        document.body.dataset.lastSubmittedPrompt?.length ?? 0,
+    }));
+
+    expect(state).toEqual({
+      uploadedFiles: "",
+      lastSubmittedPromptLength: USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("uploads a long user prompt as a txt attachment and submits a file instruction", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-long-prompt-upload",
+        prompt: "x".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles ?? "",
+      lastSubmittedPrompt: document.body.dataset.lastSubmittedPrompt ?? "",
+      lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
+    }));
+    const fileName = state.uploadedFiles;
+    const instruction = buildUploadedUserPromptInstruction(fileName);
+
+    expect(fileName).toMatch(/^user-prompt-\d{8}T\d{9}Z(?:-\d+)?\.txt$/);
+    expect(state).toEqual({
+      uploadedFiles: fileName,
+      lastSubmittedPrompt: instruction,
+      lastSubmissionMethod: "button",
+    });
+    expect(result.output_text).toBe(`Fake response for: ${instruction}`);
+
+    await adapter.shutdown();
+  });
+
+  it("preserves explicit files while uploading a long prompt as the next attachment", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const firstFile = path.join(root, "direct-explicit-one.txt");
+    const secondFile = path.join(root, "direct-explicit-two.txt");
+    await writeFile(firstFile, "first direct explicit upload", "utf8");
+    await writeFile(secondFile, "second direct explicit upload", "utf8");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-long-prompt-upload-with-explicit-files",
+        prompt: "y".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+        files: [firstFile, secondFile],
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles ?? "",
+      lastSubmittedPrompt: document.body.dataset.lastSubmittedPrompt ?? "",
+    }));
+    const uploadedFiles = state.uploadedFiles.split("|");
+    const promptFileName = uploadedFiles[2] ?? "";
+
+    expect(uploadedFiles.slice(0, 2)).toEqual([
+      "direct-explicit-one.txt",
+      "direct-explicit-two.txt",
+    ]);
+    expect(promptFileName).toMatch(/^user-prompt-\d{8}T\d{9}Z(?:-\d+)?\.txt$/);
+    expect(state.lastSubmittedPrompt).toBe(
+      buildUploadedUserPromptInstruction(promptFileName),
+    );
+
+    await adapter.shutdown();
+  });
+
+  it("keeps current composer insertion when explicit uploads fill all file slots", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const explicitFiles = await Promise.all(
+      Array.from({ length: 10 }, async (_, index) => {
+        const filePath = path.join(root, `full-slot-${index + 1}.txt`);
+        await writeFile(filePath, `explicit full slot ${index + 1}`, "utf8");
+        return filePath;
+      }),
+    );
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-long-prompt-direct-at-upload-cap",
+        prompt: "z".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+        files: explicitFiles,
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles ?? "",
+      lastSubmittedPromptLength:
+        document.body.dataset.lastSubmittedPrompt?.length ?? 0,
+    }));
+
+    expect(state.uploadedFiles.split("|")).toEqual(
+      explicitFiles.map((file) => path.basename(file)),
+    );
+    expect(state.lastSubmittedPromptLength).toBe(
+      USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1,
+    );
+
+    await adapter.shutdown();
+  });
+
   it("does not recover when the composer still contains direct prompt text", () => {
     const decision = evaluatePromptAttachmentRecovery({
       baseline: attachmentState([]),
