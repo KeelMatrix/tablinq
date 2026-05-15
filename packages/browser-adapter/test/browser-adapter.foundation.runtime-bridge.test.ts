@@ -269,6 +269,10 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
           <div data-slot="upload-list">
             <span class="pill" data-testid="upload-chip" aria-label="Attached file explicit-one.txt">explicit-one.txt</span>
             <span class="pill" data-testid="upload-chip">prompt-auto-upload.txt</span>
+            <div role="group" aria-label="user-prompt-20260515T070101285Z.txt">
+              <button type="button" aria-label="user-prompt-20260515T070101285Z.txt"></button>
+              <span>Document</span>
+            </div>
             <span class="pill" data-slot="upload-processing" data-upload-processing="true" aria-busy="true">Processing uploads...</span>
           </div>
         </main>
@@ -286,9 +290,17 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
     );
 
     expect(adapter.readComposerAttachmentState()).toEqual({
-      visibleCount: 2,
-      visibleNames: ["explicit-one.txt", "prompt-auto-upload.txt"],
-      normalizedNames: ["explicit-one.txt", "prompt-auto-upload.txt"],
+      visibleCount: 3,
+      visibleNames: [
+        "explicit-one.txt",
+        "prompt-auto-upload.txt",
+        "user-prompt-20260515T070101285Z.txt",
+      ],
+      normalizedNames: [
+        "explicit-one.txt",
+        "prompt-auto-upload.txt",
+        "user-prompt-20260515t070101285z.txt",
+      ],
       attachmentsProcessing: true,
     });
     dom.window.close();
