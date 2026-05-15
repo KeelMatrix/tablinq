@@ -10,6 +10,7 @@ export async function callPageAdapter<T>(
     | "clickSubmit"
     | "applyAskConfiguration"
     | "uploadAcknowledged"
+    | "readComposerAttachmentState"
     | "submitReady"
     | "attachmentsStillProcessing"
     | "readSubmitState"

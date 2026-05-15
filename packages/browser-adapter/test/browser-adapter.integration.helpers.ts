@@ -23,6 +23,7 @@ export type HarnessUrlOptions = {
     | "upload-processing-delay"
     | "upload-processing-stuck"
     | "submit-never-ready"
+    | "auto-upload-prompt"
     | "submit-upload-trap"
     | "submit-upload-trap-no-keyboard"
     | "submit-upload-stale-recover"

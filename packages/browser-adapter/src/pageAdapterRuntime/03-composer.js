@@ -3,7 +3,8 @@ function createComposerRuntimeModule({
   domUtils,
   getMessageRuntime,
 }) {
-  const { normalizeText, collapseText, unique, hasToken } = textUtils;
+  const { normalizeText, collapseText, unique, uniqueCollapsed, hasToken } =
+    textUtils;
   const {
     isVisible,
     firstVisible,
@@ -326,8 +327,67 @@ function createComposerRuntimeModule({
     "[aria-label*='attachment']",
   ].join(", ");
 
-  const visibleAttachmentElements = () =>
-    visibleUnique(document.querySelectorAll(uploadAttachmentSelectors));
+  const visibleAttachmentElements = () => {
+    const elements = visibleUnique(
+      document.querySelectorAll(uploadAttachmentSelectors),
+    );
+    return elements.filter(
+      (element) =>
+        !elements.some((other) => other !== element && other.contains(element)),
+    );
+  };
+
+  const sanitizeVisibleAttachmentName = (value) => {
+    const stripped = collapseText(value)
+      .replace(/^attached\s+file\s+/i, "")
+      .replace(/^attachment\s+/i, "")
+      .trim();
+    if (!stripped || stripped.length > 160) {
+      return null;
+    }
+    if (/[<>:"/\\|?*\u0000-\u001f]/.test(stripped)) {
+      return null;
+    }
+    if (!/\.[a-z0-9]{1,12}$/i.test(stripped)) {
+      return null;
+    }
+    const normalized = normalizeText(stripped);
+    if (
+      hasToken(normalized, [
+        "processing",
+        "uploading",
+        "indexing",
+        "analyzing",
+        "attached",
+        "attachment",
+      ])
+    ) {
+      return null;
+    }
+    return stripped;
+  };
+
+  const attachmentNameCandidates = (element) =>
+    [
+      element?.textContent ?? "",
+      element?.getAttribute?.("aria-label") ?? "",
+      element?.getAttribute?.("title") ?? "",
+    ]
+      .map(sanitizeVisibleAttachmentName)
+      .filter(Boolean);
+
+  const readComposerAttachmentState = () => {
+    const elements = visibleAttachmentElements();
+    const visibleNames = uniqueCollapsed(
+      elements.flatMap(attachmentNameCandidates),
+    );
+    return {
+      visibleCount: elements.length,
+      visibleNames,
+      normalizedNames: unique(visibleNames),
+      attachmentsProcessing: attachmentsStillProcessing(),
+    };
+  };
 
   const hasAcknowledgedAttachments = () =>
     unique((document.body.dataset.uploadedFiles ?? "").split("|")).length > 0 ||
@@ -604,6 +664,7 @@ function createComposerRuntimeModule({
     readSubmitState,
     submitStarted,
     attachmentsStillProcessing,
+    readComposerAttachmentState,
     setComposerValue,
     uploadAcknowledged,
   };

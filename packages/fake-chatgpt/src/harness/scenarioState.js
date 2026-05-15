@@ -35,6 +35,7 @@ export const scenarioRegistry = {
     blockedSubmitAfterUpload: true,
     keyboardSubmit: false,
   },
+  "auto-upload-prompt": { autoUploadPrompt: true },
   "research-success": { deepResearchFrame: true },
   "research-timeout-reload-success": { deepResearchFrame: true },
   "research-failure": { deepResearchFrame: true },
@@ -108,6 +109,7 @@ export function createScenarioState(window) {
     hasDelayedUploadProcessing: Boolean(definition.delayedUploadProcessing),
     hasStuckUploadProcessing: Boolean(definition.stuckUploadProcessing),
     hasBlockedSubmitAfterUpload: Boolean(definition.blockedSubmitAfterUpload),
+    autoUploadsComposerPrompt: Boolean(definition.autoUploadPrompt),
     usesDeepResearchStartingShell: Boolean(
       definition.deepResearchStartingShell,
     ),
@@ -158,6 +160,7 @@ export function initializeScenarioDataset(document, window, config) {
   document.body.dataset.selectedMode = "normal";
   document.body.dataset.uploadedFiles = "";
   document.body.dataset.uploadProcessing = "false";
+  document.body.dataset.promptAutoUploaded = "false";
   document.body.dataset.researchState = "idle";
   document.body.dataset.researchStatusMessage = "";
   document.body.dataset.conversationId =
