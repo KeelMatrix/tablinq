@@ -12,6 +12,61 @@ import { MAX_COMPOSER_UPLOAD_FILES } from "../timing";
 
 export const USER_PROMPT_UPLOAD_THRESHOLD_CHARS = 4_500;
 
+const PROMPT_UPLOAD_FILE_NAME_TOKEN = "user-prompt-<timestamp>.txt";
+
+export const UPLOADED_USER_PROMPT_INSTRUCTION_TEMPLATES = [
+  "User prompt uploaded as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The user prompt was uploaded as user-prompt-<timestamp>.txt. Follow that uploaded prompt exactly.",
+  "User prompt file user-prompt-<timestamp>.txt has been uploaded. Follow the uploaded user prompt exactly.",
+  "The uploaded user prompt is in user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The user prompt is available in user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "A user prompt has been uploaded as user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "The uploaded file user-prompt-<timestamp>.txt contains the user prompt. Follow it exactly.",
+  "The user prompt has been provided in user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "User prompt saved as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "User prompt file: user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The file user-prompt-<timestamp>.txt contains the user prompt. Follow the uploaded user prompt exactly.",
+  "The prompt from the user is uploaded as user-prompt-<timestamp>.txt. Follow it exactly.",
+  "User prompt uploaded in file user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The uploaded prompt file is user-prompt-<timestamp>.txt. Follow the user prompt in that file exactly.",
+  "The user prompt can be found in user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "User prompt included as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The user prompt was provided via user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "Uploaded user prompt file: user-prompt-<timestamp>.txt. Follow the user prompt exactly.",
+  "The file named user-prompt-<timestamp>.txt contains the uploaded user prompt. Follow it exactly.",
+  "User prompt is uploaded as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The uploaded user prompt is stored in user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The user prompt has been uploaded in user-prompt-<timestamp>.txt. Follow that prompt exactly.",
+  "Uploaded file user-prompt-<timestamp>.txt contains the user prompt. Follow it exactly.",
+  "The user\u2019s prompt is uploaded as user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "The uploaded user prompt file is named user-prompt-<timestamp>.txt. Follow it exactly.",
+  "User prompt provided as uploaded file user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The prompt to follow is uploaded as user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The user prompt is contained in user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The uploaded file user-prompt-<timestamp>.txt is the user prompt. Follow it exactly.",
+  "User prompt uploaded under the name user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "The prompt supplied by the user is in user-prompt-<timestamp>.txt. Follow it exactly.",
+  "User prompt available as uploaded file user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The user prompt has been attached as user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "Uploaded user prompt is in user-prompt-<timestamp>.txt. Follow the user prompt exactly.",
+  "The file user-prompt-<timestamp>.txt is the uploaded user prompt. Follow it exactly.",
+  "The user\u2019s prompt has been uploaded as user-prompt-<timestamp>.txt. Follow that uploaded prompt exactly.",
+  "Use the uploaded user prompt in user-prompt-<timestamp>.txt and follow it exactly.",
+  "Read the uploaded user prompt from user-prompt-<timestamp>.txt and follow it exactly.",
+  "Follow exactly the uploaded user prompt contained in user-prompt-<timestamp>.txt.",
+  "Follow the uploaded user prompt exactly as provided in user-prompt-<timestamp>.txt.",
+  "The user prompt is provided in the uploaded file user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The uploaded file named user-prompt-<timestamp>.txt provides the user prompt. Follow it exactly.",
+  "The uploaded user prompt is user-prompt-<timestamp>.txt. Follow the prompt exactly.",
+  "User prompt file user-prompt-<timestamp>.txt is available. Follow the uploaded user prompt exactly.",
+  "The uploaded prompt user-prompt-<timestamp>.txt contains the user\u2019s instructions. Follow the user prompt exactly.",
+  "User instructions are uploaded as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The user prompt was attached in user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "The uploaded user prompt can be read from user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The prompt file user-prompt-<timestamp>.txt contains the user prompt. Follow the uploaded user prompt exactly.",
+  "The user prompt is in the uploaded file user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+] as const;
+
 export type UploadedUserPrompt = {
   fileName: string;
   instruction: string;
@@ -63,8 +118,19 @@ export function chooseUserPromptUploadFileName({
   );
 }
 
-export function buildUploadedUserPromptInstruction(fileName: string): string {
-  return `User prompt uploaded as ${fileName}. Follow the uploaded user prompt exactly.`;
+export function buildUploadedUserPromptInstruction(
+  fileName: string,
+  random: () => number = Math.random,
+): string {
+  const templateCount = UPLOADED_USER_PROMPT_INSTRUCTION_TEMPLATES.length;
+  const rawIndex = Math.floor(random() * templateCount);
+  const index = Number.isFinite(rawIndex)
+    ? Math.min(Math.max(rawIndex, 0), templateCount - 1)
+    : 0;
+  return UPLOADED_USER_PROMPT_INSTRUCTION_TEMPLATES[index].replace(
+    PROMPT_UPLOAD_FILE_NAME_TOKEN,
+    fileName,
+  );
 }
 
 export function composerAttachmentStateHasExactName(

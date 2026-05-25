@@ -26,6 +26,7 @@ import {
   buildUploadedUserPromptInstruction,
   chooseUserPromptUploadFileName,
   shouldUploadUserPromptText,
+  UPLOADED_USER_PROMPT_INSTRUCTION_TEMPLATES,
   USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
 } from "../src/execution/userPromptUpload";
 import { applyAskSnapshot } from "../src/execution/streaming";
@@ -63,6 +64,65 @@ const attachmentState = (
   normalizedNames: visibleNames.map((name) => name.toLowerCase()),
   attachmentsProcessing: false,
 });
+
+const EXPECTED_UPLOADED_USER_PROMPT_INSTRUCTION_TEMPLATES = [
+  "User prompt uploaded as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The user prompt was uploaded as user-prompt-<timestamp>.txt. Follow that uploaded prompt exactly.",
+  "User prompt file user-prompt-<timestamp>.txt has been uploaded. Follow the uploaded user prompt exactly.",
+  "The uploaded user prompt is in user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The user prompt is available in user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "A user prompt has been uploaded as user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "The uploaded file user-prompt-<timestamp>.txt contains the user prompt. Follow it exactly.",
+  "The user prompt has been provided in user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "User prompt saved as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "User prompt file: user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The file user-prompt-<timestamp>.txt contains the user prompt. Follow the uploaded user prompt exactly.",
+  "The prompt from the user is uploaded as user-prompt-<timestamp>.txt. Follow it exactly.",
+  "User prompt uploaded in file user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The uploaded prompt file is user-prompt-<timestamp>.txt. Follow the user prompt in that file exactly.",
+  "The user prompt can be found in user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "User prompt included as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The user prompt was provided via user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "Uploaded user prompt file: user-prompt-<timestamp>.txt. Follow the user prompt exactly.",
+  "The file named user-prompt-<timestamp>.txt contains the uploaded user prompt. Follow it exactly.",
+  "User prompt is uploaded as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The uploaded user prompt is stored in user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The user prompt has been uploaded in user-prompt-<timestamp>.txt. Follow that prompt exactly.",
+  "Uploaded file user-prompt-<timestamp>.txt contains the user prompt. Follow it exactly.",
+  "The user\u2019s prompt is uploaded as user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "The uploaded user prompt file is named user-prompt-<timestamp>.txt. Follow it exactly.",
+  "User prompt provided as uploaded file user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The prompt to follow is uploaded as user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The user prompt is contained in user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The uploaded file user-prompt-<timestamp>.txt is the user prompt. Follow it exactly.",
+  "User prompt uploaded under the name user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "The prompt supplied by the user is in user-prompt-<timestamp>.txt. Follow it exactly.",
+  "User prompt available as uploaded file user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The user prompt has been attached as user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "Uploaded user prompt is in user-prompt-<timestamp>.txt. Follow the user prompt exactly.",
+  "The file user-prompt-<timestamp>.txt is the uploaded user prompt. Follow it exactly.",
+  "The user\u2019s prompt has been uploaded as user-prompt-<timestamp>.txt. Follow that uploaded prompt exactly.",
+  "Use the uploaded user prompt in user-prompt-<timestamp>.txt and follow it exactly.",
+  "Read the uploaded user prompt from user-prompt-<timestamp>.txt and follow it exactly.",
+  "Follow exactly the uploaded user prompt contained in user-prompt-<timestamp>.txt.",
+  "Follow the uploaded user prompt exactly as provided in user-prompt-<timestamp>.txt.",
+  "The user prompt is provided in the uploaded file user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The uploaded file named user-prompt-<timestamp>.txt provides the user prompt. Follow it exactly.",
+  "The uploaded user prompt is user-prompt-<timestamp>.txt. Follow the prompt exactly.",
+  "User prompt file user-prompt-<timestamp>.txt is available. Follow the uploaded user prompt exactly.",
+  "The uploaded prompt user-prompt-<timestamp>.txt contains the user\u2019s instructions. Follow the user prompt exactly.",
+  "User instructions are uploaded as user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+  "The user prompt was attached in user-prompt-<timestamp>.txt. Follow the uploaded prompt exactly.",
+  "The uploaded user prompt can be read from user-prompt-<timestamp>.txt. Follow it exactly.",
+  "The prompt file user-prompt-<timestamp>.txt contains the user prompt. Follow the uploaded user prompt exactly.",
+  "The user prompt is in the uploaded file user-prompt-<timestamp>.txt. Follow the uploaded user prompt exactly.",
+] as const;
+
+function uploadedUserPromptInstructionVariants(fileName: string): string[] {
+  return EXPECTED_UPLOADED_USER_PROMPT_INSTRUCTION_TEMPLATES.map((template) =>
+    template.replace("user-prompt-<timestamp>.txt", fileName),
+  );
+}
 
 function mermaidPreviewSvg(labels: string[]): string {
   return encodeURIComponent(`
@@ -275,6 +335,25 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     ).toThrow(/unique prompt upload file name/);
   });
 
+  it("rotates uploaded user prompt instructions through the exact approved variants", () => {
+    const fileName = "user-prompt-20260515T010203456Z.txt";
+    const expectedInstructions =
+      uploadedUserPromptInstructionVariants(fileName);
+
+    expect(UPLOADED_USER_PROMPT_INSTRUCTION_TEMPLATES).toEqual(
+      EXPECTED_UPLOADED_USER_PROMPT_INSTRUCTION_TEMPLATES,
+    );
+    expect(expectedInstructions).toHaveLength(50);
+    for (const [index, instruction] of expectedInstructions.entries()) {
+      expect(
+        buildUploadedUserPromptInstruction(
+          fileName,
+          () => (index + 0.5) / expectedInstructions.length,
+        ),
+      ).toBe(instruction);
+    }
+  });
+
   it("keeps current composer insertion for prompts at the upload threshold", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
@@ -341,15 +420,16 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
       lastSubmissionMethod: document.body.dataset.lastSubmissionMethod,
     }));
     const fileName = state.uploadedFiles;
-    const instruction = buildUploadedUserPromptInstruction(fileName);
+    const approvedInstructions =
+      uploadedUserPromptInstructionVariants(fileName);
 
     expect(fileName).toMatch(/^user-prompt-\d{8}T\d{9}Z(?:-\d+)?\.txt$/);
-    expect(state).toEqual({
-      uploadedFiles: fileName,
-      lastSubmittedPrompt: instruction,
-      lastSubmissionMethod: "button",
-    });
-    expect(result.output_text).toBe(`Fake response for: ${instruction}`);
+    expect(state.uploadedFiles).toBe(fileName);
+    expect(approvedInstructions).toContain(state.lastSubmittedPrompt);
+    expect(state.lastSubmissionMethod).toBe("button");
+    expect(result.output_text).toBe(
+      `Fake response for: ${state.lastSubmittedPrompt}`,
+    );
 
     await adapter.shutdown();
   });
@@ -394,8 +474,8 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
       "direct-explicit-two.txt",
     ]);
     expect(promptFileName).toMatch(/^user-prompt-\d{8}T\d{9}Z(?:-\d+)?\.txt$/);
-    expect(state.lastSubmittedPrompt).toBe(
-      buildUploadedUserPromptInstruction(promptFileName),
+    expect(uploadedUserPromptInstructionVariants(promptFileName)).toContain(
+      state.lastSubmittedPrompt,
     );
 
     await adapter.shutdown();
