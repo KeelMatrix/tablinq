@@ -1,54 +1,41 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Value, json};
-use shared_protocol::{CapabilityReport, Effort, Mode, ModelClass};
+use shared_protocol::{CapabilityReport, Effort, ModelClass};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ProviderModelSpec {
     pub id: &'static str,
-    pub mode: Mode,
-    pub model_class: Option<ModelClass>,
+    pub model_class: ModelClass,
     pub effort: Option<Effort>,
-    pub uses_research: bool,
 }
+
+pub const LEGACY_SEARCH_MODEL_ID: &str = "tablinq-search";
+pub const RESEARCH_PRESET_ID: &str = "tablinq-research";
 
 pub const PROVIDER_MODELS: &[ProviderModelSpec] = &[
     ProviderModelSpec {
         id: "tablinq-instant",
-        mode: Mode::Normal,
-        model_class: Some(ModelClass::Instant),
-        effort: Some(Effort::None),
-        uses_research: false,
+        model_class: ModelClass::Instant,
+        effort: None,
     },
     ProviderModelSpec {
         id: "tablinq-thinking-standard",
-        mode: Mode::Normal,
-        model_class: Some(ModelClass::Thinking),
+        model_class: ModelClass::Thinking,
         effort: Some(Effort::Standard),
-        uses_research: false,
     },
     ProviderModelSpec {
         id: "tablinq-thinking-extended",
-        mode: Mode::Normal,
-        model_class: Some(ModelClass::Thinking),
+        model_class: ModelClass::Thinking,
         effort: Some(Effort::Extended),
-        uses_research: false,
-    },
-    ProviderModelSpec {
-        id: "tablinq-search",
-        mode: Mode::Search,
-        model_class: None,
-        effort: None,
-        uses_research: false,
-    },
-    ProviderModelSpec {
-        id: "tablinq-research",
-        mode: Mode::Research,
-        model_class: None,
-        effort: None,
-        uses_research: true,
     },
 ];
+
+#[derive(Debug, Clone, Copy)]
+pub enum ProviderRequestTarget {
+    Ask(&'static ProviderModelSpec),
+    Research,
+}
 
 #[derive(Debug, Clone)]
 pub struct CapabilitySnapshotStatus {
@@ -63,6 +50,12 @@ struct CapabilityAvailability {
 
 pub fn resolve_model(model_id: &str) -> Option<&'static ProviderModelSpec> {
     PROVIDER_MODELS.iter().find(|spec| spec.id == model_id)
+}
+
+pub fn resolve_request_target(model_id: &str) -> Option<ProviderRequestTarget> {
+    resolve_model(model_id)
+        .map(ProviderRequestTarget::Ask)
+        .or_else(|| (model_id == RESEARCH_PRESET_ID).then_some(ProviderRequestTarget::Research))
 }
 
 pub fn model_object(
@@ -86,12 +79,18 @@ pub fn model_object(
         "object": "model",
         "created": 0,
         "owned_by": "tablinq",
-        "tablinq_preset_kind": preset_kind(spec),
+        "tablinq_preset_kind": "model_selection",
         "tablinq_ui_target": ui_target(spec),
-        "tablinq_mode": mode_name(spec.mode),
-        "tablinq_model_class": spec.model_class.map(model_class_name),
+        "tablinq_default_mode": "normal",
+        "tablinq_mode": "normal",
+        "tablinq_model_class": model_class_name(spec.model_class),
         "tablinq_effort": spec.effort.map(effort_name),
-        "tablinq_execution_kind": if spec.uses_research { "research" } else { "ask" },
+        "tablinq_execution_kind": "ask",
+        "tablinq_supported_modes": ["normal", "search"],
+        "tablinq_search_mode": true,
+        "tablinq_search_mode_status": search_mode_status(report).availability,
+        "tablinq_search_mode_kind": "composer_chip",
+        "tablinq_search_mode_note": "Search is a ChatGPT composer chip/mode selected with tablinq_mode=\"search\", not a model id.",
         "tablinq_streaming": true,
         "tablinq_streaming_status": "final_only",
         "tablinq_live_streaming": false,
@@ -123,8 +122,6 @@ pub fn model_snapshot_status(
             composer_submission_ready(report)
                 && thinking_effort_available(report, spec.effort.unwrap_or(Effort::None))
         }
-        "tablinq-search" => search_capability_available(report),
-        "tablinq-research" => research_capability_available(report),
         _ => false,
     };
     if available {
@@ -144,14 +141,8 @@ pub fn model_snapshot_status(
                     "the required thinking effort control was not observed in the current attached browser-backed ChatGPT snapshot"
                 }
             }
-            "tablinq-search" => {
-                "the Search composer mode was not observed in the current attached browser-backed ChatGPT snapshot"
-            }
-            "tablinq-research" => {
-                "the Deep Research entrypoint or ready research page state was not observed in the current attached browser-backed ChatGPT snapshot"
-            }
             _ => {
-                "the required preset state was not observed in the current attached browser-backed ChatGPT snapshot"
+                "the required model selection state was not observed in the current attached browser-backed ChatGPT snapshot"
             }
         };
         CapabilitySnapshotStatus {
@@ -166,8 +157,8 @@ pub(super) fn composer_submission_ready(report: &CapabilityReport) -> bool {
 }
 
 pub(super) fn search_capability_available(report: &CapabilityReport) -> bool {
-    composer_submission_ready(report)
-        && (report.matrix.search_mode_visible || has_mode_alias(report, "search"))
+    let _ = report;
+    true
 }
 
 pub(super) fn research_capability_available(report: &CapabilityReport) -> bool {
@@ -212,28 +203,34 @@ fn capability_status(
     }
 }
 
+fn search_mode_status(report: Option<&CapabilityReport>) -> CapabilityAvailability {
+    match report {
+        Some(_) => CapabilityAvailability {
+            availability: "available",
+        },
+        None => CapabilityAvailability {
+            availability: "unknown",
+        },
+    }
+}
+
 fn unknown_capability_note() -> String {
     "the current browser-backed ChatGPT UI snapshot is unknown until the attached tab reports probes"
         .to_owned()
 }
 
-fn preset_kind(spec: &ProviderModelSpec) -> &'static str {
-    if spec.uses_research {
-        "research_flow"
-    } else if spec.mode == Mode::Search {
-        "composer_mode"
-    } else {
-        "model_selection"
-    }
-}
-
 fn ui_target(spec: &ProviderModelSpec) -> Value {
     json!({
-        "mode": mode_name(spec.mode),
-        "model_class": spec.model_class.map(model_class_name),
+        "default_mode": "normal",
+        "model_class": model_class_name(spec.model_class),
         "effort": spec.effort.map(effort_name),
-        "requires_search_chip": spec.mode == Mode::Search,
-        "requires_research_entrypoint": spec.uses_research,
+        "supported_modes": ["normal", "search"],
+        "search_mode": {
+            "kind": "composer_chip",
+            "request_field": "tablinq_mode",
+            "request_value": "search",
+        },
+        "requires_research_entrypoint": false,
     })
 }
 
@@ -246,40 +243,26 @@ fn observed_aliases(spec: &ProviderModelSpec, report: Option<&CapabilityReport>)
         });
     };
 
-    let mode_key = match spec.mode {
-        Mode::Normal => "normal",
-        Mode::Search => "search",
-        Mode::Research => "research",
-    };
     let model_class_key = match spec.model_class {
-        Some(ModelClass::Instant) => Some("instant"),
-        Some(ModelClass::Thinking) => Some("thinking"),
-        None => None,
+        ModelClass::Instant => "instant",
+        ModelClass::Thinking => "thinking",
     };
     let effort_key = match spec.effort {
-        Some(Effort::None) => Some("none"),
         Some(Effort::Standard) => Some("standard"),
         Some(Effort::Extended) => Some("extended"),
         None => None,
+        Some(Effort::None) => None,
     };
 
     json!({
-        "modes": report.aliases.modes.get(mode_key).cloned().unwrap_or_default(),
-        "model_classes": model_class_key
-            .and_then(|key| report.aliases.model_classes.get(key).cloned())
+        "modes": report.aliases.modes.get("normal").cloned().unwrap_or_default(),
+        "search_modes": report.aliases.modes.get("search").cloned().unwrap_or_default(),
+        "model_classes": report.aliases.model_classes.get(model_class_key).cloned()
             .unwrap_or_default(),
         "efforts": effort_key
             .and_then(|key| report.aliases.efforts.get(key).cloned())
             .unwrap_or_default(),
     })
-}
-
-pub fn mode_name(mode: Mode) -> &'static str {
-    match mode {
-        Mode::Normal => "normal",
-        Mode::Search => "search",
-        Mode::Research => "research",
-    }
 }
 
 fn model_class_name(value: ModelClass) -> &'static str {
@@ -323,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn model_availability_uses_live_capability_report_aliases() {
+    fn base_model_availability_uses_live_capability_report_aliases() {
         let report = report_with_aliases(
             CapabilityMatrix {
                 composer_ready: true,
@@ -340,13 +323,11 @@ mod tests {
         );
 
         assert_eq!(
-            model_snapshot_status(&PROVIDER_MODELS[3], Some(&report)).snapshot_status,
+            model_snapshot_status(&PROVIDER_MODELS[0], Some(&report)).snapshot_status,
             "observed"
         );
-        assert_eq!(
-            model_snapshot_status(&PROVIDER_MODELS[4], Some(&report)).snapshot_status,
-            "observed"
-        );
+        assert!(search_capability_available(&report));
+        assert!(research_capability_available(&report));
     }
 
     #[test]
@@ -371,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn research_model_requires_submit_ready_page_state() {
+    fn research_capability_requires_submit_ready_page_state() {
         let report = report_with_aliases(
             CapabilityMatrix {
                 composer_ready: false,
@@ -385,10 +366,22 @@ mod tests {
             },
         );
 
-        assert_eq!(
-            model_snapshot_status(&PROVIDER_MODELS[4], Some(&report)).snapshot_status,
-            "not_observed"
+        assert!(!research_capability_available(&report));
+    }
+
+    #[test]
+    fn search_capability_is_not_visibility_gated() {
+        let report = report_with_aliases(
+            CapabilityMatrix {
+                composer_ready: true,
+                submit_available: true,
+                search_mode_visible: false,
+                ..CapabilityMatrix::default()
+            },
+            RuntimeAliases::default(),
         );
+
+        assert!(search_capability_available(&report));
     }
 
     #[test]

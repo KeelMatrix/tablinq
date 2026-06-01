@@ -179,13 +179,15 @@ Tablinq can expose the same browser-backed session through a local OpenAI-compat
 - recommended branch concurrency: `1`
 - subagents disabled by default
 
-Supported API presets:
+Supported API base models:
 
 - `tablinq-instant`
 - `tablinq-thinking-standard`
 - `tablinq-thinking-extended`
-- `tablinq-search`
-- `tablinq-research`
+
+Search is a ChatGPT composer chip/mode, not a model. API clients use a base `model` plus top-level `tablinq_mode: "search"`; omit `tablinq_mode` or set `"normal"` for non-search requests. Search combines with any selected base target where the attached ChatGPT UI supports that target. Free/Paid plan differences affect base model availability, not the Search chip concept.
+
+Deep Research remains a separate research flow, not Search.
 
 See:
 

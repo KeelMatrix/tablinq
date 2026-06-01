@@ -90,12 +90,17 @@ fn provider_endpoint_exposes_openclaude_preset_metadata() {
     assert_eq!(body["presets"]["openclaude"]["max_parallel_requests"], 1);
     assert_eq!(body["presets"]["openclaude"]["subagents"], "queued");
     assert_eq!(
-        body["presets"]["openclaude"]["recommended_presets"],
-        json!([
-            "tablinq-instant",
-            "tablinq-thinking-standard",
-            "tablinq-search",
-        ])
+        body["presets"]["openclaude"]["recommended_models"],
+        json!(["tablinq-instant", "tablinq-thinking-standard"])
+    );
+    assert_eq!(
+        body["presets"]["openclaude"]["search_mode"]["request_field"],
+        "tablinq_mode"
+    );
+    assert!(
+        body["presets"]["openclaude"]["search_mode"]["note"]
+            .as_str()
+            .is_some_and(|note| note.contains("not a model"))
     );
     assert_eq!(body["presets"]["openclaude"]["streaming"], true);
     assert_eq!(body["presets"]["openclaude"]["live_streaming"], false);
@@ -159,8 +164,16 @@ fn provider_endpoint_exposes_paperclip_preset_metadata() {
     );
     assert_eq!(body["presets"]["paperclip"]["usage_accounting"], "unknown");
     assert_eq!(
-        body["presets"]["paperclip"]["recommended_presets"],
-        json!(["tablinq-instant", "tablinq-search", "tablinq-research"])
+        body["presets"]["paperclip"]["recommended_models"],
+        json!(["tablinq-instant"])
+    );
+    assert_eq!(
+        body["presets"]["paperclip"]["search_mode"]["request_value"],
+        "search"
+    );
+    assert_eq!(
+        body["presets"]["paperclip"]["research_preset"],
+        "tablinq-research"
     );
     assert!(!body_text.to_ascii_lowercase().contains("managed"));
 
@@ -255,8 +268,6 @@ fn documented_provider_contract_surfaces_are_present() {
             "tablinq-instant",
             "tablinq-thinking-standard",
             "tablinq-thinking-extended",
-            "tablinq-search",
-            "tablinq-research",
         ])
     );
     assert!(
@@ -450,15 +461,26 @@ fn models_endpoint_returns_openai_model_catalog() {
             "tablinq-instant",
             "tablinq-thinking-standard",
             "tablinq-thinking-extended",
-            "tablinq-search",
-            "tablinq-research",
         ])
     );
     let models = body["data"].as_array().unwrap();
-    assert_eq!(models.len(), 5);
+    assert_eq!(models.len(), 3);
     assert_eq!(models[0]["id"], "tablinq-instant");
     assert_eq!(models[0]["tablinq_model_class"], "instant");
-    assert_eq!(models[0]["tablinq_effort"], "none");
+    assert_eq!(models[0]["tablinq_effort"], Value::Null);
+    assert_eq!(models[0]["tablinq_default_mode"], "normal");
+    assert_eq!(
+        models[0]["tablinq_supported_modes"],
+        json!(["normal", "search"])
+    );
+    assert_eq!(models[0]["tablinq_search_mode"], true);
+    assert_eq!(models[0]["tablinq_search_mode_status"], "available");
+    assert_eq!(models[0]["tablinq_search_mode_kind"], "composer_chip");
+    assert!(
+        models[0]["tablinq_search_mode_note"]
+            .as_str()
+            .is_some_and(|note| note.contains("not a model"))
+    );
     assert_eq!(models[0]["tablinq_streaming"], true);
     assert_eq!(models[0]["tablinq_streaming_status"], "final_only");
     assert_eq!(models[0]["tablinq_live_streaming"], false);
@@ -467,12 +489,7 @@ fn models_endpoint_returns_openai_model_catalog() {
     assert_eq!(models[1]["tablinq_effort"], "standard");
     assert_eq!(models[2]["id"], "tablinq-thinking-extended");
     assert_eq!(models[2]["tablinq_effort"], "extended");
-    assert_eq!(models[3]["id"], "tablinq-search");
-    assert_eq!(models[3]["tablinq_preset_kind"], "composer_mode");
-    assert_eq!(models[3]["tablinq_mode"], "search");
-    assert_eq!(models[4]["id"], "tablinq-research");
-    assert_eq!(models[4]["tablinq_preset_kind"], "research_flow");
-    assert_eq!(models[4]["tablinq_execution_kind"], "research");
+    assert!(models.iter().all(|model| model["id"] != "tablinq-search"));
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
@@ -507,14 +524,16 @@ fn capabilities_endpoint_reports_alias_remaps_for_stable_models() {
     assert_eq!(body["object"], "tablinq.capability_catalog");
     assert_eq!(body["source"], "live");
     assert_eq!(
-        body["provider"]["observed_preset_ids"],
+        body["provider"]["observed_model_ids"],
         json!([
             "tablinq-instant",
             "tablinq-thinking-standard",
             "tablinq-thinking-extended",
-            "tablinq-search",
-            "tablinq-research",
         ])
+    );
+    assert_eq!(
+        body["provider"]["capabilities"]["search"]["request_field"],
+        "tablinq_mode"
     );
     assert_eq!(body["observed_ui"]["search_mode"]["status"], "observed");
     assert!(body["presets"].as_array().unwrap().iter().any(|item| {
@@ -555,43 +574,30 @@ fn capabilities_endpoint_marks_missing_features_unavailable() {
     .unwrap();
     assert_eq!(response.status_code, 200);
     let body: Value = serde_json::from_slice(&response.body).unwrap();
-    let search = body["presets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["id"] == "tablinq-search")
-        .unwrap();
     let thinking = body["presets"]
         .as_array()
         .unwrap()
         .iter()
         .find(|item| item["id"] == "tablinq-thinking-standard")
         .unwrap();
-    let research = body["presets"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|item| item["id"] == "tablinq-research")
-        .unwrap();
     assert_eq!(thinking["tablinq_snapshot_status"], "not_observed");
-    assert_eq!(search["tablinq_snapshot_status"], "not_observed");
-    assert_eq!(research["tablinq_snapshot_status"], "not_observed");
     assert!(
-        !search["tablinq_snapshot_note"]
+        body["presets"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .iter()
+            .all(|item| item["id"] != "tablinq-search")
     );
     assert_eq!(
         body["provider"]["capabilities"]["search"]["snapshot_status"],
-        "not_observed"
+        "observed"
     );
     assert_eq!(
         body["provider"]["capabilities"]["research"]["snapshot_status"],
         "not_observed"
     );
-    let observed_ids = body["provider"]["observed_preset_ids"].as_array().unwrap();
-    assert_eq!(body["provider"]["preset_ids"].as_array().unwrap().len(), 5);
+    let observed_ids = body["provider"]["observed_model_ids"].as_array().unwrap();
+    assert_eq!(body["provider"]["model_ids"].as_array().unwrap().len(), 3);
     assert_eq!(observed_ids.len(), 1);
     assert_eq!(observed_ids[0], "tablinq-instant");
 

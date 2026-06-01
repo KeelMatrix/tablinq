@@ -377,7 +377,8 @@ fn chat_completions_maps_capability_errors_to_openai_shape() {
     let (handle, snapshot) = spawn_gateway(config);
 
     let body = serde_json::to_vec(&json!({
-        "model": "tablinq-search",
+        "model": "tablinq-thinking-standard",
+        "tablinq_mode": "search",
         "messages": [
             { "role": "user", "content": "search for release notes" }
         ]

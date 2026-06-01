@@ -105,13 +105,27 @@ Route guidance:
 - `GET /v1/usage`: use `limit`, `offset`, and `summary=true` for polling, or `summary=false`/`view=full` for detailed history. Pagination metadata is computed against the durable request-history count.
 - `GET /v1/files` and `GET /v1/artifacts`: use `limit`, `offset`, and summary views for repeated listing; fetch individual details or artifact content only when needed.
 
-## Supported API presets
+## Supported API models and modes
 
 - `tablinq-instant`
 - `tablinq-thinking-standard`
 - `tablinq-thinking-extended`
-- `tablinq-search` for Search chip / composer mode
-- `tablinq-research` for the Deep Research flow
+
+Search is a ChatGPT composer chip/mode, not a model. Use a base `model` plus top-level `tablinq_mode: "search"`:
+
+```json
+{
+  "model": "tablinq-thinking-standard",
+  "tablinq_mode": "search",
+  "messages": [
+    { "role": "user", "content": "Find current Windows code-signing costs." }
+  ]
+}
+```
+
+For non-search ask requests, omit `tablinq_mode` or set `"normal"`. Search combines with any selected base target where the attached ChatGPT UI supports that target. Free/Paid plan differences affect which base target is selectable, not the Search chip concept.
+
+`tablinq-research` is a separate Deep Research flow. It is not Search and does not use the Search composer chip.
 
 ## Safe parallelism
 
