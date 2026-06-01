@@ -568,7 +568,8 @@ fn chat_completions_stream_true_execution_errors_are_sse_errors() {
     let (handle, snapshot) = spawn_gateway(config);
 
     let body = serde_json::to_vec(&json!({
-        "model": "tablinq-search",
+        "model": "tablinq-thinking-standard",
+        "tablinq_mode": "search",
         "stream": true,
         "messages": [
             { "role": "user", "content": "search should be unavailable" }

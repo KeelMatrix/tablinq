@@ -35,8 +35,8 @@ Also confirm:
 2. Run `gpt ask --model instant "Compress this outage note into one Slack update."` and confirm completion or a clean `capability_missing` failure.
 3. Run `gpt ask --model thinking --effort standard "Choose Rust or TypeScript for a crash-report parser."` and confirm completion or a clean capability failure.
 4. Run `gpt ask --model thinking --effort extended "Design a rollback plan for a broken updater."` and confirm completion or a clean capability failure.
-5. Run `gpt ask --mode search "Which Rust release first stabilized let-chains?"` and confirm ChatGPT opens the composer plus/tools menu, selects `Web search`/`Search`, shows a visible `Search` chip before submit, and completes with web-search behavior such as sources or current factual content. If ChatGPT does not expose composer Web search, confirm a clean capability failure.
-6. Run `gpt ask --mode search --model thinking --effort standard "Find current Windows code-signing costs."` and confirm search mode and thinking selection both apply before submit, or fail cleanly if either capability is unavailable.
+5. Run `gpt ask --mode search "Which Rust release first stabilized let-chains?"` and confirm ChatGPT opens the composer plus/tools menu, selects `Web search`/`Search`, shows a visible `Search` chip before submit, and completes with web-search behavior such as sources or current factual content. Search is a composer chip/mode, not a model; if ChatGPT does not expose composer Web search, confirm a clean capability failure.
+6. Run `gpt ask --mode search --model thinking --effort standard "Find current Windows code-signing costs."` and confirm search mode and thinking selection both apply before submit, or fail cleanly if either capability is unavailable. Free/Paid plan differences should affect only the selected base target, not the Search chip concept.
 7. Run `gpt ask --mode search --conversation conv-123 "Refresh the shipping checklist against current notarization rules."` with a real conversation ID and confirm the existing conversation is reused while search mode applies.
 8. Run `gpt ask --file path\to\notes.txt --file path\to\decisions.csv "Extract the unresolved launch decisions."` and confirm both attachments appear before submit.
 9. After a run that produces an artifact, confirm `gpt artifacts list` shows it and `gpt artifacts pull last --to .` retrieves it.
@@ -55,9 +55,10 @@ If you want to retain command output or before/after snapshots from a live check
 1. Call `POST /v1/chat/completions` with `tablinq-instant` and confirm the response includes `request_id`, `tablinq_job_id`, and warnings metadata.
 2. Call `POST /v1/chat/completions` with `"stream": false` and confirm the normal non-streaming response path still works.
 3. Call `POST /v1/chat/completions` with `"stream": true` and confirm an SSE response arrives after finalization with one final content chunk, one stop chunk, and `data: [DONE]`.
-4. Call `GET /v1/provider`, configure an OpenClaude preset, and confirm `primary` requests execute while `subagent` requests are rejected with `subagents_disabled`.
-5. Upload a file to `POST /v1/files`, run a research completion with the returned file ID, and confirm `GET /v1/artifacts?view=summary&limit=20` returns a linked artifact.
-6. Run `scripts/soak_gateway.ps1 -CompactLog` for repeated sequential requests and confirm request IDs advance without leaving the gateway or daemon unhealthy. Use `-FullLog` only when you need forensic response capture.
+4. Call `POST /v1/chat/completions` with a base model such as `tablinq-thinking-standard` plus `"tablinq_mode": "search"` and confirm Search behaves as a composer chip/mode, not a model id.
+5. Call `GET /v1/provider`, configure an OpenClaude preset, and confirm `primary` requests execute while `subagent` requests are rejected with `subagents_disabled`.
+6. Upload a file to `POST /v1/files`, run a research completion with the returned file ID, and confirm `GET /v1/artifacts?view=summary&limit=20` returns a linked artifact.
+7. Run `scripts/soak_gateway.ps1 -CompactLog` for repeated sequential requests and confirm request IDs advance without leaving the gateway or daemon unhealthy. Use `-FullLog` only when you need forensic response capture.
 
 ## Interruption and recovery checks
 

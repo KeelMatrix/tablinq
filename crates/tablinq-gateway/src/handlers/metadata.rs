@@ -179,7 +179,7 @@ pub(crate) fn handle_provider_request(
                 {
                     "code": "capability_missing",
                     "behavior": "refuse",
-                    "when": "the selected live account or workspace no longer exposes the requested model or mode",
+                    "when": "the selected live account or workspace no longer exposes the requested base model target, effort control, composer chip, or research entrypoint",
                 },
                 {
                     "code": "ui_drift",
@@ -203,11 +203,16 @@ pub(crate) fn handle_provider_request(
             },
             "presets": {
                 "openclaude": {
-                    "recommended_presets": [
+                    "recommended_models": [
                         "tablinq-instant",
                         "tablinq-thinking-standard",
-                        "tablinq-search",
                     ],
+                    "search_mode": {
+                        "kind": "composer_chip",
+                        "request_field": "tablinq_mode",
+                        "request_value": "search",
+                        "note": "Search is a composer chip/mode used with any supported base model target; it is not a model.",
+                    },
                     "streaming": true,
                     "streaming_note": "stream:true is accepted for OpenAI-compatible SSE framing, but responses are final-only after browser finalization",
                     "live_streaming": false,
@@ -217,11 +222,16 @@ pub(crate) fn handle_provider_request(
                 },
                 "paperclip": {
                     "transport": "openai_compatible_http",
-                    "recommended_presets": [
+                    "recommended_models": [
                         "tablinq-instant",
-                        "tablinq-search",
-                        "tablinq-research",
                     ],
+                    "search_mode": {
+                        "kind": "composer_chip",
+                        "request_field": "tablinq_mode",
+                        "request_value": "search",
+                        "note": "Search is a composer chip/mode used with any supported base model target; it is not a model.",
+                    },
+                    "research_preset": "tablinq-research",
                     "streaming": true,
                     "streaming_note": "stream:true is accepted for OpenAI-compatible SSE framing, but responses are final-only after browser finalization",
                     "live_streaming": false,

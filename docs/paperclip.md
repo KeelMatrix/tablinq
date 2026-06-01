@@ -15,11 +15,14 @@ Use Tablinq's local gateway as an OpenAI-compatible provider for Paperclip.
 
 Paperclip is a good fit when you want file-backed browser automation, research-style runs, and artifact retrieval through a familiar provider contract.
 
-## Recommended API presets
+## Recommended API models and modes
 
 - `tablinq-instant`
-- `tablinq-search` for the Search composer mode
 - `tablinq-research` for the Deep Research flow
+
+Search is a ChatGPT composer chip/mode, not a model. Use a base `model` plus top-level `tablinq_mode: "search"` for Search ask requests, and omit `tablinq_mode` or set `"normal"` for non-search requests. Search combines with any selected base target where the attached ChatGPT UI supports that target; Free/Paid plan differences affect base target availability, not the Search chip concept.
+
+`tablinq-research` is a separate Deep Research flow. It is not Search and does not use the Search composer chip.
 
 ## Example config
 

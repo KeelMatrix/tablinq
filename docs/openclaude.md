@@ -16,14 +16,15 @@ Use Tablinq's local gateway as an OpenAI-compatible provider for OpenClaude.
 
 OpenClaude works best when you treat Tablinq as a high-context, browser-backed provider with one real upstream slot.
 
-## Recommended API presets
+## Recommended API models and modes
 
 - `tablinq-instant`
 - `tablinq-thinking-standard`
 - `tablinq-thinking-extended`
-- `tablinq-search` for the Search composer mode
 
-Use `tablinq-research` only when you explicitly want the longer-running research path.
+Search is a ChatGPT composer chip/mode, not a model. Use a base `model` plus top-level `tablinq_mode: "search"` when OpenClaude should ask with Search enabled. Omit `tablinq_mode` or set `"normal"` for non-search requests. Search combines with any selected base target where the attached ChatGPT UI supports that target; Free/Paid plan differences affect base target availability, not the Search chip concept.
+
+Use `tablinq-research` only when you explicitly want the longer-running research path. Research is separate from Search.
 
 ## Safe default policy
 
@@ -39,7 +40,8 @@ Use `tablinq-research` only when you explicitly want the longer-running research
     "baseURL": "http://127.0.0.1:3847/v1",
     "apiKey": "<gateway.api_key>"
   },
-  "model": "tablinq-search",
+  "model": "tablinq-thinking-standard",
+  "tablinq_mode": "search",
   "stream": true,
   "max_parallel_requests": 1,
   "max_parallel_branches": 1,
@@ -83,7 +85,8 @@ For request-scoped evidence capture and how to consume `GET /v1/requests/{reques
 
 ```json
 {
-  "model": "tablinq-search",
+  "model": "tablinq-thinking-standard",
+  "tablinq_mode": "search",
   "stream": true,
   "tablinq_request_role": "primary",
   "tablinq_new_conversation": true,

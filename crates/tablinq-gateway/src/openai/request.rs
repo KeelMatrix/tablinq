@@ -1,8 +1,9 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use shared_protocol::Mode;
 
-use super::models::resolve_model;
+use super::models::{LEGACY_SEARCH_MODEL_ID, resolve_request_target};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenAiRequestError {
@@ -48,6 +49,8 @@ pub fn invalid_request_json_error(message: impl Into<String>) -> OpenAiRequestEr
 #[serde(deny_unknown_fields)]
 pub struct ChatCompletionsRequest {
     pub model: String,
+    #[serde(default)]
+    pub tablinq_mode: Option<TablinqMode>,
     pub messages: Vec<ChatMessage>,
     #[serde(default)]
     pub stream: bool,
@@ -101,6 +104,37 @@ pub struct ChatCompletionsRequest {
     pub tablinq_auto_recover_provider_generation_failure: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TablinqMode {
+    Normal,
+    Search,
+    Unknown(String),
+}
+
+impl TablinqMode {
+    pub fn as_shared_mode(&self) -> Option<Mode> {
+        match self {
+            Self::Normal => Some(Mode::Normal),
+            Self::Search => Some(Mode::Search),
+            Self::Unknown(_) => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TablinqMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "normal" => Self::Normal,
+            "search" => Self::Search,
+            _ => Self::Unknown(value),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestRole {
@@ -149,6 +183,24 @@ pub struct MessagePart {
 impl ChatCompletionsRequest {
     pub fn request_role(&self) -> RequestRole {
         self.tablinq_request_role.unwrap_or(RequestRole::Primary)
+    }
+
+    pub fn resolved_tablinq_mode(&self) -> Result<Mode> {
+        match self.tablinq_mode.as_ref() {
+            None => Ok(Mode::Normal),
+            Some(mode) => Ok(mode.as_shared_mode().ok_or_else(|| {
+                let value = match mode {
+                    TablinqMode::Unknown(value) => value.as_str(),
+                    _ => "",
+                };
+                invalid_request_error(
+                    "unsupported_tablinq_mode",
+                    format!(
+                        "tablinq_mode {value:?} is not supported; use \"normal\" or \"search\""
+                    ),
+                )
+            })?),
+        }
     }
 }
 
@@ -242,7 +294,15 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
         )
         .into());
     }
-    if resolve_model(&request.model).is_none() {
+    request.resolved_tablinq_mode()?;
+    if request.model == LEGACY_SEARCH_MODEL_ID {
+        return Err(invalid_request_error(
+            "unsupported_model",
+            "tablinq-search is not a model. Use model=<base target> with tablinq_mode=\"search\".",
+        )
+        .into());
+    }
+    if resolve_request_target(&request.model).is_none() {
         return Err(invalid_request_error(
             "unsupported_model",
             format!("model {} is not supported", request.model),
@@ -323,6 +383,58 @@ mod tests {
 
         let err = validate_chat_request(&request).expect_err("unknown model should fail");
         assert!(err.to_string().contains("is not supported"));
+    }
+
+    #[test]
+    fn tablinq_mode_defaults_to_normal_and_accepts_normal_or_search() {
+        for (value, expected) in [
+            (None, Mode::Normal),
+            (Some("normal"), Mode::Normal),
+            (Some("search"), Mode::Search),
+        ] {
+            let mut body = json!({
+                "model": "tablinq-thinking-standard",
+                "messages": [{ "role": "user", "content": "hello" }]
+            });
+            if let Some(value) = value {
+                body["tablinq_mode"] = json!(value);
+            }
+            let request: ChatCompletionsRequest =
+                serde_json::from_value(body).expect("request decodes");
+
+            validate_chat_request(&request).expect("request validates");
+            assert_eq!(request.resolved_tablinq_mode().unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn invalid_tablinq_mode_is_rejected_as_invalid_request() {
+        let request: ChatCompletionsRequest = serde_json::from_value(json!({
+            "model": "tablinq-thinking-standard",
+            "tablinq_mode": "browse",
+            "messages": [{ "role": "user", "content": "hello" }]
+        }))
+        .expect("request decodes");
+
+        let err = validate_chat_request(&request).expect_err("invalid mode should fail");
+        let openai_error = err.downcast_ref::<OpenAiRequestError>().unwrap();
+        assert_eq!(openai_error.error_type, "invalid_request_error");
+        assert_eq!(openai_error.code, "unsupported_tablinq_mode");
+        assert!(openai_error.message.contains("normal"));
+        assert!(openai_error.message.contains("search"));
+    }
+
+    #[test]
+    fn legacy_search_model_id_is_rejected_with_migration_guidance() {
+        let request: ChatCompletionsRequest = serde_json::from_value(json!({
+            "model": "tablinq-search",
+            "messages": [{ "role": "user", "content": "hello" }]
+        }))
+        .expect("request decodes");
+
+        let err = validate_chat_request(&request).expect_err("legacy search model should fail");
+        assert!(err.to_string().contains("tablinq-search is not a model"));
+        assert!(err.to_string().contains("tablinq_mode=\"search\""));
     }
 
     #[test]

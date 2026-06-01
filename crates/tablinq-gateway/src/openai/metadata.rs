@@ -12,11 +12,11 @@ pub fn provider_capability_catalog(
     report: Option<&CapabilityReport>,
     capability_source: &str,
 ) -> Value {
-    let preset_ids = PROVIDER_MODELS
+    let model_ids = PROVIDER_MODELS
         .iter()
         .map(|spec| spec.id)
         .collect::<Vec<_>>();
-    let observed_preset_ids = PROVIDER_MODELS
+    let observed_model_ids = PROVIDER_MODELS
         .iter()
         .filter(|spec| model_snapshot_status(spec, report).snapshot_status == "observed")
         .map(|spec| spec.id)
@@ -24,14 +24,12 @@ pub fn provider_capability_catalog(
 
     json!({
         "capability_source": capability_source,
-        "preset_ids": preset_ids.clone(),
-        "observed_preset_ids": observed_preset_ids,
+        "model_ids": model_ids.clone(),
+        "observed_model_ids": observed_model_ids,
         "capabilities": {
-            "search": capability_status(
+            "search": search_capability_status(
                 report,
-                "tablinq-search",
-                search_capability_available,
-                "the Search composer mode was not observed in the current attached browser-backed ChatGPT snapshot",
+                model_ids.clone(),
             ),
             "research": capability_status(
                 report,
@@ -53,7 +51,7 @@ pub fn provider_capability_catalog(
             ),
             "streaming": json!({
                 "gateway_support": "final_only",
-                "stable_preset_ids": preset_ids,
+                "stable_model_ids": model_ids,
                 "live_token_streaming": false,
                 "note": "stream:true is accepted for OpenAI-compatible SSE framing, but Tablinq waits for the finalized browser-backed response and emits final-only chunks because ChatGPT drafts may be rewritten before finalization",
             }),
@@ -103,6 +101,38 @@ fn capability_status(
     }
 }
 
+fn search_capability_status(
+    report: Option<&CapabilityReport>,
+    stable_model_ids: Vec<&str>,
+) -> Value {
+    match report {
+        Some(report) if search_capability_available(report) => json!({
+            "snapshot_status": "observed",
+            "stable_model_ids": stable_model_ids,
+            "kind": "composer_chip",
+            "request_field": "tablinq_mode",
+            "request_value": "search",
+            "note": "Search is a ChatGPT composer chip/mode selected with tablinq_mode=\"search\" alongside a base model; it is not a model id.",
+        }),
+        Some(_) => json!({
+            "snapshot_status": "not_observed",
+            "stable_model_ids": stable_model_ids,
+            "kind": "composer_chip",
+            "request_field": "tablinq_mode",
+            "request_value": "search",
+            "note": "Search is a ChatGPT composer chip/mode, but it was not observed in the current attached browser-backed ChatGPT snapshot.",
+        }),
+        None => json!({
+            "snapshot_status": "unknown",
+            "stable_model_ids": stable_model_ids,
+            "kind": "composer_chip",
+            "request_field": "tablinq_mode",
+            "request_value": "search",
+            "note": "Search is a ChatGPT composer chip/mode selected with tablinq_mode=\"search\" alongside a base model; the current browser-backed ChatGPT UI snapshot is unknown.",
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_catalog_keeps_missing_modes_not_observed_without_aliases() {
+    fn provider_catalog_reports_search_as_request_mode_metadata() {
         let report = report_with_aliases(
             CapabilityMatrix {
                 composer_ready: true,
@@ -138,7 +168,12 @@ mod tests {
         let provider = provider_capability_catalog(Some(&report), "live");
         assert_eq!(
             provider["capabilities"]["search"]["snapshot_status"],
-            "not_observed"
+            "observed"
+        );
+        assert_eq!(provider["capabilities"]["search"]["kind"], "composer_chip");
+        assert_eq!(
+            provider["capabilities"]["search"]["request_field"],
+            "tablinq_mode"
         );
         assert_eq!(
             provider["capabilities"]["research"]["snapshot_status"],

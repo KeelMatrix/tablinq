@@ -32,6 +32,62 @@ fn unknown_model_returns_openai_shaped_invalid_request_error() {
     assert_eq!(body["request_id"], "req-unknown-model");
     assert_eq!(body["error"]["type"], "invalid_request_error");
 
+    let invalid_mode = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+            ("x-request-id", "req-invalid-tablinq-mode"),
+        ],
+        &serde_json::to_vec(&json!({
+            "model": "tablinq-thinking-standard",
+            "tablinq_mode": "browse",
+            "messages": [{ "role": "user", "content": "hello" }]
+        }))
+        .unwrap(),
+        5_000,
+    )
+    .unwrap();
+    assert_eq!(invalid_mode.status_code, 400);
+    let invalid_mode_body: Value = serde_json::from_slice(&invalid_mode.body).unwrap();
+    assert_eq!(invalid_mode_body["request_id"], "req-invalid-tablinq-mode");
+    assert_eq!(
+        invalid_mode_body["error"]["code"],
+        "unsupported_tablinq_mode"
+    );
+
+    let legacy_search_model = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        V1_CHAT_COMPLETIONS_PATH,
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+            ("x-request-id", "req-legacy-search-model"),
+        ],
+        &serde_json::to_vec(&json!({
+            "model": "tablinq-search",
+            "messages": [{ "role": "user", "content": "hello" }]
+        }))
+        .unwrap(),
+        5_000,
+    )
+    .unwrap();
+    assert_eq!(legacy_search_model.status_code, 400);
+    let legacy_body: Value = serde_json::from_slice(&legacy_search_model.body).unwrap();
+    assert_eq!(legacy_body["request_id"], "req-legacy-search-model");
+    assert_eq!(legacy_body["error"]["code"], "unsupported_model");
+    assert!(
+        legacy_body["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("tablinq-search is not a model")
+                && message.contains("tablinq_mode=\"search\""))
+    );
+
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();
 }
