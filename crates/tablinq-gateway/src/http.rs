@@ -227,7 +227,7 @@ pub(crate) fn parse_http_request(
     if method == "POST" && request_path == V1_FILES_PATH {
         if content_length > crate::uploads::MAX_STAGED_UPLOAD_BYTES {
             return Err(
-                payload_too_large("payload_too_large", "file exceeds 20 MiB limit").with_partial(
+                payload_too_large("payload_too_large", "file exceeds 50 MiB limit").with_partial(
                     Some(method),
                     Some(path),
                     Some(headers),

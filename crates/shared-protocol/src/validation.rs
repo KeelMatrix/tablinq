@@ -35,7 +35,7 @@ pub enum ValidationError {
 }
 
 pub(crate) const MAX_ATTACHMENT_FILES: usize = 10;
-pub const MAX_ATTACHMENT_FILE_BYTES: u64 = 20 * 1024 * 1024;
+pub const MAX_ATTACHMENT_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub(crate) fn validate_exact_version(version: &str) -> Result<(), ValidationError> {
     if version == PROTOCOL_VERSION {
