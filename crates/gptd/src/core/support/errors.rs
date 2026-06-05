@@ -24,6 +24,8 @@ use url::Url;
 pub fn error_code_for_message(message: &str) -> ErrorCode {
     if is_provider_generation_failure_message(message) {
         ErrorCode::ProviderGenerationFailedNonretryable
+    } else if message.contains("Tablinq's native ChatGPT upload budget is exhausted") {
+        ErrorCode::NativeUploadRateLimited
     } else if message.contains("provider_stopped_thinking")
         || message.to_ascii_lowercase().contains("stopped thinking")
     {

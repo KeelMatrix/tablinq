@@ -97,6 +97,7 @@ export async function prepareAskSubmission(
     page,
     prompt: command.prompt,
     explicitFiles,
+    promptUploadThresholdChars: command.promptUploadThresholdChars,
     attachmentBaseline,
     report: host.getLastCapabilityReport(),
   });

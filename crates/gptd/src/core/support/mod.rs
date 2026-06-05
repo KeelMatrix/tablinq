@@ -287,6 +287,7 @@ mod tests {
                 files: vec![],
                 conversation_id: None,
                 new_conversation: false,
+                prompt_upload_threshold_chars: None,
                 auto_recover_provider_generation_failure: true,
             })
             .unwrap();
@@ -311,6 +312,7 @@ mod tests {
                 files: vec![],
                 conversation_id: None,
                 new_conversation: true,
+                prompt_upload_threshold_chars: None,
                 auto_recover_provider_generation_failure: true,
             })
             .unwrap();

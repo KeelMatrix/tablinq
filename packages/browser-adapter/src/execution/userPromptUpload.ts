@@ -10,7 +10,7 @@ import {
 import { uploadAttachments } from "../pageRuntime/uploads";
 import { MAX_COMPOSER_UPLOAD_FILES } from "../timing";
 
-export const USER_PROMPT_UPLOAD_THRESHOLD_CHARS = 4_500;
+export const USER_PROMPT_UPLOAD_THRESHOLD_CHARS = 20_000; // practical max is 24_000, more than that cannot safely fit in gpt text composer
 
 const PROMPT_UPLOAD_FILE_NAME_TOKEN = "user-prompt-<timestamp>.txt";
 
@@ -76,14 +76,17 @@ export type UploadedUserPrompt = {
 export function shouldUploadUserPromptText({
   prompt,
   preUploadedFileCount,
+  promptUploadThresholdChars = USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
   maxUploadFiles = MAX_COMPOSER_UPLOAD_FILES,
 }: {
   prompt: string;
   preUploadedFileCount: number;
+  promptUploadThresholdChars?: number;
   maxUploadFiles?: number;
 }): boolean {
+  const threshold = Math.max(1, Math.trunc(promptUploadThresholdChars));
   return (
-    promptCharacterLength(prompt) > USER_PROMPT_UPLOAD_THRESHOLD_CHARS &&
+    promptCharacterLength(prompt) > threshold &&
     preUploadedFileCount < maxUploadFiles
   );
 }
@@ -144,12 +147,14 @@ export async function uploadUserPromptTextIfNeeded({
   page,
   prompt,
   explicitFiles,
+  promptUploadThresholdChars,
   attachmentBaseline,
   report,
 }: {
   page: Page;
   prompt: string;
   explicitFiles: string[];
+  promptUploadThresholdChars?: number | null;
   attachmentBaseline: ComposerAttachmentState;
   report: CapabilityReportPayload | null;
 }): Promise<UploadedUserPrompt | null> {
@@ -157,7 +162,14 @@ export async function uploadUserPromptTextIfNeeded({
     explicitFiles.length,
     attachmentBaseline.visibleCount,
   );
-  if (!shouldUploadUserPromptText({ prompt, preUploadedFileCount })) {
+  if (
+    !shouldUploadUserPromptText({
+      prompt,
+      preUploadedFileCount,
+      promptUploadThresholdChars:
+        promptUploadThresholdChars ?? USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
+    })
+  ) {
     return null;
   }
 

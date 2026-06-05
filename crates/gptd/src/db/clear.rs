@@ -15,6 +15,7 @@ pub(super) fn clear_all_state(conn: &mut Connection) -> Result<DatabaseClearStat
         artifacts_deleted: count_rows(&tx, "artifacts")?,
         artifact_links_deleted: count_rows(&tx, "job_artifacts")?,
         failure_bundles_deleted: count_rows(&tx, "failure_bundles")?,
+        native_upload_attempts_deleted: count_rows(&tx, "native_upload_attempts")?,
         artifact_files_deleted: 0,
         artifact_files_missing: 0,
         artifact_files_failed: 0,
@@ -28,6 +29,7 @@ pub(super) fn clear_all_state(conn: &mut Connection) -> Result<DatabaseClearStat
     tx.execute("DELETE FROM conversations", [])?;
     tx.execute("DELETE FROM sessions", [])?;
     tx.execute("DELETE FROM failure_bundles", [])?;
+    tx.execute("DELETE FROM native_upload_attempts", [])?;
     tx.commit()?;
 
     Ok(DatabaseClearStateResult {

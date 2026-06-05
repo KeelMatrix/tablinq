@@ -84,6 +84,8 @@ pub struct AskCommand {
     pub model_class: Option<ModelClass>,
     pub effort: Option<Effort>,
     pub files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_upload_threshold_chars: Option<u32>,
     #[serde(default = "default_auto_recover_provider_generation_failure")]
     pub auto_recover_provider_generation_failure: bool,
 }

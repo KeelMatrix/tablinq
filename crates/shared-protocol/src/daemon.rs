@@ -2,8 +2,9 @@ use crate::{
     AckEvent, ArtifactList, ArtifactPullResult, AskCommand, AskResult, BrowserOpenRequest,
     BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot, ClearStateResult, ConfigSnapshot,
     ConversationList, ConversationSelectCommand, ConversationSelection, DoctorReport, ErrorCode,
-    EventPayload, HealthCheck, JobDetail, JobList, PullArtifactCommand, RecoveryPacket,
-    RecoveryTrace, ResearchCommand, ResearchResult, SessionList,
+    EventPayload, HealthCheck, JobDetail, JobList, NativeUploadRateLimitDiagnostic,
+    PullArtifactCommand, RecoveryPacket, RecoveryTrace, ResearchCommand, ResearchResult,
+    SessionList,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -86,4 +87,6 @@ pub struct DaemonErrorResponse {
     pub recovery_trace: Option<RecoveryTrace>,
     #[serde(default)]
     pub recovery_packet: Option<RecoveryPacket>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_upload_rate_limit: Option<NativeUploadRateLimitDiagnostic>,
 }

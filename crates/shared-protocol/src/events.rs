@@ -22,6 +22,7 @@ pub enum ErrorCode {
     ProviderGenerationFailedNonretryable,
     ProviderStoppedThinking,
     ProviderConversationLoadFailed,
+    NativeUploadRateLimited,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

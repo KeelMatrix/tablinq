@@ -14,23 +14,31 @@ pub(crate) fn map_openai_error_parts(
         return client_error.parts();
     }
 
-    if let Some(metadata) = execution_error_metadata(err)
-        && matches!(
+    if let Some(metadata) = execution_error_metadata(err) {
+        if metadata.error_code == ErrorCode::NativeUploadRateLimited {
+            return (
+                429,
+                "rate_limit_error",
+                "native_upload_budget_exhausted",
+                metadata.message,
+            );
+        }
+        if matches!(
             metadata.error_code,
             ErrorCode::ProviderGenerationFailedNonretryable
                 | ErrorCode::ProviderStoppedThinking
                 | ErrorCode::ProviderConversationLoadFailed
-        )
-    {
-        let code = match metadata.error_code {
-            ErrorCode::ProviderGenerationFailedNonretryable => {
-                "provider_generation_failed_nonretryable"
-            }
-            ErrorCode::ProviderStoppedThinking => "provider_stopped_thinking",
-            ErrorCode::ProviderConversationLoadFailed => "provider_conversation_load_failed",
-            _ => unreachable!(),
-        };
-        return (502, "provider_error", code, metadata.message);
+        ) {
+            let code = match metadata.error_code {
+                ErrorCode::ProviderGenerationFailedNonretryable => {
+                    "provider_generation_failed_nonretryable"
+                }
+                ErrorCode::ProviderStoppedThinking => "provider_stopped_thinking",
+                ErrorCode::ProviderConversationLoadFailed => "provider_conversation_load_failed",
+                _ => unreachable!(),
+            };
+            return (502, "provider_error", code, metadata.message);
+        }
     }
 
     let message = format!("{err:#}");
@@ -80,6 +88,12 @@ pub(crate) fn map_openai_error_parts(
         ErrorCode::UiDrift => (502, "provider_error", "ui_drift", message),
         ErrorCode::ResearchJobFailed => (502, "provider_error", "research_job_failed", message),
         ErrorCode::UploadFailed => (400, "invalid_request_error", "upload_failed", message),
+        ErrorCode::NativeUploadRateLimited => (
+            429,
+            "rate_limit_error",
+            "native_upload_budget_exhausted",
+            message,
+        ),
         ErrorCode::DownloadFailed => (502, "provider_error", "download_failed", message),
         ErrorCode::Transport => {
             if message.contains("queue full") {

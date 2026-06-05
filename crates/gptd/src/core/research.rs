@@ -41,6 +41,7 @@ impl CoreService {
     pub fn prepare_research(&self, command: ResearchCommand) -> Result<PreparedResearchJob> {
         ensure_prompt_execution_allowed(&self.config)?;
         command.validate().context("validate research command")?;
+        self.reserve_native_upload_budget_for_research(&command)?;
 
         let db = self.open_db()?;
         let prepared = prepare_job_record(

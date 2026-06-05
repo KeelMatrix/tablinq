@@ -34,9 +34,27 @@ Recommended posture:
 - keep `max_parallel_requests = 1`
 - keep `max_parallel_branches = 1`
 - keep subagents disabled by default
+- keep Tablinq's native upload limiter enabled; CLI and gateway requests share the same rolling browser-session budget
 - `stream = true` is accepted for OpenAI-compatible SSE framing, but Tablinq waits for the finalized browser-backed response and emits final-only chunks; it never streams live partial ChatGPT drafts
 - set client timeouts above Tablinq's own upstream timeouts
 - expect small built-in browser interaction jitters and a longer pre-submit jitter; they exist to keep browser-driven actions closer to human pacing and reduce provider countermeasures
+
+## Native upload budget
+
+Tablinq tracks native ChatGPT file upload attempts in the shared SQLite state used by the CLI, daemon, and gateway. This prevents `gpt ask --file ...` and `POST /v1/chat/completions` from bypassing each other.
+
+Default `config/config.toml` settings:
+
+```toml
+native_upload_limit_count = 65
+native_upload_limit_window_minutes = 180
+```
+
+OpenAI's [File Uploads FAQ](https://help.openai.com/en/articles/8555545-file-uploads-faq) says users can upload up to 80 files every 3 hours, with lower limits possible during peak hours. Tablinq rejects `native_upload_limit_count` values above the hard maximum of `80`.
+
+Each explicit input file counts as one attempted native upload. Long prompts that Tablinq converts into `user-prompt-*.txt` also count as one upload attempt. When the rolling budget is exhausted, Tablinq returns a rate-limit error with the configured limit/window, current charged uploads, attempted upload cost, remaining time until release, and reset timestamp.
+
+If the only would-be upload is a generated prompt text file, there are no explicit files, and the prompt is at most `24_000` Unicode characters, Tablinq submits that request inline instead of uploading the prompt file.
 
 ## Core endpoints
 

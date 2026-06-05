@@ -149,6 +149,7 @@ export interface AskExecutionCommand {
   modelClass?: "instant" | "thinking" | null;
   effort?: "none" | "standard" | "extended" | null;
   files?: string[];
+  promptUploadThresholdChars?: number | null;
 }
 
 export interface ResearchExecutionCommand {

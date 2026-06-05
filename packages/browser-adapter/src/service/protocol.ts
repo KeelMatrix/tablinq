@@ -39,6 +39,7 @@ export type AskRequest = {
   model_class?: "instant" | "thinking" | null;
   effort?: "none" | "standard" | "extended" | null;
   files?: string[];
+  prompt_upload_threshold_chars?: number | null;
 };
 
 export type RecoverAskRequest = Omit<AskRequest, "type"> & {

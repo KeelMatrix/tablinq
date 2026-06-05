@@ -5,6 +5,7 @@ mod failure_bundles;
 mod gateway_http;
 mod jobs;
 mod migrations;
+mod native_uploads;
 mod requests;
 mod row_mapping;
 mod sessions;
@@ -25,6 +26,7 @@ pub use gateway_http::{
     GatewayHttpCapturedBody, GatewayHttpRequestFinish, GatewayHttpRequestRecord,
     GatewayHttpRequestStart, capture_gateway_http_body, gateway_http_headers_json,
 };
+pub(crate) use native_uploads::{NativeUploadBudgetRequest, NativeUploadBudgetReservation};
 
 const REQUEST_HISTORY_LIMIT: usize = 200;
 #[cfg(test)]
@@ -55,6 +57,23 @@ impl Database {
 
     pub fn migration_count(&self) -> Result<u32> {
         migrations::count(&self.conn)
+    }
+
+    pub(crate) fn reserve_native_upload_budget(
+        &mut self,
+        request: NativeUploadBudgetRequest<'_>,
+    ) -> Result<NativeUploadBudgetReservation> {
+        native_uploads::reserve(&mut self.conn, request)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn current_native_upload_charged_uploads(
+        &self,
+        scope_key: &str,
+        window_minutes: u32,
+        now: DateTime<Utc>,
+    ) -> Result<u32> {
+        native_uploads::current_charged_uploads(&self.conn, scope_key, window_minutes, now)
     }
 
     pub fn clear_all_state(&mut self) -> Result<DatabaseClearStateResult> {

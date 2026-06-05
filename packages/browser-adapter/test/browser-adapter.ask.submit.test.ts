@@ -311,6 +311,23 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     ).toBe(false);
   });
 
+  it("uses a request-scoped prompt upload threshold override", () => {
+    expect(
+      shouldUploadUserPromptText({
+        prompt: "x".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+        preUploadedFileCount: 0,
+        promptUploadThresholdChars: 24_000,
+      }),
+    ).toBe(false);
+    expect(
+      shouldUploadUserPromptText({
+        prompt: "x".repeat(24_001),
+        preUploadedFileCount: 0,
+        promptUploadThresholdChars: 24_000,
+      }),
+    ).toBe(true);
+  });
+
   it("chooses unique user prompt upload names with bounded suffix attempts", () => {
     const timestamp = new Date("2026-05-15T01:02:03.456Z");
 
