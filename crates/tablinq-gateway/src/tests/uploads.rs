@@ -30,7 +30,7 @@ fn upload_store_cleans_up_expired_staged_files() {
 }
 
 #[test]
-fn upload_store_rejects_files_larger_than_twenty_mib() {
+fn upload_store_rejects_files_larger_than_fifty_mib() {
     let dir = tempdir().unwrap();
     let config = AppConfig::load_or_create(Some(dir.path())).unwrap();
     let store = UploadStore::load(&config).unwrap();
@@ -39,7 +39,7 @@ fn upload_store_rejects_files_larger_than_twenty_mib() {
     let err = store
         .stage_upload("oversize.bin", Some("application/octet-stream"), &body)
         .unwrap_err();
-    assert!(format!("{err:#}").contains("20 MiB"));
+    assert!(format!("{err:#}").contains("50 MiB"));
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn files_upload_endpoint_stages_files_and_research_accepts_file_ids() {
 }
 
 #[test]
-fn files_upload_endpoint_rejects_files_larger_than_twenty_mib() {
+fn files_upload_endpoint_rejects_files_larger_than_fifty_mib() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();
     let state_root = config.paths.state_root.clone();
@@ -189,7 +189,7 @@ fn files_upload_endpoint_rejects_files_larger_than_twenty_mib() {
     assert_eq!(json["error"]["type"], "invalid_request_error");
     assert_eq!(json["error"]["code"], "payload_too_large");
     assert_eq!(json["error"]["param"], Value::Null);
-    assert_eq!(json["error"]["message"], "file exceeds 20 MiB limit");
+    assert_eq!(json["error"]["message"], "file exceeds 50 MiB limit");
 
     stop_gateway_process(Some(&state_root)).unwrap();
     handle.join().unwrap().unwrap();

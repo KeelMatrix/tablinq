@@ -243,7 +243,7 @@ fn research_command_rejects_more_than_ten_files() {
 }
 
 #[test]
-fn ask_command_rejects_file_larger_than_twenty_mib() {
+fn ask_command_rejects_file_larger_than_fifty_mib() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("oversize.bin");
     fs::write(&path, vec![0_u8; (MAX_ATTACHMENT_FILE_BYTES as usize) + 1]).unwrap();
@@ -272,7 +272,7 @@ fn ask_command_rejects_file_larger_than_twenty_mib() {
 }
 
 #[test]
-fn research_command_accepts_file_at_twenty_mib() {
+fn research_command_accepts_file_at_fifty_mib() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("limit.bin");
     fs::write(&path, vec![0_u8; MAX_ATTACHMENT_FILE_BYTES as usize]).unwrap();

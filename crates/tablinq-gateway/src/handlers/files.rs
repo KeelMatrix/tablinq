@@ -72,7 +72,7 @@ pub(crate) fn handle_file_upload_request(
             &context.request_id,
             "invalid_request_error",
             "payload_too_large",
-            "file exceeds 20 MiB limit",
+            "file exceeds 50 MiB limit",
         ));
     }
     let metadata = upload_store.stage_upload(

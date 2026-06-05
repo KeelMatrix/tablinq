@@ -148,7 +148,7 @@ fn bearer_token_auth_accepts_valid_token_and_rejects_invalid_token() {
 }
 
 #[test]
-fn declared_upload_over_limit_preserves_twenty_mib_cap_response() {
+fn declared_upload_over_limit_preserves_fifty_mib_cap_response() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();
     let state_root = config.paths.state_root.clone();
