@@ -1,5 +1,5 @@
 use anyhow::Error;
-use shared_protocol::{ErrorCode, RecoveryPacket, RecoveryTrace};
+use shared_protocol::{ErrorCode, NativeUploadRateLimitDiagnostic, RecoveryPacket, RecoveryTrace};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
@@ -9,6 +9,7 @@ pub struct ExecutionErrorMetadata {
     pub current_url: Option<String>,
     pub recovery_trace: Option<RecoveryTrace>,
     pub recovery_packet: Option<RecoveryPacket>,
+    pub native_upload_rate_limit: Option<NativeUploadRateLimitDiagnostic>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +27,7 @@ impl ExecutionErrorMetadata {
             current_url,
             recovery_trace: None,
             recovery_packet: None,
+            native_upload_rate_limit: None,
         }
     }
 
@@ -36,6 +38,14 @@ impl ExecutionErrorMetadata {
     ) -> Self {
         self.recovery_trace = Some(recovery_trace);
         self.recovery_packet = Some(recovery_packet);
+        self
+    }
+
+    pub fn with_native_upload_rate_limit(
+        mut self,
+        diagnostic: NativeUploadRateLimitDiagnostic,
+    ) -> Self {
+        self.native_upload_rate_limit = Some(diagnostic);
         self
     }
 }

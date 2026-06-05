@@ -252,6 +252,7 @@ fn map_error(err: anyhow::Error) -> DaemonResponse {
             message: metadata.message,
             recovery_trace: metadata.recovery_trace,
             recovery_packet: metadata.recovery_packet,
+            native_upload_rate_limit: metadata.native_upload_rate_limit,
         });
     }
     let message = format!("{err:#}");
@@ -260,6 +261,7 @@ fn map_error(err: anyhow::Error) -> DaemonResponse {
         message,
         recovery_trace: None,
         recovery_packet: None,
+        native_upload_rate_limit: None,
     })
 }
 

@@ -30,6 +30,7 @@ export function createAskStreamState({
           "The comparison is narrowing to one core distinction: Rust optimizes for correctness under low-level constraints, while TypeScript optimizes for speed and safety of application development. I’m turning that into a decision-oriented visual instead of a feature list.",
         ]
       : null;
+  const responsePromptText = compactPromptForResponse(promptText);
 
   return {
     conversationId,
@@ -38,13 +39,13 @@ export function createAskStreamState({
     responseText:
       scenario === "provider-generation-failure-after-success" &&
       promptText.includes("Recovery note:")
-        ? `Recovered response for: ${promptText}\nUploads: ${uploadedFiles().length ? uploadedFiles().join(", ") : "none"}`
+        ? `Recovered response for: ${responsePromptText}\nUploads: ${uploadedFiles().length ? uploadedFiles().join(", ") : "none"}`
         : responseBlocks
           ? responseBlocks.join("\n\n")
           : richRecoveryPrompt
             ? `${richRecoveryPrompt}\n\nOutline\n1. Goal\n2. Inputs\n3. Constraints\n4. Output`
             : promptText
-              ? `Fake response for: ${promptText}`
+              ? `Fake response for: ${responsePromptText}`
               : "Fake response for an empty prompt.",
     responseBlocks,
     richRecoveryPrompt,
@@ -59,4 +60,11 @@ export function createAskStreamState({
     pendingStart: false,
     phase: reasoningArtifacts ? "prelude-1" : "answer",
   };
+}
+
+function compactPromptForResponse(promptText) {
+  if (promptText.length <= 1_000) {
+    return promptText;
+  }
+  return `${promptText.slice(0, 500)}... [${promptText.length} chars]`;
 }

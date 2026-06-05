@@ -609,7 +609,9 @@ function createComposerRuntimeModule({
       range.deleteContents();
       selection?.removeAllRanges();
       selection?.addRange(range);
-      if (typeof document.execCommand === "function") {
+      if (value.length > 4_000) {
+        element.textContent = value;
+      } else if (typeof document.execCommand === "function") {
         document.execCommand("insertText", false, value);
       } else {
         element.textContent = value;

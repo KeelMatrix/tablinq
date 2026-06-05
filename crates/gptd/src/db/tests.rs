@@ -1,5 +1,5 @@
 use super::*;
-use chrono::Duration;
+use chrono::{Duration, TimeZone};
 use sha2::{Digest, Sha256};
 use shared_protocol::{
     ArtifactMetadata, CapabilityMatrix, ConversationRecoveryManifest, FailureBundle, JobKind,
@@ -203,6 +203,104 @@ fn gateway_http_requests_migration_creates_table_and_indexes() {
     ] {
         assert!(indexes.iter().any(|name| name == index), "missing {index}");
     }
+}
+
+#[test]
+fn native_upload_attempts_migration_creates_table_and_index() {
+    let (_dir, db) = test_db();
+
+    let table_count: u32 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'native_upload_attempts'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(table_count, 1);
+
+    let index_count: u32 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'native_upload_attempts_scope_charged_at_idx'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index_count, 1);
+}
+
+#[test]
+fn native_upload_budget_allows_success_then_blocks_boundary() {
+    let (_dir, mut db) = test_db();
+    let now = Utc.with_ymd_and_hms(2026, 6, 4, 12, 0, 0).unwrap();
+
+    assert!(matches!(
+        db.reserve_native_upload_budget(NativeUploadBudgetRequest {
+            scope_key: "scope",
+            configured_limit: 2,
+            window_minutes: 180,
+            attempted_upload_cost: 1,
+            now,
+        })
+        .unwrap(),
+        NativeUploadBudgetReservation::Charged
+    ));
+
+    let exhausted = db
+        .reserve_native_upload_budget(NativeUploadBudgetRequest {
+            scope_key: "scope",
+            configured_limit: 2,
+            window_minutes: 180,
+            attempted_upload_cost: 1,
+            now: now + Duration::minutes(1),
+        })
+        .unwrap();
+    let NativeUploadBudgetReservation::Exhausted(diagnostic) = exhausted else {
+        panic!("expected exhausted budget");
+    };
+
+    assert_eq!(diagnostic.configured_limit, 2);
+    assert_eq!(diagnostic.window_minutes, 180);
+    assert_eq!(diagnostic.uploads_currently_charged, 1);
+    assert_eq!(diagnostic.attempted_upload_cost, 1);
+    assert_eq!(diagnostic.reset_at, now + Duration::minutes(180));
+}
+
+#[test]
+fn native_upload_budget_rolling_window_expires_old_charges() {
+    let (_dir, mut db) = test_db();
+    let first = Utc.with_ymd_and_hms(2026, 6, 4, 9, 0, 0).unwrap();
+    let later = first + Duration::minutes(181);
+
+    assert!(matches!(
+        db.reserve_native_upload_budget(NativeUploadBudgetRequest {
+            scope_key: "scope",
+            configured_limit: 2,
+            window_minutes: 180,
+            attempted_upload_cost: 1,
+            now: first,
+        })
+        .unwrap(),
+        NativeUploadBudgetReservation::Charged
+    ));
+    assert!(matches!(
+        db.reserve_native_upload_budget(NativeUploadBudgetRequest {
+            scope_key: "scope",
+            configured_limit: 2,
+            window_minutes: 180,
+            attempted_upload_cost: 1,
+            now: later,
+        })
+        .unwrap(),
+        NativeUploadBudgetReservation::Charged
+    ));
+
+    assert_eq!(
+        db.current_native_upload_charged_uploads("scope", 180, later)
+            .unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -703,6 +801,14 @@ fn clear_all_state_removes_persisted_rows_but_keeps_migrations() {
         gateway_request: None,
     })
     .unwrap();
+    db.reserve_native_upload_budget(NativeUploadBudgetRequest {
+        scope_key: "scope-clear",
+        configured_limit: 10,
+        window_minutes: 180,
+        attempted_upload_cost: 2,
+        now,
+    })
+    .unwrap();
 
     let cleared = db.clear_all_state().unwrap();
 
@@ -714,6 +820,7 @@ fn clear_all_state_removes_persisted_rows_but_keeps_migrations() {
     assert_eq!(cleared.result.artifacts_deleted, 1);
     assert_eq!(cleared.result.artifact_links_deleted, 1);
     assert_eq!(cleared.result.failure_bundles_deleted, 1);
+    assert_eq!(cleared.result.native_upload_attempts_deleted, 1);
     assert_eq!(
         cleared.artifact_storage_paths,
         vec![artifact_path.display().to_string()]
@@ -728,6 +835,7 @@ fn clear_all_state_removes_persisted_rows_but_keeps_migrations() {
         "artifacts",
         "job_artifacts",
         "failure_bundles",
+        "native_upload_attempts",
     ] {
         let count: i64 = db
             .conn

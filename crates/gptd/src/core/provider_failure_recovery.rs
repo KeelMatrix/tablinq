@@ -222,7 +222,7 @@ impl CoreService {
             ));
         }
 
-        let next_command = AskCommand {
+        let mut next_command = AskCommand {
             prompt: build_provider_generation_replay_prompt(
                 &input.prepared.command.prompt,
                 context_summary.as_deref(),
@@ -237,8 +237,12 @@ impl CoreService {
             model_class: input.prepared.command.model_class,
             effort: input.prepared.command.effort,
             files: replay_files,
+            prompt_upload_threshold_chars: None,
             auto_recover_provider_generation_failure: false,
         };
+        if let Err(err) = self.apply_native_upload_budget_to_ask(&mut next_command) {
+            return Ok(ProviderFailureRecoveryOutcome::TerminalError(err));
+        }
 
         Ok(ProviderFailureRecoveryOutcome::Replay {
             trace: Box::new(trace),

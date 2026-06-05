@@ -161,6 +161,7 @@ mod tests {
                     model_class: None,
                     effort: None,
                     files: vec![],
+                    prompt_upload_threshold_chars: None,
                     auto_recover_provider_generation_failure: true,
                 },
                 created_at: Utc::now(),

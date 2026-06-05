@@ -37,9 +37,10 @@ impl PreparedAskJob {
 }
 
 impl CoreService {
-    pub fn prepare_ask(&self, command: AskCommand) -> Result<PreparedAskJob> {
+    pub fn prepare_ask(&self, mut command: AskCommand) -> Result<PreparedAskJob> {
         ensure_prompt_execution_allowed(&self.config)?;
         command.validate().context("validate ask command")?;
+        self.apply_native_upload_budget_to_ask(&mut command)?;
 
         let db = self.open_db()?;
         let prepared = prepare_job_record(

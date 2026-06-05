@@ -94,6 +94,12 @@ pub(crate) fn annotate_openai_error_value(
         value["tablinq_replacement_conversation_id"] =
             Value::String(replacement_conversation_id.to_owned());
     }
+    if let Some(diagnostic) =
+        execution_metadata.and_then(|item| item.native_upload_rate_limit.as_ref())
+    {
+        value["tablinq_native_upload_budget"] =
+            serde_json::to_value(diagnostic).unwrap_or_else(|_| json!({}));
+    }
     let guidance = provider_guidance_for_code(code);
     if !guidance.is_empty() {
         value["tablinq_guidance"] = json!(guidance);

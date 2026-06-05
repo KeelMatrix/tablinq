@@ -133,6 +133,7 @@ mod tests {
                         model_class: Some(shared_protocol::ModelClass::Instant),
                         effort: Some(shared_protocol::Effort::None),
                         files: Vec::new(),
+                        prompt_upload_threshold_chars: None,
                         auto_recover_provider_generation_failure: true,
                     },
                 }),

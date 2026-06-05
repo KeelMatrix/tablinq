@@ -178,6 +178,7 @@ Tablinq can expose the same browser-backed session through a local OpenAI-compat
 - recommended concurrency: `1`
 - recommended branch concurrency: `1`
 - subagents disabled by default
+- native ChatGPT upload limiter: `native_upload_limit_count = 65` and `native_upload_limit_window_minutes = 180`; OpenAI's [File Uploads FAQ](https://help.openai.com/en/articles/8555545-file-uploads-faq) says users can upload up to 80 files every 3 hours
 
 Supported API base models:
 

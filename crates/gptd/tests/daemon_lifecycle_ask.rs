@@ -58,6 +58,7 @@ fn daemon_streams_ask_responses_and_persists_conversations() {
             model_class: None,
             effort: None,
             files: vec![],
+            prompt_upload_threshold_chars: None,
             auto_recover_provider_generation_failure: true,
         }),
         |event| {
@@ -139,6 +140,7 @@ fn daemon_reports_timeout_errors_for_stalled_asks() {
             model_class: None,
             effort: None,
             files: vec![],
+            prompt_upload_threshold_chars: None,
             auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),
@@ -228,6 +230,7 @@ fn client_disconnect_during_ask_cancels_the_job() {
         model_class: None,
         effort: None,
         files: vec![],
+        prompt_upload_threshold_chars: None,
         auto_recover_provider_generation_failure: true,
     }))
     .unwrap();
@@ -296,6 +299,7 @@ fn cancelled_ask_releases_browser_capacity() {
                     model_class: None,
                     effort: None,
                     files: vec![],
+                    prompt_upload_threshold_chars: None,
                     auto_recover_provider_generation_failure: true,
                 }),
                 |event| {
@@ -381,6 +385,7 @@ fn daemon_handles_configured_asks_on_renamed_controls() {
             model_class: Some(ModelClass::Thinking),
             effort: Some(Effort::Extended),
             files: vec![],
+            prompt_upload_threshold_chars: None,
             auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),
@@ -434,6 +439,7 @@ fn daemon_reports_capability_missing_errors_for_unavailable_modes() {
             model_class: None,
             effort: None,
             files: vec![],
+            prompt_upload_threshold_chars: None,
             auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),
@@ -491,6 +497,7 @@ fn daemon_persists_uploaded_artifacts_and_pulls_them_locally() {
             model_class: None,
             effort: None,
             files: vec![upload_fixture.display().to_string()],
+            prompt_upload_threshold_chars: None,
             auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),
@@ -580,6 +587,7 @@ fn daemon_reports_upload_errors_when_attachment_controls_are_missing() {
             model_class: None,
             effort: None,
             files: vec![upload_fixture.display().to_string()],
+            prompt_upload_threshold_chars: None,
             auto_recover_provider_generation_failure: true,
         }),
         |_event| Ok(()),

@@ -105,6 +105,7 @@ pub(crate) fn prepare_chat_completions_request(
                 model_class: Some(model.model_class),
                 effort: model.effort,
                 files,
+                prompt_upload_threshold_chars: None,
                 auto_recover_provider_generation_failure:
                     request.tablinq_auto_recover_provider_generation_failure,
             })?),
@@ -144,9 +145,10 @@ fn require_json_content_type(context: &RequestContext) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::map_openai_error;
     use crate::http::HttpRequest;
     use gptd::AppConfig;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use shared_protocol::{AskCommand, Effort, Mode, ModelClass};
     use std::collections::BTreeMap;
     use tempfile::tempdir;
@@ -268,5 +270,71 @@ mod tests {
 
         assert!(err.to_string().contains("tablinq-search is not a model"));
         assert!(err.to_string().contains("tablinq_mode=\"search\""));
+    }
+
+    #[test]
+    fn direct_cli_and_gateway_ask_preparation_share_native_upload_budget() -> Result<()> {
+        let dir = tempdir()?;
+        let mut config = AppConfig::load_or_create(Some(dir.path()))?;
+        config.file.native_upload_limit_count = Some(2);
+        config.file.native_upload_limit_window_minutes = Some(180);
+        let core = CoreService::new(config.clone())?;
+        let upload_store = UploadStore::load(&config)?;
+
+        core.prepare_ask(AskCommand {
+            prompt: "cli path".to_owned(),
+            conversation_id: None,
+            new_conversation: false,
+            mode: Mode::Normal,
+            model_class: Some(ModelClass::Instant),
+            effort: None,
+            files: vec!["cli.txt".to_owned()],
+            prompt_upload_threshold_chars: None,
+            auto_recover_provider_generation_failure: true,
+        })?;
+
+        let body = json!({
+            "model": "tablinq-instant",
+            "tablinq_files": ["api.txt"],
+            "messages": [{ "role": "user", "content": "api path" }]
+        });
+        let context = RequestContext {
+            request_id: "req-upload-budget".to_owned(),
+            request: HttpRequest {
+                method: "POST".to_owned(),
+                path: "/v1/chat/completions".to_owned(),
+                headers: BTreeMap::from([(
+                    "content-type".to_owned(),
+                    "application/json".to_owned(),
+                )]),
+                body: serde_json::to_vec(&body)?,
+            },
+        };
+
+        let err = match prepare_chat_completions_request(&core, &upload_store, &context) {
+            Ok(_) => panic!("gateway ask should see CLI upload charge"),
+            Err(err) => err,
+        };
+        let response = map_openai_error(&context.request_id, &err, None);
+        let body: Value = serde_json::from_slice(&response.body)?;
+
+        assert_eq!(response.status_code, 429);
+        assert_eq!(body["error"]["type"], "rate_limit_error");
+        assert_eq!(body["error"]["code"], "native_upload_budget_exhausted");
+        assert_eq!(body["tablinq_native_upload_budget"]["configured_limit"], 2);
+        assert_eq!(
+            body["tablinq_native_upload_budget"]["uploads_currently_charged"],
+            1
+        );
+        assert_eq!(
+            body["tablinq_native_upload_budget"]["attempted_upload_cost"],
+            1
+        );
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("reset timestamp"))
+        );
+        Ok(())
     }
 }

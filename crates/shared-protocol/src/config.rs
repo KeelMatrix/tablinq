@@ -57,5 +57,7 @@ pub struct ConfigSnapshot {
     pub browser_channel: String,
     pub browser_extension_required: bool,
     pub browser_auto_open_target_tab: bool,
+    pub native_upload_limit_count: u32,
+    pub native_upload_limit_window_minutes: u32,
     pub gateway: GatewayConfigSnapshot,
 }

@@ -197,6 +197,20 @@ pub(crate) const MIGRATIONS: &[(&str, &str)] = &[
             ON gateway_http_requests(response_status_code);
         "#,
     ),
+    (
+        "0011_native_upload_attempts",
+        r#"
+        CREATE TABLE IF NOT EXISTS native_upload_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_key TEXT NOT NULL,
+            upload_count INTEGER NOT NULL,
+            charged_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS native_upload_attempts_scope_charged_at_idx
+            ON native_upload_attempts(scope_key, charged_at);
+        "#,
+    ),
 ];
 
 pub(crate) fn apply(conn: &Connection) -> Result<()> {

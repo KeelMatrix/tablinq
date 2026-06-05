@@ -227,6 +227,7 @@ pub(crate) fn build_ask_command(args: &AskArgs) -> AskCommand {
             .iter()
             .map(|path| path.display().to_string())
             .collect(),
+        prompt_upload_threshold_chars: None,
         auto_recover_provider_generation_failure: true,
     }
 }

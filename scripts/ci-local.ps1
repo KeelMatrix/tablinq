@@ -144,7 +144,7 @@ function Run-TypeScriptTestJob {
 
   Write-Host "==> TypeScript full tests"
   Ensure-PnpmInstall $RepoRoot
-  Invoke-Step pnpm @("test") $RepoRoot
+  Invoke-Step pnpm @("exec", "vitest", "run", "--maxWorkers=4") $RepoRoot
 }
 
 function Run-TypeScriptTestShardJob {

@@ -40,6 +40,9 @@ export function normalizeAskCommand(
     modelClass: request.model_class,
     effort: request.effort,
     files: request.files ?? [],
+    promptUploadThresholdChars: normalizePositiveInteger(
+      request.prompt_upload_threshold_chars,
+    ),
   };
 }
 
@@ -189,4 +192,14 @@ function normalizeAskMode(mode: unknown): AskExecutionCommand["mode"] {
     return mode;
   }
   throw new Error("ask mode unsupported: use the dedicated research command");
+}
+
+function normalizePositiveInteger(value: unknown): number | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
+    throw new Error("prompt upload threshold must be a positive integer");
+  }
+  return Math.trunc(value);
 }

@@ -1,8 +1,9 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
-    BrowserConnectionMode, CONFIG_VERSION, ConfigSnapshot, GatewayConfigSnapshot, StatePaths,
-    build_state_paths, resolve_state_root,
+    BrowserConnectionMode, CONFIG_VERSION, ConfigSnapshot, GatewayConfigSnapshot,
+    NATIVE_UPLOAD_LIMIT_DEFAULT_COUNT, NATIVE_UPLOAD_LIMIT_DEFAULT_WINDOW_MINUTES,
+    NATIVE_UPLOAD_LIMIT_HARD_MAX_COUNT, StatePaths, build_state_paths, resolve_state_root,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -40,6 +41,8 @@ pub struct FileConfig {
     pub browser_auto_open_target_tab: Option<bool>,
     pub browser_submit_jitter_min_ms: Option<u64>,
     pub browser_submit_jitter_max_ms: Option<u64>,
+    pub native_upload_limit_count: Option<u32>,
+    pub native_upload_limit_window_minutes: Option<u32>,
     pub gateway: Option<GatewayFileConfig>,
 }
 
@@ -86,6 +89,8 @@ impl AppConfig {
             browser_channel: self.browser_channel().to_owned(),
             browser_extension_required: self.browser_extension_required(),
             browser_auto_open_target_tab: self.browser_auto_open_target_tab(),
+            native_upload_limit_count: self.native_upload_limit_count(),
+            native_upload_limit_window_minutes: self.native_upload_limit_window_minutes(),
             gateway: GatewayConfigSnapshot {
                 host: self.gateway_host().to_owned(),
                 port: self.gateway_port(),
@@ -187,6 +192,18 @@ impl AppConfig {
             .browser_submit_jitter_max_ms
             .unwrap_or(2_500)
             .max(min)
+    }
+
+    pub fn native_upload_limit_count(&self) -> u32 {
+        self.file
+            .native_upload_limit_count
+            .unwrap_or(NATIVE_UPLOAD_LIMIT_DEFAULT_COUNT)
+    }
+
+    pub fn native_upload_limit_window_minutes(&self) -> u32 {
+        self.file
+            .native_upload_limit_window_minutes
+            .unwrap_or(NATIVE_UPLOAD_LIMIT_DEFAULT_WINDOW_MINUTES)
     }
 
     pub fn gateway_host(&self) -> &str {
@@ -294,7 +311,9 @@ impl AppConfig {
 pub fn parse_file_config(raw: &str) -> Result<FileConfig> {
     let parsed: FileConfig = toml::from_str(raw).context("parse config.toml")?;
     ensure_current_config_version(&parsed)?;
-    Ok(normalize_file_config(parsed))
+    let normalized = normalize_file_config(parsed);
+    validate_file_config(&normalized)?;
+    Ok(normalized)
 }
 
 fn load_or_create_file_config(path: &Path) -> Result<FileConfig> {
@@ -305,6 +324,7 @@ fn load_or_create_file_config(path: &Path) -> Result<FileConfig> {
         Ok(file)
     } else {
         let file = normalize_file_config(FileConfig::default());
+        validate_file_config(&file)?;
         write_file_config(path, &file)?;
         Ok(file)
     }
@@ -382,6 +402,12 @@ fn normalize_file_config(mut file: FileConfig) -> FileConfig {
     if file.browser_submit_jitter_max_ms.is_none() {
         file.browser_submit_jitter_max_ms = Some(2_500);
     }
+    if file.native_upload_limit_count.is_none() {
+        file.native_upload_limit_count = Some(NATIVE_UPLOAD_LIMIT_DEFAULT_COUNT);
+    }
+    if file.native_upload_limit_window_minutes.is_none() {
+        file.native_upload_limit_window_minutes = Some(NATIVE_UPLOAD_LIMIT_DEFAULT_WINDOW_MINUTES);
+    }
     let gateway = file.gateway.get_or_insert_with(GatewayFileConfig::default);
     if gateway.host.is_none() {
         gateway.host = Some("127.0.0.1".to_owned());
@@ -417,6 +443,27 @@ fn normalize_file_config(mut file: FileConfig) -> FileConfig {
         gateway.safe_mode_behavior = Some("reject_execution".to_owned());
     }
     file
+}
+
+fn validate_file_config(file: &FileConfig) -> Result<()> {
+    let upload_limit = file
+        .native_upload_limit_count
+        .unwrap_or(NATIVE_UPLOAD_LIMIT_DEFAULT_COUNT);
+    if upload_limit == 0 {
+        bail!("config.toml native_upload_limit_count must be at least 1");
+    }
+    if upload_limit > NATIVE_UPLOAD_LIMIT_HARD_MAX_COUNT {
+        bail!(
+            "config.toml native_upload_limit_count {upload_limit} exceeds hard maximum {NATIVE_UPLOAD_LIMIT_HARD_MAX_COUNT}"
+        );
+    }
+    let window_minutes = file
+        .native_upload_limit_window_minutes
+        .unwrap_or(NATIVE_UPLOAD_LIMIT_DEFAULT_WINDOW_MINUTES);
+    if window_minutes == 0 {
+        bail!("config.toml native_upload_limit_window_minutes must be at least 1");
+    }
+    Ok(())
 }
 
 fn generate_gateway_api_key() -> String {
@@ -470,6 +517,8 @@ mod tests {
         assert!(config.browser_auto_open_target_tab());
         assert_eq!(config.browser_submit_jitter_min_ms(), 800);
         assert_eq!(config.browser_submit_jitter_max_ms(), 2_500);
+        assert_eq!(config.native_upload_limit_count(), 65);
+        assert_eq!(config.native_upload_limit_window_minutes(), 180);
         assert_eq!(config.gateway_host(), "127.0.0.1");
         assert_eq!(config.gateway_port(), 3847);
         assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
@@ -501,6 +550,8 @@ mod tests {
         );
         assert_eq!(parsed.browser_submit_jitter_min_ms, Some(800));
         assert_eq!(parsed.browser_submit_jitter_max_ms, Some(2_500));
+        assert_eq!(parsed.native_upload_limit_count, Some(65));
+        assert_eq!(parsed.native_upload_limit_window_minutes, Some(180));
         assert_eq!(
             parsed.gateway.as_ref().and_then(|value| value.port),
             Some(3847)
@@ -577,6 +628,20 @@ warm_mode = true
     }
 
     #[test]
+    fn parse_file_config_rejects_native_upload_limit_above_hard_maximum() {
+        let err = parse_file_config(
+            r#"
+version = 2
+native_upload_limit_count = 81
+"#,
+        )
+        .unwrap_err();
+
+        let message = format!("{err:#}");
+        assert!(message.contains("native_upload_limit_count 81 exceeds hard maximum 80"));
+    }
+
+    #[test]
     fn require_gateway_api_key_rejects_blank_value() {
         let dir = tempdir().unwrap();
         let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
@@ -606,6 +671,8 @@ warm_mode = true
                 browser_auto_open_target_tab: None,
                 browser_submit_jitter_min_ms: None,
                 browser_submit_jitter_max_ms: None,
+                native_upload_limit_count: None,
+                native_upload_limit_window_minutes: None,
                 gateway: None,
             };
             let normalized = super::normalize_file_config(file.clone());
