@@ -50,6 +50,7 @@ export function createAskRuntimeState(
     lastStatusAt: 0,
     lastSnapshotSignature: null,
     lastIdentityUpdateSignature: null,
+    transientInterruptionThoughtArtifactSignature: null,
   };
 }
 

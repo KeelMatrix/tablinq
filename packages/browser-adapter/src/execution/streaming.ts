@@ -97,6 +97,7 @@ export function askSnapshotProgressSignature(snapshot: AskSnapshot): string {
     snapshot.conversationId,
     snapshot.messageId,
     snapshot.thoughtDividerBeforeMessage ?? false,
+    snapshot.thoughtArtifactSignature ?? "",
     snapshot.currentUrl,
   ]);
 }

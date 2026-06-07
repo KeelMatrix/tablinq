@@ -89,6 +89,7 @@ function createCommandRuntime({
           null,
         thoughtDividerBeforeMessage:
           messageRuntime.thoughtDividerBeforeMessage(article),
+        thoughtArtifactSignature: messageRuntime.readThoughtArtifactSignature(),
         currentUrl: window.location.href,
       };
     },
