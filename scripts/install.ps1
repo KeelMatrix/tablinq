@@ -729,6 +729,126 @@ function Convert-ToTomlStringLiteral {
   "'" + ($Value.Replace("'", "''")) + "'"
 }
 
+function New-LocalGatewayApiKey {
+  "tablinq-local-" + ([System.Guid]::NewGuid().ToString("N"))
+}
+
+function Test-TomlSettingExists {
+  param(
+    [string]$Path,
+    [string]$Key,
+    [string]$Section = ""
+  )
+
+  if (-not (Test-Path $Path)) {
+    return $false
+  }
+
+  $currentSection = ""
+  foreach ($line in @(Get-Content -Path $Path -ErrorAction SilentlyContinue)) {
+    $trimmed = ([string]$line).Trim()
+    if ($trimmed -match '^\[(?<section>[^\]]+)\]\s*$') {
+      $currentSection = $matches.section
+      continue
+    }
+
+    if ($currentSection -ne $Section) {
+      continue
+    }
+
+    $keyPattern = '^\s*{0}\s*=' -f [regex]::Escape($Key)
+    if ($line -match $keyPattern) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
+function Set-TomlLines {
+  param(
+    [string]$Path,
+    [System.Collections.Generic.List[string]]$Lines
+  )
+
+  Set-Content -Path $Path -Value $Lines.ToArray() -Encoding utf8
+}
+
+function Add-TomlSettingIfMissing {
+  param(
+    [string]$Path,
+    [string]$Key,
+    [string]$DefaultToml,
+    [string]$Section = "",
+    [string]$DisplayValue = $null
+  )
+
+  if (Test-TomlSettingExists -Path $Path -Key $Key -Section $Section) {
+    return $false
+  }
+
+  if ($null -eq $DefaultToml -or -not $DefaultToml.Trim()) {
+    $settingName = if ($Section) { "$Section.$Key" } else { $Key }
+    throw "Missing default TOML value for config setting '$settingName'. Refusing to install because the config migration table is incomplete."
+  }
+
+  $lines = [System.Collections.Generic.List[string]]::new()
+  if (Test-Path $Path) {
+    foreach ($line in @(Get-Content -Path $Path -ErrorAction SilentlyContinue)) {
+      $lines.Add([string]$line) | Out-Null
+    }
+  }
+
+  $settingLine = "{0} = {1}" -f $Key, $DefaultToml
+  if (-not $Section) {
+    $insertAt = $lines.Count
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+      if ($lines[$index].Trim() -match '^\[[^\]]+\]\s*$') {
+        $insertAt = $index
+        break
+      }
+    }
+    $lines.Insert($insertAt, $settingLine)
+  }
+  else {
+    $sectionStart = -1
+    $nextSection = -1
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+      $trimmed = $lines[$index].Trim()
+      if ($trimmed -match '^\[(?<section>[^\]]+)\]\s*$') {
+        if ($matches.section -eq $Section) {
+          $sectionStart = $index
+          continue
+        }
+
+        if ($sectionStart -ge 0) {
+          $nextSection = $index
+          break
+        }
+      }
+    }
+
+    if ($sectionStart -lt 0) {
+      if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].Trim()) {
+        $lines.Add("") | Out-Null
+      }
+      $lines.Add("[$Section]") | Out-Null
+      $lines.Add($settingLine) | Out-Null
+    }
+    else {
+      $insertAt = if ($nextSection -ge 0) { $nextSection } else { $lines.Count }
+      $lines.Insert($insertAt, $settingLine)
+    }
+  }
+
+  Set-TomlLines -Path $Path -Lines $lines
+
+  $settingName = if ($Section) { "$Section.$Key" } else { $Key }
+  $shownValue = if ($DisplayValue) { $DisplayValue } else { $DefaultToml }
+  Write-Host ("  config: added {0} = {1}" -f $settingName, $shownValue)
+  return $true
+}
+
 function Set-TomlStringValue {
   param(
     [string]$Path,
@@ -739,6 +859,7 @@ function Set-TomlStringValue {
   $line = "{0} = {1}" -f $Key, (Convert-ToTomlStringLiteral -Value $Value)
   $content = if (Test-Path $Path) { Get-Content $Path -Raw } else { "" }
   $keyPattern = "(?m)^{0}\s*=.*$" -f [regex]::Escape($Key)
+  $added = -not (Test-TomlSettingExists -Path $Path -Key $Key)
 
   if ($content -match $keyPattern) {
     $content = [regex]::Replace($content, $keyPattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($match) $line }, 1)
@@ -759,6 +880,9 @@ function Set-TomlStringValue {
   }
 
   Set-Content -Path $Path -Value $content -Encoding utf8
+  if ($added) {
+    Write-Host ("  config: added {0} = {1}" -f $Key, (Convert-ToTomlStringLiteral -Value $Value))
+  }
 }
 
 function Get-TomlStringValue {
@@ -782,23 +906,85 @@ function Get-TomlStringValue {
   return $DefaultValue
 }
 
+function Assert-ConfigVersionSupported {
+  param([string]$ConfigPath)
+
+  if (-not (Test-Path $ConfigPath)) {
+    return
+  }
+
+  $content = Get-Content -Path $ConfigPath -Raw
+  $match = [regex]::Match($content, '(?m)^\s*version\s*=\s*(?<value>\d+)\s*$')
+  if (-not $match.Success) {
+    return
+  }
+
+  $version = [int]$match.Groups["value"].Value
+  if ($version -ne 2) {
+    throw "config.toml version $version is unsupported by this installer; expected version 2. Update the config manually before installing."
+  }
+}
+
+function Get-RequiredConfigDefaultDefinitions {
+  @(
+    [pscustomobject]@{ Section = ""; Key = "version"; DefaultToml = "2"; DisplayValue = "2" }
+    [pscustomobject]@{ Section = ""; Key = "warm_mode"; DefaultToml = "false"; DisplayValue = "false" }
+    [pscustomobject]@{ Section = ""; Key = "safe_mode"; DefaultToml = "false"; DisplayValue = "false" }
+    [pscustomobject]@{ Section = ""; Key = "browser_connection_mode"; DefaultToml = "'attach_first'"; DisplayValue = "'attach_first'" }
+    [pscustomobject]@{ Section = ""; Key = "browser_debug_host"; DefaultToml = "'127.0.0.1'"; DisplayValue = "'127.0.0.1'" }
+    [pscustomobject]@{ Section = ""; Key = "browser_debug_port"; DefaultToml = "9222"; DisplayValue = "9222" }
+    [pscustomobject]@{ Section = ""; Key = "browser_channel"; DefaultToml = "'msedge'"; DisplayValue = "'msedge'" }
+    [pscustomobject]@{ Section = ""; Key = "browser_target_url"; DefaultToml = "'https://chatgpt.com/'"; DisplayValue = "'https://chatgpt.com/'" }
+    [pscustomobject]@{ Section = ""; Key = "browser_extension_required"; DefaultToml = "true"; DisplayValue = "true" }
+    [pscustomobject]@{ Section = ""; Key = "browser_auto_open_target_tab"; DefaultToml = "true"; DisplayValue = "true" }
+    [pscustomobject]@{ Section = ""; Key = "browser_submit_jitter_min_ms"; DefaultToml = "800"; DisplayValue = "800" }
+    [pscustomobject]@{ Section = ""; Key = "browser_submit_jitter_max_ms"; DefaultToml = "2500"; DisplayValue = "2500" }
+    [pscustomobject]@{ Section = ""; Key = "native_upload_limit_count"; DefaultToml = "65"; DisplayValue = "65" }
+    [pscustomobject]@{ Section = ""; Key = "native_upload_limit_window_minutes"; DefaultToml = "180"; DisplayValue = "180" }
+    [pscustomobject]@{ Section = ""; Key = "chatgpt_instant_message_limit_count"; DefaultToml = "150"; DisplayValue = "150" }
+    [pscustomobject]@{ Section = ""; Key = "chatgpt_instant_message_limit_window_minutes"; DefaultToml = "180"; DisplayValue = "180" }
+    [pscustomobject]@{ Section = ""; Key = "chatgpt_thinking_message_limit_count"; DefaultToml = "2900"; DisplayValue = "2900" }
+    [pscustomobject]@{ Section = ""; Key = "chatgpt_thinking_message_limit_window_minutes"; DefaultToml = "10080"; DisplayValue = "10080" }
+    [pscustomobject]@{ Section = "gateway"; Key = "host"; DefaultToml = "'127.0.0.1'"; DisplayValue = "'127.0.0.1'" }
+    [pscustomobject]@{ Section = "gateway"; Key = "port"; DefaultToml = "3847"; DisplayValue = "3847" }
+    [pscustomobject]@{ Section = "gateway"; Key = "api_key"; DefaultToml = (Convert-ToTomlStringLiteral -Value (New-LocalGatewayApiKey)); DisplayValue = "<generated>" }
+    [pscustomobject]@{ Section = "gateway"; Key = "max_concurrent_upstream_jobs"; DefaultToml = "1"; DisplayValue = "1" }
+    [pscustomobject]@{ Section = "gateway"; Key = "queue_length"; DefaultToml = "32"; DisplayValue = "32" }
+    [pscustomobject]@{ Section = "gateway"; Key = "queue_timeout_ms"; DefaultToml = "7230000"; DisplayValue = "7230000" }
+    [pscustomobject]@{ Section = "gateway"; Key = "per_client_limit"; DefaultToml = "8"; DisplayValue = "8" }
+    [pscustomobject]@{ Section = "gateway"; Key = "ask_timeout_ms"; DefaultToml = "3600000"; DisplayValue = "3600000" }
+    [pscustomobject]@{ Section = "gateway"; Key = "extended_thinking_timeout_ms"; DefaultToml = "3000000"; DisplayValue = "3000000" }
+    [pscustomobject]@{ Section = "gateway"; Key = "research_timeout_ms"; DefaultToml = "7200000"; DisplayValue = "7200000" }
+    [pscustomobject]@{ Section = "gateway"; Key = "safe_mode_behavior"; DefaultToml = "'reject_execution'"; DisplayValue = "'reject_execution'" }
+  )
+}
+
+function Ensure-ConfigDefaults {
+  param([string]$ConfigPath)
+
+  foreach ($definition in @(Get-RequiredConfigDefaultDefinitions)) {
+    Add-TomlSettingIfMissing `
+      -Path $ConfigPath `
+      -Section $definition.Section `
+      -Key $definition.Key `
+      -DefaultToml $definition.DefaultToml `
+      -DisplayValue $definition.DisplayValue | Out-Null
+  }
+}
+
 function Ensure-ConfigFile {
   param([string]$StateRoot)
 
-  $configPath = Join-Path $StateRoot "config\config.toml"
+  $configDir = Join-Path $StateRoot "config"
+  $configPath = Join-Path $configDir "config.toml"
+  New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+
   if (-not (Test-Path $configPath)) {
-    @(
-      "version = 2"
-      "warm_mode = false"
-      "safe_mode = false"
-      "browser_target_url = 'https://chatgpt.com/'"
-      ""
-      "[gateway]"
-      "host = '127.0.0.1'"
-      "port = 3847"
-    ) | Set-Content -Path $configPath -Encoding utf8
+    New-Item -ItemType File -Path $configPath -Force | Out-Null
   }
 
+  Assert-ConfigVersionSupported -ConfigPath $configPath
+  Ensure-ConfigDefaults -ConfigPath $configPath
   $configPath
 }
 

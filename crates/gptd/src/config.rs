@@ -713,6 +713,76 @@ mod tests {
     }
 
     #[test]
+    fn install_script_config_defaults_cover_normalized_file_config_fields() {
+        let install_script = include_str!("../../../scripts/install.ps1");
+
+        for (field, default_toml) in [
+            ("version", "2"),
+            ("warm_mode", "false"),
+            ("safe_mode", "false"),
+            ("browser_connection_mode", "'attach_first'"),
+            ("browser_debug_host", "'127.0.0.1'"),
+            ("browser_debug_port", "9222"),
+            ("browser_channel", "'msedge'"),
+            ("browser_target_url", "'https://chatgpt.com/'"),
+            ("browser_extension_required", "true"),
+            ("browser_auto_open_target_tab", "true"),
+            ("browser_submit_jitter_min_ms", "800"),
+            ("browser_submit_jitter_max_ms", "2500"),
+            ("native_upload_limit_count", "65"),
+            ("native_upload_limit_window_minutes", "180"),
+            ("chatgpt_instant_message_limit_count", "150"),
+            ("chatgpt_instant_message_limit_window_minutes", "180"),
+            ("chatgpt_thinking_message_limit_count", "2900"),
+            ("chatgpt_thinking_message_limit_window_minutes", "10080"),
+            ("gateway.host", "'127.0.0.1'"),
+            ("gateway.port", "3847"),
+            ("gateway.max_concurrent_upstream_jobs", "1"),
+            ("gateway.queue_length", "32"),
+            ("gateway.queue_timeout_ms", "7230000"),
+            ("gateway.per_client_limit", "8"),
+            ("gateway.ask_timeout_ms", "3600000"),
+            ("gateway.extended_thinking_timeout_ms", "3000000"),
+            ("gateway.research_timeout_ms", "7200000"),
+            ("gateway.safe_mode_behavior", "'reject_execution'"),
+        ] {
+            let key = field.rsplit('.').next().unwrap_or(field);
+            assert!(
+                install_script.contains(&format!("Key = \"{key}\"")),
+                "scripts/install.ps1 should add missing config setting {field}"
+            );
+            assert!(
+                install_script.contains(&format!("DefaultToml = \"{default_toml}\"")),
+                "scripts/install.ps1 should configure default {default_toml} for {field}"
+            );
+        }
+
+        assert!(
+            install_script.contains("Key = \"api_key\"")
+                && install_script.contains("New-LocalGatewayApiKey"),
+            "scripts/install.ps1 should generate gateway.api_key when missing"
+        );
+        assert!(
+            install_script.contains(
+                "Set-TomlStringValue -Path $configPath -Key \"browser_path\" -Value $BrowserSelection.Path"
+            ),
+            "scripts/install.ps1 should materialize browser_path from browser discovery"
+        );
+
+        for intentionally_not_persisted in ["browser_debug_endpoint"] {
+            assert!(
+                !install_script.contains(&format!("Key = \"{intentionally_not_persisted}\"")),
+                "{intentionally_not_persisted} is derived/optional and should not be materialized by install.ps1"
+            );
+        }
+
+        assert!(
+            install_script.contains("Missing default TOML value for config setting"),
+            "scripts/install.ps1 should fail clearly if a required default definition is incomplete"
+        );
+    }
+
+    #[test]
     fn parse_file_config_rejects_missing_version() {
         let err = parse_file_config("warm_mode = true").unwrap_err();
         assert!(format!("{err:#}").contains(&format!(
