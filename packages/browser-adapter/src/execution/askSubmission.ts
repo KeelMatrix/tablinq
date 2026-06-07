@@ -98,6 +98,8 @@ export async function prepareAskSubmission(
     prompt: command.prompt,
     explicitFiles,
     promptUploadThresholdChars: command.promptUploadThresholdChars,
+    promptUploadFileName: command.promptUploadFileName,
+    promptUploadComposerText: command.promptUploadComposerText,
     attachmentBaseline,
     report: host.getLastCapabilityReport(),
   });

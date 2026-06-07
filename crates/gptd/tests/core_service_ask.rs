@@ -64,6 +64,8 @@ fn core_service_runs_ask_jobs_and_artifact_flow_without_cli() {
                 effort: None,
                 files: vec![upload_fixture.display().to_string()],
                 prompt_upload_threshold_chars: None,
+                prompt_upload_file_name: None,
+                prompt_upload_composer_text: None,
                 auto_recover_provider_generation_failure: true,
             },
             |event| {

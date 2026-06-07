@@ -150,6 +150,8 @@ export interface AskExecutionCommand {
   effort?: "none" | "standard" | "extended" | null;
   files?: string[];
   promptUploadThresholdChars?: number | null;
+  promptUploadFileName?: string | null;
+  promptUploadComposerText?: string | null;
 }
 
 export interface ResearchExecutionCommand {

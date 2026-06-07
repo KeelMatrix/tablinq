@@ -162,6 +162,8 @@ mod tests {
                     effort: None,
                     files: vec![],
                     prompt_upload_threshold_chars: None,
+                    prompt_upload_file_name: None,
+                    prompt_upload_composer_text: None,
                     auto_recover_provider_generation_failure: true,
                 },
                 created_at: Utc::now(),

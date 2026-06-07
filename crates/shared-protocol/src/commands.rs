@@ -1,6 +1,7 @@
 use crate::validation::{
     ValidationError, validate_exact_version, validate_optional, validate_paths, validate_required,
 };
+use crate::{USER_PROMPT_UPLOAD_THRESHOLD_CHARS, validate_safe_txt_basename};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -86,6 +87,10 @@ pub struct AskCommand {
     pub files: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_upload_threshold_chars: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_upload_file_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_upload_composer_text: Option<String>,
     #[serde(default = "default_auto_recover_provider_generation_failure")]
     pub auto_recover_provider_generation_failure: bool,
 }
@@ -106,7 +111,44 @@ impl AskCommand {
                 message: "research must use the dedicated research command".to_owned(),
             });
         }
+        validate_prompt_upload_pair(
+            self.prompt_upload_file_name.as_deref(),
+            self.prompt_upload_composer_text.as_deref(),
+            self.prompt_upload_threshold_chars
+                .map(|value| value as usize)
+                .unwrap_or(USER_PROMPT_UPLOAD_THRESHOLD_CHARS),
+        )?;
         validate_paths("files", &self.files)
+    }
+}
+
+fn validate_prompt_upload_pair(
+    file_name: Option<&str>,
+    composer_text: Option<&str>,
+    threshold: usize,
+) -> Result<(), ValidationError> {
+    match (file_name, composer_text) {
+        (None, None) => Ok(()),
+        (Some(file_name), Some(composer_text)) => {
+            validate_safe_txt_basename("prompt_upload_file_name", file_name)?;
+            validate_required("prompt_upload_composer_text", composer_text)?;
+            let length = composer_text.chars().count();
+            if length > threshold {
+                return Err(ValidationError::InvalidFieldCombination {
+                    field: "prompt_upload_composer_text".to_owned(),
+                    message: format!(
+                        "must be at most {threshold} characters for the resolved prompt upload threshold; found {length}"
+                    ),
+                });
+            }
+            Ok(())
+        }
+        _ => Err(ValidationError::InvalidFieldCombination {
+            field: "prompt_upload_file_name".to_owned(),
+            message:
+                "prompt_upload_file_name and prompt_upload_composer_text must be provided together"
+                    .to_owned(),
+        }),
     }
 }
 

@@ -408,6 +408,84 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     await adapter.shutdown();
   });
 
+  it("ignores explicit prompt upload fields for small direct-composer prompts", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-small-explicit-prompt-upload-unused",
+        prompt: "small prompt stays inline",
+        promptUploadFileName: "openclaude-small-prompt.txt",
+        promptUploadComposerText: "Read openclaude-small-prompt.txt exactly.",
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles ?? "",
+      lastSubmittedPrompt: document.body.dataset.lastSubmittedPrompt ?? "",
+    }));
+
+    expect(state).toEqual({
+      uploadedFiles: "",
+      lastSubmittedPrompt: "small prompt stays inline",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("keeps explicit prompt upload fields unused at the threshold boundary", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-threshold-explicit-prompt-upload-unused",
+        prompt: "t".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS),
+        promptUploadFileName: "openclaude-threshold-prompt.txt",
+        promptUploadComposerText:
+          "Read openclaude-threshold-prompt.txt exactly.",
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles ?? "",
+      lastSubmittedPromptLength:
+        document.body.dataset.lastSubmittedPrompt?.length ?? 0,
+    }));
+
+    expect(state).toEqual({
+      uploadedFiles: "",
+      lastSubmittedPromptLength: USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
+    });
+
+    await adapter.shutdown();
+  });
+
   it("uploads a long user prompt as a txt attachment and submits a file instruction", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
@@ -446,6 +524,47 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     expect(state.lastSubmissionMethod).toBe("button");
     expect(result.output_text).toBe(
       `Fake response for: ${state.lastSubmittedPrompt}`,
+    );
+
+    await adapter.shutdown();
+  });
+
+  it("uploads a long user prompt with the exact explicit filename and composer text", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    const result = await adapter.ask(
+      {
+        jobId: "job-ask-long-explicit-prompt-upload",
+        prompt: "x".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+        promptUploadFileName: "openclaude-large-prompt.txt",
+        promptUploadComposerText: "Read openclaude-large-prompt.txt exactly.",
+        timeoutMs: 10_000,
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      uploadedFiles: document.body.dataset.uploadedFiles ?? "",
+      lastSubmittedPrompt: document.body.dataset.lastSubmittedPrompt ?? "",
+    }));
+
+    expect(state).toEqual({
+      uploadedFiles: "openclaude-large-prompt.txt",
+      lastSubmittedPrompt: "Read openclaude-large-prompt.txt exactly.",
+    });
+    expect(result.output_text).toBe(
+      "Fake response for: Read openclaude-large-prompt.txt exactly.",
     );
 
     await adapter.shutdown();
@@ -494,6 +613,39 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
     expect(uploadedUserPromptInstructionVariants(promptFileName)).toContain(
       state.lastSubmittedPrompt,
     );
+
+    await adapter.shutdown();
+  });
+
+  it("rejects explicit prompt upload filename collisions instead of renaming", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const explicitFile = path.join(root, "openclaude-collision.txt");
+    await writeFile(explicitFile, "explicit upload", "utf8");
+    const targetUrl = withHarnessUrl(server.url, { variant: "live" });
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: targetUrl,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl, headless: true });
+
+    await expect(
+      adapter.ask(
+        {
+          jobId: "job-ask-explicit-prompt-upload-collision",
+          prompt: "c".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+          files: [explicitFile],
+          promptUploadFileName: "openclaude-collision.txt",
+          promptUploadComposerText: "Read openclaude-collision.txt exactly.",
+          timeoutMs: 10_000,
+        },
+        () => {},
+      ),
+    ).rejects.toThrow(/collides with an existing attachment/);
 
     await adapter.shutdown();
   });

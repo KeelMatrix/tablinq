@@ -199,6 +199,7 @@ If clients overlap, queueing is normal. Treat the gateway as a browser-backed sc
 - `tablinq_conversation_id = "<conversation-id>"`
 - `tablinq_new_conversation = true`
 - `tablinq_auto_recover_provider_generation_failure = true`
+- `tablinq_prompt_upload_file_name = "<name>.txt"` and `tablinq_prompt_upload_composer_text = "<text>"` as a strict pair for deterministic long-prompt uploads
 
 Default intent:
 
@@ -208,6 +209,8 @@ Default intent:
   - serialized follow-up or side work behind the same upstream slot
 - `subagent`
   - rejected by default unless you deliberately relax policy
+
+For large prompts, `messages` remains authoritative. If the flattened prompt is at or below Tablinq's resolved prompt-upload threshold, Tablinq submits the flattened prompt directly and ignores the supplied prompt-upload pair after validation. If the flattened prompt exceeds the threshold, Tablinq uploads the prompt as the exact supplied `.txt` filename and submits the exact supplied composer text. Unsafe names, partial pairs, oversized composer text, and ambiguous attachment-name collisions are rejected instead of renamed.
 
 ## Timeouts and client behavior
 

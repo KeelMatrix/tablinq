@@ -40,6 +40,8 @@ export type AskRequest = {
   effort?: "none" | "standard" | "extended" | null;
   files?: string[];
   prompt_upload_threshold_chars?: number | null;
+  prompt_upload_file_name?: string | null;
+  prompt_upload_composer_text?: string | null;
 };
 
 export type RecoverAskRequest = Omit<AskRequest, "type"> & {

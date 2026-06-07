@@ -37,7 +37,7 @@ pub use recovery::*;
 pub use requests::*;
 pub use state_paths::*;
 pub use upload_limits::*;
-pub use validation::ValidationError;
+pub use validation::{ValidationError, validate_safe_txt_basename};
 
 #[cfg(test)]
 mod tests;

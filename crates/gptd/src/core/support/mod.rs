@@ -288,6 +288,8 @@ mod tests {
                 conversation_id: None,
                 new_conversation: false,
                 prompt_upload_threshold_chars: None,
+                prompt_upload_file_name: None,
+                prompt_upload_composer_text: None,
                 auto_recover_provider_generation_failure: true,
             })
             .unwrap();
@@ -313,6 +315,8 @@ mod tests {
                 conversation_id: None,
                 new_conversation: true,
                 prompt_upload_threshold_chars: None,
+                prompt_upload_file_name: None,
+                prompt_upload_composer_text: None,
                 auto_recover_provider_generation_failure: true,
             })
             .unwrap();
