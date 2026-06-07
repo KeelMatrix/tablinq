@@ -1,3 +1,13 @@
+import {
+  MAX_COMPOSER_UPLOAD_FILES,
+  MAX_UPLOAD_FILE_BYTES,
+} from "./uploadLimits";
+
+export {
+  MAX_COMPOSER_UPLOAD_FILES,
+  MAX_UPLOAD_FILE_BYTES,
+} from "./uploadLimits";
+
 export const NAVIGATION_TIMEOUT_MS = 20_000;
 export const ASK_TIMEOUT_MS = 25_000;
 export const RESEARCH_TIMEOUT_MS = 60_000;
@@ -5,12 +15,12 @@ export const ACTIVE_RESEARCH_REFRESH_INTERVAL_MS = 5 * 60_000;
 export const PROBE_TIMEOUT_MS = 5_000;
 export const ATTACH_PROBE_GRACE_MS = 1_500;
 export const INTERACTION_TIMEOUT_MS = 7_500;
-export const MAX_UPLOAD_FILE_BYTES = 20 * 1024 * 1024;
-export const MAX_COMPOSER_UPLOAD_FILES = 10;
+export const UPLOAD_ACK_TIMEOUT_BASELINE_FILE_BYTES = 20 * 1024 * 1024;
 export const UPLOAD_ACK_TIMEOUT_MIN_MS = 10_000;
-export const UPLOAD_ACK_TIMEOUT_MAX_MS = 40_000;
+export const UPLOAD_ACK_TIMEOUT_BASELINE_MAX_MS = 40_000;
 export const ADDITIONAL_UPLOAD_ACK_WEIGHT = 0.9;
-export const SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS = 60_000;
+export const SUBMIT_READY_AFTER_UPLOAD_MIN_MS = 60_000;
+export const SUBMIT_READY_AFTER_UPLOAD_GRACE_MS = 30_000;
 export const RESEARCH_SUBMISSION_START_TIMEOUT_MS = 7_500;
 export const DEEP_RESEARCH_HANDOFF_TIMEOUT_MS = 60_000;
 export const DEEP_RESEARCH_START_CONFIRM_TIMEOUT_MS = 15_000;
@@ -84,9 +94,54 @@ export function askResponseStreamMaxMs(): number {
   );
 }
 
+export function maxUploadFileBytes(): number {
+  return MAX_UPLOAD_FILE_BYTES;
+}
+
+export function uploadAckTimeoutMinMs(): number {
+  return (
+    readPositiveIntegerEnv("TABLINQ_UPLOAD_ACK_TIMEOUT_MIN_MS") ??
+    UPLOAD_ACK_TIMEOUT_MIN_MS
+  );
+}
+
+export function uploadAckTimeoutMaxMs(): number {
+  const minTimeoutMs = uploadAckTimeoutMinMs();
+  const configured = readPositiveIntegerEnv(
+    "TABLINQ_UPLOAD_ACK_TIMEOUT_MAX_MS",
+  );
+  if (configured !== undefined) {
+    return Math.max(minTimeoutMs, configured);
+  }
+  return Math.max(
+    minTimeoutMs,
+    scaledUploadAckTimeoutMaxMs(maxUploadFileBytes()),
+  );
+}
+
+export function submitReadyAfterUploadTimeoutMs(): number {
+  const configured = readPositiveIntegerEnv(
+    "TABLINQ_SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS",
+  );
+  if (configured !== undefined) {
+    return configured;
+  }
+  return roundUpToNearest(
+    Math.max(
+      SUBMIT_READY_AFTER_UPLOAD_MIN_MS,
+      uploadAckTimeoutMaxMs() + SUBMIT_READY_AFTER_UPLOAD_GRACE_MS,
+    ),
+    30_000,
+  );
+}
+
+export function uploadFileLimitMiB(fileBytes = maxUploadFileBytes()): number {
+  return Math.round(fileBytes / (1024 * 1024));
+}
+
 export function uploadAckTimeoutMsForFiles(fileSizes: number[]): number {
   if (fileSizes.length === 0) {
-    return UPLOAD_ACK_TIMEOUT_MIN_MS;
+    return uploadAckTimeoutMinMs();
   }
 
   const perFileTimeouts = fileSizes
@@ -105,13 +160,28 @@ export function uploadAckTimeoutMsForFiles(fileSizes: number[]): number {
 function uploadAckTimeoutMsForFile(fileSizeBytes: number): number {
   const normalizedSize = Math.min(
     1,
-    Math.max(0, fileSizeBytes) / MAX_UPLOAD_FILE_BYTES,
+    Math.max(0, fileSizeBytes) / maxUploadFileBytes(),
   );
+  const minTimeoutMs = uploadAckTimeoutMinMs();
   return Math.round(
-    UPLOAD_ACK_TIMEOUT_MIN_MS +
-      (UPLOAD_ACK_TIMEOUT_MAX_MS - UPLOAD_ACK_TIMEOUT_MIN_MS) *
-        Math.sqrt(normalizedSize),
+    minTimeoutMs +
+      (uploadAckTimeoutMaxMs() - minTimeoutMs) * Math.sqrt(normalizedSize),
   );
+}
+
+function scaledUploadAckTimeoutMaxMs(uploadCapBytes: number): number {
+  const ratio = Math.max(
+    1,
+    uploadCapBytes / UPLOAD_ACK_TIMEOUT_BASELINE_FILE_BYTES,
+  );
+  return roundUpToNearest(
+    UPLOAD_ACK_TIMEOUT_BASELINE_MAX_MS * Math.sqrt(ratio),
+    5_000,
+  );
+}
+
+function roundUpToNearest(value: number, step: number): number {
+  return Math.ceil(value / step) * step;
 }
 
 function readPositiveIntegerEnv(name: string): number | undefined {

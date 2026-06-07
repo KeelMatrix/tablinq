@@ -22,7 +22,7 @@ import {
 } from "../pageRuntime";
 import { readComposerAttachmentState } from "../pageRuntime/attachments";
 import type { AskBaseline } from "../snapshotState";
-import { SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS } from "../timing";
+import { submitReadyAfterUploadTimeoutMs } from "../timing";
 import { conversationIdFromUrl } from "../urls";
 
 import { ensureProviderReachable } from "./askProviderFailure";
@@ -115,7 +115,7 @@ export async function prepareAskSubmission(
     await waitForSubmitReadyAfterUploads(
       page,
       Math.min(
-        SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+        submitReadyAfterUploadTimeoutMs(),
         Math.max(1, timing.timeoutAt - Date.now()),
       ),
     );

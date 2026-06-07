@@ -19,6 +19,7 @@ mod rate_limits;
 mod recovery;
 mod requests;
 mod state_paths;
+mod upload_limits;
 mod validation;
 
 pub use artifacts::*;
@@ -35,7 +36,8 @@ pub use rate_limits::*;
 pub use recovery::*;
 pub use requests::*;
 pub use state_paths::*;
-pub use validation::{MAX_ATTACHMENT_FILE_BYTES, ValidationError};
+pub use upload_limits::*;
+pub use validation::ValidationError;
 
 #[cfg(test)]
 mod tests;

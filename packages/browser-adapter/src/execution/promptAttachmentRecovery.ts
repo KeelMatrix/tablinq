@@ -13,7 +13,7 @@ import {
 import type { SubmitStateSnapshot } from "../snapshotState";
 import {
   adaptivePollIntervalMs,
-  SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+  submitReadyAfterUploadTimeoutMs,
 } from "../timing";
 
 export const PROMPT_ATTACHMENT_RECOVERY_PROMPT =
@@ -134,7 +134,7 @@ export async function recoverPromptAttachmentUploadIfNeeded(
       await waitForSubmitReadyAfterUploads(
         page,
         Math.min(
-          SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+          submitReadyAfterUploadTimeoutMs(),
           Math.max(1, timeoutAt - Date.now()),
         ),
       );

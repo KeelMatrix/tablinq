@@ -66,13 +66,13 @@ pub(crate) fn handle_file_upload_request(
             "x-file-name header is required",
         ));
     };
-    if context.request.body.len() > crate::uploads::MAX_STAGED_UPLOAD_BYTES {
+    if context.request.body.len() > crate::uploads::max_staged_upload_bytes() {
         return Ok(api_error_response(
             413,
             &context.request_id,
             "invalid_request_error",
             "payload_too_large",
-            "file exceeds 50 MiB limit",
+            crate::uploads::staged_upload_limit_message("file exceeds"),
         ));
     }
     let metadata = upload_store.stage_upload(

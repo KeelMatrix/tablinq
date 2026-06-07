@@ -5,7 +5,7 @@ import {
   adaptivePollIntervalMs,
   INTERACTION_TIMEOUT_MS,
   NAVIGATION_TIMEOUT_MS,
-  SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+  submitReadyAfterUploadTimeoutMs,
   SUBMIT_START_TIMEOUT_MS,
 } from "../timing";
 
@@ -19,7 +19,7 @@ import {
 
 export async function waitForSubmitReadyAfterUploads(
   page: Page,
-  timeoutMs = SUBMIT_READY_AFTER_UPLOAD_TIMEOUT_MS,
+  timeoutMs = submitReadyAfterUploadTimeoutMs(),
 ): Promise<void> {
   const startedAt = Date.now();
   const deadline = Date.now() + timeoutMs;

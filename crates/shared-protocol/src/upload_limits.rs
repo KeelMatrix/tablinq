@@ -1,0 +1,8 @@
+pub const MAX_UPLOAD_FILE_BYTES: u64 = 50 * 1024 * 1024;
+pub const MAX_ATTACHMENT_FILE_BYTES: u64 = MAX_UPLOAD_FILE_BYTES;
+pub const MAX_COMPOSER_UPLOAD_FILES: usize = 10;
+pub const MAX_ATTACHMENT_FILES: usize = MAX_COMPOSER_UPLOAD_FILES;
+
+pub fn max_upload_file_bytes() -> u64 {
+    MAX_UPLOAD_FILE_BYTES
+}
