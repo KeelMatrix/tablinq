@@ -1,6 +1,5 @@
 #![allow(unused_imports, dead_code)]
 use super::*;
-use crate::uploads::MAX_STAGED_UPLOAD_BYTES;
 
 const UPLOAD_ARTIFACT_HTTP_TIMEOUT_MS: u64 = 60_000;
 

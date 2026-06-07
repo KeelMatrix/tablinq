@@ -225,14 +225,12 @@ pub(crate) fn parse_http_request(
         .unwrap_or(0);
     let request_path = normalized_request_path(&path);
     if method == "POST" && request_path == V1_FILES_PATH {
-        if content_length > crate::uploads::MAX_STAGED_UPLOAD_BYTES {
-            return Err(
-                payload_too_large("payload_too_large", "file exceeds 50 MiB limit").with_partial(
-                    Some(method),
-                    Some(path),
-                    Some(headers),
-                ),
-            );
+        if content_length > crate::uploads::max_staged_upload_bytes() {
+            return Err(payload_too_large(
+                "payload_too_large",
+                crate::uploads::staged_upload_limit_message("file exceeds"),
+            )
+            .with_partial(Some(method), Some(path), Some(headers)));
         }
     } else if content_length > MAX_NON_UPLOAD_REQUEST_BODY_BYTES {
         return Err(

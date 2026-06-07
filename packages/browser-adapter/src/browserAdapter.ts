@@ -46,6 +46,7 @@ export { interactionJitterMs } from "./timing";
 export {
   MAX_COMPOSER_UPLOAD_FILES,
   MAX_UPLOAD_FILE_BYTES,
+  maxUploadFileBytes,
   adaptivePollIntervalMs,
   highRiskActionCooldownMs,
   noteProviderPressure,
@@ -54,6 +55,8 @@ export {
   providerPressureCooldownMs,
   resetProviderPressureForTest,
   resetSessionRhythmForTest,
+  submitReadyAfterUploadTimeoutMs,
+  uploadAckTimeoutMaxMs,
   uploadAckTimeoutMsForFiles,
 } from "./timing";
 import { conversationIdFromUrl, resolveConversationUrl } from "./urls";

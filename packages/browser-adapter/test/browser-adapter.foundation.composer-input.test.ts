@@ -10,6 +10,7 @@ import {
   detectBrowserExecutable,
   highRiskActionCooldownMs,
   interactionJitterMs,
+  MAX_COMPOSER_UPLOAD_FILES,
   MAX_UPLOAD_FILE_BYTES,
   noteProviderPressure,
   noteProviderPressureFromText,
@@ -18,6 +19,8 @@ import {
   resetSessionRhythmForTest,
   resolveConversationUrl,
   resolveBrowserLaunchConfig,
+  submitReadyAfterUploadTimeoutMs,
+  uploadAckTimeoutMaxMs,
   uploadAckTimeoutMsForFiles,
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
@@ -136,18 +139,34 @@ describe("browser adapter foundation: composer input handling", () => {
     await adapter.shutdown();
   });
 
+  it("keeps browser upload limits in sync with canonical upload limit metadata", async () => {
+    const raw = await readFile(
+      path.join(process.cwd(), "shared", "upload-limits.json"),
+      "utf8",
+    );
+    const limits = JSON.parse(raw) as {
+      maxUploadFileBytes: number;
+      maxComposerUploadFiles: number;
+    };
+
+    expect(MAX_UPLOAD_FILE_BYTES).toBe(limits.maxUploadFileBytes);
+    expect(MAX_COMPOSER_UPLOAD_FILES).toBe(limits.maxComposerUploadFiles);
+  });
+
   it("scales upload acknowledgment timeout nonlinearly by file size and additional files", () => {
     expect(uploadAckTimeoutMsForFiles([])).toBe(10_000);
     expect(uploadAckTimeoutMsForFiles([0])).toBe(10_000);
-    expect(uploadAckTimeoutMsForFiles([MAX_UPLOAD_FILE_BYTES])).toBe(40_000);
+    expect(uploadAckTimeoutMaxMs()).toBe(65_000);
+    expect(uploadAckTimeoutMsForFiles([MAX_UPLOAD_FILE_BYTES])).toBe(65_000);
     expect(uploadAckTimeoutMsForFiles([MAX_UPLOAD_FILE_BYTES / 4])).toBe(
-      25_000,
+      37_500,
     );
     expect(
       uploadAckTimeoutMsForFiles([
         MAX_UPLOAD_FILE_BYTES,
         MAX_UPLOAD_FILE_BYTES / 4,
       ]),
-    ).toBe(62_500);
+    ).toBe(98_750);
+    expect(submitReadyAfterUploadTimeoutMs()).toBe(120_000);
   });
 });

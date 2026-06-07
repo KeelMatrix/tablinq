@@ -9,6 +9,21 @@ fn fixed_time() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 4, 12, 3, 4, 5).unwrap()
 }
 
+#[test]
+fn upload_limits_match_canonical_metadata() {
+    let raw = include_str!("../../../shared/upload-limits.json");
+    let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
+
+    assert_eq!(
+        MAX_UPLOAD_FILE_BYTES,
+        parsed["maxUploadFileBytes"].as_u64().unwrap()
+    );
+    assert_eq!(
+        MAX_COMPOSER_UPLOAD_FILES,
+        parsed["maxComposerUploadFiles"].as_u64().unwrap() as usize
+    );
+}
+
 fn ask_command_fixture() -> AskCommand {
     AskCommand {
         prompt: "hello".to_owned(),

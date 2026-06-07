@@ -7,8 +7,9 @@ import type { CapabilityReportPayload } from "../contracts";
 import {
   adaptivePollIntervalMs,
   INTERACTION_TIMEOUT_MS,
-  MAX_UPLOAD_FILE_BYTES,
+  maxUploadFileBytes,
   uploadAckTimeoutMsForFiles,
+  uploadFileLimitMiB,
 } from "../timing";
 
 import { callPageAdapter } from "./adapter";
@@ -36,11 +37,15 @@ export async function uploadAttachments(
     return;
   }
 
+  const maxFileBytes = maxUploadFileBytes();
+  const maxFileMiB = uploadFileLimitMiB(maxFileBytes);
   const resolvedFiles = await Promise.all(
     files.map(async (file) => {
       if (typeof file !== "string") {
-        if (file.buffer.length > MAX_UPLOAD_FILE_BYTES) {
-          throw new Error(`upload failed: file exceeds 20 MiB: ${file.name}`);
+        if (file.buffer.length > maxFileBytes) {
+          throw new Error(
+            `upload failed: file exceeds ${maxFileMiB} MiB: ${file.name}`,
+          );
         }
         return {
           input: file,
@@ -55,8 +60,10 @@ export async function uploadAttachments(
       if (!fileStat?.isFile()) {
         throw new Error(`upload failed: file not found: ${absolutePath}`);
       }
-      if (fileStat.size > MAX_UPLOAD_FILE_BYTES) {
-        throw new Error(`upload failed: file exceeds 20 MiB: ${absolutePath}`);
+      if (fileStat.size > maxFileBytes) {
+        throw new Error(
+          `upload failed: file exceeds ${maxFileMiB} MiB: ${absolutePath}`,
+        );
       }
       return {
         input: absolutePath,

@@ -769,12 +769,11 @@ mod tests {
             "scripts/install.ps1 should materialize browser_path from browser discovery"
         );
 
-        for intentionally_not_persisted in ["browser_debug_endpoint"] {
-            assert!(
-                !install_script.contains(&format!("Key = \"{intentionally_not_persisted}\"")),
-                "{intentionally_not_persisted} is derived/optional and should not be materialized by install.ps1"
-            );
-        }
+        let intentionally_not_persisted = "browser_debug_endpoint";
+        assert!(
+            !install_script.contains(&format!("Key = \"{intentionally_not_persisted}\"")),
+            "{intentionally_not_persisted} is derived/optional and should not be materialized by install.ps1"
+        );
 
         assert!(
             install_script.contains("Missing default TOML value for config setting"),

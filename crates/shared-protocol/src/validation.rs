@@ -1,4 +1,4 @@
-use crate::PROTOCOL_VERSION;
+use crate::{MAX_ATTACHMENT_FILES, PROTOCOL_VERSION, max_upload_file_bytes};
 use std::fs;
 use thiserror::Error;
 
@@ -33,9 +33,6 @@ pub enum ValidationError {
         expected: &'static str,
     },
 }
-
-pub(crate) const MAX_ATTACHMENT_FILES: usize = 10;
-pub const MAX_ATTACHMENT_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
 pub(crate) fn validate_exact_version(version: &str) -> Result<(), ValidationError> {
     if version == PROTOCOL_VERSION {
@@ -77,16 +74,17 @@ pub(crate) fn validate_paths(
             found: values.len(),
         });
     }
+    let max_file_bytes = max_upload_file_bytes();
     for value in values {
         validate_required(field, value)?;
         if let Ok(metadata) = fs::metadata(value)
             && metadata.is_file()
-            && metadata.len() > MAX_ATTACHMENT_FILE_BYTES
+            && metadata.len() > max_file_bytes
         {
             return Err(ValidationError::FileTooLarge {
                 field,
                 path: value.clone(),
-                max_bytes: MAX_ATTACHMENT_FILE_BYTES,
+                max_bytes: max_file_bytes,
                 found_bytes: metadata.len(),
             });
         }

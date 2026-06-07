@@ -4,11 +4,10 @@ use crate::db::{NativeUploadBudgetRequest, NativeUploadBudgetReservation};
 use anyhow::Result;
 use chrono::Utc;
 use shared_protocol::{
-    AskCommand, ErrorCode, NativeUploadRateLimitDiagnostic, ResearchCommand,
-    USER_PROMPT_INLINE_FALLBACK_THRESHOLD_CHARS, USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
+    AskCommand, ErrorCode, MAX_COMPOSER_UPLOAD_FILES, NativeUploadRateLimitDiagnostic,
+    ResearchCommand, USER_PROMPT_INLINE_FALLBACK_THRESHOLD_CHARS,
+    USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
 };
-
-const MAX_COMPOSER_UPLOAD_FILES: usize = 10;
 pub(in crate::core) const NATIVE_UPLOAD_SCOPE_KEY: &str = "chatgpt-native-browser-session";
 
 impl CoreService {

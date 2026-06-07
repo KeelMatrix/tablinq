@@ -7,7 +7,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub(crate) const MAX_STAGED_UPLOAD_BYTES: usize = 50 * 1024 * 1024;
+pub(crate) fn max_staged_upload_bytes() -> usize {
+    shared_protocol::max_upload_file_bytes() as usize
+}
+
+pub(crate) fn max_staged_upload_mib() -> usize {
+    max_staged_upload_bytes() / (1024 * 1024)
+}
+
+pub(crate) fn staged_upload_limit_message(prefix: &str) -> String {
+    format!("{prefix} {} MiB limit", max_staged_upload_mib())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct StagedFileMetadata {
@@ -52,8 +62,8 @@ impl UploadStore {
         body: &[u8],
     ) -> Result<StagedFileMetadata> {
         self.cleanup_expired()?;
-        if body.len() > MAX_STAGED_UPLOAD_BYTES {
-            anyhow::bail!("upload exceeds 50 MiB limit");
+        if body.len() > max_staged_upload_bytes() {
+            anyhow::bail!(staged_upload_limit_message("upload exceeds"));
         }
 
         let safe_name = sanitize_upload_file_name(file_name);

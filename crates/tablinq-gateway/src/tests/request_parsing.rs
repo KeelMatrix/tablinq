@@ -4,7 +4,7 @@ use crate::routes::{
     V1_BROWSER_PROFILE_INFO_PATH, V1_CONFIG_PATH, V1_DOCTOR_PATH, V1_JOBS_PATH, V1_REQUESTS_PATH,
     V1_STATUS_PATH,
 };
-use crate::uploads::MAX_STAGED_UPLOAD_BYTES;
+use crate::uploads::max_staged_upload_bytes;
 
 #[test]
 fn non_upload_body_over_limit_returns_413_before_body_read() {
@@ -160,7 +160,7 @@ fn declared_upload_over_limit_preserves_fifty_mib_cap_response() {
         &auth,
         "oversize.bin",
         "application/octet-stream",
-        MAX_STAGED_UPLOAD_BYTES + 1,
+        max_staged_upload_bytes() + 1,
     );
     assert_eq!(response.status_code, 413);
     assert_eq!(response.reason_phrase, "Payload Too Large");

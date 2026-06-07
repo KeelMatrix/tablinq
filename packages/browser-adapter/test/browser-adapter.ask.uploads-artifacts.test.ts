@@ -436,7 +436,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
     await adapter.shutdown();
   });
 
-  it("rejects files larger than 20 MiB before upload", async () => {
+  it("rejects files larger than the canonical upload limit before upload", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");
     const fixture = path.join(root, "oversize.bin");
@@ -460,7 +460,7 @@ describe("browser adapter ask: uploads and artifacts", () => {
         },
         () => {},
       ),
-    ).rejects.toThrow(/file exceeds 20 MiB/i);
+    ).rejects.toThrow(/file exceeds 50 MiB/i);
 
     await adapter.shutdown();
   });
