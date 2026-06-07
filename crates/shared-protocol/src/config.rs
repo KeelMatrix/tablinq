@@ -59,5 +59,9 @@ pub struct ConfigSnapshot {
     pub browser_auto_open_target_tab: bool,
     pub native_upload_limit_count: u32,
     pub native_upload_limit_window_minutes: u32,
+    pub chatgpt_instant_message_limit_count: u32,
+    pub chatgpt_instant_message_limit_window_minutes: u32,
+    pub chatgpt_thinking_message_limit_count: u32,
+    pub chatgpt_thinking_message_limit_window_minutes: u32,
     pub gateway: GatewayConfigSnapshot,
 }

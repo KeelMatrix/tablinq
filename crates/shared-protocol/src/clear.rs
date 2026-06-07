@@ -12,6 +12,7 @@ pub struct ClearStateResult {
     pub artifact_links_deleted: u64,
     pub failure_bundles_deleted: u64,
     pub native_upload_attempts_deleted: u64,
+    pub chatgpt_message_attempts_deleted: u64,
     pub artifact_files_deleted: u64,
     pub artifact_files_missing: u64,
     pub artifact_files_failed: u64,
@@ -28,5 +29,6 @@ impl ClearStateResult {
             + self.artifact_links_deleted
             + self.failure_bundles_deleted
             + self.native_upload_attempts_deleted
+            + self.chatgpt_message_attempts_deleted
     }
 }

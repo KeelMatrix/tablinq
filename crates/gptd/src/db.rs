@@ -1,4 +1,5 @@
 mod artifacts;
+mod chatgpt_messages;
 mod clear;
 mod conversations;
 mod failure_bundles;
@@ -21,6 +22,7 @@ use shared_protocol::{
 };
 use std::path::Path;
 
+pub(crate) use chatgpt_messages::{ChatGptMessageBudgetRequest, ChatGptMessageBudgetReservation};
 pub use gateway_http::{
     GATEWAY_HTTP_BODY_CAPTURE_LIMIT, GATEWAY_HTTP_STREAMING_RESPONSE_REASON,
     GatewayHttpCapturedBody, GatewayHttpRequestFinish, GatewayHttpRequestRecord,
@@ -59,6 +61,27 @@ impl Database {
         migrations::count(&self.conn)
     }
 
+    pub(crate) fn reserve_chatgpt_message_budget(
+        &mut self,
+        request: ChatGptMessageBudgetRequest<'_>,
+    ) -> Result<ChatGptMessageBudgetReservation> {
+        chatgpt_messages::reserve(&mut self.conn, request)
+    }
+
+    pub(crate) fn reset_chatgpt_message_budget(&mut self, scope_key: &str) -> Result<u64> {
+        chatgpt_messages::reset(&mut self.conn, scope_key)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn current_chatgpt_messages_charged(
+        &self,
+        scope_key: &str,
+        window_minutes: u32,
+        now: DateTime<Utc>,
+    ) -> Result<u32> {
+        chatgpt_messages::current_charged_messages(&self.conn, scope_key, window_minutes, now)
+    }
+
     pub(crate) fn reserve_native_upload_budget(
         &mut self,
         request: NativeUploadBudgetRequest<'_>,
@@ -74,6 +97,10 @@ impl Database {
         now: DateTime<Utc>,
     ) -> Result<u32> {
         native_uploads::current_charged_uploads(&self.conn, scope_key, window_minutes, now)
+    }
+
+    pub(crate) fn reset_native_upload_budget(&mut self, scope_key: &str) -> Result<u64> {
+        native_uploads::reset(&mut self.conn, scope_key)
     }
 
     pub fn clear_all_state(&mut self) -> Result<DatabaseClearStateResult> {

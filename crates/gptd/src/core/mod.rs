@@ -1,5 +1,6 @@
 mod artifact_operations;
 mod ask;
+mod chatgpt_message_limit;
 mod conversation_inspection;
 mod job_operations;
 mod lifecycle;

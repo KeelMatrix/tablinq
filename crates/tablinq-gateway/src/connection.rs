@@ -211,6 +211,11 @@ pub(crate) fn handle_connection(
             Route::JobDetail => requests::handle_job_detail_request(core, &context)?,
             Route::JobCancel => requests::handle_job_cancel_request(core, &context)?,
             Route::Usage => metadata::handle_usage_request(core, &context)?,
+            Route::RateLimitsReset => health_admin::handle_rate_limits_reset_request(
+                core,
+                &context.request.body,
+                &context.request_id,
+            )?,
             Route::BrowserAttach => browser::handle_browser_attach_request(
                 core,
                 &context.request.body,

@@ -41,6 +41,7 @@ impl CoreService {
         ensure_prompt_execution_allowed(&self.config)?;
         command.validate().context("validate ask command")?;
         self.apply_native_upload_budget_to_ask(&mut command)?;
+        self.apply_chatgpt_message_budget_to_ask(&command)?;
 
         let db = self.open_db()?;
         let prepared = prepare_job_record(

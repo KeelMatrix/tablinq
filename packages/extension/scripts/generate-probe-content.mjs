@@ -32,7 +32,9 @@ function stripRuntimeModuleSyntax(source) {
 
 function readBundledRuntimeSource() {
   return runtimeModulePaths
-    .map((modulePath) => stripRuntimeModuleSyntax(readFileSync(modulePath, "utf8")))
+    .map((modulePath) =>
+      stripRuntimeModuleSyntax(readFileSync(modulePath, "utf8")),
+    )
     .join("\n\n");
 }
 

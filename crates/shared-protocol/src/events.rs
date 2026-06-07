@@ -23,6 +23,7 @@ pub enum ErrorCode {
     ProviderStoppedThinking,
     ProviderConversationLoadFailed,
     NativeUploadRateLimited,
+    ChatGptMessageRateLimited,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

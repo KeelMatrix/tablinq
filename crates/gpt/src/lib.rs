@@ -20,8 +20,8 @@ use crate::terminal::{
 
 pub use crate::cli::{
     ArtifactsCommand, AskArgs, BrowserCommand, ClearArgs, Cli, CliEffort, CliMode, CliModelClass,
-    Command, ConfigCommand, ConversationsCommand, DaemonCommand, GatewayCommand, JobsCommand,
-    ResearchArgs, SessionsCommand, VersionArgs,
+    CliRateLimitBucket, Command, ConfigCommand, ConversationsCommand, DaemonCommand,
+    GatewayCommand, JobsCommand, RateLimitCommand, ResearchArgs, SessionsCommand, VersionArgs,
 };
 pub use crate::terminal::format_cli_error;
 
@@ -74,6 +74,11 @@ fn execute(cli: &Cli) -> Result<CliExecution> {
         },
         Command::Config { command } => match command {
             ConfigCommand::Show => Ok(CliExecution::Json(config_show(cli.state_root.as_deref())?)),
+        },
+        Command::RateLimit { command } => match command {
+            RateLimitCommand::Reset { bucket } => {
+                run_rate_limit_reset_command(cli.state_root.as_deref(), *bucket)
+            }
         },
         Command::Sessions { command } => match command {
             SessionsCommand::List => Ok(CliExecution::Json(send_daemon_request(
@@ -152,6 +157,24 @@ fn execute(cli: &Cli) -> Result<CliExecution> {
             command,
         )?)),
     }
+}
+
+fn run_rate_limit_reset_command(
+    state_root: Option<&Path>,
+    bucket: CliRateLimitBucket,
+) -> Result<CliExecution> {
+    let request = DaemonRequest::ResetRateLimit(crate::cli::build_reset_rate_limit_command(bucket));
+    let response = send_daemon_response(state_root, request)?;
+    if let shared_protocol::DaemonResponse::Error(error) = &response {
+        anyhow::bail!("{}", error.message);
+    }
+    let shared_protocol::DaemonResponse::ResetRateLimit(result) = response else {
+        anyhow::bail!("unexpected rate-limit reset response: {response:?}");
+    };
+    Ok(CliExecution::Text(format!(
+        "Reset {:?} rate limit: {} attempts deleted.",
+        result.bucket, result.deleted_attempts
+    )))
 }
 
 fn render_conversations_list(state_root: Option<&Path>) -> Result<CliExecution> {
@@ -253,6 +276,15 @@ mod tests {
     use std::thread;
     use std::time::Duration;
     use tempfile::tempdir;
+
+    #[test]
+    fn build_rate_limit_reset_maps_file_upload_bucket() {
+        let command = crate::cli::build_reset_rate_limit_command(CliRateLimitBucket::FileUpload);
+        assert_eq!(
+            command.bucket,
+            shared_protocol::RateLimitBucket::NativeUpload
+        );
+    }
 
     #[test]
     fn clear_command_refuses_without_all_and_force() {

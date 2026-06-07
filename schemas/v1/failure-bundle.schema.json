@@ -36,7 +36,9 @@
         "research_job_failed",
         "provider_generation_failed_nonretryable",
         "provider_stopped_thinking",
-        "provider_conversation_load_failed"
+        "provider_conversation_load_failed",
+        "native_upload_rate_limited",
+        "chatgpt_message_rate_limited"
       ]
     },
     "message": { "type": "string", "minLength": 1 },

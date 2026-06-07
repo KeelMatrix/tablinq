@@ -34,10 +34,44 @@ Recommended posture:
 - keep `max_parallel_requests = 1`
 - keep `max_parallel_branches = 1`
 - keep subagents disabled by default
-- keep Tablinq's native upload limiter enabled; CLI and gateway requests share the same rolling browser-session budget
+- keep Tablinq's ChatGPT message and native upload limiters enabled; CLI and gateway requests share the same persisted rolling budgets
 - `stream = true` is accepted for OpenAI-compatible SSE framing, but Tablinq waits for the finalized browser-backed response and emits final-only chunks; it never streams live partial ChatGPT drafts
 - set client timeouts above Tablinq's own upstream timeouts
 - expect small built-in browser interaction jitters and a longer pre-submit jitter; they exist to keep browser-driven actions closer to human pacing and reduce provider countermeasures
+
+## ChatGPT message budget
+
+Tablinq tracks browser-backed ChatGPT message submissions in the shared SQLite state used by the CLI, daemon, and gateway. The counters are persisted, so process restarts and crashes on the same machine do not reset local budget state.
+
+Default `config/config.toml` settings:
+
+```toml
+chatgpt_instant_message_limit_count = 150
+chatgpt_instant_message_limit_window_minutes = 180
+chatgpt_thinking_message_limit_count = 2900
+chatgpt_thinking_message_limit_window_minutes = 10080
+```
+
+The Thinking budget is shared by `tablinq-thinking-standard` and `tablinq-thinking-extended`; OpenAI documents Standard and Extended as thinking-time choices, not separate usage pools. OpenAI's [GPT-5.5 in ChatGPT](https://help.openai.com/en/articles/11909943-gpt-5-in-chatgpt) currently says ChatGPT Plus and Go users can send up to 160 GPT-5.5 messages every 3 hours, Plus and Business users can manually select GPT-5.5 Thinking, Go users can send up to 10 Thinking messages every 5 hours after enabling Thinking, and automatic Instant-to-Thinking switching does not count toward manual Thinking limits. OpenAI [release notes](https://help.openai.com/en/articles/6825453-chatgpt-release-notes) have also stated Plus users have 3,000 GPT-5 Thinking messages per week, so Tablinq's 2,900/week default leaves headroom for manual usage and provider-side variance.
+
+Tablinq does not enforce a hard maximum for these settings. Set the counts and windows to match the signed-in account you are using, keeping some headroom for manual ChatGPT usage and provider-side variance. When the rolling budget is exhausted, Tablinq returns a rate-limit error with the bucket, configured limit/window, current charged messages, attempted cost, remaining time until release, and reset timestamp.
+
+Manual resets are available through the CLI and gateway API:
+
+```pwsh
+gpt rate-limit reset instant
+gpt rate-limit reset thinking
+gpt rate-limit reset file-upload
+```
+
+```http
+POST /v1/rate-limits/reset
+Content-Type: application/json
+
+{"bucket":"instant"}
+```
+
+Use `"thinking"` for the shared Thinking budget and `"native_upload"` for the file upload budget.
 
 ## Native upload budget
 
@@ -78,6 +112,7 @@ If the only would-be upload is a generated prompt text file, there are no explic
 - `POST /v1/conversations/select`
 - `GET /v1/sessions/{session_id}/conversations`
 - `POST /v1/chat/completions`
+- `POST /v1/rate-limits/reset`
 - `POST /v1/files`
 - `GET /v1/files`
 - `GET /v1/files/{id}`
@@ -86,7 +121,7 @@ If the only would-be upload is a generated prompt text file, there are no explic
 - `GET /v1/artifacts/{id}/content`
 - `POST /v1/requests/{request_id}/cancel`
 
-`POST /admin/shutdown` and `POST /admin/clear` are administrative operations. `POST /admin/clear` is destructive and requires an authenticated JSON body of `{"all":true,"force":true}`.
+`POST /admin/shutdown`, `POST /admin/clear`, and `POST /v1/rate-limits/reset` are administrative operations. `POST /admin/clear` is destructive and requires an authenticated JSON body of `{"all":true,"force":true}`.
 
 ## Response size controls
 

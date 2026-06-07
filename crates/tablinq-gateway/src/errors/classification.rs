@@ -23,6 +23,14 @@ pub(crate) fn map_openai_error_parts(
                 metadata.message,
             );
         }
+        if metadata.error_code == ErrorCode::ChatGptMessageRateLimited {
+            return (
+                429,
+                "rate_limit_error",
+                "chatgpt_message_budget_exhausted",
+                metadata.message,
+            );
+        }
         if matches!(
             metadata.error_code,
             ErrorCode::ProviderGenerationFailedNonretryable
@@ -92,6 +100,12 @@ pub(crate) fn map_openai_error_parts(
             429,
             "rate_limit_error",
             "native_upload_budget_exhausted",
+            message,
+        ),
+        ErrorCode::ChatGptMessageRateLimited => (
+            429,
+            "rate_limit_error",
+            "chatgpt_message_budget_exhausted",
             message,
         ),
         ErrorCode::DownloadFailed => (502, "provider_error", "download_failed", message),

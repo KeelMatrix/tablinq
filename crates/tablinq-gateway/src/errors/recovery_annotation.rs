@@ -100,6 +100,12 @@ pub(crate) fn annotate_openai_error_value(
         value["tablinq_native_upload_budget"] =
             serde_json::to_value(diagnostic).unwrap_or_else(|_| json!({}));
     }
+    if let Some(diagnostic) =
+        execution_metadata.and_then(|item| item.chatgpt_message_rate_limit.as_ref())
+    {
+        value["tablinq_chatgpt_message_budget"] =
+            serde_json::to_value(diagnostic).unwrap_or_else(|_| json!({}));
+    }
     let guidance = provider_guidance_for_code(code);
     if !guidance.is_empty() {
         value["tablinq_guidance"] = json!(guidance);
@@ -125,7 +131,8 @@ mod tests {
     use gptd::browser::{ExecutionErrorMetadata, execution_error};
     use serde_json::Value;
     use shared_protocol::{
-        Effort, ErrorCode, Mode, ModelClass, RecoveryPacket, RecoveryStrategy, RecoveryTrace,
+        ChatGptMessageRateLimitDiagnostic, Effort, ErrorCode, Mode, ModelClass, RateLimitBucket,
+        RecoveryPacket, RecoveryStrategy, RecoveryTrace,
     };
 
     fn assert_no_cli_display_markers(value: &str) {
@@ -159,6 +166,44 @@ mod tests {
                 .is_some_and(|items| !items.is_empty())
         );
         assert_no_cli_display_markers(&String::from_utf8(response.body).unwrap());
+    }
+
+    #[test]
+    fn chatgpt_message_rate_limit_errors_map_to_openai_429_and_include_budget() {
+        let diagnostic = ChatGptMessageRateLimitDiagnostic {
+            bucket: RateLimitBucket::Thinking,
+            configured_limit: 2_900,
+            window_minutes: 10_080,
+            messages_currently_charged: 2_900,
+            attempted_message_cost: 1,
+            remaining_seconds_until_release: 600,
+            reset_at: chrono::DateTime::parse_from_rfc3339("2026-06-07T01:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        };
+        let err = execution_error(
+            ExecutionErrorMetadata::new(
+                ErrorCode::ChatGptMessageRateLimited,
+                "Tablinq's ChatGPT thinking message budget is exhausted",
+                None,
+            )
+            .with_chatgpt_message_rate_limit(diagnostic),
+        );
+
+        let body = map_openai_error_value("req-rate", &err, None);
+
+        assert_eq!(body["status"], 429);
+        assert_eq!(body["error"]["type"], "rate_limit_error");
+        assert_eq!(body["error"]["code"], "chatgpt_message_budget_exhausted");
+        assert_eq!(body["tablinq_chatgpt_message_budget"]["bucket"], "thinking");
+        assert_eq!(
+            body["tablinq_chatgpt_message_budget"]["configured_limit"],
+            2_900
+        );
+        assert_eq!(
+            body["tablinq_chatgpt_message_budget"]["messages_currently_charged"],
+            2_900
+        );
     }
 
     #[test]

@@ -211,6 +211,20 @@ pub(crate) const MIGRATIONS: &[(&str, &str)] = &[
             ON native_upload_attempts(scope_key, charged_at);
         "#,
     ),
+    (
+        "0012_chatgpt_message_attempts",
+        r#"
+        CREATE TABLE IF NOT EXISTS chatgpt_message_attempts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope_key TEXT NOT NULL,
+            message_count INTEGER NOT NULL,
+            charged_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS chatgpt_message_attempts_scope_charged_at_idx
+            ON chatgpt_message_attempts(scope_key, charged_at);
+        "#,
+    ),
 ];
 
 pub(crate) fn apply(conn: &Connection) -> Result<()> {

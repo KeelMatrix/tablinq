@@ -16,6 +16,7 @@ pub(super) fn clear_all_state(conn: &mut Connection) -> Result<DatabaseClearStat
         artifact_links_deleted: count_rows(&tx, "job_artifacts")?,
         failure_bundles_deleted: count_rows(&tx, "failure_bundles")?,
         native_upload_attempts_deleted: count_rows(&tx, "native_upload_attempts")?,
+        chatgpt_message_attempts_deleted: count_rows(&tx, "chatgpt_message_attempts")?,
         artifact_files_deleted: 0,
         artifact_files_missing: 0,
         artifact_files_failed: 0,
@@ -30,6 +31,7 @@ pub(super) fn clear_all_state(conn: &mut Connection) -> Result<DatabaseClearStat
     tx.execute("DELETE FROM sessions", [])?;
     tx.execute("DELETE FROM failure_bundles", [])?;
     tx.execute("DELETE FROM native_upload_attempts", [])?;
+    tx.execute("DELETE FROM chatgpt_message_attempts", [])?;
     tx.commit()?;
 
     Ok(DatabaseClearStateResult {

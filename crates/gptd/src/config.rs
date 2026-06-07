@@ -1,9 +1,13 @@
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use shared_protocol::{
-    BrowserConnectionMode, CONFIG_VERSION, ConfigSnapshot, GatewayConfigSnapshot,
-    NATIVE_UPLOAD_LIMIT_DEFAULT_COUNT, NATIVE_UPLOAD_LIMIT_DEFAULT_WINDOW_MINUTES,
-    NATIVE_UPLOAD_LIMIT_HARD_MAX_COUNT, StatePaths, build_state_paths, resolve_state_root,
+    BrowserConnectionMode, CHATGPT_INSTANT_MESSAGE_LIMIT_DEFAULT_COUNT,
+    CHATGPT_INSTANT_MESSAGE_LIMIT_DEFAULT_WINDOW_MINUTES,
+    CHATGPT_THINKING_MESSAGE_LIMIT_DEFAULT_COUNT,
+    CHATGPT_THINKING_MESSAGE_LIMIT_DEFAULT_WINDOW_MINUTES, CONFIG_VERSION, ConfigSnapshot,
+    GatewayConfigSnapshot, NATIVE_UPLOAD_LIMIT_DEFAULT_COUNT,
+    NATIVE_UPLOAD_LIMIT_DEFAULT_WINDOW_MINUTES, NATIVE_UPLOAD_LIMIT_HARD_MAX_COUNT, StatePaths,
+    build_state_paths, resolve_state_root,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,6 +47,10 @@ pub struct FileConfig {
     pub browser_submit_jitter_max_ms: Option<u64>,
     pub native_upload_limit_count: Option<u32>,
     pub native_upload_limit_window_minutes: Option<u32>,
+    pub chatgpt_instant_message_limit_count: Option<u32>,
+    pub chatgpt_instant_message_limit_window_minutes: Option<u32>,
+    pub chatgpt_thinking_message_limit_count: Option<u32>,
+    pub chatgpt_thinking_message_limit_window_minutes: Option<u32>,
     pub gateway: Option<GatewayFileConfig>,
 }
 
@@ -91,6 +99,12 @@ impl AppConfig {
             browser_auto_open_target_tab: self.browser_auto_open_target_tab(),
             native_upload_limit_count: self.native_upload_limit_count(),
             native_upload_limit_window_minutes: self.native_upload_limit_window_minutes(),
+            chatgpt_instant_message_limit_count: self.chatgpt_instant_message_limit_count(),
+            chatgpt_instant_message_limit_window_minutes: self
+                .chatgpt_instant_message_limit_window_minutes(),
+            chatgpt_thinking_message_limit_count: self.chatgpt_thinking_message_limit_count(),
+            chatgpt_thinking_message_limit_window_minutes: self
+                .chatgpt_thinking_message_limit_window_minutes(),
             gateway: GatewayConfigSnapshot {
                 host: self.gateway_host().to_owned(),
                 port: self.gateway_port(),
@@ -204,6 +218,30 @@ impl AppConfig {
         self.file
             .native_upload_limit_window_minutes
             .unwrap_or(NATIVE_UPLOAD_LIMIT_DEFAULT_WINDOW_MINUTES)
+    }
+
+    pub fn chatgpt_instant_message_limit_count(&self) -> u32 {
+        self.file
+            .chatgpt_instant_message_limit_count
+            .unwrap_or(CHATGPT_INSTANT_MESSAGE_LIMIT_DEFAULT_COUNT)
+    }
+
+    pub fn chatgpt_instant_message_limit_window_minutes(&self) -> u32 {
+        self.file
+            .chatgpt_instant_message_limit_window_minutes
+            .unwrap_or(CHATGPT_INSTANT_MESSAGE_LIMIT_DEFAULT_WINDOW_MINUTES)
+    }
+
+    pub fn chatgpt_thinking_message_limit_count(&self) -> u32 {
+        self.file
+            .chatgpt_thinking_message_limit_count
+            .unwrap_or(CHATGPT_THINKING_MESSAGE_LIMIT_DEFAULT_COUNT)
+    }
+
+    pub fn chatgpt_thinking_message_limit_window_minutes(&self) -> u32 {
+        self.file
+            .chatgpt_thinking_message_limit_window_minutes
+            .unwrap_or(CHATGPT_THINKING_MESSAGE_LIMIT_DEFAULT_WINDOW_MINUTES)
     }
 
     pub fn gateway_host(&self) -> &str {
@@ -408,6 +446,22 @@ fn normalize_file_config(mut file: FileConfig) -> FileConfig {
     if file.native_upload_limit_window_minutes.is_none() {
         file.native_upload_limit_window_minutes = Some(NATIVE_UPLOAD_LIMIT_DEFAULT_WINDOW_MINUTES);
     }
+    if file.chatgpt_instant_message_limit_count.is_none() {
+        file.chatgpt_instant_message_limit_count =
+            Some(CHATGPT_INSTANT_MESSAGE_LIMIT_DEFAULT_COUNT);
+    }
+    if file.chatgpt_instant_message_limit_window_minutes.is_none() {
+        file.chatgpt_instant_message_limit_window_minutes =
+            Some(CHATGPT_INSTANT_MESSAGE_LIMIT_DEFAULT_WINDOW_MINUTES);
+    }
+    if file.chatgpt_thinking_message_limit_count.is_none() {
+        file.chatgpt_thinking_message_limit_count =
+            Some(CHATGPT_THINKING_MESSAGE_LIMIT_DEFAULT_COUNT);
+    }
+    if file.chatgpt_thinking_message_limit_window_minutes.is_none() {
+        file.chatgpt_thinking_message_limit_window_minutes =
+            Some(CHATGPT_THINKING_MESSAGE_LIMIT_DEFAULT_WINDOW_MINUTES);
+    }
     let gateway = file.gateway.get_or_insert_with(GatewayFileConfig::default);
     if gateway.host.is_none() {
         gateway.host = Some("127.0.0.1".to_owned());
@@ -462,6 +516,40 @@ fn validate_file_config(file: &FileConfig) -> Result<()> {
         .unwrap_or(NATIVE_UPLOAD_LIMIT_DEFAULT_WINDOW_MINUTES);
     if window_minutes == 0 {
         bail!("config.toml native_upload_limit_window_minutes must be at least 1");
+    }
+    validate_positive_limit(
+        "chatgpt_instant_message_limit_count",
+        file.chatgpt_instant_message_limit_count
+            .unwrap_or(CHATGPT_INSTANT_MESSAGE_LIMIT_DEFAULT_COUNT),
+    )?;
+    validate_positive_window(
+        "chatgpt_instant_message_limit_window_minutes",
+        file.chatgpt_instant_message_limit_window_minutes
+            .unwrap_or(CHATGPT_INSTANT_MESSAGE_LIMIT_DEFAULT_WINDOW_MINUTES),
+    )?;
+    validate_positive_limit(
+        "chatgpt_thinking_message_limit_count",
+        file.chatgpt_thinking_message_limit_count
+            .unwrap_or(CHATGPT_THINKING_MESSAGE_LIMIT_DEFAULT_COUNT),
+    )?;
+    validate_positive_window(
+        "chatgpt_thinking_message_limit_window_minutes",
+        file.chatgpt_thinking_message_limit_window_minutes
+            .unwrap_or(CHATGPT_THINKING_MESSAGE_LIMIT_DEFAULT_WINDOW_MINUTES),
+    )?;
+    Ok(())
+}
+
+fn validate_positive_limit(field: &str, value: u32) -> Result<()> {
+    if value == 0 {
+        bail!("config.toml {field} must be at least 1");
+    }
+    Ok(())
+}
+
+fn validate_positive_window(field: &str, value: u32) -> Result<()> {
+    if value == 0 {
+        bail!("config.toml {field} must be at least 1");
     }
     Ok(())
 }
@@ -519,6 +607,13 @@ mod tests {
         assert_eq!(config.browser_submit_jitter_max_ms(), 2_500);
         assert_eq!(config.native_upload_limit_count(), 65);
         assert_eq!(config.native_upload_limit_window_minutes(), 180);
+        assert_eq!(config.chatgpt_instant_message_limit_count(), 150);
+        assert_eq!(config.chatgpt_instant_message_limit_window_minutes(), 180);
+        assert_eq!(config.chatgpt_thinking_message_limit_count(), 2_900);
+        assert_eq!(
+            config.chatgpt_thinking_message_limit_window_minutes(),
+            10_080
+        );
         assert_eq!(config.gateway_host(), "127.0.0.1");
         assert_eq!(config.gateway_port(), 3847);
         assert_eq!(config.gateway_max_concurrent_upstream_jobs(), 1);
@@ -552,6 +647,16 @@ mod tests {
         assert_eq!(parsed.browser_submit_jitter_max_ms, Some(2_500));
         assert_eq!(parsed.native_upload_limit_count, Some(65));
         assert_eq!(parsed.native_upload_limit_window_minutes, Some(180));
+        assert_eq!(parsed.chatgpt_instant_message_limit_count, Some(150));
+        assert_eq!(
+            parsed.chatgpt_instant_message_limit_window_minutes,
+            Some(180)
+        );
+        assert_eq!(parsed.chatgpt_thinking_message_limit_count, Some(2_900));
+        assert_eq!(
+            parsed.chatgpt_thinking_message_limit_window_minutes,
+            Some(10_080)
+        );
         assert_eq!(
             parsed.gateway.as_ref().and_then(|value| value.port),
             Some(3847)
@@ -642,6 +747,44 @@ native_upload_limit_count = 81
     }
 
     #[test]
+    fn parse_file_config_rejects_zero_chatgpt_message_limits() {
+        for field in [
+            "chatgpt_instant_message_limit_count",
+            "chatgpt_instant_message_limit_window_minutes",
+            "chatgpt_thinking_message_limit_count",
+            "chatgpt_thinking_message_limit_window_minutes",
+        ] {
+            let err = parse_file_config(&format!(
+                r#"
+version = 2
+{field} = 0
+"#
+            ))
+            .unwrap_err();
+
+            assert!(
+                format!("{err:#}").contains(&format!("{field} must be at least 1")),
+                "{field} should reject zero"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_file_config_allows_large_chatgpt_message_limits() {
+        let parsed = parse_file_config(
+            r#"
+version = 2
+chatgpt_instant_message_limit_count = 1000000
+chatgpt_thinking_message_limit_count = 1000000
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.chatgpt_instant_message_limit_count, Some(1_000_000));
+        assert_eq!(parsed.chatgpt_thinking_message_limit_count, Some(1_000_000));
+    }
+
+    #[test]
     fn require_gateway_api_key_rejects_blank_value() {
         let dir = tempdir().unwrap();
         let mut config = AppConfig::load_or_create(Some(dir.path())).unwrap();
@@ -673,6 +816,10 @@ native_upload_limit_count = 81
                 browser_submit_jitter_max_ms: None,
                 native_upload_limit_count: None,
                 native_upload_limit_window_minutes: None,
+                chatgpt_instant_message_limit_count: None,
+                chatgpt_instant_message_limit_window_minutes: None,
+                chatgpt_thinking_message_limit_count: None,
+                chatgpt_thinking_message_limit_window_minutes: None,
                 gateway: None,
             };
             let normalized = super::normalize_file_config(file.clone());

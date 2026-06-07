@@ -239,6 +239,9 @@ fn handle_request(core: &CoreService, request: DaemonRequest) -> Result<DaemonRe
             DaemonResponse::ArtifactPull(core.pull_artifact(command)?)
         }
         DaemonRequest::ClearAllState => DaemonResponse::ClearState(core.clear_all_state()?),
+        DaemonRequest::ResetRateLimit(command) => {
+            DaemonResponse::ResetRateLimit(core.reset_rate_limit(command)?)
+        }
         DaemonRequest::BrowserOpen(request) => DaemonResponse::Browser(core.browser_open(request)?),
         DaemonRequest::BrowserClose => DaemonResponse::Browser(core.browser_close()?),
         DaemonRequest::BrowserProfileInfo => DaemonResponse::Browser(core.browser_profile_info()?),
@@ -253,6 +256,7 @@ fn map_error(err: anyhow::Error) -> DaemonResponse {
             recovery_trace: metadata.recovery_trace,
             recovery_packet: metadata.recovery_packet,
             native_upload_rate_limit: metadata.native_upload_rate_limit,
+            chatgpt_message_rate_limit: metadata.chatgpt_message_rate_limit,
         });
     }
     let message = format!("{err:#}");
@@ -262,6 +266,7 @@ fn map_error(err: anyhow::Error) -> DaemonResponse {
         recovery_trace: None,
         recovery_packet: None,
         native_upload_rate_limit: None,
+        chatgpt_message_rate_limit: None,
     })
 }
 

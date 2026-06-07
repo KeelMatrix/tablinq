@@ -9,7 +9,7 @@ use shared_protocol::{
 };
 
 const MAX_COMPOSER_UPLOAD_FILES: usize = 10;
-const NATIVE_UPLOAD_SCOPE_KEY: &str = "chatgpt-native-browser-session";
+pub(in crate::core) const NATIVE_UPLOAD_SCOPE_KEY: &str = "chatgpt-native-browser-session";
 
 impl CoreService {
     pub(super) fn apply_native_upload_budget_to_ask(&self, command: &mut AskCommand) -> Result<()> {
@@ -287,6 +287,23 @@ mod tests {
         assert!(message.contains("attempted upload cost 1"));
         assert!(message.contains("remaining time until release 01:01:01"));
         assert!(message.contains("reset timestamp 2026-06-04T12:34:56+00:00"));
+    }
+
+    #[test]
+    fn reset_native_upload_budget_clears_upload_attempts() {
+        let (_dir, core) = test_core(3);
+        core.prepare_ask(ask_command("ask".to_owned(), vec!["one.txt".to_owned()]))
+            .unwrap();
+        assert_eq!(core.current_native_upload_charged_uploads().unwrap(), 1);
+
+        let result = core
+            .reset_rate_limit(shared_protocol::ResetRateLimitCommand {
+                bucket: shared_protocol::RateLimitBucket::NativeUpload,
+            })
+            .unwrap();
+
+        assert_eq!(result.deleted_attempts, 1);
+        assert_eq!(core.current_native_upload_charged_uploads().unwrap(), 0);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use shared_protocol::{
-    AskCommand, ConversationSelectCommand, Effort, Mode, ModelClass, ResearchCommand,
+    AskCommand, ConversationSelectCommand, Effort, Mode, ModelClass, RateLimitBucket,
+    ResearchCommand, ResetRateLimitCommand,
 };
 use std::path::PathBuf;
 
@@ -33,6 +34,10 @@ pub enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+    RateLimit {
+        #[command(subcommand)]
+        command: RateLimitCommand,
     },
     Sessions {
         #[command(subcommand)]
@@ -113,6 +118,14 @@ pub enum GatewayCommand {
 #[derive(Debug, Subcommand, PartialEq, Eq)]
 pub enum ConfigCommand {
     Show,
+}
+
+#[derive(Debug, Subcommand, PartialEq, Eq)]
+pub enum RateLimitCommand {
+    Reset {
+        #[arg(value_enum)]
+        bucket: CliRateLimitBucket,
+    },
 }
 
 #[derive(Debug, Subcommand, PartialEq, Eq)]
@@ -210,6 +223,14 @@ pub enum CliEffort {
     Extended,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum CliRateLimitBucket {
+    Instant,
+    Thinking,
+    #[value(name = "file-upload", alias = "native-upload", alias = "upload")]
+    FileUpload,
+}
+
 pub(crate) fn build_ask_command(args: &AskArgs) -> AskCommand {
     AskCommand {
         prompt: args.prompt.clone(),
@@ -229,6 +250,16 @@ pub(crate) fn build_ask_command(args: &AskArgs) -> AskCommand {
             .collect(),
         prompt_upload_threshold_chars: None,
         auto_recover_provider_generation_failure: true,
+    }
+}
+
+pub(crate) fn build_reset_rate_limit_command(bucket: CliRateLimitBucket) -> ResetRateLimitCommand {
+    ResetRateLimitCommand {
+        bucket: match bucket {
+            CliRateLimitBucket::Instant => RateLimitBucket::Instant,
+            CliRateLimitBucket::Thinking => RateLimitBucket::Thinking,
+            CliRateLimitBucket::FileUpload => RateLimitBucket::NativeUpload,
+        },
     }
 }
 
@@ -325,6 +356,79 @@ mod tests {
 
         assert_eq!(cli.state_root, None);
         assert!(matches!(cli.command, Command::Ask(_)));
+    }
+
+    #[test]
+    fn rate_limit_reset_command_matches_golden_shape() {
+        let cli = parse(&["gpt", "rate-limit", "reset", "file-upload"]);
+        assert!(matches!(
+            cli.command,
+            Command::RateLimit {
+                command: RateLimitCommand::Reset {
+                    bucket: CliRateLimitBucket::FileUpload
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn rate_limit_reset_command_maps_all_supported_buckets() {
+        let instant = parse(&["gpt", "rate-limit", "reset", "instant"]);
+        let thinking = parse(&["gpt", "rate-limit", "reset", "thinking"]);
+        let native_upload_alias = parse(&["gpt", "rate-limit", "reset", "native-upload"]);
+        let upload_alias = parse(&["gpt", "rate-limit", "reset", "upload"]);
+
+        let Command::RateLimit {
+            command: RateLimitCommand::Reset {
+                bucket: instant_bucket,
+            },
+        } = instant.command
+        else {
+            panic!("instant command should parse as rate-limit reset");
+        };
+        let Command::RateLimit {
+            command:
+                RateLimitCommand::Reset {
+                    bucket: thinking_bucket,
+                },
+        } = thinking.command
+        else {
+            panic!("thinking command should parse as rate-limit reset");
+        };
+        let Command::RateLimit {
+            command:
+                RateLimitCommand::Reset {
+                    bucket: native_upload_bucket,
+                },
+        } = native_upload_alias.command
+        else {
+            panic!("native-upload command should parse as rate-limit reset");
+        };
+        let Command::RateLimit {
+            command: RateLimitCommand::Reset {
+                bucket: upload_bucket,
+            },
+        } = upload_alias.command
+        else {
+            panic!("upload command should parse as rate-limit reset");
+        };
+
+        assert_eq!(
+            build_reset_rate_limit_command(instant_bucket).bucket,
+            RateLimitBucket::Instant
+        );
+        assert_eq!(
+            build_reset_rate_limit_command(thinking_bucket).bucket,
+            RateLimitBucket::Thinking
+        );
+        assert_eq!(
+            build_reset_rate_limit_command(native_upload_bucket).bucket,
+            RateLimitBucket::NativeUpload
+        );
+        assert_eq!(
+            build_reset_rate_limit_command(upload_bucket).bucket,
+            RateLimitBucket::NativeUpload
+        );
     }
 
     #[test]

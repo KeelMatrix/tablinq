@@ -3,7 +3,7 @@ use chrono::{Duration, TimeZone};
 use sha2::{Digest, Sha256};
 use shared_protocol::{
     ArtifactMetadata, CapabilityMatrix, ConversationRecoveryManifest, FailureBundle, JobKind,
-    RequestExecutionKind, RequestUsage, SessionList,
+    RateLimitBucket, RequestExecutionKind, RequestUsage, SessionList,
 };
 use std::fs;
 use tempfile::{TempDir, tempdir};
@@ -809,6 +809,15 @@ fn clear_all_state_removes_persisted_rows_but_keeps_migrations() {
         now,
     })
     .unwrap();
+    db.reserve_chatgpt_message_budget(ChatGptMessageBudgetRequest {
+        scope_key: "message-scope-clear",
+        bucket: RateLimitBucket::Instant,
+        configured_limit: 10,
+        window_minutes: 180,
+        attempted_message_cost: 1,
+        now,
+    })
+    .unwrap();
 
     let cleared = db.clear_all_state().unwrap();
 
@@ -821,6 +830,7 @@ fn clear_all_state_removes_persisted_rows_but_keeps_migrations() {
     assert_eq!(cleared.result.artifact_links_deleted, 1);
     assert_eq!(cleared.result.failure_bundles_deleted, 1);
     assert_eq!(cleared.result.native_upload_attempts_deleted, 1);
+    assert_eq!(cleared.result.chatgpt_message_attempts_deleted, 1);
     assert_eq!(
         cleared.artifact_storage_paths,
         vec![artifact_path.display().to_string()]
@@ -836,6 +846,7 @@ fn clear_all_state_removes_persisted_rows_but_keeps_migrations() {
         "job_artifacts",
         "failure_bundles",
         "native_upload_attempts",
+        "chatgpt_message_attempts",
     ] {
         let count: i64 = db
             .conn

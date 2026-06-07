@@ -1,5 +1,8 @@
 use anyhow::Error;
-use shared_protocol::{ErrorCode, NativeUploadRateLimitDiagnostic, RecoveryPacket, RecoveryTrace};
+use shared_protocol::{
+    ChatGptMessageRateLimitDiagnostic, ErrorCode, NativeUploadRateLimitDiagnostic, RecoveryPacket,
+    RecoveryTrace,
+};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]
@@ -10,6 +13,7 @@ pub struct ExecutionErrorMetadata {
     pub recovery_trace: Option<RecoveryTrace>,
     pub recovery_packet: Option<RecoveryPacket>,
     pub native_upload_rate_limit: Option<NativeUploadRateLimitDiagnostic>,
+    pub chatgpt_message_rate_limit: Option<ChatGptMessageRateLimitDiagnostic>,
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +32,7 @@ impl ExecutionErrorMetadata {
             recovery_trace: None,
             recovery_packet: None,
             native_upload_rate_limit: None,
+            chatgpt_message_rate_limit: None,
         }
     }
 
@@ -46,6 +51,14 @@ impl ExecutionErrorMetadata {
         diagnostic: NativeUploadRateLimitDiagnostic,
     ) -> Self {
         self.native_upload_rate_limit = Some(diagnostic);
+        self
+    }
+
+    pub fn with_chatgpt_message_rate_limit(
+        mut self,
+        diagnostic: ChatGptMessageRateLimitDiagnostic,
+    ) -> Self {
+        self.chatgpt_message_rate_limit = Some(diagnostic);
         self
     }
 }
