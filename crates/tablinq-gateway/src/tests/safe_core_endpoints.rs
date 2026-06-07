@@ -230,6 +230,82 @@ fn v1_jobs_endpoints_list_detail_cancel_and_not_found() {
 }
 
 #[test]
+fn v1_rate_limits_reset_succeeds_with_auth() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let response = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        "/v1/rate-limits/reset",
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        br#"{"bucket":"thinking"}"#,
+        5_000,
+    )
+    .unwrap();
+
+    let body = assert_json_status(&response, 200);
+    assert_eq!(body["object"], "tablinq.rate_limit_reset");
+    assert_eq!(body["data"]["bucket"], "thinking");
+    assert_eq!(body["data"]["deleted_attempts"], 0);
+}
+
+#[test]
+fn v1_rate_limits_reset_supports_native_upload_and_rejects_invalid_payloads() {
+    let _guard = integration_lock();
+    let (_dir, config) = test_config();
+    let auth = auth_header(&config);
+    let gateway = RunningGateway::start(config);
+    let snapshot = &gateway.snapshot;
+
+    let native_upload = http_request(
+        &snapshot.host,
+        snapshot.port,
+        "POST",
+        "/v1/rate-limits/reset",
+        &[
+            ("authorization", auth.as_str()),
+            ("content-type", "application/json"),
+        ],
+        br#"{"bucket":"native_upload"}"#,
+        5_000,
+    )
+    .unwrap();
+    let native_upload_body = assert_json_status(&native_upload, 200);
+    assert_eq!(native_upload_body["object"], "tablinq.rate_limit_reset");
+    assert_eq!(native_upload_body["data"]["bucket"], "native_upload");
+
+    for body in [
+        br#"{"bucket":"unsupported"}"#.as_slice(),
+        br#"{"bucket":"instant","extra":true}"#.as_slice(),
+    ] {
+        let response = http_request(
+            &snapshot.host,
+            snapshot.port,
+            "POST",
+            "/v1/rate-limits/reset",
+            &[
+                ("authorization", auth.as_str()),
+                ("content-type", "application/json"),
+            ],
+            body,
+            5_000,
+        )
+        .unwrap();
+        let error_body = assert_json_status(&response, 400);
+        assert_eq!(error_body["error"], "invalid_request_json");
+        assert!(error_body["message"].as_str().is_some());
+    }
+}
+
+#[test]
 fn v1_safe_core_endpoints_require_authorization() {
     let _guard = integration_lock();
     let (_dir, config) = test_config();
@@ -242,6 +318,7 @@ fn v1_safe_core_endpoints_require_authorization() {
         ("GET", V1_DOCTOR_PATH),
         ("GET", V1_CONFIG_PATH),
         ("GET", V1_JOBS_PATH),
+        ("POST", "/v1/rate-limits/reset"),
         ("GET", "/v1/jobs/job-running"),
         ("POST", "/v1/jobs/job-running/cancel"),
     ] {

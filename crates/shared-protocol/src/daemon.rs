@@ -1,10 +1,10 @@
 use crate::{
     AckEvent, ArtifactList, ArtifactPullResult, AskCommand, AskResult, BrowserOpenRequest,
-    BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot, ClearStateResult, ConfigSnapshot,
-    ConversationList, ConversationSelectCommand, ConversationSelection, DoctorReport, ErrorCode,
-    EventPayload, HealthCheck, JobDetail, JobList, NativeUploadRateLimitDiagnostic,
-    PullArtifactCommand, RecoveryPacket, RecoveryTrace, ResearchCommand, ResearchResult,
-    SessionList,
+    BrowserStatusSnapshot, CancelJobCommand, CapabilitySnapshot, ChatGptMessageRateLimitDiagnostic,
+    ClearStateResult, ConfigSnapshot, ConversationList, ConversationSelectCommand,
+    ConversationSelection, DoctorReport, ErrorCode, EventPayload, HealthCheck, JobDetail, JobList,
+    NativeUploadRateLimitDiagnostic, PullArtifactCommand, RecoveryPacket, RecoveryTrace,
+    ResearchCommand, ResearchResult, ResetRateLimitCommand, ResetRateLimitResult, SessionList,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -32,6 +32,7 @@ pub enum DaemonRequest {
     BrowserOpen(BrowserOpenRequest),
     BrowserClose,
     BrowserProfileInfo,
+    ResetRateLimit(ResetRateLimitCommand),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -55,6 +56,7 @@ pub enum DaemonResponse {
     ArtifactPull(ArtifactPullResult),
     ClearState(ClearStateResult),
     Browser(BrowserStatusSnapshot),
+    ResetRateLimit(ResetRateLimitResult),
     Error(DaemonErrorResponse),
 }
 
@@ -89,4 +91,6 @@ pub struct DaemonErrorResponse {
     pub recovery_packet: Option<RecoveryPacket>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_upload_rate_limit: Option<NativeUploadRateLimitDiagnostic>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatgpt_message_rate_limit: Option<ChatGptMessageRateLimitDiagnostic>,
 }

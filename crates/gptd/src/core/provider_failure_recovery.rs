@@ -243,6 +243,9 @@ impl CoreService {
         if let Err(err) = self.apply_native_upload_budget_to_ask(&mut next_command) {
             return Ok(ProviderFailureRecoveryOutcome::TerminalError(err));
         }
+        if let Err(err) = self.apply_chatgpt_message_budget_to_ask(&next_command) {
+            return Ok(ProviderFailureRecoveryOutcome::TerminalError(err));
+        }
 
         Ok(ProviderFailureRecoveryOutcome::Replay {
             trace: Box::new(trace),

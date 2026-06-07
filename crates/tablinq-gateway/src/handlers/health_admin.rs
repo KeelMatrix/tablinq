@@ -7,6 +7,7 @@ use anyhow::Result;
 use gptd::{AppConfig, CoreService};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use shared_protocol::{RateLimitBucket, ResetRateLimitCommand};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const CLEAR_SAFETY_MESSAGE: &str =
@@ -19,6 +20,12 @@ struct ClearStateRequest {
     all: bool,
     #[serde(default)]
     force: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResetRateLimitRequest {
+    bucket: RateLimitBucket,
 }
 
 pub(crate) fn handle_health_request(
@@ -189,6 +196,38 @@ pub(crate) fn handle_admin_clear_request(
             "request_id": request_id,
             "cleared": true,
             "result": result,
+        }),
+    ))
+}
+
+pub(crate) fn handle_rate_limits_reset_request(
+    core: &CoreService,
+    body: &[u8],
+    request_id: &str,
+) -> Result<HttpResponse> {
+    let request = match serde_json::from_slice::<ResetRateLimitRequest>(body) {
+        Ok(request) => request,
+        Err(err) => {
+            return Ok(json_response(
+                400,
+                json!({
+                    "request_id": request_id,
+                    "error": "invalid_request_json",
+                    "message": format!("{err:#}"),
+                }),
+            ));
+        }
+    };
+
+    let result = core.reset_rate_limit(ResetRateLimitCommand {
+        bucket: request.bucket,
+    })?;
+    Ok(json_response(
+        200,
+        json!({
+            "object": "tablinq.rate_limit_reset",
+            "request_id": request_id,
+            "data": result,
         }),
     ))
 }

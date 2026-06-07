@@ -70,6 +70,18 @@ pub(super) fn reserve(
     Ok(NativeUploadBudgetReservation::Charged)
 }
 
+pub(super) fn reset(conn: &mut Connection, scope_key: &str) -> Result<u64> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let deleted = tx
+        .execute(
+            "DELETE FROM native_upload_attempts WHERE scope_key = ?1",
+            [scope_key],
+        )
+        .context("reset native upload attempts")?;
+    tx.commit()?;
+    Ok(deleted as u64)
+}
+
 #[cfg(test)]
 pub(super) fn current_charged_uploads(
     conn: &Connection,

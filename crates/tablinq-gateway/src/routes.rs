@@ -22,6 +22,7 @@ pub(crate) const V1_REQUESTS_PATH: &str = "/v1/requests";
 pub(crate) const V1_CONVERSATIONS_PATH: &str = "/v1/conversations";
 pub(crate) const V1_CONVERSATIONS_SELECT_PATH: &str = "/v1/conversations/select";
 pub(crate) const V1_USAGE_PATH: &str = "/v1/usage";
+pub(crate) const V1_RATE_LIMITS_RESET_PATH: &str = "/v1/rate-limits/reset";
 pub(crate) const V1_BROWSER_ATTACH_PATH: &str = "/v1/browser/attach";
 pub(crate) const V1_BROWSER_DETACH_PATH: &str = "/v1/browser/detach";
 pub(crate) const V1_BROWSER_PROFILE_INFO_PATH: &str = "/v1/browser/profile-info";
@@ -52,6 +53,7 @@ pub(crate) enum Route {
     JobDetail,
     JobCancel,
     Usage,
+    RateLimitsReset,
     BrowserAttach,
     BrowserDetach,
     BrowserProfileInfo,
@@ -92,6 +94,7 @@ pub(crate) fn match_route(method: &str, path: &str) -> Route {
         ("GET", V1_CONFIG_PATH) => Route::Config,
         ("GET", V1_JOBS_PATH) => Route::Jobs,
         ("GET", V1_USAGE_PATH) => Route::Usage,
+        ("POST", V1_RATE_LIMITS_RESET_PATH) => Route::RateLimitsReset,
         ("POST", V1_BROWSER_ATTACH_PATH) => Route::BrowserAttach,
         ("POST", V1_BROWSER_DETACH_PATH) => Route::BrowserDetach,
         ("GET", V1_BROWSER_PROFILE_INFO_PATH) => Route::BrowserProfileInfo,
@@ -140,6 +143,7 @@ pub(crate) fn method_not_allowed_for_path(path: &str) -> Option<&'static str> {
         V1_REQUESTS_PATH => Some("GET"),
         V1_CONVERSATIONS_PATH => Some("GET"),
         V1_USAGE_PATH => Some("GET"),
+        V1_RATE_LIMITS_RESET_PATH => Some("POST"),
         V1_CHAT_COMPLETIONS_PATH => Some("POST"),
         V1_FILES_PATH => Some("GET, POST"),
         V1_ARTIFACTS_PATH => Some("GET"),
@@ -807,6 +811,10 @@ mod tests {
             Route::RequestAction
         );
         assert_eq!(match_route("GET", V1_STATUS_PATH), Route::Status);
+        assert_eq!(
+            match_route("POST", V1_RATE_LIMITS_RESET_PATH),
+            Route::RateLimitsReset
+        );
         assert_eq!(match_route("GET", "/v1/jobs/job-1"), Route::JobDetail);
         assert_eq!(
             match_route("POST", "/v1/jobs/job-1/cancel"),
@@ -824,6 +832,10 @@ mod tests {
         assert_eq!(method_not_allowed_for_path(V1_MODELS_PATH), Some("GET"));
         assert_eq!(
             method_not_allowed_for_path(V1_CHAT_COMPLETIONS_PATH),
+            Some("POST")
+        );
+        assert_eq!(
+            method_not_allowed_for_path(V1_RATE_LIMITS_RESET_PATH),
             Some("POST")
         );
         assert_eq!(

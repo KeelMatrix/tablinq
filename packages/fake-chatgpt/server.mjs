@@ -20,7 +20,8 @@ createServer((request, response) => {
   try {
     const body = readFileSync(filePath);
     response.writeHead(200, {
-      "content-type": mimeTypes[extname(filePath)] || "application/octet-stream",
+      "content-type":
+        mimeTypes[extname(filePath)] || "application/octet-stream",
     });
     response.end(body);
   } catch {

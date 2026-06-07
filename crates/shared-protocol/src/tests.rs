@@ -146,6 +146,35 @@ fn command_envelope_round_trips() {
 }
 
 #[test]
+fn reset_rate_limit_command_round_trips_all_buckets() {
+    for (bucket, expected_json) in [
+        (RateLimitBucket::Instant, r#"{"bucket":"instant"}"#),
+        (RateLimitBucket::Thinking, r#"{"bucket":"thinking"}"#),
+        (
+            RateLimitBucket::NativeUpload,
+            r#"{"bucket":"native_upload"}"#,
+        ),
+    ] {
+        let command = ResetRateLimitCommand { bucket };
+        let json = serde_json::to_string(&command).unwrap();
+        assert_eq!(json, expected_json);
+        assert_eq!(
+            serde_json::from_str::<ResetRateLimitCommand>(expected_json).unwrap(),
+            command
+        );
+    }
+}
+
+#[test]
+fn reset_rate_limit_command_rejects_unknown_fields_and_buckets() {
+    assert!(
+        serde_json::from_str::<ResetRateLimitCommand>(r#"{"bucket":"instant","extra":true}"#)
+            .is_err()
+    );
+    assert!(serde_json::from_str::<ResetRateLimitCommand>(r#"{"bucket":"unsupported"}"#).is_err());
+}
+
+#[test]
 fn event_envelope_round_trips() {
     let envelope = EventEnvelope {
         version: PROTOCOL_VERSION.to_owned(),

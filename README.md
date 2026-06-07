@@ -178,6 +178,7 @@ Tablinq can expose the same browser-backed session through a local OpenAI-compat
 - recommended concurrency: `1`
 - recommended branch concurrency: `1`
 - subagents disabled by default
+- ChatGPT message limiter: `chatgpt_instant_message_limit_count = 150` per 3 hours and `chatgpt_thinking_message_limit_count = 2900` per week shared by Standard and Extended Thinking; OpenAI's [GPT-5.5 in ChatGPT](https://help.openai.com/en/articles/11909943-gpt-5-in-chatgpt) currently says ChatGPT Plus users can send up to 160 GPT-5.5 messages every 3 hours and can manually select GPT-5.5 Thinking, while OpenAI [release notes](https://help.openai.com/en/articles/6825453-chatgpt-release-notes) have stated Plus users have 3,000 GPT-5 Thinking messages per week
 - native ChatGPT upload limiter: `native_upload_limit_count = 65` and `native_upload_limit_window_minutes = 180`; OpenAI's [File Uploads FAQ](https://help.openai.com/en/articles/8555545-file-uploads-faq) says users can upload up to 80 files every 3 hours
 
 Supported API base models:
