@@ -106,6 +106,8 @@ pub(crate) fn prepare_chat_completions_request(
                 effort: model.effort,
                 files,
                 prompt_upload_threshold_chars: None,
+                prompt_upload_file_name: request.tablinq_prompt_upload_file_name.clone(),
+                prompt_upload_composer_text: request.tablinq_prompt_upload_composer_text.clone(),
                 auto_recover_provider_generation_failure:
                     request.tablinq_auto_recover_provider_generation_failure,
             })?),
@@ -153,18 +155,11 @@ mod tests {
     use std::collections::BTreeMap;
     use tempfile::tempdir;
 
-    fn prepare_ask_command(model: &str, tablinq_mode: Option<&str>) -> Result<AskCommand> {
+    fn prepare_ask_command_from_body(body: Value) -> Result<AskCommand> {
         let dir = tempdir()?;
         let config = AppConfig::load_or_create(Some(dir.path()))?;
         let core = CoreService::new(config.clone())?;
         let upload_store = UploadStore::load(&config)?;
-        let mut body = json!({
-            "model": model,
-            "messages": [{ "role": "user", "content": "hello" }]
-        });
-        if let Some(tablinq_mode) = tablinq_mode {
-            body["tablinq_mode"] = json!(tablinq_mode);
-        }
         let context = RequestContext {
             request_id: "req-prepare".to_owned(),
             request: HttpRequest {
@@ -183,6 +178,17 @@ mod tests {
             PreparedChatJob::Ask(job) => Ok(job.command),
             PreparedChatJob::Research(_) => unreachable!("expected ask job"),
         }
+    }
+
+    fn prepare_ask_command(model: &str, tablinq_mode: Option<&str>) -> Result<AskCommand> {
+        let mut body = json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "hello" }]
+        });
+        if let Some(tablinq_mode) = tablinq_mode {
+            body["tablinq_mode"] = json!(tablinq_mode);
+        }
+        prepare_ask_command_from_body(body)
     }
 
     fn assert_ask_selection(
@@ -243,6 +249,103 @@ mod tests {
     }
 
     #[test]
+    fn legacy_request_leaves_prompt_upload_fields_absent() {
+        let command = prepare_ask_command("tablinq-instant", None).expect("request prepares");
+
+        assert_eq!(command.prompt, "hello");
+        assert_eq!(command.prompt_upload_file_name, None);
+        assert_eq!(command.prompt_upload_composer_text, None);
+    }
+
+    #[test]
+    fn explicit_prompt_upload_fields_map_through_prepared_ask_with_files_and_parts() {
+        let command = prepare_ask_command_from_body(json!({
+            "model": "tablinq-instant",
+            "tablinq_files": ["top-level.txt"],
+            "tablinq_prompt_upload_file_name": "openclaude-large-prompt.txt",
+            "tablinq_prompt_upload_composer_text": "Read openclaude-large-prompt.txt exactly.",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "first" },
+                    { "type": "input_text", "input_text": "second" },
+                    { "type": "input_file", "file_path": "part-path.txt" }
+                ]
+            }]
+        }))
+        .expect("request prepares");
+
+        assert_eq!(command.prompt, "first\nsecond");
+        assert_eq!(
+            command.prompt_upload_file_name.as_deref(),
+            Some("openclaude-large-prompt.txt")
+        );
+        assert_eq!(
+            command.prompt_upload_composer_text.as_deref(),
+            Some("Read openclaude-large-prompt.txt exactly.")
+        );
+        assert_eq!(command.files, vec!["top-level.txt", "part-path.txt"]);
+    }
+
+    #[test]
+    fn explicit_prompt_upload_fields_preserve_staged_file_ids() -> Result<()> {
+        let dir = tempdir()?;
+        let config = AppConfig::load_or_create(Some(dir.path()))?;
+        let core = CoreService::new(config.clone())?;
+        let upload_store = UploadStore::load(&config)?;
+        let staged = upload_store.stage_upload("staged.txt", Some("text/plain"), b"staged")?;
+        let staged_file_id = staged.file_id.clone();
+        let body = json!({
+            "model": "tablinq-instant",
+            "tablinq_file_ids": [staged_file_id],
+            "tablinq_prompt_upload_file_name": "openclaude-large-prompt.txt",
+            "tablinq_prompt_upload_composer_text": "Read openclaude-large-prompt.txt exactly.",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "first" },
+                    { "type": "input_file", "file_id": staged.file_id }
+                ]
+            }]
+        });
+        let context = RequestContext {
+            request_id: "req-prepare-file-id".to_owned(),
+            request: HttpRequest {
+                method: "POST".to_owned(),
+                path: "/v1/chat/completions".to_owned(),
+                headers: BTreeMap::from([(
+                    "content-type".to_owned(),
+                    "application/json".to_owned(),
+                )]),
+                body: serde_json::to_vec(&body)?,
+            },
+        };
+
+        let prepared = prepare_chat_completions_request(&core, &upload_store, &context)?;
+        let PreparedChatJob::Ask(job) = prepared.job else {
+            unreachable!("expected ask job");
+        };
+
+        assert_eq!(job.command.files.len(), 2);
+        assert!(
+            job.command
+                .files
+                .iter()
+                .all(|path| path.ends_with("staged.txt"))
+        );
+        assert_eq!(
+            job.command.prompt_upload_file_name.as_deref(),
+            Some("openclaude-large-prompt.txt")
+        );
+        assert_eq!(
+            job.command.prompt_upload_composer_text.as_deref(),
+            Some("Read openclaude-large-prompt.txt exactly.")
+        );
+        assert_eq!(prepared.file_ids.len(), 2);
+        Ok(())
+    }
+
+    #[test]
     fn explicit_normal_tablinq_mode_prepares_normal_mode() {
         assert_ask_selection(
             "tablinq-thinking-standard",
@@ -290,6 +393,8 @@ mod tests {
             effort: None,
             files: vec!["cli.txt".to_owned()],
             prompt_upload_threshold_chars: None,
+            prompt_upload_file_name: None,
+            prompt_upload_composer_text: None,
             auto_recover_provider_generation_failure: true,
         })?;
 

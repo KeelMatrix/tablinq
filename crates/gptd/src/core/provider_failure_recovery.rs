@@ -238,6 +238,8 @@ impl CoreService {
             effort: input.prepared.command.effort,
             files: replay_files,
             prompt_upload_threshold_chars: None,
+            prompt_upload_file_name: None,
+            prompt_upload_composer_text: None,
             auto_recover_provider_generation_failure: false,
         };
         if let Err(err) = self.apply_native_upload_budget_to_ask(&mut next_command) {

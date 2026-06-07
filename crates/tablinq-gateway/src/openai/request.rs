@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
-use shared_protocol::Mode;
+use shared_protocol::{Mode, USER_PROMPT_UPLOAD_THRESHOLD_CHARS, validate_safe_txt_basename};
 
 use super::models::{LEGACY_SEARCH_MODEL_ID, resolve_request_target};
 
@@ -100,6 +100,10 @@ pub struct ChatCompletionsRequest {
     pub tablinq_conversation_id: Option<String>,
     #[serde(default)]
     pub tablinq_new_conversation: bool,
+    #[serde(default)]
+    pub tablinq_prompt_upload_file_name: Option<String>,
+    #[serde(default)]
+    pub tablinq_prompt_upload_composer_text: Option<String>,
     #[serde(default = "shared_protocol::default_auto_recover_provider_generation_failure")]
     pub tablinq_auto_recover_provider_generation_failure: bool,
 }
@@ -272,6 +276,7 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
         )
         .into());
     }
+    validate_prompt_upload_fields(request)?;
     if request
         .tablinq_file_ids
         .iter()
@@ -341,6 +346,48 @@ pub fn validate_chat_request(request: &ChatCompletionsRequest) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_prompt_upload_fields(request: &ChatCompletionsRequest) -> Result<()> {
+    match (
+        request.tablinq_prompt_upload_file_name.as_deref(),
+        request.tablinq_prompt_upload_composer_text.as_deref(),
+    ) {
+        (None, None) => Ok(()),
+        (Some(file_name), Some(composer_text)) => {
+            validate_safe_txt_basename("tablinq_prompt_upload_file_name", file_name).map_err(
+                |err| {
+                    invalid_request_error(
+                        "invalid_prompt_upload_file_name",
+                        format!("tablinq_prompt_upload_file_name {err}"),
+                    )
+                },
+            )?;
+            if composer_text.trim().is_empty() {
+                return Err(invalid_request_error(
+                    "invalid_prompt_upload_composer_text",
+                    "tablinq_prompt_upload_composer_text must not be empty",
+                )
+                .into());
+            }
+            let length = composer_text.chars().count();
+            if length > USER_PROMPT_UPLOAD_THRESHOLD_CHARS {
+                return Err(invalid_request_error(
+                    "invalid_prompt_upload_composer_text",
+                    format!(
+                        "tablinq_prompt_upload_composer_text must be at most {USER_PROMPT_UPLOAD_THRESHOLD_CHARS} characters; found {length}"
+                    ),
+                )
+                .into());
+            }
+            Ok(())
+        }
+        _ => Err(invalid_request_error(
+            "invalid_prompt_upload_pair",
+            "tablinq_prompt_upload_file_name and tablinq_prompt_upload_composer_text must be provided together",
+        )
+        .into()),
+    }
 }
 
 #[cfg(test)]
@@ -458,6 +505,96 @@ mod tests {
         .expect("request decodes");
 
         assert!(!request.stream);
+        validate_chat_request(&request).expect("request validates");
+    }
+
+    #[test]
+    fn explicit_prompt_upload_fields_must_be_a_valid_pair() {
+        for (body, expected_code) in [
+            (
+                json!({
+                    "model": "tablinq-instant",
+                    "messages": [{ "role": "user", "content": "hello" }],
+                    "tablinq_prompt_upload_file_name": "prompt.txt"
+                }),
+                "invalid_prompt_upload_pair",
+            ),
+            (
+                json!({
+                    "model": "tablinq-instant",
+                    "messages": [{ "role": "user", "content": "hello" }],
+                    "tablinq_prompt_upload_composer_text": "Read the uploaded prompt."
+                }),
+                "invalid_prompt_upload_pair",
+            ),
+        ] {
+            let request: ChatCompletionsRequest =
+                serde_json::from_value(body).expect("request decodes");
+            let err = validate_chat_request(&request).expect_err("pair should fail");
+            let openai_error = err.downcast_ref::<OpenAiRequestError>().unwrap();
+            assert_eq!(openai_error.code, expected_code);
+        }
+    }
+
+    #[test]
+    fn explicit_prompt_upload_file_name_must_be_safe_txt_basename() {
+        let too_long = format!(
+            "{}.txt",
+            "a".repeat(shared_protocol::MAX_SAFE_FILE_NAME_BYTES)
+        );
+        for file_name in [
+            "",
+            "  ",
+            " prompt.txt",
+            "dir/prompt.txt",
+            "dir\\prompt.txt",
+            "../prompt.txt",
+            "..\\prompt.txt",
+            "prompt.md",
+            "prompt.TXT",
+            "bad:name.txt",
+            "CON.txt",
+            too_long.as_str(),
+        ] {
+            let request: ChatCompletionsRequest = serde_json::from_value(json!({
+                "model": "tablinq-instant",
+                "messages": [{ "role": "user", "content": "hello" }],
+                "tablinq_prompt_upload_file_name": file_name,
+                "tablinq_prompt_upload_composer_text": "Read the uploaded prompt."
+            }))
+            .expect("request decodes");
+
+            let err = validate_chat_request(&request).expect_err("file name should fail");
+            let openai_error = err.downcast_ref::<OpenAiRequestError>().unwrap();
+            assert_eq!(openai_error.code, "invalid_prompt_upload_file_name");
+        }
+    }
+
+    #[test]
+    fn explicit_prompt_upload_composer_text_is_capped_by_upload_threshold() {
+        let request: ChatCompletionsRequest = serde_json::from_value(json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "tablinq_prompt_upload_file_name": "prompt.txt",
+            "tablinq_prompt_upload_composer_text": "x".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1)
+        }))
+        .expect("request decodes");
+
+        let err = validate_chat_request(&request).expect_err("composer text should fail");
+        let openai_error = err.downcast_ref::<OpenAiRequestError>().unwrap();
+        assert_eq!(openai_error.code, "invalid_prompt_upload_composer_text");
+    }
+
+    #[test]
+    fn explicit_prompt_upload_fields_are_accepted_with_normal_user_message() {
+        let request: ChatCompletionsRequest = serde_json::from_value(json!({
+            "model": "tablinq-instant",
+            "messages": [{ "role": "user", "content": "hello" }],
+            "tablinq_prompt_upload_file_name": "openclaude-prompt.txt",
+            "tablinq_prompt_upload_composer_text": "Read openclaude-prompt.txt exactly."
+        }))
+        .expect("request decodes");
+
         validate_chat_request(&request).expect("request validates");
     }
 

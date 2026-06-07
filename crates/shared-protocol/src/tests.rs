@@ -34,6 +34,8 @@ fn ask_command_fixture() -> AskCommand {
         effort: Some(Effort::Standard),
         files: vec!["fixtures/a.pdf".to_owned()],
         prompt_upload_threshold_chars: None,
+        prompt_upload_file_name: None,
+        prompt_upload_composer_text: None,
         auto_recover_provider_generation_failure: true,
     }
 }
@@ -233,6 +235,8 @@ fn ask_command_accepts_up_to_ten_files() {
             .map(|index| format!("fixtures/input-{index}.txt"))
             .collect(),
         prompt_upload_threshold_chars: None,
+        prompt_upload_file_name: None,
+        prompt_upload_composer_text: None,
         auto_recover_provider_generation_failure: true,
     };
 
@@ -250,6 +254,8 @@ fn ask_command_rejects_research_mode() {
         effort: None,
         files: vec![],
         prompt_upload_threshold_chars: None,
+        prompt_upload_file_name: None,
+        prompt_upload_composer_text: None,
         auto_recover_provider_generation_failure: true,
     };
 
@@ -259,6 +265,48 @@ fn ask_command_rejects_research_mode() {
         ValidationError::InvalidFieldCombination {
             field: "mode".to_owned(),
             message: "research must use the dedicated research command".to_owned(),
+        }
+    );
+}
+
+#[test]
+fn ask_command_validates_explicit_prompt_upload_pair() {
+    let mut command = AskCommand {
+        prompt: "hello".to_owned(),
+        conversation_id: None,
+        new_conversation: false,
+        mode: Mode::Normal,
+        model_class: Some(ModelClass::Instant),
+        effort: None,
+        files: vec![],
+        prompt_upload_threshold_chars: Some(12),
+        prompt_upload_file_name: Some("prompt.txt".to_owned()),
+        prompt_upload_composer_text: Some("read prompt".to_owned()),
+        auto_recover_provider_generation_failure: true,
+    };
+    command.validate().unwrap();
+
+    command.prompt_upload_composer_text = Some("x".repeat(13));
+    let err = command.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ValidationError::InvalidFieldCombination {
+            field: "prompt_upload_composer_text".to_owned(),
+            message:
+                "must be at most 12 characters for the resolved prompt upload threshold; found 13"
+                    .to_owned(),
+        }
+    );
+
+    command.prompt_upload_composer_text = None;
+    let err = command.validate().unwrap_err();
+    assert_eq!(
+        err,
+        ValidationError::InvalidFieldCombination {
+            field: "prompt_upload_file_name".to_owned(),
+            message:
+                "prompt_upload_file_name and prompt_upload_composer_text must be provided together"
+                    .to_owned(),
         }
     );
 }
@@ -300,6 +348,8 @@ fn ask_command_rejects_file_larger_than_fifty_mib() {
         effort: None,
         files: vec![path.display().to_string()],
         prompt_upload_threshold_chars: None,
+        prompt_upload_file_name: None,
+        prompt_upload_composer_text: None,
         auto_recover_provider_generation_failure: true,
     };
 

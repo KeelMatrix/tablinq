@@ -133,6 +133,7 @@ pub(crate) fn handle_provider_request(
                         "extra conversation context is not supported in browser submission",
                         "unsupported message context is rejected before queueing",
                         "stream=true uses final-only SSE after the browser-backed response finalizes",
+                        "tablinq_prompt_upload_file_name and tablinq_prompt_upload_composer_text may be sent together for deterministic large-prompt upload naming and composer text",
                     ],
                     "tolerated_parameters": [
                         "common generation tuning parameters",
@@ -219,6 +220,10 @@ pub(crate) fn handle_provider_request(
                     "max_parallel_requests": 1,
                     "subagents": "queued",
                     "subagent_recommendation": "queue",
+                    "large_prompt_upload_pair": [
+                        "tablinq_prompt_upload_file_name",
+                        "tablinq_prompt_upload_composer_text",
+                    ],
                 },
                 "paperclip": {
                     "transport": "openai_compatible_http",

@@ -56,6 +56,7 @@ Use `tablinq-research` only when you explicitly want the longer-running research
 - `tablinq_request_role = "branch"` for serialized follow-up work
 - `tablinq_request_role = "subagent"` for delegated work that should be rejected by default
 - `tablinq_parent_request_id = "<request-id>"` when branch work belongs to a primary request
+- `tablinq_prompt_upload_file_name = "<name>.txt"` together with `tablinq_prompt_upload_composer_text = "<text>"` when OpenClaude wants deterministic large-prompt upload naming and exact composer text
 
 ## Conversation guidance
 
@@ -95,5 +96,18 @@ For request-scoped evidence capture and how to consume `GET /v1/requests/{reques
   ]
 }
 ```
+
+## Large Prompt Uploads
+
+OpenClaude clients may always send this pair on chat-completion requests:
+
+```json
+{
+  "tablinq_prompt_upload_file_name": "openclaude-prompt.txt",
+  "tablinq_prompt_upload_composer_text": "Read openclaude-prompt.txt exactly and answer the user request."
+}
+```
+
+`messages` remains the source of the full prompt. Tablinq still decides whether the flattened prompt is small enough for direct composer submission or must be uploaded as a `.txt` attachment. When upload mode is selected, the supplied file name and composer text are used exactly; when direct composer mode is selected, they are validated but not used.
 
 See [provider-mode.md](provider-mode.md) for bring-up, health checks, files, artifacts, and recovery commands.

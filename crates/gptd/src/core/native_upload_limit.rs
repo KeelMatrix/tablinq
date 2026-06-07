@@ -14,9 +14,12 @@ impl CoreService {
     pub(super) fn apply_native_upload_budget_to_ask(&self, command: &mut AskCommand) -> Result<()> {
         command.prompt_upload_threshold_chars = None;
         let prompt_chars = command.prompt.chars().count();
+        let explicit_prompt_upload = command.prompt_upload_file_name.is_some()
+            && command.prompt_upload_composer_text.is_some();
+        let prompt_exceeds_upload_threshold = prompt_chars > USER_PROMPT_UPLOAD_THRESHOLD_CHARS;
         let prompt_upload_cost = usize::from(
-            prompt_chars > USER_PROMPT_UPLOAD_THRESHOLD_CHARS
-                && command.files.len() < MAX_COMPOSER_UPLOAD_FILES,
+            prompt_exceeds_upload_threshold
+                && (command.files.len() < MAX_COMPOSER_UPLOAD_FILES || explicit_prompt_upload),
         );
         let attempted_upload_cost = (command.files.len() + prompt_upload_cost) as u32;
         if attempted_upload_cost == 0 {
@@ -25,6 +28,12 @@ impl CoreService {
 
         match self.reserve_native_upload_budget(attempted_upload_cost)? {
             NativeUploadBudgetReservation::Charged | NativeUploadBudgetReservation::NoUpload => {
+                if explicit_prompt_upload
+                    && prompt_exceeds_upload_threshold
+                    && command.files.len() + prompt_upload_cost > MAX_COMPOSER_UPLOAD_FILES
+                {
+                    return Err(prompt_upload_attachment_limit_error(command.files.len()));
+                }
                 Ok(())
             }
             NativeUploadBudgetReservation::Exhausted(_diagnostic)
@@ -86,6 +95,16 @@ impl CoreService {
             Utc::now(),
         )
     }
+}
+
+fn prompt_upload_attachment_limit_error(explicit_file_count: usize) -> anyhow::Error {
+    execution_error(ExecutionErrorMetadata::new(
+        ErrorCode::UploadFailed,
+        format!(
+            "upload failed: explicit prompt upload would exceed the composer attachment limit of {MAX_COMPOSER_UPLOAD_FILES} files; request already has {explicit_file_count} explicit files"
+        ),
+        None,
+    ))
 }
 
 fn should_inline_prompt_upload_fallback(
@@ -153,6 +172,8 @@ mod tests {
             effort: None,
             files,
             prompt_upload_threshold_chars: None,
+            prompt_upload_file_name: None,
+            prompt_upload_composer_text: None,
             auto_recover_provider_generation_failure: true,
         }
     }
@@ -264,6 +285,30 @@ mod tests {
 
         let message = format!("{err:#}");
         assert!(message.contains("attempted upload cost 2"));
+    }
+
+    #[test]
+    fn explicit_prompt_upload_at_file_slot_limit_charges_and_fails() {
+        let (_dir, core) = test_core(20);
+        let mut command = ask_command(
+            "x".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+            (0..MAX_COMPOSER_UPLOAD_FILES)
+                .map(|index| format!("explicit-{index}.txt"))
+                .collect(),
+        );
+        command.prompt_upload_file_name = Some("openclaude-prompt.txt".to_owned());
+        command.prompt_upload_composer_text = Some("Read openclaude-prompt.txt.".to_owned());
+
+        let err = core
+            .prepare_ask(command)
+            .expect_err("prompt upload should exceed composer file slots");
+
+        let message = format!("{err:#}");
+        assert!(message.contains("composer attachment limit"));
+        assert_eq!(
+            core.current_native_upload_charged_uploads().unwrap(),
+            (MAX_COMPOSER_UPLOAD_FILES + 1) as u32
+        );
     }
 
     #[test]

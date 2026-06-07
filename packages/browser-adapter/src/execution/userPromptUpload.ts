@@ -73,6 +73,8 @@ export type UploadedUserPrompt = {
   attachmentState: ComposerAttachmentState;
 };
 
+const MAX_SAFE_FILE_NAME_BYTES = 255;
+
 export function shouldUploadUserPromptText({
   prompt,
   preUploadedFileCount,
@@ -148,6 +150,8 @@ export async function uploadUserPromptTextIfNeeded({
   prompt,
   explicitFiles,
   promptUploadThresholdChars,
+  promptUploadFileName,
+  promptUploadComposerText,
   attachmentBaseline,
   report,
 }: {
@@ -155,30 +159,77 @@ export async function uploadUserPromptTextIfNeeded({
   prompt: string;
   explicitFiles: string[];
   promptUploadThresholdChars?: number | null;
+  promptUploadFileName?: string | null;
+  promptUploadComposerText?: string | null;
   attachmentBaseline: ComposerAttachmentState;
   report: CapabilityReportPayload | null;
 }): Promise<UploadedUserPrompt | null> {
+  const explicitPromptUpload =
+    promptUploadFileName != null || promptUploadComposerText != null;
+  if (
+    (promptUploadFileName == null && promptUploadComposerText != null) ||
+    (promptUploadFileName != null && promptUploadComposerText == null)
+  ) {
+    throw new Error(
+      "upload failed: prompt upload file name and composer text must be provided together",
+    );
+  }
+  const threshold =
+    promptUploadThresholdChars ?? USER_PROMPT_UPLOAD_THRESHOLD_CHARS;
+  if (promptUploadFileName != null && promptUploadComposerText != null) {
+    assertExplicitPromptUploadFileName(promptUploadFileName);
+    if (promptUploadComposerText.trim().length === 0) {
+      throw new Error("upload failed: prompt upload composer text is empty");
+    }
+    const composerLength = promptCharacterLength(promptUploadComposerText);
+    if (composerLength > Math.max(1, Math.trunc(threshold))) {
+      throw new Error(
+        `upload failed: prompt upload composer text exceeds the resolved prompt upload threshold (${composerLength} > ${Math.max(
+          1,
+          Math.trunc(threshold),
+        )})`,
+      );
+    }
+  }
   const preUploadedFileCount = Math.max(
     explicitFiles.length,
     attachmentBaseline.visibleCount,
   );
-  if (
-    !shouldUploadUserPromptText({
-      prompt,
-      preUploadedFileCount,
-      promptUploadThresholdChars:
-        promptUploadThresholdChars ?? USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
-    })
-  ) {
+  const promptExceedsThreshold =
+    promptCharacterLength(prompt) > Math.max(1, Math.trunc(threshold));
+  if (!promptExceedsThreshold) {
+    return null;
+  }
+  if (preUploadedFileCount >= MAX_COMPOSER_UPLOAD_FILES) {
+    if (explicitPromptUpload) {
+      throw new Error(
+        "upload failed: explicit prompt upload would exceed the composer attachment limit",
+      );
+    }
     return null;
   }
 
-  const fileName = chooseUserPromptUploadFileName({
-    existingNames: [
-      ...attachmentBaseline.visibleNames,
-      ...explicitFiles.map((file) => basename(file)),
-    ],
-  });
+  const existingNames = [
+    ...attachmentBaseline.visibleNames,
+    ...explicitFiles.map((file) => basename(file)),
+  ];
+  const fileName =
+    promptUploadFileName ??
+    chooseUserPromptUploadFileName({
+      existingNames,
+    });
+  if (
+    promptUploadFileName &&
+    existingNames.some(
+      (existingName) =>
+        existingName.trim().toLowerCase() ===
+        promptUploadFileName.trim().toLowerCase(),
+    )
+  ) {
+    throw new Error(
+      `upload failed: explicit prompt upload file name collides with an existing attachment: ${promptUploadFileName}`,
+    );
+  }
   await uploadAttachments(
     page,
     [
@@ -203,9 +254,37 @@ export async function uploadUserPromptTextIfNeeded({
 
   return {
     fileName,
-    instruction: buildUploadedUserPromptInstruction(fileName),
+    instruction:
+      promptUploadComposerText ?? buildUploadedUserPromptInstruction(fileName),
     attachmentState,
   };
+}
+
+function assertExplicitPromptUploadFileName(fileName: string): void {
+  if (
+    fileName.trim() !== fileName ||
+    fileName.length === 0 ||
+    Buffer.byteLength(fileName, "utf8") > MAX_SAFE_FILE_NAME_BYTES ||
+    !fileName.endsWith(".txt") ||
+    /[\/\\]/.test(fileName) ||
+    fileName.includes("..") ||
+    /[<>:"|?*\x00-\x1f]/.test(fileName) ||
+    /[. ]$/.test(fileName) ||
+    isWindowsReservedBasename(fileName.slice(0, -".txt".length))
+  ) {
+    throw new Error(
+      `upload failed: explicit prompt upload file name is unsafe: ${fileName}`,
+    );
+  }
+}
+
+function isWindowsReservedBasename(stem: string): boolean {
+  const upper = stem.toUpperCase();
+  return (
+    ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"].includes(upper) ||
+    /^COM[1-9]$/.test(upper) ||
+    /^LPT[1-9]$/.test(upper)
+  );
 }
 
 function formatPromptUploadTimestamp(timestamp: Date): string {

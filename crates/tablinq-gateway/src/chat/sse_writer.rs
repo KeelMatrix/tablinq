@@ -134,6 +134,8 @@ mod tests {
                         effort: Some(shared_protocol::Effort::None),
                         files: Vec::new(),
                         prompt_upload_threshold_chars: None,
+                        prompt_upload_file_name: None,
+                        prompt_upload_composer_text: None,
                         auto_recover_provider_generation_failure: true,
                     },
                 }),

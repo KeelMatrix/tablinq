@@ -32,6 +32,8 @@ fn prepared_jobs_persist_across_restart() {
             effort: None,
             files: vec![],
             prompt_upload_threshold_chars: None,
+            prompt_upload_file_name: None,
+            prompt_upload_composer_text: None,
             auto_recover_provider_generation_failure: true,
         })
         .unwrap();
@@ -100,6 +102,8 @@ fn cancelled_jobs_report_cancelled_status_in_job_detail() {
             effort: None,
             files: vec![],
             prompt_upload_threshold_chars: None,
+            prompt_upload_file_name: None,
+            prompt_upload_composer_text: None,
             auto_recover_provider_generation_failure: true,
         })
         .unwrap();

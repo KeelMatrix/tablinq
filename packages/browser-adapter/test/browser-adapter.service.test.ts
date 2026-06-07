@@ -105,6 +105,32 @@ describe("browser adapter service helpers", () => {
     ).toThrow(/attach_first, managed_fallback, managed_only/);
   });
 
+  it("maps explicit prompt upload fields onto ask execution commands", () => {
+    expect(
+      normalizeAskCommand({
+        type: "ask",
+        job_id: "job-explicit-prompt-upload",
+        prompt: "large prompt",
+        prompt_upload_file_name: "openclaude-prompt.txt",
+        prompt_upload_composer_text: "Read openclaude-prompt.txt exactly.",
+      }),
+    ).toMatchObject({
+      jobId: "job-explicit-prompt-upload",
+      promptUploadFileName: "openclaude-prompt.txt",
+      promptUploadComposerText: "Read openclaude-prompt.txt exactly.",
+    });
+    expect(
+      normalizeAskCommand({
+        type: "ask",
+        job_id: "job-legacy-prompt-upload",
+        prompt: "legacy",
+      }),
+    ).toMatchObject({
+      promptUploadFileName: undefined,
+      promptUploadComposerText: undefined,
+    });
+  });
+
   it("maps recover_ask baseline fields with nullish defaults only", () => {
     const request = recoverAskRequestFixture();
 

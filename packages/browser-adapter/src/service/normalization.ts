@@ -43,6 +43,12 @@ export function normalizeAskCommand(
     promptUploadThresholdChars: normalizePositiveInteger(
       request.prompt_upload_threshold_chars,
     ),
+    promptUploadFileName: normalizeOptionalString(
+      request.prompt_upload_file_name,
+    ),
+    promptUploadComposerText: normalizeOptionalString(
+      request.prompt_upload_composer_text,
+    ),
   };
 }
 
@@ -202,4 +208,14 @@ function normalizePositiveInteger(value: unknown): number | undefined {
     throw new Error("prompt upload threshold must be a positive integer");
   }
   return Math.trunc(value);
+}
+
+function normalizeOptionalString(value: unknown): string | null | undefined {
+  if (value == null) {
+    return value === null ? null : undefined;
+  }
+  if (typeof value !== "string") {
+    throw new Error("prompt upload fields must be strings when provided");
+  }
+  return value;
 }
