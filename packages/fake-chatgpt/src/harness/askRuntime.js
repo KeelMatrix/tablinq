@@ -14,6 +14,8 @@ export function createAskRuntime({
   escapeHtml,
 }) {
   const { scenario, variant } = config;
+  const transientInterruptionMessage =
+    "Streaming interrupted. Waiting for the complete message...";
   const {
     usesProviderGenerationFailureRecovery,
     usesProviderGenerationFailureAfterSuccess,
@@ -118,6 +120,45 @@ export function createAskRuntime({
     button.textContent = text;
     divider.appendChild(button);
     return divider;
+  }
+
+  function renderTransientInterruption(state, artifactCount = 0) {
+    const transcript = transcriptContainer();
+    clearThinkingArtifactNodes();
+    if (
+      !(transcript instanceof HTMLElement) ||
+      !(messageArticle instanceof HTMLElement)
+    ) {
+      return;
+    }
+
+    messageArticle.hidden = false;
+    messageArticle.setAttribute("data-message-author-role", "assistant");
+    messageArticle.setAttribute("data-message-id", state.messageId);
+    messageArticle.setAttribute("data-turn-start-message", "true");
+    message.textContent = transientInterruptionMessage;
+
+    if (artifactCount <= 0 || !Array.isArray(state.reasoningArtifacts)) {
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    const visibleCount = Math.min(
+      artifactCount,
+      state.reasoningArtifacts.length,
+    );
+    for (let index = 0; index < visibleCount; index += 1) {
+      fragment.appendChild(
+        createThinkingArtifactMessage(
+          state.reasoningArtifacts[index],
+          state.reasoningArtifactMessageIds[index],
+        ),
+      );
+    }
+    fragment.appendChild(createThoughtDivider(`Thought for ${visibleCount}s`));
+    transcript.insertBefore(fragment, messageArticle);
+    document.body.dataset.lastMessageId =
+      state.reasoningArtifactMessageIds[visibleCount - 1] ?? state.messageId;
   }
 
   function renderThinkingArtifactSequence(state) {
@@ -385,6 +426,20 @@ export function createAskRuntime({
 
     setStreamState("running");
     setStreamingControls(true);
+    if (
+      scenario === "transient-interruption-reload-success" ||
+      scenario === "transient-interruption-timeout" ||
+      scenario === "transient-interruption-thought-progress"
+    ) {
+      writeConversationState(conversationId, state.messageId);
+      clearAskFailureState();
+      renderTransientInterruption(
+        state,
+        scenario === "transient-interruption-thought-progress" ? 1 : 0,
+      );
+      persistStreamState(state);
+      return;
+    }
     if (scenario === "followup-stale" && askNumber > 1) {
       state.pendingStart = true;
       persistStreamState(state);
@@ -419,6 +474,31 @@ export function createAskRuntime({
     }
 
     writeConversationState(state.conversationId, state.messageId);
+    if (scenario === "transient-interruption-reload-success") {
+      finishStream(state);
+      return;
+    }
+    if (scenario === "transient-interruption-timeout") {
+      setStreamState("running");
+      setStreamingControls(true);
+      renderTransientInterruption(state);
+      persistStreamState(state);
+      return;
+    }
+    if (scenario === "transient-interruption-thought-progress") {
+      state.transientInterruptionReloads =
+        (state.transientInterruptionReloads || 0) + 1;
+      if (state.transientInterruptionReloads === 1) {
+        setStreamState("running");
+        setStreamingControls(true);
+        renderTransientInterruption(state, 2);
+        persistStreamState(state);
+        timers.set(() => finishStream(state), 120);
+        return;
+      }
+      finishStream(state);
+      return;
+    }
     if (scenario === "recover-complete") {
       finishStream(state);
       return;

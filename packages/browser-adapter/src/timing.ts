@@ -35,6 +35,7 @@ export const ASK_STICKY_STREAM_RELOAD_STALL_MS = 30_000;
 export const ASK_STICKY_STREAM_FINAL_GRACE_MS = 20_000;
 export const ASK_RESPONSE_STREAM_SNAPSHOT_INTERVAL_MS = 30_000;
 export const ASK_RESPONSE_STREAM_MAX_MS = 20 * 60_000;
+export const ASK_TRANSIENT_INTERRUPTION_RELOAD_INTERVAL_MS = 30_000;
 export const MAX_RECOVERY_ATTEMPTS = 3;
 
 export {
@@ -91,6 +92,14 @@ export function askResponseStreamMaxMs(): number {
   return (
     readPositiveIntegerEnv("TABLINQ_ASK_STREAM_MAX_MS") ??
     ASK_RESPONSE_STREAM_MAX_MS
+  );
+}
+
+export function askTransientInterruptionReloadIntervalMs(): number {
+  return (
+    readPositiveIntegerEnv(
+      "TABLINQ_ASK_TRANSIENT_INTERRUPTION_RELOAD_INTERVAL_MS",
+    ) ?? ASK_TRANSIENT_INTERRUPTION_RELOAD_INTERVAL_MS
   );
 }
 

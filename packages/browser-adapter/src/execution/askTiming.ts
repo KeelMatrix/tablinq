@@ -8,6 +8,7 @@ import {
   askResponseStreamMaxMs,
   askResponseStreamSnapshotIntervalMs,
   askStickyStreamFinalGraceMs,
+  askTransientInterruptionReloadIntervalMs,
   askStickyStreamReloadStallMs,
 } from "../timing";
 
@@ -22,6 +23,7 @@ export type AskTiming = {
   stickyStreamFinalGraceMs: number;
   responseStreamSnapshotIntervalMs: number;
   responseStreamMaxMs: number;
+  transientInterruptionReloadIntervalMs: number;
 };
 
 export function resolveAskTiming(command: AskExecutionCommand): AskTiming {
@@ -49,6 +51,8 @@ export function resolveAskTiming(command: AskExecutionCommand): AskTiming {
     stickyStreamFinalGraceMs,
     responseStreamSnapshotIntervalMs: askResponseStreamSnapshotIntervalMs(),
     responseStreamMaxMs: askResponseStreamMaxMs(),
+    transientInterruptionReloadIntervalMs:
+      askTransientInterruptionReloadIntervalMs(),
   };
 }
 

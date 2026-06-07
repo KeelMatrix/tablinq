@@ -17,6 +17,8 @@ function createAssistantMessageRuntimeModule({
     domUtils;
   const {
     isReasoningArtifactMessage,
+    isTransientAskStatusElement,
+    isThoughtDividerElement,
     explicitAssistantRole,
     readMessageIdentity,
     thoughtDividerBeforeMessage,
@@ -193,6 +195,51 @@ function createAssistantMessageRuntimeModule({
   const PROVIDER_GENERATION_FAILURE_HELP_CENTER = "help center";
   const PROVIDER_STOPPED_THINKING_MARKER = "stopped thinking";
 
+  const isTransientAskInterruptionText = (value) => {
+    const normalized = collapseText(value).toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    return (
+      normalized.includes("interrupted") &&
+      normalized.includes("waiting") &&
+      normalized.includes("complete") &&
+      /\b(?:answer|message|response|reply|completion)\b/.test(normalized)
+    );
+  };
+
+  const readThoughtArtifactSignature = () => {
+    const candidates = visibleUnique(
+      document.querySelectorAll(
+        [
+          "[data-tablinq-thinking-artifact]",
+          "[data-tablinq-thought-divider]",
+          "[data-message-author-role='assistant']",
+          "button",
+          "[role='button']",
+        ].join(", "),
+      ),
+    ).filter(
+      (element) =>
+        element instanceof HTMLElement &&
+        (element.hasAttribute("data-tablinq-thinking-artifact") ||
+          element.hasAttribute("data-tablinq-thought-divider") ||
+          isReasoningArtifactMessage(element) ||
+          isTransientAskStatusElement(element) ||
+          isThoughtDividerElement(element)),
+    );
+
+    if (candidates.length === 0) {
+      return "";
+    }
+    return JSON.stringify(
+      candidates.map((element) => [
+        readMessageIdentity(element),
+        collapseText(element.textContent ?? ""),
+      ]),
+    );
+  };
+
   const readAskFailureState = (article) => {
     const explicitCode = datasetValue(document.body.dataset.askFailureCode);
     const explicitMessage = datasetValue(
@@ -280,7 +327,7 @@ function createAssistantMessageRuntimeModule({
     if (explicitState && explicitState !== "idle") {
       return explicitState;
     }
-    if (stopButtonVisible()) {
+    if (stopButtonVisible() || isTransientAskInterruptionText(text)) {
       return "running";
     }
     if (text) {
@@ -300,5 +347,6 @@ function createAssistantMessageRuntimeModule({
     hasTransientRenderedWidgets,
     materializeCodePreviewSources,
     thoughtDividerBeforeMessage,
+    readThoughtArtifactSignature,
   };
 }

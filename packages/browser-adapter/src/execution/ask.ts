@@ -6,9 +6,11 @@ import {
   readAskBaseline,
   readAskSnapshot,
   scrollToBottomIfNeeded,
+  sleep,
 } from "../pageRuntime";
 import { safePageUrl } from "../capabilityProbe";
 import {
+  isTransientAskInterruptionText,
   normalizeComparableAskText,
   type AskBaseline,
   type AskSnapshot,
@@ -140,6 +142,25 @@ export async function runAsk(
         throwIfProviderStoppedThinking(snapshot);
       }
 
+      const transientInterruptionRecovery =
+        await handleTransientAskInterruptionIfNeeded(
+          host,
+          command,
+          page,
+          state,
+          snapshot,
+          onChunk,
+          onState,
+          timing,
+        );
+      page = transientInterruptionRecovery.page;
+      if (transientInterruptionRecovery.result) {
+        return transientInterruptionRecovery.result;
+      }
+      if (transientInterruptionRecovery.handled) {
+        continue;
+      }
+
       await recordAskSnapshotProgress(
         host,
         command,
@@ -248,6 +269,139 @@ export async function runAsk(
     }
     throw error;
   }
+}
+
+async function handleTransientAskInterruptionIfNeeded(
+  host: BrowserExecutionHost,
+  command: AskExecutionCommand,
+  page: Awaited<ReturnType<typeof openAskExecutionPage>>,
+  state: ReturnType<typeof createAskRuntimeState>,
+  snapshot: AskSnapshot,
+  onChunk: ChunkSink,
+  onState: StateSink,
+  timing: AskTiming,
+): Promise<{
+  page: typeof page;
+  result?: AskResultSnapshot;
+  handled: boolean;
+}> {
+  if (!isTransientAskInterruptionText(snapshot.text)) {
+    state.transientInterruptionThoughtArtifactSignature = null;
+    return { page, handled: false };
+  }
+
+  const initialThoughtArtifactSignature =
+    snapshot.thoughtArtifactSignature ?? "";
+  if (
+    initialThoughtArtifactSignature &&
+    state.transientInterruptionThoughtArtifactSignature ===
+      initialThoughtArtifactSignature
+  ) {
+    return { page, handled: false };
+  }
+
+  const startedAt = Date.now();
+  const remainingMs = Math.max(0, timing.timeoutAt - startedAt);
+  const acceleratedDeadlineAt =
+    startedAt + Math.max(1, Math.floor(remainingMs / 3));
+  let lastThoughtArtifactSignature = initialThoughtArtifactSignature;
+
+  while (Date.now() < acceleratedDeadlineAt) {
+    await onState({
+      state: "interrupted",
+      reason:
+        "provider reported a transient interrupted response; reloading to re-check completion",
+      at: new Date().toISOString(),
+      conversation_id: state.knownConversationId ?? snapshot.conversationId,
+      message_id: state.knownMessageId ?? snapshot.messageId,
+      current_url: snapshot.currentUrl,
+      streaming_safe: false,
+    });
+
+    await sleep(
+      Math.min(
+        timing.transientInterruptionReloadIntervalMs,
+        Math.max(1, acceleratedDeadlineAt - Date.now()),
+      ),
+    );
+    await page
+      .reload({ waitUntil: "domcontentloaded", timeout: NAVIGATION_TIMEOUT_MS })
+      .catch(() => undefined);
+    await scrollToBottomIfNeeded(page).catch(() => undefined);
+
+    const reloadedSnapshot = await readAskSnapshot(
+      page,
+      state.askBaseline,
+    ).catch(() => null);
+    if (!reloadedSnapshot) {
+      continue;
+    }
+
+    throwIfProviderGenerationFailed(reloadedSnapshot);
+    await recordAskSnapshotProgress(
+      host,
+      command,
+      state,
+      reloadedSnapshot,
+      onChunk,
+      onState,
+      "observed assistant identity after transient interruption reload",
+    );
+    updateAskDoneStreak(state, reloadedSnapshot);
+
+    const thoughtArtifactSignature =
+      reloadedSnapshot.thoughtArtifactSignature ?? "";
+    if (
+      thoughtArtifactSignature &&
+      thoughtArtifactSignature !== lastThoughtArtifactSignature
+    ) {
+      state.transientInterruptionThoughtArtifactSignature =
+        thoughtArtifactSignature;
+      return { page, handled: true };
+    }
+    lastThoughtArtifactSignature = thoughtArtifactSignature;
+
+    if (!isTransientAskInterruptionText(reloadedSnapshot.text)) {
+      if (reloadedSnapshot.state !== "done") {
+        return { page, handled: true };
+      }
+
+      const stabilized = await stabilizeAskCompletion(
+        page,
+        state.askBaseline,
+        reloadedSnapshot,
+        Math.min(timing.timeoutAt, Date.now() + 1_000),
+      );
+      await recordAskSnapshotProgress(
+        host,
+        command,
+        state,
+        stabilized,
+        onChunk,
+        onState,
+        "observed stabilized assistant identity after transient interruption reload",
+      );
+      if (stabilized.state !== "done") {
+        return { page, handled: true };
+      }
+      return {
+        page,
+        handled: true,
+        result: await finalizeAsk(
+          host,
+          command,
+          page,
+          state,
+          stabilized,
+          onChunk,
+        ),
+      };
+    }
+  }
+
+  throw new Error(
+    "ask timed out waiting for the complete provider response after a transient interruption",
+  );
 }
 
 type AskResponseStreamWatchdog = {

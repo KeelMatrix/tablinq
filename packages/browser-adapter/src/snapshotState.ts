@@ -12,6 +12,7 @@ export interface AskSnapshot {
   conversationId: string | null;
   messageId: string | null;
   thoughtDividerBeforeMessage?: boolean;
+  thoughtArtifactSignature?: string;
   currentUrl: string;
 }
 
@@ -105,7 +106,22 @@ export function normalizeComparableAskText(text: string): string {
 }
 
 export function isTransientAskStatusText(text: string): boolean {
-  return /^thought for\b/i.test(text.trim());
+  return (
+    /^thought for\b/i.test(text.trim()) || isTransientAskInterruptionText(text)
+  );
+}
+
+export function isTransientAskInterruptionText(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("interrupted") &&
+    normalized.includes("waiting") &&
+    normalized.includes("complete") &&
+    /\b(?:answer|message|response|reply|completion)\b/.test(normalized)
+  );
 }
 
 export function sameAskCompletionSnapshot(
@@ -119,6 +135,8 @@ export function sameAskCompletionSnapshot(
     left.failureMessage === right.failureMessage &&
     left.retryVisible === right.retryVisible &&
     Boolean(left.hasTransientWidgets) === Boolean(right.hasTransientWidgets) &&
+    (left.thoughtArtifactSignature ?? "") ===
+      (right.thoughtArtifactSignature ?? "") &&
     left.conversationId === right.conversationId &&
     left.messageId === right.messageId &&
     left.currentUrl === right.currentUrl
@@ -401,6 +419,7 @@ export function normalizeAskSnapshot(snapshot: AskSnapshot): AskSnapshot {
       conversationIdFromUrl(snapshot.currentUrl),
     messageId: normalizeOptionalString(snapshot.messageId),
     thoughtDividerBeforeMessage: Boolean(snapshot.thoughtDividerBeforeMessage),
+    thoughtArtifactSignature: snapshot.thoughtArtifactSignature ?? "",
   };
 }
 

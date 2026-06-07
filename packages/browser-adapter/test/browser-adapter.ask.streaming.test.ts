@@ -46,12 +46,15 @@ async function withAskStreamWatchdogEnv<T>(
     intervalMs?: number;
     maxMs?: number;
     stickyReloadMs?: number;
+    transientInterruptionReloadMs?: number;
   },
   run: () => Promise<T>,
 ): Promise<T> {
   const previousInterval = process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS;
   const previousMax = process.env.TABLINQ_ASK_STREAM_MAX_MS;
   const previousSticky = process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
+  const previousTransientInterruptionReload =
+    process.env.TABLINQ_ASK_TRANSIENT_INTERRUPTION_RELOAD_INTERVAL_MS;
   if (values.intervalMs !== undefined) {
     process.env.TABLINQ_ASK_STREAM_SNAPSHOT_INTERVAL_MS = String(
       values.intervalMs,
@@ -63,6 +66,11 @@ async function withAskStreamWatchdogEnv<T>(
   if (values.stickyReloadMs !== undefined) {
     process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = String(
       values.stickyReloadMs,
+    );
+  }
+  if (values.transientInterruptionReloadMs !== undefined) {
+    process.env.TABLINQ_ASK_TRANSIENT_INTERRUPTION_RELOAD_INTERVAL_MS = String(
+      values.transientInterruptionReloadMs,
     );
   }
   try {
@@ -82,6 +90,12 @@ async function withAskStreamWatchdogEnv<T>(
       delete process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS;
     } else {
       process.env.TABLINQ_ASK_STICKY_STREAM_RELOAD_STALL_MS = previousSticky;
+    }
+    if (previousTransientInterruptionReload === undefined) {
+      delete process.env.TABLINQ_ASK_TRANSIENT_INTERRUPTION_RELOAD_INTERVAL_MS;
+    } else {
+      process.env.TABLINQ_ASK_TRANSIENT_INTERRUPTION_RELOAD_INTERVAL_MS =
+        previousTransientInterruptionReload;
     }
   }
 }
@@ -166,6 +180,114 @@ describe("browser adapter ask: streaming and finalization", () => {
           expect(result.output_text).toBe(
             "Fake response for: finish after the watchdog reloads",
           );
+        },
+      );
+      expect((await adapter.health()).reload_count).toBeGreaterThan(0);
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
+  it("reloads transient provider interruption notices until completion appears", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "transient-interruption-reload-success",
+    });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
+
+    try {
+      await withAskStreamWatchdogEnv(
+        {
+          intervalMs: 150,
+          maxMs: 5000,
+          stickyReloadMs: 5000,
+          transientInterruptionReloadMs: 100,
+        },
+        async () => {
+          const result = await adapter.ask(
+            {
+              jobId: "job-ask-transient-interruption-reload-final",
+              prompt: "finish after the transient interruption reloads",
+              timeoutMs: 5000,
+            },
+            () => {},
+          );
+
+          expect(result.output_text).toBe(
+            "Fake response for: finish after the transient interruption reloads",
+          );
+          expect(result.output_text).not.toMatch(/interrupted/i);
+        },
+      );
+      expect((await adapter.health()).reload_count).toBeGreaterThan(0);
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
+  it("uses the accelerated timeout for repeated transient provider interruption notices", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "transient-interruption-timeout",
+    });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
+
+    try {
+      await withAskStreamWatchdogEnv(
+        {
+          intervalMs: 150,
+          maxMs: 5000,
+          stickyReloadMs: 5000,
+          transientInterruptionReloadMs: 100,
+        },
+        async () => {
+          await expect(
+            adapter.ask(
+              {
+                jobId: "job-ask-transient-interruption-timeout",
+                prompt: "keep showing the transient interruption notice",
+                timeoutMs: 1200,
+              },
+              () => {},
+            ),
+          ).rejects.toThrow(/complete provider response/i);
+        },
+      );
+      expect((await adapter.health()).reload_count).toBeGreaterThan(0);
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
+  it("leaves the accelerated interruption path when new thought artifacts appear", async () => {
+    const server = await harness.startServer();
+    const targetUrl = withHarnessUrl(server.url, {
+      scenario: "transient-interruption-thought-progress",
+    });
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
+
+    try {
+      await withAskStreamWatchdogEnv(
+        {
+          intervalMs: 150,
+          maxMs: 5000,
+          stickyReloadMs: 5000,
+          transientInterruptionReloadMs: 100,
+        },
+        async () => {
+          const result = await adapter.ask(
+            {
+              jobId: "job-ask-transient-interruption-thought-progress",
+              prompt: "finish after thought progress",
+              timeoutMs: 1200,
+            },
+            () => {},
+          );
+
+          expect(result.output_text).toBe(
+            "Fake response for: finish after thought progress",
+          );
+          expect(result.output_text).not.toMatch(/interrupted/i);
         },
       );
       expect((await adapter.health()).reload_count).toBeGreaterThan(0);
@@ -401,6 +523,33 @@ describe("browser adapter ask: streaming and finalization", () => {
     );
 
     await adapter.shutdown();
+  });
+
+  it("treats provider interruption notices as in-flight status, not answer text", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML(
+      "beforeend",
+      `
+        <section data-testid="conversation-turn-4" data-turn="assistant">
+          <h4 class="sr-only">ChatGPT said:</h4>
+          <div data-message-author-role="assistant" data-message-id="interrupted-msg">
+            <div class="markdown">
+              <p>Streaming interrupted. Waiting for the complete message...</p>
+            </div>
+          </div>
+        </section>
+      `,
+    );
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.hasAssistantMessage).toBe(true);
+    expect(snapshot.text).toBe(
+      "Streaming interrupted. Waiting for the complete message...",
+    );
+    expect(snapshot.state).toBe("running");
+    dom.window.close();
   });
 
   it("tracks live-style answer rewrites without emitting provisional chunks", async () => {

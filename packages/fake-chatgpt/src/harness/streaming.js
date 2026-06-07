@@ -24,7 +24,8 @@ export function createAskStreamState({
       ? ["Goal", "Inputs", "Constraints", "Output"]
       : null;
   const reasoningArtifacts =
-    scenario === "thinking-artifact-messages" && variant === "live"
+    (scenario === "thinking-artifact-messages" && variant === "live") ||
+    scenario === "transient-interruption-thought-progress"
       ? [
           "I’m reconstructing the prior context from the recovery note and turning it into a compact comparison that makes the tradeoff explicit rather than just listing features.",
           "The comparison is narrowing to one core distinction: Rust optimizes for correctness under low-level constraints, while TypeScript optimizes for speed and safety of application development. I’m turning that into a decision-oriented visual instead of a feature list.",

@@ -56,6 +56,7 @@ export type AskRuntimeState = {
   lastStatusAt: number;
   lastSnapshotSignature: string | null;
   lastIdentityUpdateSignature: string | null;
+  transientInterruptionThoughtArtifactSignature: string | null;
 };
 
 export type ResearchRuntimeState = {
