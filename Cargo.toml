@@ -11,14 +11,14 @@ version = "0.1.0"
 
 [workspace.dependencies]
 anyhow = "1.0.100"
-chrono = { version = "0.4.42", features = ["serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 ctrlc = "3.4.7"
 interprocess = "2.4.2"
 proptest = "1.9.0"
-rusqlite = { version = "0.39.0", features = ["bundled"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.145"
+serde_json = "1.0.150"
 sha2 = "0.11.0"
 tempfile = "3.23.0"
 thiserror = "2.0.12"
