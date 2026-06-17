@@ -16,7 +16,10 @@ import {
 } from "../src/browserAdapter";
 import type { StreamChunkSnapshot } from "../src/browserAdapter";
 import { finalizeAsk } from "../src/execution/finalization";
-import { applyAskSnapshot } from "../src/execution/streaming";
+import {
+  applyAskSnapshot,
+  askSnapshotProgressSignature,
+} from "../src/execution/streaming";
 import { uploadAttachments } from "../src/pageRuntime/uploads";
 import {
   createIsolatedTempDir,
@@ -33,6 +36,14 @@ import {
   liveStyleCanvasArtifactTurn,
   liveStyleReasoningTurn,
   liveThoughtArtifactText,
+  liveWorkedFinalAnswerHtml,
+  liveWorkedFinalAnswerText,
+  liveWorkedReasoningAnswerMessageHtml,
+  liveWorkedReasoningIntroText,
+  liveWorkedReasoningPlanText,
+  liveWorkedReasoningStatusText,
+  liveWorkedReasoningStepTexts,
+  liveWorkedReasoningTurn,
 } from "./helpers/askRuntimeDom";
 import {
   captureDeltaChunks,
@@ -174,6 +185,194 @@ describe("browser adapter ask: uploads and artifacts", () => {
     expect(snapshot.text).not.toContain("Searching");
     expect(snapshot.text).not.toContain("Sources");
     expect(snapshot.text).not.toContain(liveThoughtArtifactText);
+    dom.window.close();
+  });
+
+  it("ignores native worked-progress UI before the final answer starts", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML("beforeend", liveWorkedReasoningTurn());
+    dom.window.document.body.dataset.streamState = "running";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.hasAssistantMessage).toBe(false);
+    expect(snapshot.messageId).toBeNull();
+    expect(snapshot.text).toBe("");
+    expect(snapshot.state).toBe("running");
+    expect(snapshot.text).not.toContain(liveWorkedReasoningStatusText);
+    expect(snapshot.text).not.toContain(liveWorkedReasoningIntroText);
+    expect(snapshot.text).not.toContain(liveWorkedReasoningPlanText);
+    for (const step of liveWorkedReasoningStepTexts) {
+      expect(snapshot.text).not.toContain(step);
+    }
+    dom.window.close();
+  });
+
+  it("reads only the native worked-progress final answer", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML(
+      "beforeend",
+      liveWorkedReasoningTurn(
+        liveWorkedReasoningAnswerMessageHtml(liveWorkedFinalAnswerHtml()),
+      ),
+    );
+    dom.window.document.body.dataset.streamState = "done";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.messageId).toBe("actual-answer-msg");
+    expect(snapshot.text).toBe(liveWorkedFinalAnswerText);
+    expect(snapshot.text.startsWith("Implemented the requested")).toBe(true);
+    expect(snapshot.text).not.toContain(liveWorkedReasoningStatusText);
+    expect(snapshot.text).not.toContain(liveWorkedReasoningIntroText);
+    expect(snapshot.text).not.toContain(liveWorkedReasoningPlanText);
+    for (const step of liveWorkedReasoningStepTexts) {
+      expect(snapshot.text).not.toContain(step);
+    }
+    dom.window.close();
+  });
+
+  it("reads only final JSON after native worked-progress UI", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    const jsonAnswer = '{"status":"ok","artifact":"calculator.zip"}';
+    main.insertAdjacentHTML(
+      "beforeend",
+      liveWorkedReasoningTurn(
+        liveWorkedReasoningAnswerMessageHtml(`<p>${jsonAnswer}</p>`),
+      ),
+    );
+    dom.window.document.body.dataset.streamState = "done";
+
+    const snapshot = adapter.readAskSnapshot({ baseline });
+
+    expect(snapshot.messageId).toBe("actual-answer-msg");
+    expect(snapshot.text).toBe(jsonAnswer);
+    expect(snapshot.text).not.toContain(liveWorkedReasoningStatusText);
+    expect(snapshot.text).not.toContain(liveWorkedReasoningIntroText);
+    expect(snapshot.text).not.toContain(liveWorkedReasoningPlanText);
+    dom.window.close();
+  });
+
+  it("keeps native worked-progress rows out of message identity and snapshot fingerprints", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML("beforeend", liveWorkedReasoningTurn());
+    dom.window.document.body.dataset.streamState = "running";
+    const state = {
+      emittedText: "",
+      nextSeq: 0,
+      knownMessageId: null,
+      pendingMessageId: null,
+      pendingMessageText: "",
+      lastSnapshotSignature: null,
+    };
+    const chunks: StreamChunkSnapshot[] = [];
+
+    const firstSnapshot = adapter.readAskSnapshot({ baseline });
+    const firstSignature = askSnapshotProgressSignature(firstSnapshot);
+    const firstProgressed = await applyAskSnapshot(
+      { jobId: "job-native-worked-progress" } as any,
+      state,
+      firstSnapshot,
+      (chunk) => {
+        chunks.push(chunk);
+      },
+    );
+
+    const step = Array.from(
+      dom.window.document.querySelectorAll("button"),
+    ).find((button) => button.textContent?.includes("Planned project setup"));
+    if (!(step instanceof dom.window.HTMLElement)) {
+      throw new Error("expected native worked-progress step row");
+    }
+    step.textContent = "Packed calculator ZIP and checked git status";
+    const secondSnapshot = adapter.readAskSnapshot({ baseline });
+    const secondSignature = askSnapshotProgressSignature(secondSnapshot);
+    const secondProgressed = await applyAskSnapshot(
+      { jobId: "job-native-worked-progress" } as any,
+      state,
+      secondSnapshot,
+      (chunk) => {
+        chunks.push(chunk);
+      },
+    );
+
+    expect(firstSnapshot.messageId).toBeNull();
+    expect(secondSnapshot.messageId).toBeNull();
+    expect(firstSnapshot.text).toBe("");
+    expect(secondSnapshot.text).toBe("");
+    expect(firstSignature).toBe(secondSignature);
+    expect(firstProgressed).toBe(true);
+    expect(secondProgressed).toBe(false);
+    expect(state.knownMessageId).toBeNull();
+    expect(state.pendingMessageId).toBeNull();
+    expect(chunks).toEqual([]);
+    dom.window.close();
+  });
+
+  it("finalizes native worked-progress output from only the real answer container", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML(
+      "beforeend",
+      liveWorkedReasoningTurn(
+        liveWorkedReasoningAnswerMessageHtml(liveWorkedFinalAnswerHtml()),
+      ),
+    );
+    dom.window.document.body.dataset.streamState = "done";
+    const snapshot = adapter.readAskSnapshot({ baseline });
+    const emitted: StreamChunkSnapshot[] = [];
+    const fakeLocator = {
+      first() {
+        return this;
+      },
+      async count() {
+        return 0;
+      },
+      async all() {
+        return [];
+      },
+    };
+    const fakePage = {
+      locator() {
+        return fakeLocator;
+      },
+      async evaluate() {
+        return false;
+      },
+    };
+    const fakeHost = {
+      getDownloadsDir() {
+        return process.cwd();
+      },
+      resolveConversationTarget(conversationId: string | null) {
+        return `https://chatgpt.com/c/${conversationId ?? "conv-worked-reasoning"}`;
+      },
+      async ensureManagedPage() {},
+    };
+
+    const result = await finalizeAsk(
+      fakeHost as any,
+      { jobId: "job-native-worked-finalize" } as any,
+      fakePage as any,
+      { emittedText: "", nextSeq: 0 },
+      snapshot,
+      (chunk) => {
+        emitted.push(chunk);
+      },
+    );
+
+    expect(result.output_text).toBe(liveWorkedFinalAnswerText);
+    expect(result.output_text).toContain("Download the full git repo ZIP");
+    expect(result.output_text).toContain("dotnet tests in this sandbox");
+    expect(result.output_text).not.toContain(liveWorkedReasoningStatusText);
+    expect(result.output_text).not.toContain(liveWorkedReasoningIntroText);
+    expect(result.output_text).not.toContain(liveWorkedReasoningPlanText);
+    expect(emitted[0]?.text).toBe(liveWorkedFinalAnswerText);
+    expect(emitted.map((chunk) => chunk.kind)).toEqual(["delta", "done"]);
     dom.window.close();
   });
 
