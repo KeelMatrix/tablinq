@@ -20,6 +20,7 @@ function createAssistantMessageRuntimeModule({
     isTransientAskStatusElement,
     isThoughtDividerElement,
     explicitAssistantRole,
+    findMessageContentRoot,
     readMessageIdentity,
     thoughtDividerBeforeMessage,
   } = messageFilters;
@@ -39,8 +40,14 @@ function createAssistantMessageRuntimeModule({
     if (!testId || !/^conversation-turn(?:-[a-z0-9_-]+)?$/i.test(testId)) {
       return false;
     }
-    if (element.querySelector(".markdown, [data-message-content]")) {
+    const hasMessageLikeContent = Boolean(
+      element.querySelector(".markdown, [data-message-content]"),
+    );
+    if (hasMessageLikeContent && findMessageContentRoot(element)) {
       return true;
+    }
+    if (hasMessageLikeContent) {
+      return false;
     }
     const labels = uniqueCollapsed([
       element.getAttribute("aria-label"),

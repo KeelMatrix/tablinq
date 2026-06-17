@@ -69,6 +69,53 @@ function createMessageFilterRuntimeModule({ textUtils, domUtils }) {
       datasetValue(element?.getAttribute?.("data-message-author-role")) ?? "",
     ) === "assistant";
 
+  const isNativeReasoningDurationText = (value) =>
+    /^worked for\b/i.test(collapseText(value));
+
+  const visibleElementChildren = (element) =>
+    Array.from(element?.children ?? []).filter(
+      (child) => child instanceof HTMLElement && isVisible(child),
+    );
+
+  const isNativeReasoningDurationControl = (element) =>
+    element instanceof HTMLElement &&
+    element.tagName.toLowerCase() === "button" &&
+    isNativeReasoningDurationText(element.textContent);
+
+  const isNativeReasoningProgressContainer = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (explicitAssistantRole(element)) {
+      return false;
+    }
+    if (element.querySelector("[data-message-author-role='assistant']")) {
+      return false;
+    }
+    const firstVisibleChild = visibleElementChildren(element)[0] ?? null;
+    return isNativeReasoningDurationControl(firstVisibleChild);
+  };
+
+  const closestNativeReasoningProgressContainer = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return null;
+    }
+    let current = element;
+    while (current instanceof HTMLElement) {
+      if (explicitAssistantRole(current)) {
+        return null;
+      }
+      if (isNativeReasoningProgressContainer(current)) {
+        return current;
+      }
+      current = current.parentElement;
+    }
+    return null;
+  };
+
+  const isInsideNativeReasoningProgress = (element) =>
+    Boolean(closestNativeReasoningProgressContainer(element));
+
   const visibleSibling = (element, direction) => {
     let current =
       direction === "previous"
@@ -106,7 +153,8 @@ function createMessageFilterRuntimeModule({ textUtils, domUtils }) {
     }
     if (
       isTransientAskStatusElement(element) ||
-      isThoughtDividerElement(element)
+      isThoughtDividerElement(element) ||
+      isNativeReasoningProgressContainer(element)
     ) {
       return true;
     }
@@ -122,6 +170,9 @@ function createMessageFilterRuntimeModule({ textUtils, domUtils }) {
   const isInsideReasoningArtifactMessage = (element) => {
     if (!(element instanceof HTMLElement)) {
       return false;
+    }
+    if (isInsideNativeReasoningProgress(element)) {
+      return true;
     }
     const message = element.closest("[data-message-author-role='assistant']");
     return (
@@ -139,6 +190,7 @@ function createMessageFilterRuntimeModule({ textUtils, domUtils }) {
     for (const candidate of candidates) {
       if (
         !isTransientAskStatusElement(candidate) &&
+        !isInsideNativeReasoningProgress(candidate) &&
         !isInsideReasoningArtifactMessage(candidate)
       ) {
         return candidate;
@@ -147,7 +199,11 @@ function createMessageFilterRuntimeModule({ textUtils, domUtils }) {
     if (candidates.length > 0) {
       return null;
     }
-    if (isTransientAskStatusElement(root) || isReasoningArtifactMessage(root)) {
+    if (
+      isTransientAskStatusElement(root) ||
+      isInsideNativeReasoningProgress(root) ||
+      isReasoningArtifactMessage(root)
+    ) {
       return null;
     }
     return root;
@@ -169,6 +225,10 @@ function createMessageFilterRuntimeModule({ textUtils, domUtils }) {
     isTransientAskStatusText,
     isTransientAskStatusElement,
     isThoughtDividerElement,
+    isNativeReasoningDurationText,
+    isNativeReasoningDurationControl,
+    isNativeReasoningProgressContainer,
+    isInsideNativeReasoningProgress,
     explicitAssistantRole,
     thoughtDividerBeforeMessage,
     isReasoningArtifactMessage,

@@ -11,6 +11,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     isTransientAskStatusText,
     isTransientAskStatusElement,
     isInsideReasoningArtifactMessage,
+    isInsideNativeReasoningProgress,
     findMessageContentRoot,
     thoughtDividerBeforeMessage,
   } = messageFilters;
@@ -773,6 +774,9 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
     if (!isVisible(node)) {
       return "";
     }
+    if (isInsideNativeReasoningProgress(node)) {
+      return "";
+    }
     if (isIgnoredMessageChrome(node)) {
       return "";
     }
@@ -917,6 +921,9 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       return "";
     }
     if (isIgnoredMessageChrome(element)) {
+      return "";
+    }
+    if (isInsideNativeReasoningProgress(element)) {
       return "";
     }
     const tag = element.tagName.toLowerCase();
@@ -1100,6 +1107,7 @@ function createMarkdownRuntimeModule({ textUtils, domUtils, messageFilters }) {
       if (
         !isTransientAskStatusElement(current) &&
         !isInsideReasoningArtifactMessage(current) &&
+        !isInsideNativeReasoningProgress(current) &&
         hasUsefulPreThoughtArtifactMarker(current)
       ) {
         const contentRoot =
