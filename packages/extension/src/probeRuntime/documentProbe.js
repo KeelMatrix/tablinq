@@ -178,6 +178,8 @@ function observeSelectedModel({ context, predicates, matrix }) {
     (label) =>
       !label.includes("pro") &&
       (label.includes("thinking") ||
+        label.includes("medium") ||
+        label.includes("high") ||
         label.includes("standard") ||
         label.includes("extended") ||
         label.includes("5.4")),
@@ -188,6 +190,8 @@ function observeSelectedModel({ context, predicates, matrix }) {
       !label.includes("pro") &&
       !label.includes("instant") &&
       !label.includes("thinking") &&
+      !label.includes("medium") &&
+      !label.includes("high") &&
       !label.includes("standard") &&
       !label.includes("extended") &&
       !label.includes("5.3") &&
@@ -224,6 +228,8 @@ function observeSelectedModel({ context, predicates, matrix }) {
           selectedModelClass === "instant"
             ? label.includes("instant") || label.includes("5.3")
             : label.includes("thinking") ||
+              label.includes("medium") ||
+              label.includes("high") ||
               label.includes("standard") ||
               label.includes("extended") ||
               label.includes("5.4"),
@@ -237,9 +243,13 @@ function observeSelectedModel({ context, predicates, matrix }) {
 
 function observeThinkingEffort({ context, predicates, matrix, model }) {
   const labels = collectSelectedEffortLabels(context, predicates);
-  const selectedEffort = labels.some((label) => label.includes("extended"))
+  const selectedEffort = labels.some(
+    (label) => label.includes("extended") || label.includes("high"),
+  )
     ? "extended"
-    : labels.some((label) => label.includes("standard"))
+    : labels.some(
+          (label) => label.includes("standard") || label.includes("medium"),
+        )
       ? "standard"
       : null;
   const status =
@@ -332,6 +342,8 @@ function collectSelectedModelLabels(context, predicates) {
     context.hasToken(label, [
       "instant",
       "thinking",
+      "medium",
+      "high",
       "pro",
       "standard",
       "extended",
@@ -366,7 +378,13 @@ function collectSelectedEffortLabels(context, predicates) {
     ...(trigger ? [trigger] : []),
     ...composerPills,
   ]).filter((label) =>
-    context.hasToken(label, ["standard", "extended", "thinking"]),
+    context.hasToken(label, [
+      "standard",
+      "extended",
+      "medium",
+      "high",
+      "thinking",
+    ]),
   );
 }
 

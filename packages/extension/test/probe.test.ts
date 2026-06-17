@@ -363,6 +363,50 @@ describe("extension capability probe", () => {
     );
   });
 
+  it("maps the new Intelligence menu Medium and High labels to existing thinking efforts", () => {
+    document.body.dataset.uiVariant = "live";
+    document.body.innerHTML = `
+      <main aria-label="chatgpt workspace">
+        <form data-testid="composer-root">
+          <textarea id="prompt-textarea" aria-label="Message ChatGPT"></textarea>
+          <button type="button" class="__composer-pill" aria-haspopup="menu" aria-expanded="true">
+            High
+          </button>
+          <button type="button" data-testid="send-button" aria-label="Send prompt">Send</button>
+        </form>
+        <div role="menu">
+          <div aria-hidden="true">Intelligence</div>
+          <div role="menuitemradio" aria-checked="false">Instant</div>
+          <div role="menuitemradio" aria-checked="false">Medium</div>
+          <div role="menuitemradio" aria-checked="true">High</div>
+          <div role="menuitem">GPT-5.5</div>
+        </div>
+      </main>
+    `;
+
+    const message = probeDocument({
+      reportedAt: "2026-04-12T10:00:00Z",
+    });
+
+    expect(message.report.matrix.model_picker_visible).toBe(true);
+    expect(message.report.matrix.thinking_effort_visible).toBe(true);
+    expect(message.report.aliases.model_classes.instant).toContain("instant");
+    expect(message.report.aliases.model_classes.thinking).toEqual(
+      expect.arrayContaining(["medium", "high"]),
+    );
+    expect(message.report.aliases.efforts.standard).toContain("medium");
+    expect(message.report.aliases.efforts.extended).toContain("high");
+    expect(message.report.observed_ui.selected_model).toMatchObject({
+      status: "observed",
+      selected_model_class: "thinking",
+      selected_label: "high",
+    });
+    expect(message.report.observed_ui.thinking_effort).toMatchObject({
+      status: "observed",
+      selected_effort: "extended",
+    });
+  });
+
   it("detects an active composer Search chip", () => {
     document.body.dataset.uiVariant = "live";
     document.body.innerHTML = `

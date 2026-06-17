@@ -141,7 +141,7 @@ export function createCapabilityDefinitions(context, predicates) {
           id: "visible-model-options",
           score: 0.95,
           find: () =>
-            findNamedControl(["instant", "thinking", "pro"], {
+            findNamedControl(["instant", "thinking", "medium", "high", "pro"], {
               include: isModelOption,
               roots: visiblePopupRootsFor(isModelOption),
             }),
@@ -150,7 +150,7 @@ export function createCapabilityDefinitions(context, predicates) {
           id: "inline-model-options",
           score: 0.93,
           find: () =>
-            findNamedControl(["instant", "thinking", "pro"], {
+            findNamedControl(["instant", "thinking", "medium", "high", "pro"], {
               include: isModelOption,
             }),
         },
@@ -181,7 +181,7 @@ export function createCapabilityDefinitions(context, predicates) {
           id: "visible-effort-options",
           score: 0.91,
           find: () =>
-            findNamedControl(["standard", "extended"], {
+            findNamedControl(["standard", "extended", "medium", "high"], {
               include: isEffortOption,
               roots: visiblePopupRootsFor(isEffortOption),
             }),
@@ -190,16 +190,27 @@ export function createCapabilityDefinitions(context, predicates) {
           id: "inline-effort-options",
           score: 0.9,
           find: () =>
-            findComposerAdjacentNamedControl(["standard", "extended"], {
-              include: isEffortOption,
-            }),
+            findComposerAdjacentNamedControl(
+              ["standard", "extended", "medium", "high"],
+              {
+                include: isEffortOption,
+              },
+            ),
         },
         {
           id: "aria-effort-toggle",
           score: 0.88,
           find: () =>
             findComposerAdjacentNamedControl(
-              ["standard", "extended", "effort", "reasoning", "thinking"],
+              [
+                "standard",
+                "extended",
+                "medium",
+                "high",
+                "effort",
+                "reasoning",
+                "thinking",
+              ],
               {
                 include: predicates.isEffortPickerTrigger,
               },
