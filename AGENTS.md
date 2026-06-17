@@ -124,6 +124,7 @@ Single-context domain docs are expected at the repo root. See `docs/agents/domai
 
 For Tablinq tasks where the user did not explicitly name a skill, start with `tablinq-skill-selector` to choose the narrowest relevant repo-local and installed engineering skills.
 Use `tablinq-prompt-style` only when live ChatGPT prompt wording or duplicate avoidance is the main concern.
+When a live ChatGPT prompt is only needed to validate routing, UI selection, or transport, the prompt must be a normal user question unrelated to Tablinq, testing, smoke checks, drift, automation, or expected sentinel text.
 
 ### Telegram agent ping
 

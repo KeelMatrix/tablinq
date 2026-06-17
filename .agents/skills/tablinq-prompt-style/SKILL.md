@@ -31,6 +31,7 @@ Avoid:
 - repeating the current topic from scratch
 - overly clean numbered requirements unless testing formatting
 - prompts that reveal automation/debug instructions
+- prompts that ask for a fixed sentinel phrase or exact test response
 
 ## Duplicate Check
 
@@ -48,6 +49,40 @@ Treat these as duplicates and do not send:
 - same request with synonyms but same intent
 - asking again because the previous response was slow
 - a prompt copied from the bug report if it already exists in the current chat
+
+## Content-Irrelevant Validation Prompts
+
+When the prompt content itself is not under test and the live prompt is only being sent to validate routing, model selection, UI selection, transport, or gateway/CLI wiring:
+
+- choose a normal standalone user question from an everyday topic unrelated to Tablinq or debugging
+- do not mention Tablinq, local automation, UI drift, smoke checks, routing, the gateway, the CLI, test state, or validation
+- do not ask for an exact phrase, sentinel text, or "reply with X"
+- vary the topic across multiple prompts instead of reusing the same template with different expected words
+- keep prompts short enough for fast validation, but make them sound like real questions a person might ask
+
+Good:
+
+```text
+what's a good way to keep basil alive on a sunny windowsill?
+```
+
+```text
+how should I think about choosing between a train and a short flight?
+```
+
+```text
+what's one practical way to make a small kitchen feel less cramped?
+```
+
+Bad:
+
+```text
+For a local Tablinq UI drift check, reply in one short sentence: medium route ok.
+```
+
+```text
+Say exactly "instant route ok" so I can verify the gateway path.
+```
 
 ## Continuation Examples
 
