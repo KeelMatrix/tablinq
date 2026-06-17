@@ -56,6 +56,8 @@ export async function findVisibleModelPickerTrigger(
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.3')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.4')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.5')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Medium')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('High')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Standard')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Extended')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
@@ -103,6 +105,8 @@ export async function findVisibleComposerModelChipRemoveButton(
         "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='reason' i]",
         "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='standard' i]",
         "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='extended' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='medium' i]",
+        "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='high' i]",
         "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='instant' i]",
         "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='latest' i]",
         "[data-testid='composer-root'] button[aria-label*='remove' i][aria-label*='pro' i]",
@@ -113,6 +117,8 @@ export async function findVisibleComposerModelChipRemoveButton(
         "form button[aria-label*='remove' i][aria-label*='reason' i]",
         "form button[aria-label*='remove' i][aria-label*='standard' i]",
         "form button[aria-label*='remove' i][aria-label*='extended' i]",
+        "form button[aria-label*='remove' i][aria-label*='medium' i]",
+        "form button[aria-label*='remove' i][aria-label*='high' i]",
         "form button[aria-label*='remove' i][aria-label*='instant' i]",
         "form button[aria-label*='remove' i][aria-label*='latest' i]",
         "form button[aria-label*='remove' i][aria-label*='pro' i]",
@@ -227,7 +233,12 @@ export async function ensureConfiguredModelClass(
           locator: preferredOption,
           checked: await preferredOption.getAttribute("aria-checked"),
         }
-      : await findVisiblePopupChoicePoint(page, modelClass, 750, excludeTokens);
+      : await findVisibleModelClassChoicePoint(
+          page,
+          modelClass,
+          750,
+          excludeTokens,
+        );
   if (option) {
     if (option.checked !== "true") {
       await clickWithInteractionJitter(
@@ -276,7 +287,7 @@ export async function ensureConfiguredModelClass(
           locator: reopenedPreferredOption,
           checked: await reopenedPreferredOption.getAttribute("aria-checked"),
         }
-      : await findVisiblePopupChoicePoint(
+      : await findVisibleModelClassChoicePoint(
           page,
           modelClass,
           INTERACTION_TIMEOUT_MS,
@@ -303,4 +314,27 @@ export async function ensureConfiguredModelClass(
     }
   }
   await closeOpenComposerMenus(page);
+}
+
+async function findVisibleModelClassChoicePoint(
+  page: Page,
+  modelClass: "instant" | "thinking",
+  timeoutMs: number,
+  excludeTokens: readonly string[],
+): Promise<{ locator: Locator; checked: string | null } | null> {
+  const tokens =
+    modelClass === "thinking" ? ["medium", "thinking", "high"] : [modelClass];
+  const perTokenTimeoutMs = Math.max(250, Math.ceil(timeoutMs / tokens.length));
+  for (const token of tokens) {
+    const option = await findVisiblePopupChoicePoint(
+      page,
+      token,
+      perTokenTimeoutMs,
+      excludeTokens,
+    );
+    if (option) {
+      return option;
+    }
+  }
+  return null;
 }

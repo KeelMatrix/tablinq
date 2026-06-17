@@ -284,6 +284,8 @@ export async function findVisibleEffortTrigger(
         "[data-testid='model-switcher-gpt-5-4-thinking-thinking-effort']",
         "[data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
         "#thinking-effort-trigger",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Medium')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('High')",
         "button[aria-controls*='effort']",
         "button[aria-label*='thinking'][aria-haspopup]",
         "button[aria-label*='effort'][aria-haspopup]",
@@ -338,6 +340,8 @@ async function findVisibleModelPickerTriggerForEffort(
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.3')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.4')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('5.5')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Medium')",
+        "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('High')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Standard')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label]):has-text('Extended')",
         "button.__composer-pill[aria-haspopup='menu']:not([aria-label])",
@@ -417,7 +421,7 @@ async function selectThinkingEffortFromConfigureModal(
   const effortCombobox = await waitForVisibleLocator(
     modal
       .locator("[role='combobox'], button:visible")
-      .filter({ hasText: /standard|extended/i }),
+      .filter({ hasText: /standard|extended|medium|high/i }),
     1_000,
   );
   if (!effortCombobox) {
@@ -431,7 +435,7 @@ async function selectThinkingEffortFromConfigureModal(
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
-  if (!currentEffort.includes(effort)) {
+  if (!textMatchesEffort(currentEffort, effort)) {
     await clickWithInteractionJitter(
       effortCombobox,
       "picker_trigger",
@@ -491,7 +495,7 @@ async function findVisibleModalEffortOption(
         .replace(/\s+/g, " ")
         .trim()
         .toLowerCase();
-      if (text.includes(effort)) {
+      if (textMatchesEffort(text, effort)) {
         return locator;
       }
     }
@@ -545,9 +549,30 @@ async function findVisibleThinkingChoicePoint(
         .replace(/\s+/g, " ")
         .trim()
         .toLowerCase();
+      const matchesEffort = textMatchesEffort(text, effort);
+      const isNewIntelligenceEffort =
+        matchesEffort &&
+        (await locator
+          .evaluate((element) => {
+            const root = element.closest("[role='menu'], [role='listbox']");
+            const rootText = (root?.textContent ?? "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .toLowerCase();
+            return (
+              rootText.includes("instant") &&
+              rootText.includes("medium") &&
+              rootText.includes("high")
+            );
+          })
+          .catch(() => false));
       const isThinking =
         testId.includes("thinking") || text.includes("thinking");
-      if (!isThinking || testId.includes("pro") || text.includes("pro")) {
+      if (
+        (!isThinking && !isNewIntelligenceEffort) ||
+        testId.includes("pro") ||
+        text.includes("pro")
+      ) {
         continue;
       }
       const hasNestedEffort =
@@ -557,10 +582,6 @@ async function findVisibleThinkingChoicePoint(
           )
           .count()
           .catch(() => 0)) > 0;
-      const matchesEffort =
-        effort === "standard"
-          ? text.includes("standard")
-          : text.includes("extended");
       if (!matchesEffort) {
         continue;
       }
@@ -583,7 +604,7 @@ async function findVisibleEffortChoicePoint(
     "[role='menuitemradio']:visible, [role='option']:visible",
   );
   const deadline = Date.now() + timeoutMs;
-  const expectedToken = token.toLowerCase();
+  const expectedTokens = effortTokensFor(token);
   while (Date.now() < deadline) {
     const count = await popupChoices.count();
     for (let index = 0; index < count; index += 1) {
@@ -596,7 +617,9 @@ async function findVisibleEffortChoicePoint(
         .replace(/\s+/g, " ")
         .trim()
         .toLowerCase();
-      if (!text.includes(expectedToken)) {
+      if (
+        !expectedTokens.some((expectedToken) => text.includes(expectedToken))
+      ) {
         continue;
       }
       return {
@@ -607,4 +630,22 @@ async function findVisibleEffortChoicePoint(
     await page.waitForTimeout(100);
   }
   return null;
+}
+
+function effortTokensFor(token: string): string[] {
+  const expected = token.toLowerCase();
+  if (expected === "standard") {
+    return ["standard", "medium"];
+  }
+  if (expected === "extended") {
+    return ["extended", "high"];
+  }
+  return [expected];
+}
+
+function textMatchesEffort(
+  text: string,
+  effort: "standard" | "extended",
+): boolean {
+  return effortTokensFor(effort).some((token) => text.includes(token));
 }

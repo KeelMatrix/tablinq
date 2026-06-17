@@ -245,6 +245,8 @@ function visibleComposerSelectionState() {
     (text) =>
       !text.includes("pro") &&
       (text.includes("thinking") ||
+        text.includes("medium") ||
+        text.includes("high") ||
         text.includes("standard") ||
         text.includes("extended") ||
         text.includes("5.4")),
@@ -255,6 +257,8 @@ function visibleComposerSelectionState() {
       !text.includes("pro") &&
       !text.includes("instant") &&
       !text.includes("thinking") &&
+      !text.includes("medium") &&
+      !text.includes("high") &&
       !text.includes("standard") &&
       !text.includes("extended") &&
       !text.includes("5.3") &&
@@ -276,7 +280,9 @@ function visibleComposerSelectionState() {
   if (hasUnsupportedPro || hasAmbiguousFiveFive) {
     effort = "ambiguous";
   } else if (model === "thinking") {
-    effort = texts.some((text) => text.includes("extended"))
+    effort = texts.some(
+      (text) => text.includes("extended") || text.includes("high"),
+    )
       ? "extended"
       : "standard";
   }

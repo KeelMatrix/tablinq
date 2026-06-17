@@ -40,12 +40,14 @@ function createCapabilityDiscoveryRuntime({
       "gpt",
       "pro",
       "latest",
+      "medium",
+      "high",
       "standard",
       "extended",
     ]) ||
     /\b5(?:\.\d+)?\b/.test(name) ||
     (hasToken(name, ["thinking"]) &&
-      !hasToken(name, ["standard", "extended", "effort"]));
+      !hasToken(name, ["medium", "high", "standard", "extended", "effort"]));
 
   const controlledPopupHasToken = (element, tokens) => {
     const controlledId = element?.getAttribute?.("aria-controls");
@@ -101,6 +103,8 @@ function createCapabilityDiscoveryRuntime({
         "thinking",
         "reasoning",
         "depth",
+        "medium",
+        "high",
         "standard",
         "extended",
         "effort",
@@ -120,6 +124,8 @@ function createCapabilityDiscoveryRuntime({
         "instant",
         "thinking",
         "reasoning",
+        "medium",
+        "high",
         "standard",
         "extended",
         "latest",
@@ -136,7 +142,14 @@ function createCapabilityDiscoveryRuntime({
         "button[aria-haspopup][aria-label*='Thinking']",
         "button[aria-haspopup][aria-label*='thinking']",
       ],
-      tokens: ["thinking", "reasoning", "standard", "extended"],
+      tokens: [
+        "thinking",
+        "reasoning",
+        "medium",
+        "high",
+        "standard",
+        "extended",
+      ],
       include: isComposerModelChip,
       exclude: (element) => !isComposerModelChip(element),
     });
@@ -146,6 +159,8 @@ function createCapabilityDiscoveryRuntime({
       selectors: [
         "button[aria-label*='remove' i][aria-label*='think' i]",
         "button[aria-label*='remove' i][aria-label*='reason' i]",
+        "button[aria-label*='remove' i][aria-label*='medium' i]",
+        "button[aria-label*='remove' i][aria-label*='high' i]",
         "button[aria-label*='remove' i][aria-label*='standard' i]",
         "button[aria-label*='remove' i][aria-label*='extended' i]",
         "button[aria-label*='remove' i][aria-label*='instant' i]",
@@ -160,6 +175,8 @@ function createCapabilityDiscoveryRuntime({
         "instant",
         "thinking",
         "reasoning",
+        "medium",
+        "high",
         "standard",
         "extended",
         "latest",
@@ -190,7 +207,15 @@ function createCapabilityDiscoveryRuntime({
       ]));
 
   const nameLooksLikeEffortOption = (name) =>
-    hasToken(name, ["standard", "extended", "effort", "depth", "balanced"]);
+    hasToken(name, [
+      "standard",
+      "extended",
+      "medium",
+      "high",
+      "effort",
+      "depth",
+      "balanced",
+    ]);
 
   const nameLooksLikeModelOption = (name) =>
     hasToken(name, [
@@ -200,6 +225,8 @@ function createCapabilityDiscoveryRuntime({
       "gpt",
       "model",
       "fast",
+      "medium",
+      "high",
       "deep",
       "deeper",
     ]);
@@ -362,13 +389,14 @@ function createCapabilityDiscoveryRuntime({
   const isSupportedModelAlias = (key, name) =>
     key === "instant"
       ? hasToken(name, ["instant"]) && !hasToken(name, ["pro"])
-      : hasToken(name, ["thinking"]) && !hasToken(name, ["pro"]);
+      : hasToken(name, ["thinking", "medium", "high"]) &&
+        !hasToken(name, ["pro"]);
 
   const discoverVisibleModelAliases = () =>
     discoverVisibleAliases({
       keys: {
         instant: ["instant"],
-        thinking: ["thinking"],
+        thinking: ["thinking", "medium", "high"],
       },
       exclude: (element) =>
         isModelPickerTrigger(element) || !isModelOption(element),
@@ -378,8 +406,8 @@ function createCapabilityDiscoveryRuntime({
   const discoverVisibleEffortAliases = () =>
     discoverVisibleAliases({
       keys: {
-        standard: ["standard"],
-        extended: ["extended"],
+        standard: ["standard", "medium"],
+        extended: ["extended", "high"],
         none: ["none", "auto"],
       },
       exclude: (element) =>
@@ -737,7 +765,7 @@ function createCapabilityDiscoveryRuntime({
         "[data-testid^='model-switcher-gpt-'][data-testid$='-thinking-thinking-effort']",
       ],
       aliases: ["effort"],
-      fallbackTokens: ["effort", "standard", "extended"],
+      fallbackTokens: ["effort", "standard", "extended", "medium", "high"],
       include: isEffortPickerTrigger,
       exclude: (element) => !isEffortPickerTrigger(element),
     });

@@ -53,19 +53,21 @@ function createCapabilityRuntimeModule({
 
   const modelDefaults = (modelClass) => [
     modelClass,
-    modelClass === "instant" ? "for everyday chats" : "for complex questions",
+    modelClass === "instant" ? "for everyday chats" : "medium",
+    modelClass === "instant" ? "instant" : "for complex questions",
   ];
 
   const modelFallbackTokens = (modelClass) =>
-    modelClass === "instant" ? ["instant"] : ["thinking"];
+    modelClass === "instant" ? ["instant"] : ["thinking", "medium", "high"];
 
   const effortDefaults = (effort) => [
     effort,
+    effort === "standard" ? "medium" : "high",
     effort === "standard" ? "thinking" : "extended thinking",
   ];
 
   const effortFallbackTokens = (effort) =>
-    effort === "standard" ? ["standard"] : ["extended"];
+    effort === "standard" ? ["standard", "medium"] : ["extended", "high"];
 
   const reportHelpers = {
     expandAliases,

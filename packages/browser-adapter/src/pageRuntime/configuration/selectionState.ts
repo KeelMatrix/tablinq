@@ -52,7 +52,10 @@ export async function readVisibleComposerSelectionState(
       const hasSupportedThinking = texts.some(
         (text) =>
           !text.includes("pro") &&
-          (text.includes("thinking") || text.includes("5.4")),
+          (text.includes("thinking") ||
+            text.includes("medium") ||
+            text.includes("high") ||
+            text.includes("5.4")),
       );
       const hasAmbiguousFiveFive = texts.some(
         (text) =>
@@ -60,6 +63,8 @@ export async function readVisibleComposerSelectionState(
           !text.includes("pro") &&
           !text.includes("instant") &&
           !text.includes("thinking") &&
+          !text.includes("medium") &&
+          !text.includes("high") &&
           !text.includes("standard") &&
           !text.includes("extended") &&
           !text.includes("5.3") &&
@@ -77,7 +82,9 @@ export async function readVisibleComposerSelectionState(
       if (hasUnsupportedPro || hasAmbiguousFiveFive) {
         effort = "ambiguous";
       } else if (model === "thinking") {
-        effort = texts.some((text) => text.includes("extended"))
+        effort = texts.some(
+          (text) => text.includes("extended") || text.includes("high"),
+        )
           ? "extended"
           : "standard";
       }
@@ -132,7 +139,10 @@ async function readSelectedComposerControlState(
       const hasSupportedThinking = texts.some(
         (text) =>
           !text.includes("pro") &&
-          (text.includes("thinking") || text.includes("5.4")),
+          (text.includes("thinking") ||
+            text.includes("medium") ||
+            text.includes("high") ||
+            text.includes("5.4")),
       );
       let model = "none";
       if (hasUnsupportedPro || (hasInstant && hasSupportedThinking)) {
@@ -145,10 +155,16 @@ async function readSelectedComposerControlState(
       let effort = "none";
       if (hasUnsupportedPro) {
         effort = "ambiguous";
-      } else if (texts.some((text) => text.includes("extended"))) {
+      } else if (
+        texts.some(
+          (text) => text.includes("extended") || text.includes("high"),
+        )
+      ) {
         effort = "extended";
       } else if (
-        texts.some((text) => text.includes("standard")) ||
+        texts.some(
+          (text) => text.includes("standard") || text.includes("medium"),
+        ) ||
         model === "thinking"
       ) {
         effort = "standard";
@@ -223,9 +239,13 @@ export async function assertVisibleComposerSelection(
   const visible = describeVisibleComposerSelection(state);
   const selectedState = await readSelectedComposerControlState(page);
   const visibleEffort: VisibleComposerSelectionState["effort"] =
-    state.texts.some((text) => text.includes("extended"))
+    state.texts.some(
+      (text) => text.includes("extended") || text.includes("high"),
+    )
       ? "extended"
-      : state.texts.some((text) => text.includes("standard"))
+      : state.texts.some(
+            (text) => text.includes("standard") || text.includes("medium"),
+          )
         ? "standard"
         : "none";
   const effectiveState =

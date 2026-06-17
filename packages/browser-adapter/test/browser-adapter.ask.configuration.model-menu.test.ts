@@ -15,6 +15,7 @@ import {
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
 import type { StreamChunkSnapshot } from "../src/browserAdapter";
+import type { Page } from "playwright-core";
 import { finalizeAsk } from "../src/execution/finalization";
 import { applyAskSnapshot } from "../src/execution/streaming";
 import {
@@ -42,6 +43,110 @@ import { installBrowserAdapterHarness } from "./helpers/browserAdapterHarness";
 const harness = installBrowserAdapterHarness();
 
 describe("browser adapter ask: model menu configuration", () => {
+  async function installNewIntelligenceMenu(page: Page): Promise<void> {
+    await page.evaluate(() => {
+      const trigger = document.querySelector(
+        "[data-harness-model-trigger='composer-right']",
+      );
+      const menu = document.querySelector("#tablinq-model-menu");
+      const instant = document.querySelector("#model-option-instant");
+      const medium = document.querySelector("#model-option-thinking");
+      const oldEffortMenu = document.querySelector("#tablinq-effort-menu");
+      const legacyNestedEffort = document.querySelector(
+        "[data-testid$='-thinking-thinking-effort']",
+      );
+      if (
+        !(trigger instanceof HTMLElement) ||
+        !(menu instanceof HTMLElement) ||
+        !(instant instanceof HTMLElement) ||
+        !(medium instanceof HTMLElement)
+      ) {
+        throw new Error("intelligence menu fixture missing");
+      }
+
+      oldEffortMenu?.remove();
+      legacyNestedEffort?.remove();
+      instant.removeAttribute("data-testid");
+      medium.removeAttribute("data-testid");
+      medium.textContent = "Medium";
+
+      const pro = document.querySelector("#model-option-pro");
+      if (pro instanceof HTMLElement) {
+        pro.removeAttribute("data-testid");
+        pro.setAttribute("role", "menuitem");
+        pro.textContent = "GPT-5.5";
+      }
+
+      const existingHigh = document.querySelector("#model-option-high");
+      const high =
+        existingHigh instanceof HTMLElement
+          ? existingHigh
+          : document.createElement("div");
+      if (!(existingHigh instanceof HTMLElement)) {
+        high.id = "model-option-high";
+        high.setAttribute("role", "menuitemradio");
+        high.hidden = true;
+        high.textContent = "High";
+        medium.after(high);
+      }
+
+      medium.addEventListener("click", () => {
+        document.body.dataset.selectedEffort = "standard";
+        (
+          window as unknown as { syncSelectedState?: () => void }
+        ).syncSelectedState?.();
+      });
+
+      high.addEventListener("click", () => {
+        document.body.dataset.modelOptionClicks = String(
+          Number.parseInt(document.body.dataset.modelOptionClicks || "0", 10) +
+            1,
+        );
+        document.body.dataset.selectedModel = "thinking";
+        document.body.dataset.selectedEffort = "extended";
+        trigger.setAttribute("aria-expanded", "false");
+        (
+          window as unknown as { syncSelectedState?: () => void }
+        ).syncSelectedState?.();
+      });
+
+      const syncSelectedState =
+        (window as unknown as { syncSelectedState?: () => void })
+          .syncSelectedState ?? (() => undefined);
+      (
+        window as unknown as { syncSelectedState?: () => void }
+      ).syncSelectedState = () => {
+        syncSelectedState();
+        const selectedModel = document.body.dataset.selectedModel;
+        const selectedEffort = document.body.dataset.selectedEffort;
+        const open = trigger.getAttribute("aria-expanded") === "true";
+        const selectedHigh =
+          selectedModel === "thinking" && selectedEffort === "extended";
+        const selectedMedium =
+          selectedModel === "thinking" && selectedEffort !== "extended";
+        trigger.textContent =
+          selectedModel === "thinking"
+            ? selectedHigh
+              ? "High"
+              : "Medium"
+            : "Instant";
+        for (const option of [instant, medium, high]) {
+          option.toggleAttribute("hidden", !open);
+        }
+        medium.setAttribute("aria-checked", selectedMedium ? "true" : "false");
+        medium.dataset.selected = selectedMedium ? "true" : "false";
+        high.setAttribute("aria-checked", selectedHigh ? "true" : "false");
+        high.dataset.selected = selectedHigh ? "true" : "false";
+        if (pro instanceof HTMLElement) {
+          pro.toggleAttribute("hidden", !open);
+        }
+      };
+      (
+        window as unknown as { syncSelectedState?: () => void }
+      ).syncSelectedState?.();
+    });
+  }
+
   it("selects Instant from the current ChatGPT model menu", async () => {
     const server = await harness.startServer();
     const { adapter } = await openManagedHarnessAdapter(harness, server.url, {
@@ -254,6 +359,160 @@ describe("browser adapter ask: model menu configuration", () => {
     expect(state).toEqual({
       model: "instant",
       modelMenuClicks: "1",
+      effortMenuClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("keeps Instant through the new intelligence menu", async () => {
+    const server = await harness.startServer();
+    const conversationId = "new-intelligence-instant";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "thinking",
+        initialEffort: "extended",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+    await installNewIntelligenceMenu(adapter.getManagedPageForTest()!);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-new-intelligence-instant",
+        prompt: "configure new intelligence instant",
+        conversationId,
+        modelClass: "instant",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      visible:
+        document
+          .querySelector("[data-harness-model-trigger='composer-right']")
+          ?.textContent?.trim() ?? "",
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      model: "instant",
+      effort: "extended",
+      visible: "Instant",
+      modelMenuClicks: "1",
+      modelOptionClicks: "1",
+      effortMenuClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("selects Medium for thinking-standard through the new intelligence menu", async () => {
+    const server = await harness.startServer();
+    const conversationId = "new-intelligence-thinking-standard";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "instant",
+        initialEffort: "extended",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+    await installNewIntelligenceMenu(adapter.getManagedPageForTest()!);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-new-intelligence-thinking-standard",
+        prompt: "configure new intelligence medium",
+        conversationId,
+        modelClass: "thinking",
+        effort: "standard",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      lastSubmittedModel: document.body.dataset.lastSubmittedModel,
+      lastSubmittedEffort: document.body.dataset.lastSubmittedEffort,
+      visible:
+        document
+          .querySelector("[data-harness-model-trigger='composer-right']")
+          ?.textContent?.trim() ?? "",
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "standard",
+      lastSubmittedModel: "thinking",
+      lastSubmittedEffort: "standard",
+      visible: "Medium",
+      modelMenuClicks: "1",
+      modelOptionClicks: "1",
+      effortMenuClicks: "0",
+    });
+
+    await adapter.shutdown();
+  });
+
+  it("selects High for thinking-extended through the new intelligence menu", async () => {
+    const server = await harness.startServer();
+    const conversationId = "new-intelligence-thinking-extended";
+    const targetUrl = withHarnessUrl(
+      new URL(`/c/${conversationId}`, server.url).toString(),
+      {
+        variant: "composer-right",
+        initialModel: "instant",
+        initialEffort: "standard",
+      },
+    );
+    const { adapter } = await openManagedHarnessAdapter(harness, targetUrl);
+    await installNewIntelligenceMenu(adapter.getManagedPageForTest()!);
+
+    await adapter.ask(
+      {
+        jobId: "job-ask-new-intelligence-thinking-extended",
+        prompt: "configure new intelligence high",
+        conversationId,
+        modelClass: "thinking",
+        effort: "extended",
+      },
+      () => {},
+    );
+
+    const state = await adapter.getManagedPageForTest()!.evaluate(() => ({
+      model: document.body.dataset.selectedModel,
+      effort: document.body.dataset.selectedEffort,
+      lastSubmittedModel: document.body.dataset.lastSubmittedModel,
+      lastSubmittedEffort: document.body.dataset.lastSubmittedEffort,
+      visible:
+        document
+          .querySelector("[data-harness-model-trigger='composer-right']")
+          ?.textContent?.trim() ?? "",
+      modelMenuClicks: document.body.dataset.modelMenuClicks ?? "0",
+      modelOptionClicks: document.body.dataset.modelOptionClicks ?? "0",
+      effortMenuClicks: document.body.dataset.effortMenuClicks ?? "0",
+    }));
+
+    expect(state).toEqual({
+      model: "thinking",
+      effort: "extended",
+      lastSubmittedModel: "thinking",
+      lastSubmittedEffort: "extended",
+      visible: "High",
+      modelMenuClicks: "1",
+      modelOptionClicks: "1",
       effortMenuClicks: "0",
     });
 

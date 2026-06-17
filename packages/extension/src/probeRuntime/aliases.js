@@ -68,7 +68,7 @@ export function captureProbeAliases({
         }
       }
     }
-    for (const name of ["standard", "extended"]) {
+    for (const name of ["standard", "extended", "medium", "high"]) {
       pushName(name);
     }
   }
@@ -89,7 +89,7 @@ export function captureProbeAliases({
       if (hasToken(name, ["instant"])) {
         addProbeAlias(aliases, "model_classes", "instant", name);
       }
-      if (hasToken(name, ["thinking"])) {
+      if (hasToken(name, ["thinking", "medium", "high"])) {
         addProbeAlias(aliases, "model_classes", "thinking", name);
       }
     }
@@ -103,10 +103,10 @@ export function captureProbeAliases({
   }
   if (capability === "thinking_effort_visible") {
     for (const name of names) {
-      if (hasToken(name, ["extended"])) {
+      if (hasToken(name, ["extended", "high"])) {
         addProbeAlias(aliases, "efforts", "extended", name);
       }
-      if (hasToken(name, ["standard"])) {
+      if (hasToken(name, ["standard", "medium"])) {
         addProbeAlias(aliases, "efforts", "standard", name);
       }
       if (hasToken(name, ["none", "auto"])) {

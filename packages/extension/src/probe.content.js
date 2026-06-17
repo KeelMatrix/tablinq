@@ -305,7 +305,7 @@
           }
         }
       }
-      for (const name of ["standard", "extended"]) {
+      for (const name of ["standard", "extended", "medium", "high"]) {
         pushName(name);
       }
     }
@@ -326,7 +326,7 @@
         if (hasToken(name, ["instant"])) {
           addProbeAlias(aliases, "model_classes", "instant", name);
         }
-        if (hasToken(name, ["thinking"])) {
+        if (hasToken(name, ["thinking", "medium", "high"])) {
           addProbeAlias(aliases, "model_classes", "thinking", name);
         }
       }
@@ -340,10 +340,10 @@
     }
     if (capability === "thinking_effort_visible") {
       for (const name of names) {
-        if (hasToken(name, ["extended"])) {
+        if (hasToken(name, ["extended", "high"])) {
           addProbeAlias(aliases, "efforts", "extended", name);
         }
-        if (hasToken(name, ["standard"])) {
+        if (hasToken(name, ["standard", "medium"])) {
           addProbeAlias(aliases, "efforts", "standard", name);
         }
         if (hasToken(name, ["none", "auto"])) {
@@ -602,12 +602,14 @@
         "legacy",
         "gpt",
         "pro",
+        "medium",
+        "high",
         "standard",
         "extended",
       ]) ||
       /\b5(?:\.\d+)?\b/.test(name) ||
       (hasToken(name, ["thinking"]) &&
-        !hasToken(name, ["standard", "extended", "effort"]));
+        !hasToken(name, ["medium", "high", "standard", "extended", "effort"]));
 
     const isComposerRightModelPickerTrigger = (element) =>
       element instanceof HTMLElement &&
@@ -646,6 +648,8 @@
           )) ||
         hasToken(accessibleName(element), [
           "thinking",
+          "medium",
+          "high",
           "standard",
           "extended",
           "effort",
@@ -672,7 +676,13 @@
           element.tagName.toLowerCase() === "button")) ||
         (isPopupOption(element) &&
           element.closest(popupRootSelector) !== null)) &&
-      hasToken(accessibleName(element), ["instant", "thinking", "pro"]);
+      hasToken(accessibleName(element), [
+        "instant",
+        "thinking",
+        "medium",
+        "high",
+        "pro",
+      ]);
 
     const isEffortOption = (element) =>
       element instanceof HTMLElement &&
@@ -685,7 +695,12 @@
           element.tagName.toLowerCase() === "button")) ||
         (isPopupOption(element) &&
           element.closest(popupRootSelector) !== null)) &&
-      hasToken(accessibleName(element), ["standard", "extended"]);
+      hasToken(accessibleName(element), [
+        "standard",
+        "extended",
+        "medium",
+        "high",
+      ]);
 
     const elementPathname = (element) => {
       if (!(element instanceof HTMLElement)) {
@@ -818,9 +833,12 @@
         "button[aria-label='Switch model']",
         "button[data-testid='model-switcher-dropdown-button']",
       ]) ??
-      findNamedControl(["instant", "thinking", "legacy", "gpt", "5.3", "5.4"], {
-        include: isComposerRightModelPickerTrigger,
-      }) ??
+      findNamedControl(
+        ["instant", "thinking", "medium", "high", "legacy", "gpt", "5.3", "5.4"],
+        {
+          include: isComposerRightModelPickerTrigger,
+        },
+      ) ??
       findNamedControl(["chatgpt", "model", "selector", "engine"], {
         include: isModelPickerTrigger,
       });
@@ -837,7 +855,15 @@
         "button[aria-haspopup][aria-label*='effort']",
       ]) ??
       findComposerAdjacentNamedControl(
-        ["standard", "extended", "effort", "reasoning", "thinking"],
+        [
+          "standard",
+          "extended",
+          "medium",
+          "high",
+          "effort",
+          "reasoning",
+          "thinking",
+        ],
         {
           include: isEffortPickerTrigger,
         },
@@ -1026,6 +1052,8 @@
             "chatgpt",
             "instant",
             "thinking",
+            "medium",
+            "high",
             "pro",
           ])
         );
@@ -1039,6 +1067,8 @@
             "effort",
             "reasoning",
             "thinking",
+            "medium",
+            "high",
             "standard",
             "extended",
           ])
@@ -1303,7 +1333,7 @@
             id: "visible-model-options",
             score: 0.95,
             find: () =>
-              findNamedControl(["instant", "thinking", "pro"], {
+              findNamedControl(["instant", "thinking", "medium", "high", "pro"], {
                 include: isModelOption,
                 roots: visiblePopupRootsFor(isModelOption),
               }),
@@ -1312,7 +1342,7 @@
             id: "inline-model-options",
             score: 0.93,
             find: () =>
-              findNamedControl(["instant", "thinking", "pro"], {
+              findNamedControl(["instant", "thinking", "medium", "high", "pro"], {
                 include: isModelOption,
               }),
           },
@@ -1343,7 +1373,7 @@
             id: "visible-effort-options",
             score: 0.91,
             find: () =>
-              findNamedControl(["standard", "extended"], {
+              findNamedControl(["standard", "extended", "medium", "high"], {
                 include: isEffortOption,
                 roots: visiblePopupRootsFor(isEffortOption),
               }),
@@ -1352,16 +1382,27 @@
             id: "inline-effort-options",
             score: 0.9,
             find: () =>
-              findComposerAdjacentNamedControl(["standard", "extended"], {
-                include: isEffortOption,
-              }),
+              findComposerAdjacentNamedControl(
+                ["standard", "extended", "medium", "high"],
+                {
+                  include: isEffortOption,
+                },
+              ),
           },
           {
             id: "aria-effort-toggle",
             score: 0.88,
             find: () =>
               findComposerAdjacentNamedControl(
-                ["standard", "extended", "effort", "reasoning", "thinking"],
+                [
+                  "standard",
+                  "extended",
+                  "medium",
+                  "high",
+                  "effort",
+                  "reasoning",
+                  "thinking",
+                ],
                 {
                   include: predicates.isEffortPickerTrigger,
                 },
@@ -1687,6 +1728,8 @@
       (label) =>
         !label.includes("pro") &&
         (label.includes("thinking") ||
+          label.includes("medium") ||
+          label.includes("high") ||
           label.includes("standard") ||
           label.includes("extended") ||
           label.includes("5.4")),
@@ -1697,6 +1740,8 @@
         !label.includes("pro") &&
         !label.includes("instant") &&
         !label.includes("thinking") &&
+        !label.includes("medium") &&
+        !label.includes("high") &&
         !label.includes("standard") &&
         !label.includes("extended") &&
         !label.includes("5.3") &&
@@ -1733,6 +1778,8 @@
             selectedModelClass === "instant"
               ? label.includes("instant") || label.includes("5.3")
               : label.includes("thinking") ||
+                label.includes("medium") ||
+                label.includes("high") ||
                 label.includes("standard") ||
                 label.includes("extended") ||
                 label.includes("5.4"),
@@ -1746,9 +1793,13 @@
 
   function observeThinkingEffort({ context, predicates, matrix, model }) {
     const labels = collectSelectedEffortLabels(context, predicates);
-    const selectedEffort = labels.some((label) => label.includes("extended"))
+    const selectedEffort = labels.some(
+      (label) => label.includes("extended") || label.includes("high"),
+    )
       ? "extended"
-      : labels.some((label) => label.includes("standard"))
+      : labels.some(
+            (label) => label.includes("standard") || label.includes("medium"),
+          )
         ? "standard"
         : null;
     const status =
@@ -1841,6 +1892,8 @@
       context.hasToken(label, [
         "instant",
         "thinking",
+        "medium",
+        "high",
         "pro",
         "standard",
         "extended",
@@ -1875,7 +1928,13 @@
       ...(trigger ? [trigger] : []),
       ...composerPills,
     ]).filter((label) =>
-      context.hasToken(label, ["standard", "extended", "thinking"]),
+      context.hasToken(label, [
+        "standard",
+        "extended",
+        "medium",
+        "high",
+        "thinking",
+      ]),
     );
   }
 

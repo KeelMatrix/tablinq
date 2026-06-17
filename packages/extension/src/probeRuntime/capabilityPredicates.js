@@ -33,12 +33,14 @@ export function createCapabilityPredicates(context) {
       "legacy",
       "gpt",
       "pro",
+      "medium",
+      "high",
       "standard",
       "extended",
     ]) ||
     /\b5(?:\.\d+)?\b/.test(name) ||
     (hasToken(name, ["thinking"]) &&
-      !hasToken(name, ["standard", "extended", "effort"]));
+      !hasToken(name, ["medium", "high", "standard", "extended", "effort"]));
 
   const isComposerRightModelPickerTrigger = (element) =>
     element instanceof HTMLElement &&
@@ -77,6 +79,8 @@ export function createCapabilityPredicates(context) {
         )) ||
       hasToken(accessibleName(element), [
         "thinking",
+        "medium",
+        "high",
         "standard",
         "extended",
         "effort",
@@ -103,7 +107,13 @@ export function createCapabilityPredicates(context) {
         element.tagName.toLowerCase() === "button")) ||
       (isPopupOption(element) &&
         element.closest(popupRootSelector) !== null)) &&
-    hasToken(accessibleName(element), ["instant", "thinking", "pro"]);
+    hasToken(accessibleName(element), [
+      "instant",
+      "thinking",
+      "medium",
+      "high",
+      "pro",
+    ]);
 
   const isEffortOption = (element) =>
     element instanceof HTMLElement &&
@@ -116,7 +126,12 @@ export function createCapabilityPredicates(context) {
         element.tagName.toLowerCase() === "button")) ||
       (isPopupOption(element) &&
         element.closest(popupRootSelector) !== null)) &&
-    hasToken(accessibleName(element), ["standard", "extended"]);
+    hasToken(accessibleName(element), [
+      "standard",
+      "extended",
+      "medium",
+      "high",
+    ]);
 
   const elementPathname = (element) => {
     if (!(element instanceof HTMLElement)) {
@@ -249,9 +264,12 @@ export function createCapabilityPredicates(context) {
       "button[aria-label='Switch model']",
       "button[data-testid='model-switcher-dropdown-button']",
     ]) ??
-    findNamedControl(["instant", "thinking", "legacy", "gpt", "5.3", "5.4"], {
-      include: isComposerRightModelPickerTrigger,
-    }) ??
+    findNamedControl(
+      ["instant", "thinking", "medium", "high", "legacy", "gpt", "5.3", "5.4"],
+      {
+        include: isComposerRightModelPickerTrigger,
+      },
+    ) ??
     findNamedControl(["chatgpt", "model", "selector", "engine"], {
       include: isModelPickerTrigger,
     });
@@ -268,7 +286,15 @@ export function createCapabilityPredicates(context) {
       "button[aria-haspopup][aria-label*='effort']",
     ]) ??
     findComposerAdjacentNamedControl(
-      ["standard", "extended", "effort", "reasoning", "thinking"],
+      [
+        "standard",
+        "extended",
+        "medium",
+        "high",
+        "effort",
+        "reasoning",
+        "thinking",
+      ],
       {
         include: isEffortPickerTrigger,
       },
@@ -457,6 +483,8 @@ export function createCapabilityPredicates(context) {
           "chatgpt",
           "instant",
           "thinking",
+          "medium",
+          "high",
           "pro",
         ])
       );
@@ -470,6 +498,8 @@ export function createCapabilityPredicates(context) {
           "effort",
           "reasoning",
           "thinking",
+          "medium",
+          "high",
           "standard",
           "extended",
         ])
