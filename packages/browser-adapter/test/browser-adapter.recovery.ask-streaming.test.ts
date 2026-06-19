@@ -208,6 +208,8 @@ describe("browser adapter recovery: ask streaming recovery", () => {
         doneStreak: 0,
         knownConversationId: null,
         knownMessageId: null,
+        submittedToProvider: false,
+        submittedConversationId: null,
         askBaseline: {
           assistantMessageCount: 0,
           conversationId: first.conversation_id,
@@ -223,6 +225,8 @@ describe("browser adapter recovery: ask streaming recovery", () => {
         recoveryAttempts: 0,
         lastStatusAt: 0,
         lastSnapshotSignature: null,
+        lastProviderActivitySignature: null,
+        lastProviderActivityAt: null,
         lastIdentityUpdateSignature: null,
       },
       (chunk: any) => {
@@ -239,6 +243,76 @@ describe("browser adapter recovery: ask streaming recovery", () => {
     expect(result.result?.output_text).toBe(first.output_text);
     expect(chunks.join("")).toBe(first.output_text);
 
+    await adapter.shutdown();
+  });
+
+
+  it("does not open a fresh conversation while reconciling a submitted ask without a known conversation", async () => {
+    const server = await harness.startServer();
+    const root = await harness.createWorkspace("browser");
+    const adapter = harness.trackAdapter(
+      new BrowserAdapter({
+        profileDir: path.join(root, "profile"),
+        downloadsDir: path.join(root, "downloads"),
+        defaultTargetUrl: server.url,
+        connectionMode: "managed_only",
+      }),
+    );
+    await adapter.open({ targetUrl: server.url, headless: true });
+    const adapterWithInternals = adapter as any;
+    const openExecutionPage = vi.spyOn(
+      adapterWithInternals.execution.host,
+      "openExecutionPage",
+    );
+
+    await expect(
+      adapterWithInternals.reconcileAskAfterInterruption(
+        adapter.getManagedPageForTest()!,
+        {
+          jobId: "job-submitted-unknown-conversation",
+          prompt: "already submitted",
+          timeoutMs: 2_000,
+        },
+        {
+          emittedText: "",
+          nextSeq: 0,
+          doneStreak: 0,
+          knownConversationId: null,
+          knownMessageId: null,
+          submittedToProvider: true,
+          submittedConversationId: null,
+          askBaseline: {
+            assistantMessageCount: 0,
+            conversationId: null,
+            messageId: null,
+            text: "",
+          },
+          pendingMessageId: null,
+          pendingMessageText: "",
+          pendingTextReconciliation: false,
+          lastProgressAt: Date.now() - 10_000,
+          lastTextChangeAt: Date.now() - 10_000,
+          lastObservedText: "",
+          stickyStreamReloaded: false,
+          stickyStreamFallbackAt: null,
+          recoveryAttempts: 0,
+          lastStatusAt: 0,
+          lastSnapshotSignature: null,
+          lastProviderActivitySignature: null,
+          lastProviderActivityAt: null,
+          lastIdentityUpdateSignature: null,
+          transientInterruptionThoughtArtifactSignature: null,
+        },
+        () => {},
+        () => {},
+        "recover submitted ask",
+        Date.now() + 2_000,
+      ),
+    ).rejects.toThrow(
+      /submitted ask cannot be reconciled because no provider conversation id is known/i,
+    );
+
+    expect(openExecutionPage).not.toHaveBeenCalled();
     await adapter.shutdown();
   });
 

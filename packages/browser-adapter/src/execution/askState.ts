@@ -41,6 +41,15 @@ export function createAskRuntimeState(
       conversationIdFromUrl(safePageUrl(page)) ??
       null,
     knownMessageId: options.knownMessageId ?? null,
+    submittedToProvider: options.submitPrompt,
+    submittedConversationId:
+      options.submitPrompt
+        ? options.knownConversationId ??
+          command.conversationId ??
+          askBaseline?.conversationId ??
+          conversationIdFromUrl(safePageUrl(page)) ??
+          null
+        : null,
     pendingMessageId: null,
     pendingMessageText: "",
     askBaseline: options.askBaseline ?? askBaseline,
@@ -70,6 +79,9 @@ export async function recordAskSnapshotProgress(
   reason: string,
 ): Promise<void> {
   rememberAskSnapshot(host, state, snapshot);
+  if (state.submittedToProvider && state.submittedConversationId === null) {
+    state.submittedConversationId = state.knownConversationId;
+  }
   const progressed = await applyAskSnapshot(command, state, snapshot, onChunk);
   const providerActivitySignature =
     askSnapshotProviderActivitySignature(snapshot);
