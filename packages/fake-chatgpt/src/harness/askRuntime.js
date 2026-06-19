@@ -97,6 +97,68 @@ export function createAskRuntime({
       .forEach((node) => node.remove());
   }
 
+  function clearWorkedProgressNodes() {
+    transcriptContainer()
+      ?.querySelectorAll("[data-harness-worked-progress]")
+      .forEach((node) => node.remove());
+  }
+
+  function renderWorkedProgress(state) {
+    const transcript = transcriptContainer();
+    if (
+      !(transcript instanceof HTMLElement) ||
+      !(messageArticle instanceof HTMLElement)
+    ) {
+      return;
+    }
+    clearWorkedProgressNodes();
+    messageArticle.hidden = false;
+    messageArticle.removeAttribute("data-message-author-role");
+    messageArticle.removeAttribute("data-message-id");
+    messageArticle.removeAttribute("data-turn-start-message");
+    message.textContent = "";
+    document.body.dataset.lastMessageId = "";
+
+    const progress = document.createElement("div");
+    progress.dataset.harnessWorkedProgress = "true";
+    progress.className = "flex flex-col gap-3";
+    progress.innerHTML = `
+      <button type="button" aria-expanded="true">Worked for ${state.providerProgressTick}s</button>
+      <div>
+        <div class="flex flex-col gap-4">
+          <div class="markdown"><p>Preparing the requested response.</p></div>
+          <button type="button"><span>Processing step ${state.providerProgressTick}</span></button>
+        </div>
+      </div>
+    `;
+    transcript.insertBefore(progress, messageArticle);
+  }
+
+  function finishWorkedProgress(state) {
+    clearWorkedProgressNodes();
+    messageArticle?.setAttribute("data-message-author-role", "assistant");
+    messageArticle?.setAttribute("data-message-id", state.messageId);
+    messageArticle?.setAttribute("data-turn-start-message", "true");
+    document.body.dataset.conversationId = state.conversationId;
+    document.body.dataset.lastMessageId = state.messageId;
+    finishStream(state);
+  }
+
+  function tickWorkedProgress(state) {
+    timers.stop();
+    state.providerProgressTick = (state.providerProgressTick || 0) + 1;
+    if (
+      scenario === "worked-progress-then-answer" &&
+      state.providerProgressTick >= 14
+    ) {
+      finishWorkedProgress(state);
+      return;
+    }
+    renderWorkedProgress(state);
+    persistStreamState(state);
+    timers.set(() => tickWorkedProgress(state), 120);
+  }
+
   function createThinkingArtifactMessage(text, messageId) {
     const article = document.createElement("div");
     article.dataset.tablinqThinkingArtifact = "true";
@@ -427,6 +489,17 @@ export function createAskRuntime({
     setStreamState("running");
     setStreamingControls(true);
     if (
+      scenario === "worked-progress-then-answer" ||
+      scenario === "worked-progress-timeout"
+    ) {
+      state.providerProgressTick = 1;
+      clearAskFailureState();
+      renderWorkedProgress(state);
+      persistStreamState(state);
+      timers.set(() => tickWorkedProgress(state), 120);
+      return;
+    }
+    if (
       scenario === "transient-interruption-reload-success" ||
       scenario === "transient-interruption-timeout" ||
       scenario === "transient-interruption-thought-progress"
@@ -474,6 +547,17 @@ export function createAskRuntime({
     }
 
     writeConversationState(state.conversationId, state.messageId);
+    if (
+      scenario === "worked-progress-then-answer" ||
+      scenario === "worked-progress-timeout"
+    ) {
+      setStreamState("running");
+      setStreamingControls(true);
+      renderWorkedProgress(state);
+      persistStreamState(state);
+      timers.set(() => tickWorkedProgress(state), 120);
+      return;
+    }
     if (scenario === "transient-interruption-reload-success") {
       finishStream(state);
       return;

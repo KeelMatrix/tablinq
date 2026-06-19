@@ -102,6 +102,12 @@ export function askSnapshotProgressSignature(snapshot: AskSnapshot): string {
   ]);
 }
 
+export function askSnapshotProviderActivitySignature(
+  snapshot: AskSnapshot,
+): string {
+  return snapshot.providerActivitySignature ?? "";
+}
+
 export async function applyResearchSnapshot(
   state: {
     emittedText: string;

@@ -55,6 +55,8 @@ export type AskRuntimeState = {
   recoveryAttempts: number;
   lastStatusAt: number;
   lastSnapshotSignature: string | null;
+  lastProviderActivitySignature: string | null;
+  lastProviderActivityAt: number | null;
   lastIdentityUpdateSignature: string | null;
   transientInterruptionThoughtArtifactSignature: string | null;
 };

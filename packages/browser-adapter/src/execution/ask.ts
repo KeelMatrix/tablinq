@@ -250,6 +250,10 @@ export async function runAsk(
       throw new Error("ask timed out while streaming response");
     }
 
+    if (hasRecentProviderActivityWithoutAnswer(state, timing)) {
+      throw new Error("ask timed out waiting for streamed response");
+    }
+
     const timeoutReload = await reloadAskOnceAfterTimeout(
       host,
       command,
@@ -591,6 +595,18 @@ function askResponseStreamWatchText(snapshot: AskSnapshot): string {
     return "";
   }
   return normalizeComparableAskText(snapshot.text);
+}
+
+function hasRecentProviderActivityWithoutAnswer(
+  state: ReturnType<typeof createAskRuntimeState>,
+  timing: AskTiming,
+): boolean {
+  return (
+    state.lastProviderActivityAt !== null &&
+    Date.now() - state.lastProviderActivityAt < timing.initialStallTimeoutMs &&
+    state.lastObservedText.length === 0 &&
+    state.emittedText.length === 0
+  );
 }
 
 async function reloadAskOnceAfterTimeout(

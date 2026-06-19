@@ -384,6 +384,80 @@ describe("browser adapter ask: streaming and finalization", () => {
     }
   });
 
+  it("keeps native provider progress alive until the final answer", async () => {
+    const server = await harness.startServer();
+    const targetUrl = resolveConversationUrl(
+      withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "worked-progress-then-answer",
+      }),
+      "conv-worked-progress-final",
+    );
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
+    const chunks = captureDeltaChunks();
+    const page = adapter.getManagedPageForTest()!;
+
+    try {
+      const resultPromise = adapter.ask(
+        {
+          jobId: "job-ask-worked-progress-final",
+          prompt: "summarize the result",
+          timeoutMs: 2_600,
+        },
+        chunks.onChunk,
+      );
+      await page.locator("[data-harness-worked-progress]").waitFor();
+      const reloadCountDuringProgress = (await adapter.health()).reload_count;
+      const result = await resultPromise;
+
+      expect(result.output_text).toBe(
+        "Fake response for: summarize the result",
+      );
+      expect(chunks.text()).toBe(result.output_text);
+      expect(chunks.text()).not.toContain("Worked for");
+      expect(chunks.text()).not.toContain("Processing step");
+      expect(
+        (await adapter.health()).reload_count - reloadCountDuringProgress,
+      ).toBe(0);
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
+  it("fails progress-only asks at the absolute timeout without reloading", async () => {
+    const server = await harness.startServer();
+    const targetUrl = resolveConversationUrl(
+      withHarnessUrl(server.url, {
+        variant: "live",
+        scenario: "worked-progress-timeout",
+      }),
+      "conv-worked-progress-timeout",
+    );
+    const { adapter } = await openTrackedManagedAdapter(harness, targetUrl);
+    const page = adapter.getManagedPageForTest()!;
+
+    try {
+      const resultPromise = adapter.ask(
+        {
+          jobId: "job-ask-worked-progress-timeout",
+          prompt: "summarize the result",
+          timeoutMs: 900,
+        },
+        () => {},
+      );
+      await page.locator("[data-harness-worked-progress]").waitFor();
+      const reloadCountDuringProgress = (await adapter.health()).reload_count;
+      await expect(resultPromise).rejects.toThrow(
+        /ask timed out waiting for streamed response/i,
+      );
+      expect(
+        (await adapter.health()).reload_count - reloadCountDuringProgress,
+      ).toBe(0);
+    } finally {
+      await adapter.shutdown();
+    }
+  });
+
   it("streams ask responses to completion", async () => {
     const server = await harness.startServer();
     const { adapter } = await openTrackedManagedAdapter(harness, server.url);

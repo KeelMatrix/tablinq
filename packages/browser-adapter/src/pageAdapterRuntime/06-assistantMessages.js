@@ -19,6 +19,8 @@ function createAssistantMessageRuntimeModule({
     isReasoningArtifactMessage,
     isTransientAskStatusElement,
     isThoughtDividerElement,
+    isNativeReasoningDurationControl,
+    isNativeReasoningProgressContainer,
     explicitAssistantRole,
     findMessageContentRoot,
     readMessageIdentity,
@@ -247,6 +249,30 @@ function createAssistantMessageRuntimeModule({
     );
   };
 
+  const readProviderActivitySignature = () => {
+    const containers = visibleUnique(
+      queryVisible(["button"])
+        .filter((element) => isNativeReasoningDurationControl(element))
+        .map((control) => {
+          let current = control.parentElement;
+          while (current instanceof HTMLElement) {
+            if (isNativeReasoningProgressContainer(current)) {
+              return current;
+            }
+            current = current.parentElement;
+          }
+          return null;
+        })
+        .filter((element) => element instanceof HTMLElement),
+    );
+    if (containers.length === 0) {
+      return "";
+    }
+    return JSON.stringify(
+      containers.map((element) => collapseText(element.textContent ?? "")),
+    );
+  };
+
   const readAskFailureState = (article) => {
     const explicitCode = datasetValue(document.body.dataset.askFailureCode);
     const explicitMessage = datasetValue(
@@ -355,5 +381,6 @@ function createAssistantMessageRuntimeModule({
     materializeCodePreviewSources,
     thoughtDividerBeforeMessage,
     readThoughtArtifactSignature,
+    readProviderActivitySignature,
   };
 }

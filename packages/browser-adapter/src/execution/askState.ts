@@ -11,7 +11,11 @@ import { STABLE_DONE_POLLS } from "../timing";
 import { conversationIdFromUrl } from "../urls";
 
 import { finalizeAsk, stabilizeAskCompletion } from "./finalization";
-import { applyAskSnapshot, rememberAskSnapshot } from "./streaming";
+import {
+  applyAskSnapshot,
+  askSnapshotProviderActivitySignature,
+  rememberAskSnapshot,
+} from "./streaming";
 import type {
   AskExecutionOptions,
   AskRuntimeState,
@@ -49,6 +53,8 @@ export function createAskRuntimeState(
     recoveryAttempts: 0,
     lastStatusAt: 0,
     lastSnapshotSignature: null,
+    lastProviderActivitySignature: null,
+    lastProviderActivityAt: null,
     lastIdentityUpdateSignature: null,
     transientInterruptionThoughtArtifactSignature: null,
   };
@@ -65,6 +71,9 @@ export async function recordAskSnapshotProgress(
 ): Promise<void> {
   rememberAskSnapshot(host, state, snapshot);
   const progressed = await applyAskSnapshot(command, state, snapshot, onChunk);
+  const providerActivitySignature =
+    askSnapshotProviderActivitySignature(snapshot);
+  state.lastProviderActivitySignature = providerActivitySignature;
   await emitAskIdentityUpdate(
     command,
     state,
@@ -72,8 +81,12 @@ export async function recordAskSnapshotProgress(
     onState,
     reason,
   );
-  if (progressed) {
-    state.lastProgressAt = Date.now();
+  if (progressed || providerActivitySignature) {
+    const now = Date.now();
+    state.lastProgressAt = now;
+    if (providerActivitySignature) {
+      state.lastProviderActivityAt = now;
+    }
   }
   if (snapshot.text !== state.lastObservedText) {
     state.lastObservedText = snapshot.text;
