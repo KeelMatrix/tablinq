@@ -239,6 +239,21 @@ export async function tryResumeAskFromPage(
   };
 }
 
+function recoveryConversationIdForSubmittedAsk(
+  page: Page,
+  command: AskExecutionCommand,
+  state: AskRuntimeState,
+): string | null {
+  return (
+    state.knownConversationId ??
+    state.submittedConversationId ??
+    command.conversationId ??
+    state.askBaseline?.conversationId ??
+    conversationIdFromUrl(safePageUrl(page)) ??
+    null
+  );
+}
+
 export async function reconcileAskAfterInterruption(
   host: BrowserExecutionHost,
   page: Page,
@@ -264,6 +279,17 @@ export async function reconcileAskAfterInterruption(
     state.lastStatusAt = Date.now();
   }
 
+  const recoveryConversationId = recoveryConversationIdForSubmittedAsk(
+    page,
+    command,
+    state,
+  );
+  if (!recoveryConversationId && state.submittedToProvider) {
+    throw new Error(
+      "submitted ask cannot be reconciled because no provider conversation id is known",
+    );
+  }
+
   const currentPageRecovery = await tryResumeAskFromPage(
     host,
     page,
@@ -278,12 +304,7 @@ export async function reconcileAskAfterInterruption(
   }
 
   const recoveredPage = await host.openExecutionPage(
-    host.resolveAskTarget(
-      state.knownConversationId ??
-        command.conversationId ??
-        state.askBaseline?.conversationId ??
-        conversationIdFromUrl(safePageUrl(page)),
-    ),
+    host.resolveAskTarget(recoveryConversationId),
     false,
     { failOnProviderConversationMismatch: false },
   );
