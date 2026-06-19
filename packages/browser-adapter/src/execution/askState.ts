@@ -42,14 +42,13 @@ export function createAskRuntimeState(
       null,
     knownMessageId: options.knownMessageId ?? null,
     submittedToProvider: options.submitPrompt,
-    submittedConversationId:
-      options.submitPrompt
-        ? options.knownConversationId ??
-          command.conversationId ??
-          askBaseline?.conversationId ??
-          conversationIdFromUrl(safePageUrl(page)) ??
-          null
-        : null,
+    submittedConversationId: options.submitPrompt
+      ? (options.knownConversationId ??
+        command.conversationId ??
+        askBaseline?.conversationId ??
+        conversationIdFromUrl(safePageUrl(page)) ??
+        null)
+      : null,
     pendingMessageId: null,
     pendingMessageText: "",
     askBaseline: options.askBaseline ?? askBaseline,

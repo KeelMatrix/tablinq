@@ -246,7 +246,6 @@ describe("browser adapter recovery: ask streaming recovery", () => {
     await adapter.shutdown();
   });
 
-
   it("does not open a fresh conversation while reconciling a submitted ask without a known conversation", async () => {
     const server = await harness.startServer();
     const root = await harness.createWorkspace("browser");

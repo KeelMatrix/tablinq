@@ -306,6 +306,85 @@ describe("browser adapter foundation: page runtime bridge behavior", () => {
     dom.window.close();
   });
 
+  it("ignores historical attachment chips outside the active composer upload region", async () => {
+    const runtimeSource = loadPageAdapterSource();
+    const historicalAttachments = Array.from(
+      { length: 10 },
+      (_value, index) =>
+        `<span data-testid="upload-chip" aria-label="Attached file history-${index}.txt">history-${index}.txt</span>`,
+    ).join("");
+    const dom = new JSDOM(
+      `<!doctype html><html><body data-stream-state="idle">
+        <main>
+          <article data-message-author-role="user">
+            <div data-slot="upload-list">${historicalAttachments}</div>
+          </article>
+          <form data-testid="composer-root">
+            <textarea id="prompt-textarea" aria-label="Message"></textarea>
+            <button data-testid="send-button" aria-label="Send prompt" type="button"></button>
+          </form>
+        </main>
+      </body></html>`,
+      {
+        url: "https://chatgpt.com/c/conv-historical-attachments",
+        runScripts: "outside-only",
+      },
+    );
+    const adapter = dom.window.eval(
+      `${runtimeSource.replace(/^export\s+/gm, "")}
+createTablinqPageAdapterRuntime();`,
+    );
+
+    expect(adapter.readComposerAttachmentState()).toEqual({
+      visibleCount: 0,
+      visibleNames: [],
+      normalizedNames: [],
+      attachmentsProcessing: false,
+    });
+    dom.window.close();
+  });
+
+  it("counts one logical composer attachment once despite nested filename controls", async () => {
+    const runtimeSource = loadPageAdapterSource();
+    const dom = new JSDOM(
+      `<!doctype html><html><body data-stream-state="idle">
+        <main>
+          <article data-message-author-role="user">
+            <div data-slot="upload-list">
+              <span data-testid="upload-chip" aria-label="Attached file historical.txt">historical.txt</span>
+            </div>
+          </article>
+          <form data-testid="composer-root">
+            <textarea id="prompt-textarea" aria-label="Message"></textarea>
+            <button data-testid="send-button" aria-label="Send prompt" type="button"></button>
+          </form>
+          <div data-slot="upload-list">
+            <div data-testid="attachment-card" aria-label="Attached file current.txt">
+              <span data-slot="upload-entry-name">current.txt</span>
+              <button type="button" aria-label="Remove current.txt">Remove</button>
+            </div>
+          </div>
+        </main>
+      </body></html>`,
+      {
+        url: "https://chatgpt.com/c/conv-current-attachment",
+        runScripts: "outside-only",
+      },
+    );
+    const adapter = dom.window.eval(
+      `${runtimeSource.replace(/^export\s+/gm, "")}
+createTablinqPageAdapterRuntime();`,
+    );
+
+    expect(adapter.readComposerAttachmentState()).toEqual({
+      visibleCount: 1,
+      visibleNames: ["current.txt"],
+      normalizedNames: ["current.txt"],
+      attachmentsProcessing: false,
+    });
+    dom.window.close();
+  });
+
   it("resolves renamed semantic controls without ChatGPT test ids or composer pill classes", async () => {
     const runtimeSource = loadPageAdapterSource();
     const dom = new JSDOM(
