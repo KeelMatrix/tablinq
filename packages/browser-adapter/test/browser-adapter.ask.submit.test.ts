@@ -26,6 +26,7 @@ import {
   buildUploadedUserPromptInstruction,
   chooseUserPromptUploadFileName,
   shouldUploadUserPromptText,
+  uploadUserPromptTextIfNeeded,
   UPLOADED_USER_PROMPT_INSTRUCTION_TEMPLATES,
   USER_PROMPT_UPLOAD_THRESHOLD_CHARS,
 } from "../src/execution/userPromptUpload";
@@ -326,6 +327,26 @@ describe("browser adapter ask: submit readiness and surface locking", () => {
         promptUploadThresholdChars: 24_000,
       }),
     ).toBe(true);
+  });
+
+  it("reports explicit prompt upload limit counts from composer attachment state", async () => {
+    await expect(
+      uploadUserPromptTextIfNeeded({
+        page: {} as never,
+        prompt: "x".repeat(USER_PROMPT_UPLOAD_THRESHOLD_CHARS + 1),
+        explicitFiles: [],
+        promptUploadFileName: "openclaude-protocol-current.txt",
+        promptUploadComposerText:
+          "Read openclaude-protocol-current.txt exactly.",
+        attachmentBaseline: attachmentState(
+          Array.from({ length: 10 }, (_value, index) => `visible-${index}.txt`),
+          10,
+        ),
+        report: null,
+      }),
+    ).rejects.toThrow(
+      /composer attachment limit; limit=10; explicit_files=0; composer_visible_count=10; composer_visible_names=visible-0\.txt/,
+    );
   });
 
   it("chooses unique user prompt upload names with bounded suffix attempts", () => {

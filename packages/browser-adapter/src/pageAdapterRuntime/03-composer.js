@@ -333,10 +333,61 @@ function createComposerRuntimeModule({
     "button[aria-label*='.']",
   ].join(", ");
 
-  const visibleAttachmentElements = () => {
-    const elements = visibleUnique(
-      document.querySelectorAll(uploadAttachmentSelectors),
+  const isDescendantOfAny = (element, roots) =>
+    element instanceof HTMLElement &&
+    roots.some((root) => root === element || root.contains(element));
+
+  const followsInDocumentOrder = (element, anchor) =>
+    element.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_PRECEDING;
+
+  const composerAttachmentRoots = () => {
+    const composer = findComposer();
+    if (!(composer instanceof HTMLElement)) {
+      return [];
+    }
+
+    const anchors = visibleUnique(
+      [
+        composer.closest("[data-testid='composer-root']"),
+        composer.closest("[data-slot='composer']"),
+        composer.closest("form"),
+        composer.parentElement,
+      ].filter((element) => element instanceof HTMLElement),
     );
+    const roots = [...anchors];
+
+    for (const uploadList of visibleUnique(
+      document.querySelectorAll("[data-slot='upload-list']"),
+    )) {
+      if (!(uploadList instanceof HTMLElement)) {
+        continue;
+      }
+      if (isDescendantOfAny(uploadList, roots)) {
+        continue;
+      }
+      if (
+        anchors.some(
+          (anchor) =>
+            uploadList.parentElement === anchor.parentElement &&
+            followsInDocumentOrder(uploadList, anchor),
+        )
+      ) {
+        roots.push(uploadList);
+      }
+    }
+
+    return visibleUnique(roots);
+  };
+
+  const queryComposerAttachmentElements = (selector) =>
+    visibleUnique(
+      composerAttachmentRoots().flatMap((root) =>
+        Array.from(root.querySelectorAll(selector)),
+      ),
+    ).filter(isVisible);
+
+  const visibleAttachmentElements = () => {
+    const elements = queryComposerAttachmentElements(uploadAttachmentSelectors);
     return elements.filter(
       (element) =>
         !elements.some((other) => other !== element && other.contains(element)),
@@ -373,20 +424,39 @@ function createComposerRuntimeModule({
     return stripped;
   };
 
-  const attachmentNameCandidates = (element) =>
-    [
-      element?.textContent ?? "",
-      element?.getAttribute?.("aria-label") ?? "",
-      element?.getAttribute?.("title") ?? "",
-    ]
-      .map(sanitizeVisibleAttachmentName)
-      .filter(Boolean);
+  const isAttachmentActionControl = (element) => {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    if (!element.matches("button, [role='button']")) {
+      return false;
+    }
+    const label = collapseText(
+      [
+        element.getAttribute("aria-label") ?? "",
+        element.getAttribute("title") ?? "",
+        element.textContent ?? "",
+      ].join(" "),
+    );
+    return /^(remove|delete|dismiss|cancel|clear)\b/i.test(label);
+  };
+
+  const attachmentNameCandidates = (element) => {
+    const candidates = [element?.textContent ?? ""];
+    if (!isAttachmentActionControl(element)) {
+      candidates.push(
+        element?.getAttribute?.("aria-label") ?? "",
+        element?.getAttribute?.("title") ?? "",
+      );
+    }
+    return candidates.map(sanitizeVisibleAttachmentName).filter(Boolean);
+  };
 
   const readComposerAttachmentState = () => {
     const elements = visibleAttachmentElements();
-    const nameElements = visibleUnique(
-      document.querySelectorAll(attachmentNameSelectors),
-    ).filter(isVisible);
+    const nameElements = queryComposerAttachmentElements(
+      attachmentNameSelectors,
+    );
     const allNameElements = [];
     const seen = new Set();
     for (const element of [...elements, ...nameElements]) {

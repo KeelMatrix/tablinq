@@ -203,7 +203,17 @@ export async function uploadUserPromptTextIfNeeded({
   if (preUploadedFileCount >= MAX_COMPOSER_UPLOAD_FILES) {
     if (explicitPromptUpload) {
       throw new Error(
-        "upload failed: explicit prompt upload would exceed the composer attachment limit",
+        [
+          "upload failed: explicit prompt upload would exceed the composer attachment limit",
+          `limit=${MAX_COMPOSER_UPLOAD_FILES}`,
+          `explicit_files=${explicitFiles.length}`,
+          `composer_visible_count=${attachmentBaseline.visibleCount}`,
+          attachmentBaseline.visibleNames.length > 0
+            ? `composer_visible_names=${attachmentBaseline.visibleNames.join(",")}`
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("; "),
       );
     }
     return null;
