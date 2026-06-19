@@ -90,6 +90,8 @@ function createCommandRuntime({
         thoughtDividerBeforeMessage:
           messageRuntime.thoughtDividerBeforeMessage(article),
         thoughtArtifactSignature: messageRuntime.readThoughtArtifactSignature(),
+        providerActivitySignature:
+          messageRuntime.readProviderActivitySignature(),
         currentUrl: window.location.href,
       };
     },

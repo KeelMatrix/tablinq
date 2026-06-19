@@ -15,6 +15,8 @@ export const scenarioRegistry = {
   "followup-stale": {},
   "followup-rich-text": {},
   "thinking-artifact-messages": {},
+  "worked-progress-then-answer": {},
+  "worked-progress-timeout": {},
   "recover-complete": { recovery: true },
   "recover-message-successor": { recovery: true },
   "recover-done-transient": { recovery: true },

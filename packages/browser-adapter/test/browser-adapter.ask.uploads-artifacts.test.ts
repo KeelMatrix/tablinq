@@ -15,9 +15,11 @@ import {
   workspaceKeyFromUrl,
 } from "../src/browserAdapter";
 import type { StreamChunkSnapshot } from "../src/browserAdapter";
+import { recordAskSnapshotProgress } from "../src/execution/askState";
 import { finalizeAsk } from "../src/execution/finalization";
 import {
   applyAskSnapshot,
+  askSnapshotProviderActivitySignature,
   askSnapshotProgressSignature,
 } from "../src/execution/streaming";
 import { uploadAttachments } from "../src/pageRuntime/uploads";
@@ -273,6 +275,8 @@ describe("browser adapter ask: uploads and artifacts", () => {
 
     const firstSnapshot = adapter.readAskSnapshot({ baseline });
     const firstSignature = askSnapshotProgressSignature(firstSnapshot);
+    const firstProviderActivitySignature =
+      askSnapshotProviderActivitySignature(firstSnapshot);
     const firstProgressed = await applyAskSnapshot(
       { jobId: "job-native-worked-progress" } as any,
       state,
@@ -291,6 +295,8 @@ describe("browser adapter ask: uploads and artifacts", () => {
     step.textContent = "Packed calculator ZIP and checked git status";
     const secondSnapshot = adapter.readAskSnapshot({ baseline });
     const secondSignature = askSnapshotProgressSignature(secondSnapshot);
+    const secondProviderActivitySignature =
+      askSnapshotProviderActivitySignature(secondSnapshot);
     const secondProgressed = await applyAskSnapshot(
       { jobId: "job-native-worked-progress" } as any,
       state,
@@ -304,11 +310,90 @@ describe("browser adapter ask: uploads and artifacts", () => {
     expect(secondSnapshot.messageId).toBeNull();
     expect(firstSnapshot.text).toBe("");
     expect(secondSnapshot.text).toBe("");
+    expect(firstSnapshot.hasAssistantMessage).toBe(false);
+    expect(secondSnapshot.hasAssistantMessage).toBe(false);
+    expect(firstProviderActivitySignature).not.toBe("");
+    expect(secondProviderActivitySignature).not.toBe("");
+    expect(firstProviderActivitySignature).not.toBe(
+      secondProviderActivitySignature,
+    );
     expect(firstSignature).toBe(secondSignature);
     expect(firstProgressed).toBe(true);
     expect(secondProgressed).toBe(false);
     expect(state.knownMessageId).toBeNull();
     expect(state.pendingMessageId).toBeNull();
+    expect(chunks).toEqual([]);
+    dom.window.close();
+  });
+
+  it("refreshes ask liveness without changing answer stream state", async () => {
+    const { adapter, dom, main } = await createAskRuntimeDom();
+    const baseline = adapter.readAskBaseline();
+    main.insertAdjacentHTML("beforeend", liveWorkedReasoningTurn());
+    dom.window.document.body.dataset.streamState = "running";
+    const firstSnapshot = adapter.readAskSnapshot({ baseline });
+    const firstProviderActivitySignature =
+      askSnapshotProviderActivitySignature(firstSnapshot);
+    const state = {
+      emittedText: "",
+      nextSeq: 7,
+      doneStreak: 0,
+      knownConversationId: null,
+      knownMessageId: null,
+      pendingMessageId: null,
+      pendingMessageText: "",
+      askBaseline: baseline,
+      pendingTextReconciliation: false,
+      lastProgressAt: 100,
+      lastTextChangeAt: 50,
+      lastObservedText: "",
+      stickyStreamReloaded: false,
+      stickyStreamFallbackAt: null,
+      recoveryAttempts: 0,
+      lastStatusAt: 0,
+      lastSnapshotSignature: askSnapshotProgressSignature(firstSnapshot),
+      lastProviderActivitySignature: firstProviderActivitySignature,
+      lastProviderActivityAt: 100,
+      lastIdentityUpdateSignature: null,
+      transientInterruptionThoughtArtifactSignature: null,
+    };
+    const chunks: StreamChunkSnapshot[] = [];
+    const step = Array.from(
+      dom.window.document.querySelectorAll("button"),
+    ).find((button) => button.textContent?.includes("Planned project setup"));
+    if (!(step instanceof dom.window.HTMLElement)) {
+      throw new Error("expected native worked-progress step row");
+    }
+    step.textContent = "Packed calculator ZIP and checked git status";
+    const secondSnapshot = adapter.readAskSnapshot({ baseline });
+    const now = vi.spyOn(Date, "now").mockReturnValue(200);
+
+    try {
+      await recordAskSnapshotProgress(
+        { setCurrentTargetUrl() {} } as any,
+        { jobId: "job-native-worked-liveness" } as any,
+        state,
+        secondSnapshot,
+        (chunk) => {
+          chunks.push(chunk);
+        },
+        () => {},
+        "observed provider activity",
+      );
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(state.lastProgressAt).toBe(200);
+    expect(state.lastTextChangeAt).toBe(50);
+    expect(state.lastProviderActivityAt).toBe(200);
+    expect(state.lastProviderActivitySignature).toBe(
+      askSnapshotProviderActivitySignature(secondSnapshot),
+    );
+    expect(state.knownMessageId).toBeNull();
+    expect(state.pendingMessageId).toBeNull();
+    expect(state.pendingMessageText).toBe("");
+    expect(state.emittedText).toBe("");
     expect(chunks).toEqual([]);
     dom.window.close();
   });

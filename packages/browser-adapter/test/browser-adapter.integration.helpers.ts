@@ -29,6 +29,8 @@ export type HarnessUrlOptions = {
     | "submit-upload-stale-recover"
     | "followup-rich-text"
     | "thinking-artifact-messages"
+    | "worked-progress-then-answer"
+    | "worked-progress-timeout"
     | "followup-stale"
     | "done-early"
     | "stall-recover"

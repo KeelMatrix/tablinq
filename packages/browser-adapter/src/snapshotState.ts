@@ -13,6 +13,7 @@ export interface AskSnapshot {
   messageId: string | null;
   thoughtDividerBeforeMessage?: boolean;
   thoughtArtifactSignature?: string;
+  providerActivitySignature?: string;
   currentUrl: string;
 }
 
@@ -420,6 +421,7 @@ export function normalizeAskSnapshot(snapshot: AskSnapshot): AskSnapshot {
     messageId: normalizeOptionalString(snapshot.messageId),
     thoughtDividerBeforeMessage: Boolean(snapshot.thoughtDividerBeforeMessage),
     thoughtArtifactSignature: snapshot.thoughtArtifactSignature ?? "",
+    providerActivitySignature: snapshot.providerActivitySignature ?? "",
   };
 }
 
