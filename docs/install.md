@@ -2,6 +2,8 @@
 
 This guide covers the packaged install path for Tablinq. For repo-checkout contributor work, see [development.md](development.md).
 
+Tablinq is developed for Windows first and has not been tested on other operating systems. The Unix-like instructions are retained for contributors who want to improve that support; expect rough edges outside Windows.
+
 ## The model you are installing
 
 Tablinq is attach-first.

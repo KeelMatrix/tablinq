@@ -2,6 +2,8 @@
 
 This checklist stays out of CI. Use it when you want to validate the attach-first normal-browser flow against the real ChatGPT site.
 
+Tablinq is Windows-first. The Unix-like commands below are retained for contributors, but the project has not been tested on other operating systems.
+
 ## Preconditions
 
 - install locally with `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install.ps1` on Windows or `./scripts/package.sh && ./scripts/install.sh` on Unix-like systems
@@ -56,7 +58,7 @@ If you want to retain command output or before/after snapshots from a live check
 2. Call `POST /v1/chat/completions` with `"stream": false` and confirm the normal non-streaming response path still works.
 3. Call `POST /v1/chat/completions` with `"stream": true` and confirm an SSE response arrives after finalization with one final content chunk, one stop chunk, and `data: [DONE]`.
 4. Call `POST /v1/chat/completions` with a base model such as `tablinq-thinking-standard` plus `"tablinq_mode": "search"` and confirm Search behaves as a composer chip/mode, not a model id.
-5. Call `GET /v1/provider`, configure an OpenClaude preset, and confirm `primary` requests execute while `subagent` requests are rejected with `subagents_disabled`.
+5. Call `GET /v1/provider` and confirm the gateway reports its current browser-backed capabilities and limitations accurately. Do not treat provider metadata as proof that autonomous coding-agent integrations are supported.
 6. Upload a file to `POST /v1/files`, run a research completion with the returned file ID, and confirm `GET /v1/artifacts?view=summary&limit=20` returns a linked artifact.
 7. Run `scripts/soak_gateway.ps1 -CompactLog` for repeated sequential requests and confirm request IDs advance without leaving the gateway or daemon unhealthy. Use `-FullLog` only when you need forensic response capture.
 

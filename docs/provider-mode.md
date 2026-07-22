@@ -319,7 +319,7 @@ Persist `request_id` and inspect request status when a client connection drops u
 - `gpt daemon start`
 - `gpt gateway start`
 
-See [openclaude.md](openclaude.md) and [paperclip.md](paperclip.md) for client-specific guidance.
+See [coding-agents.md](coding-agents.md) before attempting to connect an autonomous coding agent. Such integrations are currently unsupported and not recommended.
 
 ## Client retry and idempotency guidance
 
