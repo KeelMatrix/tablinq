@@ -79,10 +79,7 @@ export type DiagnosticsRequest = {
 };
 
 export type ControlRequest =
-  | OpenRequest
-  | { type: "health" }
-  | { type: "close" }
-  | { type: "shutdown" };
+  OpenRequest | { type: "health" } | { type: "close" } | { type: "shutdown" };
 
 export type AdapterRequest =
   | OpenRequest

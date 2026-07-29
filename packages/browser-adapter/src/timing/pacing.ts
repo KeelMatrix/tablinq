@@ -16,18 +16,10 @@ export type HighRiskActionKind =
   | "retry_click";
 
 export type ActionPacingProfile =
-  | "micro"
-  | "visual-choice"
-  | "commit"
-  | "retry"
-  | "research-handoff";
+  "micro" | "visual-choice" | "commit" | "retry" | "research-handoff";
 
 export type AdaptivePollingProfile =
-  | "edge"
-  | "stabilize"
-  | "upload"
-  | "generation"
-  | "recovery";
+  "edge" | "stabilize" | "upload" | "generation" | "recovery";
 
 export type PressureSignalKind =
   | "rate_limited"

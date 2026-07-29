@@ -89,9 +89,7 @@ export class BrowserAdapter {
   private readonly defaultTargetUrl: string;
   private readonly defaultBrowserPath: string | null;
   private readonly connectionMode:
-    | "attach_first"
-    | "managed_fallback"
-    | "managed_only";
+    "attach_first" | "managed_fallback" | "managed_only";
   private readonly debugEndpoint: string | null;
   private readonly extensionRequired: boolean;
   private lastScreenshotPath: string | null = null;
