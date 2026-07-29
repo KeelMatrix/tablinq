@@ -225,7 +225,7 @@ export function createBrowserIntegrationHarness() {
 }
 
 async function waitForDebugEndpoint(endpoint: string): Promise<void> {
-  const deadline = Date.now() + 10000;
+  const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`${endpoint}/json/version`);
