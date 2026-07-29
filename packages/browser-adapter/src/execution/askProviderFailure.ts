@@ -15,8 +15,7 @@ const PROVIDER_CONVERSATION_LOADED_STABLE_MS = 500;
 const PROVIDER_CONVERSATION_LOAD_POLL_MS = 150;
 
 type ProviderReachableResult =
-  | { ok: true }
-  | { ok: false; timedOut: boolean; reason?: string };
+  { ok: true } | { ok: false; timedOut: boolean; reason?: string };
 
 class AskProviderFailure extends Error {
   readonly code: string;

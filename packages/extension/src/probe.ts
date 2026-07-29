@@ -26,10 +26,7 @@ export interface RuntimeAliasesSnapshot {
 }
 
 export type CapabilityObservationStatus =
-  | "observed"
-  | "not_observed"
-  | "unknown"
-  | "blocked";
+  "observed" | "not_observed" | "unknown" | "blocked";
 
 export interface BinaryCapabilityObservationSnapshot {
   status: CapabilityObservationStatus;
